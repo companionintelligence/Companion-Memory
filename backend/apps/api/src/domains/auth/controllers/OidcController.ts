@@ -36,7 +36,6 @@ import { MEMORY_SIGN_IN_CLIENT } from '../utils/applianceAudience';
 import { ensureCsrfCookie, setCsrfCookie, setSessionCookie } from '../utils/authCookies';
 import {
   OIDC_ORIGIN_BOUNCE_PARAM,
-  type OidcCallbackRequestOrigin,
   readRequestOrigin,
   resolveOidcCallbackUrl,
   resolveOidcOriginBounce,
@@ -228,12 +227,7 @@ export class OidcController {
    * resulting localhost callback is unreachable for CI-Portal.
    */
   private getCallbackUrl(req: Request) {
-    return resolveOidcCallbackUrl(this.requestOrigin(req), config.auth.oidc.publicBaseUrl);
-  }
-
-  /** The origin the browser used to reach this app, honouring the reverse proxy. */
-  private requestOrigin(req: Request): OidcCallbackRequestOrigin {
-    return readRequestOrigin(req);
+    return resolveOidcCallbackUrl(readRequestOrigin(req), config.auth.oidc.publicBaseUrl);
   }
 
   /**
@@ -288,7 +282,7 @@ export class OidcController {
     // origin holding neither cookie and sign-in fails with `invalid_state`, so
     // move onto the public origin before minting any of them.
     const bounceUrl = resolveOidcOriginBounce(
-      this.requestOrigin(req),
+      readRequestOrigin(req),
       publicBaseUrl,
       redirect ?? undefined,
       // Already bounced once — proceed here rather than risk a redirect loop.
