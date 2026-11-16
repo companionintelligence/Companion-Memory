@@ -1,12 +1,13 @@
 # DIDComm Messaging v2.1
 
-> **Status (2026-11-15): a tested library behind a flag that is off by default.** `backend/apps/api/src/domains/didcomm/`
+> **Status (2026-11-16): a tested library behind a flag that is off by default.** `backend/apps/api/src/domains/didcomm/`
 > packs and unpacks [DIDComm Messaging v2.1](https://identity.foundation/didcomm-messaging/spec/)
 > envelopes (authcrypt, anoncrypt, signed, and the combinations), routes them through mediators, and
 > speaks the small protocols DIDComm itself defines. Since Companion-Memory#3439, #3442 and #3443 (merged
 > 2026-11-12 and 2026-11-13 UTC, not yet in a release) `DidcommModule` is registered with Nest:
 > `GET /didcomm/did`, `POST /didcomm/oob`, `POST /didcomm/oob/parse` and `POST /didcomm/message` answer
-> `404` unless `didcomm.messaging` (`ENABLE_DIDCOMM_MESSAGING`, default false) is on. With it on they use
+> `404` unless `didcomm.messaging` (`ENABLE_DIDCOMM_MESSAGING`, default false) is on.
+> Do not turn it on until its security review is done. With it on they use
 > a `did:peer` identity the process generates at first use, an in-memory replay guard, and a resolver for
 > `did:key` and `did:peer` only. The module writes **no database rows** and makes **no network request**,
 > and nothing else in the API calls it. [What is not built](#what-is-not-built) lists the rest and

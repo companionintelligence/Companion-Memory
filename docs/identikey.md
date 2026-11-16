@@ -6,7 +6,8 @@
 > has no table and no migration. Since Companion-Memory#3439 (merged 2026-11-12, not yet in a
 > release) `IdentikeyModule` is registered with Nest: `POST /auth/identikey/challenge` and
 > `POST /auth/identikey/verify` answer `404` unless `auth.identikey` (`ENABLE_AUTH_IDENTIKEY`, default
-> false) is on. With it on they keep challenges in the process-local `InMemoryNonceStore` and answer a
+> false) is on. Do not turn it on until its security review is done.
+> With it on they keep challenges in the process-local `InMemoryNonceStore` and answer a
 > verified response with the key's fingerprint; they enroll and pin nothing, write nothing to the database
 > and create no session.
 > What it gives the next phases is a verifier
