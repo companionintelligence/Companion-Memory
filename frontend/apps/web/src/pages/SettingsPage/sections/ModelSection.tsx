@@ -8,6 +8,8 @@ import { ModelSelector } from '@/components/ModelSelector';
 import { useCurrentUser, useModel, useSessionAuth } from '@/hooks';
 import { useLlmEndpoint, type LlmBackendKind } from '@/hooks/useLlmEndpoint';
 
+import { RecommendedModelCard } from './RecommendedModelCard';
+
 type BackendPreset = 'ollama' | 'lemonade' | 'openai_compatible';
 
 /**
@@ -571,6 +573,8 @@ export function ModelSection() {
           {endpointError ? <p className="text-sm text-destructive">{endpointError}</p> : null}
         </Card.Content>
       </Card>
+
+      <RecommendedModelCard canDownload={canEditEndpoint} onSwitched={refetchModels} />
 
       <Card>
         <Card.Content className="space-y-6 pt-6">

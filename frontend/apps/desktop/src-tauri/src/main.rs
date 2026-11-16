@@ -418,6 +418,7 @@ fn main() {
             let progress = stack_manager::new_progress();
             app.manage(StartupProgressState(progress.clone()));
             app.manage(local_model::LocalModelHandles::default());
+            app.manage(local_model::recommended::Downloader::default());
             // initialize_stack has just read this same file to write .env, so a
             // failure here is one it already reported; the fallback only keeps
             // the shell from refusing to start over a readiness check.
@@ -513,6 +514,8 @@ fn main() {
             open_docker_downloads_command,
             read_desktop_logs_command,
             get_local_model_status_command,
+            get_recommended_model_command,
+            download_recommended_model_command,
             get_startup_progress_command,
             open_external_url_command,
             take_pending_deep_link_command,
@@ -812,6 +815,43 @@ fn get_local_model_status_command(
     state: tauri::State<'_, local_model::LocalModelHandles>,
 ) -> Option<local_model::LocalModelResolution> {
     state.status()
+}
+
+/// Settings > Model asks this whether to offer "Download recommended model"
+/// and, while a download runs, how far it has got. See
+/// local_model::recommended. Lists the models of the user's own Ollama, so it
+/// runs off the main thread.
+#[tauri::command]
+async fn get_recommended_model_command(
+    app: tauri::AppHandle,
+) -> Result<local_model::recommended::RecommendedModelStatus, String> {
+    tokio::task::spawn_blocking(move || recommended_model_status(&app))
+        .await
+        .map_err(|e| format!("Task join error: {e}"))
+}
+
+/// Settings > Model's "Download recommended model". Returns once the download
+/// has started; the page follows it with get_recommended_model_command.
+#[tauri::command]
+async fn download_recommended_model_command(
+    app: tauri::AppHandle,
+) -> Result<local_model::recommended::RecommendedModelStatus, String> {
+    tokio::task::spawn_blocking(move || {
+        let paths = app.state::<StackPathsState>().0.clone();
+        let backend = app.state::<local_model::LocalModelHandles>().status().map(|status| status.chat_backend);
+        local_model::recommended::start(&paths, backend, &app.state::<local_model::recommended::Downloader>())?;
+
+        Ok(recommended_model_status(&app))
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))?
+}
+
+fn recommended_model_status(app: &tauri::AppHandle) -> local_model::recommended::RecommendedModelStatus {
+    let paths = &app.state::<StackPathsState>().0;
+    let backend = app.state::<local_model::LocalModelHandles>().status().map(|status| status.chat_backend);
+
+    local_model::recommended::status(paths, backend, &app.state::<local_model::recommended::Downloader>())
 }
 
 #[cfg(test)]

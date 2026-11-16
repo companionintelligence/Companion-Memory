@@ -28,6 +28,10 @@ const APP_COMMANDS: &[&str] = &[
     // Remote CI-Server web app (capabilities/oidc-remote-deep-link.json).
     "open_external_url_command",
     "take_pending_deep_link_command",
+    // Remote CI-Server web app, Settings > Model
+    // (capabilities/remote-recommended-model.json).
+    "get_recommended_model_command",
+    "download_recommended_model_command",
 ];
 
 fn main() {

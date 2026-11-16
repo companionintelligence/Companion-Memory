@@ -1,0 +1,18 @@
+{
+  "identifier": "remote-recommended-model",
+  "description": "Lets the real CI-Server web app (served remotely at http://127.0.0.1:8642 / http://localhost:8642 after the bootstrap page's window.location.replace()) offer \"Download recommended model\" in Settings > Model when the person's own Ollama lacks a model this app pulls into its own Ollama: get_recommended_model_command says which are missing and how a download is going, download_recommended_model_command starts one. Neither takes an argument, so the page cannot choose what is pulled: the list is ollama_sidecar::RECOMMENDED_MODELS. See src-tauri/src/local_model/recommended.rs.",
+  "windows": [
+    "main"
+  ],
+  "local": false,
+  "remote": {
+    "urls": [
+      "http://127.0.0.1:8642",
+      "http://localhost:8642"
+    ]
+  },
+  "permissions": [
+    "allow-get-recommended-model-command",
+    "allow-download-recommended-model-command"
+  ]
+}
