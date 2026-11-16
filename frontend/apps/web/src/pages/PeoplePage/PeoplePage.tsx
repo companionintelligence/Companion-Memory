@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useMemo, useState } from 'react';
+import { type ReactNode, useCallback, useMemo, useRef, useState } from 'react';
 
 import { useApolloClient, useQuery } from '@apollo/client/react';
 import { EmptyState, GlobalUID, useDeviceLayout, usePageTitle } from '@ci/common';
@@ -148,6 +148,17 @@ const GET_MERGED_PERSON = gql(`
         communicationCount
         lastInteractionAt
       }
+    }
+  }
+`);
+
+// How many people the list holds after a merge. Only the server can say: the
+// person a merge removed may not have matched the search. Reading the merge
+// queue also folds exact pairs the page never saw.
+const GET_PEOPLE_COUNT = gql(`
+  query GetPeopleCount($query: String) {
+    people(query: $query, first: 1) {
+      totalCount
     }
   }
 `);
@@ -358,6 +369,10 @@ function RemotePeoplePage() {
     await Promise.all([refetch(), refetchCandidates()]);
   }, [pagination, refetch, refetchCandidates]);
 
+  // Numbers each merge's recount, so an answer that arrives after a later
+  // merge's recount was sent cannot put back the older count.
+  const lastRecount = useRef(0);
+
   // Patch the accumulated list rather than refetch()ing it. refetch() replays
   // the hook's ORIGINAL variables (first: PAGE_SIZE, no cursor) and overwrites
   // the cache entry fetchMore has been appending to, so on a 21k-person list
@@ -374,9 +389,12 @@ function RemotePeoplePage() {
           }
 
           const edges = prev.people.edges.filter((edge) => !removed.has(edge.node.id));
-          const dropped = prev.people.edges.length - edges.length;
+          // With no search the count is every live person, so it drops by
+          // everyone the merge removed, loaded on this page or not. A search's
+          // count drops by the loaded rows that matched. Both are read again below.
+          const gone = peopleVariables.query == null ? removed.size : prev.people.edges.length - edges.length;
 
-          if (dropped === 0) {
+          if (gone === 0) {
             return prev;
           }
 
@@ -385,10 +403,47 @@ function RemotePeoplePage() {
             people: {
               ...prev.people,
               edges,
-              totalCount: Math.max(0, prev.people.totalCount - dropped),
+              totalCount: Math.max(0, prev.people.totalCount - gone),
             },
           };
         });
+      }
+
+      const candidatesRefetched = refetchCandidates();
+
+      // Reading the queue again folds exact email and phone pairs on the
+      // server, so more people than this merge removed may be gone by the time
+      // it returns. The count is read once that is done. It does not hold up
+      // the card. A failed recount keeps the drop made above, since the merge
+      // itself went through.
+      if (removed.size > 0) {
+        const recount = ++lastRecount.current;
+
+        void candidatesRefetched
+          .catch(() => undefined)
+          .then(() =>
+            client.query({
+              query: GET_PEOPLE_COUNT,
+              variables: { query: peopleVariables.query },
+              fetchPolicy: 'no-cache',
+              // A recount sent while an older one is in flight must not be
+              // handed that one's answer.
+              context: { queryDeduplication: false },
+            }),
+          )
+          .then(({ data: counted }) => {
+            const totalCount = counted?.people.totalCount;
+
+            // A later merge has sent its own recount; this answer may predate it.
+            if (totalCount == null || recount !== lastRecount.current) {
+              return;
+            }
+
+            client.cache.updateQuery({ query: GET_PEOPLE, variables: peopleVariables }, (prev) =>
+              prev?.people ? { ...prev, people: { ...prev.people, totalCount } } : prev,
+            );
+          })
+          .catch(() => undefined);
       }
 
       await Promise.all([
@@ -399,7 +454,7 @@ function RemotePeoplePage() {
               fetchPolicy: 'network-only',
             })
           : Promise.resolve(),
-        refetchCandidates(),
+        candidatesRefetched,
       ]);
 
       // Only now that the scored candidates have been re-read (so nothing

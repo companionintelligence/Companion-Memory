@@ -80,6 +80,14 @@ const GET_MERGED_PERSON = gql(`
   }
 `);
 
+const GET_PEOPLE_COUNT = gql(`
+  query GetPeopleCount($query: String) {
+    people(query: $query, first: 1) {
+      totalCount
+    }
+  }
+`);
+
 const GET_MERGE_CANDIDATES = gql(`
   query GetMergeCandidates($first: Int, $after: String) {
     mergeCandidates(first: $first, after: $after) {
@@ -856,6 +864,151 @@ describe('PeoplePage', () => {
     } finally {
       observer.restore();
     }
+  });
+
+  describe('the People count after a merge', () => {
+    const ZOE_UUID = '019fd7c0-641c-76dd-8ed7-a5053faff720';
+    const ZOE_GLOBAL_ID = btoa(`person:${ZOE_UUID}`);
+    const ZOE_TWIN_UUID = '019fd7c0-641c-76dd-8ed7-a5053faff721';
+    const ZOE_TWIN_GLOBAL_ID = btoa(`person:${ZOE_TWIN_UUID}`);
+
+    const zoePair = candidateEdge([
+      { id: ZOE_GLOBAL_ID, name: 'Zoe Young' },
+      { id: ZOE_TWIN_GLOBAL_ID, name: 'Zoe Young' },
+    ]);
+
+    const mergeMocks = [
+      {
+        request: {
+          query: MERGE_PEOPLE,
+          variables: { input: { targetId: ZOE_GLOBAL_ID, sourceIds: [ZOE_TWIN_GLOBAL_ID] } },
+        },
+        result: {
+          data: {
+            mergePeople: {
+              __typename: 'MergePeoplePayload' as const,
+              success: true,
+              person: { __typename: 'PersonType' as const, id: ZOE_GLOBAL_ID, name: 'Zoe Young' },
+            },
+          },
+        },
+      },
+      {
+        request: { query: GET_MERGED_PERSON, variables: { id: ZOE_GLOBAL_ID } },
+        result: { data: { person: personNode({ id: ZOE_GLOBAL_ID, name: 'Zoe Young' }) } },
+      },
+      {
+        request: { query: GET_MERGE_CANDIDATES, variables: { first: CANDIDATE_PAGE_SIZE } },
+        result: candidatesResult([]),
+      },
+    ];
+
+    function peoplePage(query: string | null, totalCount: number, nodes: Array<Record<string, unknown>>) {
+      return {
+        request: { query: GET_PEOPLE, variables: { query, first: PAGE_SIZE } },
+        result: {
+          data: {
+            people: {
+              __typename: 'PersonConnection' as const,
+              totalCount,
+              pageInfo: pageInfo({ hasNextPage: true, endCursor: 'page-1-end' }),
+              edges: nodes.map((node) => ({
+                __typename: 'PersonEdge' as const,
+                cursor: String(node.id),
+                node: personNode(node),
+              })),
+            },
+          },
+        },
+      };
+    }
+
+    const headerCount = () =>
+      screen.getByText('People', { selector: '.font-medium' }).nextElementSibling?.textContent;
+
+    /**
+     * People loads 30 rows at a time. Merging a pair near the end of the list
+     * removed no loaded row. The count only went down by the loaded rows it
+     * took out, so the header kept "40" until a reload showed 39.
+     */
+    it('drops by the person the merge removed even when that row is not loaded yet', async () => {
+      renderWithProviders(<PeoplePage />, {
+        mocks: [
+          peoplePage(null, 40, [{ id: PERSON_GLOBAL_ID, name: 'Ada Lovelace' }]),
+          {
+            request: { query: GET_MERGE_CANDIDATES, variables: { first: CANDIDATE_PAGE_SIZE } },
+            result: candidatesResult([zoePair]),
+          },
+          ...mergeMocks,
+          // The recount fails, so the header shows the drop made on the client.
+          {
+            request: { query: GET_PEOPLE_COUNT, variables: { query: null } },
+            error: new Error('Memory server unreachable'),
+          },
+        ],
+      });
+
+      expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument();
+      expect(headerCount()).toBe('40');
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Merge into one person' }));
+
+      await waitFor(() => expect(headerCount()).toBe('39'));
+      await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+      expect(headerCount()).toBe('39');
+      expect(screen.getByText('Ada Lovelace')).toBeInTheDocument();
+    });
+
+    it('takes the server count after the merge queue folded more people than the merge removed', async () => {
+      renderWithProviders(<PeoplePage />, {
+        mocks: [
+          peoplePage(null, 40, [{ id: PERSON_GLOBAL_ID, name: 'Ada Lovelace' }]),
+          {
+            request: { query: GET_MERGE_CANDIDATES, variables: { first: CANDIDATE_PAGE_SIZE } },
+            result: candidatesResult([zoePair]),
+          },
+          ...mergeMocks,
+          {
+            request: { query: GET_PEOPLE_COUNT, variables: { query: null } },
+            result: {
+              data: { people: { __typename: 'PersonConnection' as const, totalCount: 37 } },
+            },
+          },
+        ],
+      });
+
+      expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument();
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Merge into one person' }));
+
+      await waitFor(() => expect(headerCount()).toBe('37'));
+    });
+
+    it("reads a search's count again from the server, since the removed person may not have matched", async () => {
+      renderWithProviders(<PeoplePage />, {
+        route: '/?search=Young',
+        mocks: [
+          peoplePage('Young', 31, [{ id: ZOE_GLOBAL_ID, name: 'Zoe Young' }]),
+          {
+            request: { query: GET_MERGE_CANDIDATES, variables: { first: CANDIDATE_PAGE_SIZE } },
+            result: candidatesResult([zoePair]),
+          },
+          ...mergeMocks,
+          {
+            request: { query: GET_PEOPLE_COUNT, variables: { query: 'Young' } },
+            result: {
+              data: { people: { __typename: 'PersonConnection' as const, totalCount: 30 } },
+            },
+          },
+        ],
+      });
+
+      await waitFor(() => expect(headerCount()).toBe('31'));
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Merge into one person' }));
+
+      await waitFor(() => expect(headerCount()).toBe('30'));
+    });
   });
 
   /**
