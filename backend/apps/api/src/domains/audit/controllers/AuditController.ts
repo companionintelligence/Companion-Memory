@@ -90,8 +90,9 @@ export class AuditController {
       until: query.until,
     });
 
+    const toEntityIds = deltas.map(toEntityIdOf);
     const relatedEntityIds = new Set<string>();
-    for (const delta of deltas) {
+    for (const [index, delta] of deltas.entries()) {
       if (delta.entityId) {
         relatedEntityIds.add(delta.entityId);
       }
@@ -100,7 +101,7 @@ export class AuditController {
         relatedEntityIds.add(delta.fromEntityId);
       }
 
-      const toEntityId = toEntityIdOf(delta);
+      const toEntityId = toEntityIds[index];
       if (toEntityId) {
         relatedEntityIds.add(toEntityId);
       }
@@ -120,10 +121,10 @@ export class AuditController {
       }),
     );
 
-    const mappedDeltas = deltas.map((delta) => {
+    const mappedDeltas = deltas.map((delta, index) => {
       const entityNode = delta.entityId ? nodeById.get(delta.entityId) : null;
       const fromEntityNode = delta.fromEntityId ? nodeById.get(delta.fromEntityId) : null;
-      const toEntityId = toEntityIdOf(delta);
+      const toEntityId = toEntityIds[index];
       const toEntityNode = toEntityId ? nodeById.get(toEntityId) : null;
 
       const fieldChanges = Object.entries(delta.changedFields ?? {}).map(([field, value]) => ({

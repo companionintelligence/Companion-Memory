@@ -5,6 +5,7 @@ import { v7 as uuidv7 } from 'uuid';
 import { LoggerService } from '@ci/common/logging';
 import { computeChunkSize } from '@ci/common/persistence';
 import { stableJson } from '@ci/common/stableJson';
+import { USER_EDITED_KEYS } from '@ci/common/userEditedProperties';
 
 export type GraphDeltaChangeType = 'created' | 'updated' | 'archived' | 'deleted' | 'merged';
 export type GraphDeltaNodeType = 'entity' | 'relationship';
@@ -59,6 +60,60 @@ export function changedFieldsBetween(
   }
 
   return changed;
+}
+
+/**
+ * The rows a merge writes into Change History, which reads a side a delta
+ * leaves out as "empty". The kept record's row holds each field the merge
+ * moved, with its real before and after values, and is left out when the merge
+ * moved nothing. Each merged-away record keeps its name; its row says where it
+ * now points and, when it was live, that it no longer is. The hand-set list is
+ * bookkeeping rather than a field anyone edited, so neither row records it.
+ */
+export function mergeDeltaInputs(merge: {
+  entityType: string;
+  ownerUserId: string;
+  changeSource: string;
+  targetId: string;
+  /** The kept record's columns before and after, keyed alike. */
+  columns: { before: Record<string, unknown>; after: Record<string, unknown> };
+  /** The kept record's properties bag before and after. */
+  properties: { before: Record<string, unknown>; after: Record<string, unknown> };
+  sources: Array<{ entityId: string; isActive: boolean | null | undefined }>;
+}): RecordGraphDeltaInput[] {
+  const propertyKeys = new Set([
+    ...Object.keys(merge.properties.before),
+    ...Object.keys(merge.properties.after),
+  ]);
+  propertyKeys.delete(USER_EDITED_KEYS);
+
+  const keptChanges = {
+    ...changedFieldsBetween(merge.columns.before, merge.columns.after, Object.keys(merge.columns.after)),
+    ...changedFieldsBetween(merge.properties.before, merge.properties.after, propertyKeys),
+  };
+  const row = {
+    nodeType: 'entity' as const,
+    entityType: merge.entityType,
+    ownerUserId: merge.ownerUserId,
+    changeSource: merge.changeSource,
+    changedByUserId: merge.ownerUserId,
+  };
+
+  return [
+    ...(Object.keys(keptChanges).length > 0
+      ? [{ ...row, changeType: 'updated' as const, entityId: merge.targetId, changedFields: keptChanges }]
+      : []),
+    ...merge.sources.map((source) => ({
+      ...row,
+      changeType: 'merged' as const,
+      entityId: source.entityId,
+      changedFields: changedFieldsBetween(
+        { merged_into_entity_id: null, is_active: source.isActive !== false },
+        { merged_into_entity_id: merge.targetId, is_active: false },
+        ['merged_into_entity_id', 'is_active'],
+      ),
+    })),
+  ];
 }
 
 /**

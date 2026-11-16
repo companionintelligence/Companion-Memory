@@ -294,6 +294,54 @@ describe('EntityEvolutionPanel', () => {
     expect(screen.getByText('Merged into another record')).toBeInTheDocument();
   });
 
+  it('names no empty "before" on a kept record whose merge row stored only its new values', () => {
+    mockDeltas([
+      delta({
+        changeType: 'updated',
+        changeSource: 'PersonMergeService.mergePeople',
+        changedFields: { name: { new: 'Yuki Tanaka' }, properties: { new: { first_name: 'Yuki' } } },
+        fieldChanges: [
+          { field: 'name', oldValue: null, newValue: 'Yuki Tanaka' },
+          { field: 'properties', oldValue: null, newValue: { first_name: 'Yuki' } },
+        ],
+      }),
+    ]);
+
+    render(<EntityEvolutionPanel entityId={FOCUS_ID} />);
+
+    expect(screen.getByText('Yuki Tanaka')).toBeInTheDocument();
+    expect(screen.queryByText(/empty/)).not.toBeInTheDocument();
+  });
+
+  it('still shows both sides of an edit that stored both', () => {
+    mockDeltas([
+      delta({
+        changeType: 'updated',
+        changedFields: { name: { old: 'Yuki', new: 'Yuki Tanaka' } },
+        fieldChanges: [{ field: 'name', oldValue: 'Yuki', newValue: 'Yuki Tanaka' }],
+      }),
+    ]);
+
+    render(<EntityEvolutionPanel entityId={FOCUS_ID} />);
+
+    expect(screen.getByText('Yuki')).toBeInTheDocument();
+    expect(screen.getByText('Yuki Tanaka')).toBeInTheDocument();
+  });
+
+  it('does not end the merge headline on a blank name', () => {
+    mockDeltas([
+      delta({
+        changeType: 'merged',
+        fieldChanges: [],
+        toEntity: { entityId: 'kept-1', entityType: 'person', name: '' },
+      }),
+    ]);
+
+    render(<EntityEvolutionPanel entityId={FOCUS_ID} />);
+
+    expect(screen.getByText('Merged into another record')).toBeInTheDocument();
+  });
+
   it('drops the provenance tiles when there is no provenance', () => {
     mockDeltas(IMPORT_DELTAS);
 

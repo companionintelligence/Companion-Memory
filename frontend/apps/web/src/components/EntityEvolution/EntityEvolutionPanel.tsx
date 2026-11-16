@@ -200,6 +200,17 @@ function isSameValue(oldValue: unknown, newValue: unknown): boolean {
 }
 
 /**
+ * Whether the stored delta holds `side` for `field`, or null when it holds no entry for the field
+ * to tell from. `fieldChanges` reads a side that was never recorded as null, the same as a side
+ * that was recorded empty.
+ */
+function storedSide(delta: EvolutionDelta, field: string, side: 'old' | 'new'): boolean | null {
+  const entry: unknown = delta.changedFields?.[field];
+
+  return entry != null && typeof entry === 'object' ? side in entry : null;
+}
+
+/**
  * Field edits worth showing.
  *
  * A record created from an import writes a delta for every column it touched, including the ones it
@@ -213,7 +224,7 @@ function meaningfulFieldChanges(delta: EvolutionDelta) {
       !(delta.changeType === 'merged' && change.field === 'merged_into_entity_id') &&
       // A merge row stored before merges recorded both sides held the merged-away record's own name
       // with no new side, which read as "Name: Yuki Tanaka -> empty". The name did not change.
-      !(delta.changeType === 'merged' && !('new' in (delta.changedFields?.[change.field] ?? {}))),
+      !(delta.changeType === 'merged' && storedSide(delta, change.field, 'new') !== true),
   );
 }
 
@@ -225,7 +236,7 @@ function entityChangeHeadline(delta: EvolutionDelta): string {
 
   if (delta.changeType === 'merged') {
     // The API names the record this one was merged into as `toEntity`.
-    return `Merged into ${delta.toEntity?.name ?? 'another record'}`;
+    return `Merged into ${delta.toEntity?.name?.trim() || 'another record'}`;
   }
 
   return 'Fields edited';
@@ -434,8 +445,11 @@ export function EntityEvolutionPanel({ entityId, entityName, refreshKey }: Props
                             >
                               <span className="text-muted-foreground">{toTitleCase(change.field)}:</span>{' '}
                               {/* On creation there is no "before" — showing "empty -> Abdul Ameer"
-                                  reads as a defect rather than as the record being born. */}
-                              {isCreation ? (
+                                  reads as a defect rather than as the record being born. Nor is there
+                                  one on an edit that stored only its new side, such as the kept
+                                  record of a merge recorded before merges stored both: its unchanged
+                                  name read as "empty -> Yuki Tanaka". */}
+                              {isCreation || storedSide(delta, change.field, 'old') === false ? (
                                 <span className="text-foreground">{formatDiffValue(change.newValue)}</span>
                               ) : (
                                 <>

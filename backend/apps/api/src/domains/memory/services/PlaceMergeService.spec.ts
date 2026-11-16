@@ -118,6 +118,7 @@ function makeHarness(
   entityRows: LocationRow[],
   ancestorsOfTarget: string[] = [],
   swept: Array<SweepAnswer | 'wrong-shape'> = SWEPT,
+  underTarget: string[] = [],
 ): Harness {
   const statements: Array<{ sql: string; params: unknown[] | undefined }> = [];
   const sweeps = [...swept];
@@ -141,6 +142,13 @@ function makeHarness(
       const sources = (params?.[2] as string[]) ?? [];
 
       return ancestorsOfTarget.filter((id) => sources.includes(id)).map((entity_id) => ({ entity_id }));
+    }
+
+    // Which candidate parents already hang below the target.
+    if (sql.includes('WITH RECURSIVE climb AS')) {
+      const candidates = (params?.[2] as string[]) ?? [];
+
+      return underTarget.filter((id) => candidates.includes(id)).map((place_id) => ({ place_id }));
     }
 
     // A sweep ends in a plain SELECT, so the driver hands its one row back as is.
@@ -577,6 +585,55 @@ describe('PlaceMergeService', () => {
 
     const [, , , , , , parent] = statementsMatching(harness, 'properties = $5::jsonb')[0].params ?? [];
     expect(parent).toBe(CITY);
+  });
+
+  it('never gives the target a parent that already hangs below it, which would close a parent loop', async () => {
+    // SOURCE_A sits inside SHOP, and SHOP sits inside the target (or inside
+    // SOURCE_B, which the re-point just moved under the target). CITY is the
+    // next source's parent and is not below the target.
+    const SHOP = '00000000-0000-0000-0000-0000000000d1';
+    const harness = makeHarness(
+      [
+        locationRow(TARGET, { name: 'Ferry Building' }),
+        locationRow(SOURCE_A, { name: 'Ferry Building', parent_place_id: SHOP }),
+        locationRow(SOURCE_B, { name: 'Ferry Building Marketplace', parent_place_id: CITY }),
+      ],
+      [],
+      SWEPT,
+      [SHOP],
+    );
+
+    await harness.service.mergePlaces(CONTEXT, [SOURCE_A, SOURCE_B], TARGET);
+
+    const [, , , , , , parent] = statementsMatching(harness, 'properties = $5::jsonb')[0].params ?? [];
+    expect(parent).toBe(CITY);
+    expect(statementsMatching(harness, 'WITH RECURSIVE climb AS')[0].params?.[2]).toEqual([SHOP, CITY]);
+  });
+
+  it('leaves the target without a parent when the only one on offer hangs below it', async () => {
+    const SHOP = '00000000-0000-0000-0000-0000000000d1';
+    const harness = makeHarness(
+      [locationRow(TARGET), locationRow(SOURCE_A, { parent_place_id: SHOP })],
+      [],
+      SWEPT,
+      [SHOP],
+    );
+
+    await harness.service.mergePlaces(CONTEXT, [SOURCE_A], TARGET);
+
+    const [, , , , , , parent] = statementsMatching(harness, 'properties = $5::jsonb')[0].params ?? [];
+    expect(parent).toBeNull();
+  });
+
+  it('asks nothing about the parent chain when the target keeps its own parent', async () => {
+    const harness = makeHarness([
+      locationRow(TARGET, { parent_place_id: CITY }),
+      locationRow(SOURCE_A, { parent_place_id: '00000000-0000-0000-0000-0000000000d1' }),
+    ]);
+
+    await harness.service.mergePlaces(CONTEXT, [SOURCE_A], TARGET);
+
+    expect(statementsMatching(harness, 'WITH RECURSIVE climb AS')).toHaveLength(0);
   });
 
   it('refuses a sweep answer that is not one { deleted, rescued } row, rather than reading it as "nothing swept"', async () => {

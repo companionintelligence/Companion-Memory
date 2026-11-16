@@ -388,6 +388,29 @@ describeWithDb(`PlaceMergeService — counts, in Postgres (${availability.target
     expect(refs).toEqual({ events: 0, children: 0, objects: 0, receipts: 0, relationships: 0, tags: 0 });
   });
 
+  it('never closes a parent loop through a place the merge moves under the target', async () => {
+    const target = await insertEntity('Location', 'Ferry Building');
+    const marketplace = await insertEntity('Location', 'Ferry Building Marketplace');
+    const shop = await insertEntity('Location', 'Ferry Building Shop', marketplace);
+    const pin = await insertEntity('Location', 'Ferry Bldg', shop);
+    const stall = await insertEntity('Location', 'Ferry Building Stall', target);
+    const kiosk = await insertEntity('Location', 'Ferry Bldg Kiosk', stall);
+
+    // The marketplace is merged away, so the shop under it moves under the
+    // target: the pin's parent is then below the target. So is the kiosk's.
+    await merger.mergePlaces(owner, [pin, marketplace, kiosk], target);
+
+    const rows: Array<{ entity_id: string; parent_place_id: string | null }> = await dataSource.query(
+      `SELECT entity_id, parent_place_id FROM ci.entities WHERE entity_id = ANY($1::uuid[])`,
+      [[target, shop, stall]],
+    );
+    const parentOf = new Map(rows.map((row) => [row.entity_id, row.parent_place_id]));
+
+    expect(parentOf.get(target)).toBeNull();
+    expect(parentOf.get(shop)).toBe(target);
+    expect(parentOf.get(stall)).toBe(target);
+  });
+
   it('reports zeros when the sources are referenced by nothing — the old code reported 2, 4 and 6', async () => {
     const target = await insertEntity('Location', 'Blue Bottle, Mint Plaza');
     const source = await insertEntity('Location', 'Blue Bottle Coffee');

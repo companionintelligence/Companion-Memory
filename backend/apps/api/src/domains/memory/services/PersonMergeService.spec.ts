@@ -574,6 +574,23 @@ describe('PersonMergeService', () => {
     expect(entityDeltas.map((input: { entityId: string }) => input.entityId)).toEqual([SOURCE_A]);
   });
 
+  it('writes no row for the kept person when the merge only carried a sync stamp over, as PersonService records an edit', async () => {
+    const harness = makeHarness([
+      personRow(TARGET, { name: 'Dana', properties: { emails: ['dana@example.com'] } }),
+      personRow(SOURCE_A, {
+        name: 'Dana',
+        properties: { emails: ['dana@example.com'], last_synced_at: '2026-11-15T06:21:44.000Z' },
+      }),
+    ]);
+
+    await harness.service.mergePeople(CONTEXT, [SOURCE_A], TARGET);
+
+    const entityDeltas = harness.recordMany.mock.calls.flatMap(([inputs]) =>
+      inputs.filter((input: { nodeType: string }) => input.nodeType === 'entity'),
+    );
+    expect(entityDeltas.map((input: { entityId: string }) => input.entityId)).toEqual([SOURCE_A]);
+  });
+
   it('records each merged-away person as moved into the kept one and no longer live, not as losing its name', async () => {
     const harness = makeHarness([
       personRow(TARGET, { name: 'Dana' }),
