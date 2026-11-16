@@ -437,7 +437,7 @@ describe('Calendar datasource', () => {
 
   /**
    * A series' rule. The importer used to keep only whether a VEVENT had an
-   * RRULE, and the calendar expands a series only from the rule itself, so an
+   * RRULE. The calendar expands a series only from the rule itself, so an
    * imported weekly meeting showed on its first date and never again.
    */
   describe('recurrence', () => {
@@ -518,8 +518,8 @@ describe('Calendar datasource', () => {
           return `${wall.month}/${wall.day} ${wall.hour}:${String(wall.minute).padStart(2, '0')}`;
         });
 
-        // October 26 and November 9 are excluded, November 25 (a Wednesday)
-        // is added, and the series stays at 10:00 after the clocks change on
+        // October 26 and November 9 are excluded and November 25 (a Wednesday)
+        // is added. The series stays at 10:00 after the clocks change on
         // November 1.
         expect(local).toEqual([
           '10/5 10:00',
@@ -737,6 +737,53 @@ describe('Calendar datasource', () => {
 
       expect(events.map((event) => event.id)).toEqual(['zoned@x', 'zoned@x#20261019T170000Z']);
       expect(events[0].recurrence).toEqual(['RRULE:FREQ=WEEKLY;COUNT=4']);
+    });
+
+    it('adds one EXDATE for an override the export repeats', () => {
+      const override = (sequence: number) => [
+        'BEGIN:VEVENT',
+        'UID:repeated@x',
+        'RECURRENCE-ID:20261019T100000',
+        'DTSTART:20261020T100000',
+        `SEQUENCE:${sequence}`,
+        'END:VEVENT',
+      ];
+      const [master] = parseIcsEvents(
+        [
+          'BEGIN:VCALENDAR',
+          'BEGIN:VEVENT',
+          'UID:repeated@x',
+          'DTSTART:20261005T100000',
+          'RRULE:FREQ=WEEKLY;COUNT=4',
+          'EXDATE:20261019T100000',
+          'END:VEVENT',
+          ...override(1),
+          ...override(2),
+          'END:VCALENDAR',
+        ].join('\r\n'),
+        'repeated.ics',
+      );
+
+      // The master already excludes October 19 in the same spelling, so the
+      // two override blocks add nothing.
+      expect(master.recurrence).toEqual(['RRULE:FREQ=WEEKLY;COUNT=4', 'EXDATE:20261019T100000']);
+
+      const [again] = parseIcsEvents(
+        [
+          'BEGIN:VCALENDAR',
+          'BEGIN:VEVENT',
+          'UID:repeated@x',
+          'DTSTART:20261005T100000',
+          'RRULE:FREQ=WEEKLY;COUNT=4',
+          'END:VEVENT',
+          ...override(1),
+          ...override(2),
+          'END:VCALENDAR',
+        ].join('\r\n'),
+        'repeated.ics',
+      );
+
+      expect(again.recurrence).toEqual(['RRULE:FREQ=WEEKLY;COUNT=4', 'EXDATE:20261019T100000']);
     });
 
     it(`leaves the rule off a series listing more than ${MAX_RECURRENCE_DATES} dates`, () => {

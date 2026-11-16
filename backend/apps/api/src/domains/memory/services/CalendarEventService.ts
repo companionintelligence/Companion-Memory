@@ -259,8 +259,8 @@ const SCHEDULE_EVENT_TYPES = ['calendar_event', 'meeting', 'appointment', 'plann
  * The importer stores a timed series' RRULE, EXDATE and RDATE lines in
  * `metadata.recurrenceRule`, the way Google sync does, so an imported series
  * expands like a synced one (see `seriesRuleOf`). An all-day series keeps none
- * yet (see `parseIcsEvents`), and neither does one imported before the rule
- * was kept: both are drawn at their DTSTART only. Importing the file again
+ * yet (see `parseIcsEvents`). Neither does one imported before the rule was
+ * kept. Both are drawn at their DTSTART only. Importing the file again
  * finds the row already there and leaves it as it is.
  */
 const IMPORTED_CALENDAR_EVENT_SQL = `(event.event_type = 'event' AND event.source_system = '${FEDERATED_SYSTEMS.calendar}')`;

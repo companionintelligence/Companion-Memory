@@ -193,8 +193,9 @@ export function parseIcsEvents(raw: string, fpath: string): ParsedIcsEvent[] {
   const unfolded = raw.replace(/\r?\n[ \t]/g, '');
   const blocks = unfolded.split(/BEGIN:VEVENT/).slice(1);
   const out: ParsedIcsEvent[] = [];
-  // Per series id, the EXDATE lines its overrides need (see exdateForOverride).
-  const overrideExdates = new Map<string, string[]>();
+  // Per series id, the EXDATE lines its overrides need (see exdateForOverride),
+  // each once: an export can repeat an override block (one per SEQUENCE).
+  const overrideExdates = new Map<string, Set<string>>();
   for (const blockRaw of blocks) {
     const block = blockRaw.split(/END:VEVENT/)[0];
     const lines = block.split(/\r?\n/);
@@ -348,21 +349,21 @@ export function parseIcsEvents(raw: string, fpath: string): ParsedIcsEvent[] {
     const overrideExdate = recurrenceId ? exdateForOverride(recurrenceId, recurrenceTzid) : undefined;
 
     if (overrideExdate) {
-      overrideExdates.set(baseId, [...(overrideExdates.get(baseId) ?? []), overrideExdate]);
+      overrideExdates.set(baseId, (overrideExdates.get(baseId) ?? new Set<string>()).add(overrideExdate));
     }
 
     // Read from the depth-0 `map`, so a nested component's STATUS cannot stand
     // in for the event's own (see the depth counter above).
     const status = icsEventStatus(map['STATUS']);
     // Only a master carries the rule. An override is one occurrence of its
-    // series, and with a rule of its own it would expand into a second series
-    // on top of the first. A master whose DTSTART did not parse gets none
+    // series. With a rule of its own it would expand into a second series on
+    // top of the first. A master whose DTSTART did not parse gets none
     // either: the push dates it at import time and the rule would repeat that.
     //
     // Nor does an all-day series, yet. `parseRecurrence` walks one in UTC
     // because it expects it at UTC midnight, where this parser puts it. The
     // nightly time repair (`TemporalRepairStage`, `floatingAsUtc`) then moves
-    // an imported all-day row to the owner's local midnight, and from there a
+    // an imported all-day row to the owner's local midnight. From there a
     // `BYDAY` rule lands a day late east of UTC and no DATE-valued EXDATE
     // matches. Until the expander follows the repair, the series shows on its
     // first date only, as it did before.
@@ -395,13 +396,15 @@ export function parseIcsEvents(raw: string, fpath: string): ParsedIcsEvent[] {
   }
 
   for (const event of out) {
-    const exdates = event.recurrence ? overrideExdates.get(event.id) : undefined;
+    const recurrence = event.recurrence;
+    const exdates = recurrence ? overrideExdates.get(event.id) : undefined;
 
-    if (!event.recurrence || !exdates) {
+    if (!recurrence || !exdates) {
       continue;
     }
 
-    const lines = [...event.recurrence, ...exdates.filter((line) => !event.recurrence?.includes(line))];
+    const written = new Set(recurrence);
+    const lines = [...recurrence, ...[...exdates].filter((line) => !written.has(line))];
 
     if (countDates(lines) <= MAX_RECURRENCE_DATES) {
       event.recurrence = lines;
@@ -569,8 +572,11 @@ function countDates(lines: readonly string[]): number {
  * (`normalizeIcsRecurrenceId`), so its key never matches: a moved meeting would
  * show at both times and a cancelled one would still show. Changing that key
  * would re-key overrides already imported, so the series is told instead. The
- * line names the wall clock as the override does, and Calendar reads it in the
- * series' zone, the same zone it walks the rule in.
+ * line names the wall clock as the override does. Calendar reads it in the
+ * series' zone, the same zone it walks the rule in. That lands on the right
+ * occurrence when the master's DTSTART is written the same way (floating, or in
+ * the same unknown zone), which is how exporters write them. A UTC or known-zone
+ * DTSTART with an unknown-zone RECURRENCE-ID still misses.
  */
 function exdateForOverride(recurrenceId: string, tzid: string | undefined): string | undefined {
   // Normalized ids end in `Z`; one left as written is a bare wall clock.
@@ -589,8 +595,8 @@ function exdateForOverride(recurrenceId: string, tzid: string | undefined): stri
  *
  * A floating date-time, or one in a zone the runtime does not know, gives the
  * server's zone. {@link parseICSDate} stored DTSTART by reading its wall clock
- * there, and `parseRecurrence` reads an EXDATE or RDATE with no usable `TZID`
- * in the series' zone. Left to the owner's zone instead, the two disagree for
+ * there. `parseRecurrence` reads an EXDATE or RDATE with no usable `TZID` in
+ * the series' zone. Left to the owner's zone instead, the two disagree for
  * anyone whose zone is not the server's: the series starts from a shifted wall
  * clock and none of its excluded dates match an occurrence.
  */
