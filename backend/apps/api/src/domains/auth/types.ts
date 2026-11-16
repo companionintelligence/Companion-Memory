@@ -36,12 +36,17 @@ export interface SessionMetadata {
 }
 
 export interface RotationResult {
-  /** New session token, or `null` on a grace-period match (keep the cookie). */
+  /**
+   * The session token to set as the cookie: a new one after a rotation, the current one again on a
+   * grace-period match. `null` only for a grace match whose current token cannot be signed again
+   * (keep the cookie).
+   */
   sessionToken: string | null;
   /**
    * Id of the session row the refresh matched — returned on BOTH branches, so
-   * the refresh response can bind (or upgrade) the CSRF cookie to its session
-   * even when a grace match sets no new session cookie.
+   * the refresh response can bind (or upgrade) the CSRF cookie to its session,
+   * even on a grace match that sets no session cookie because its current token
+   * cannot be signed again.
    */
   sessionId: string;
 }

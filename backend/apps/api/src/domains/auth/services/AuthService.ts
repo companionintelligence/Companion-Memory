@@ -49,6 +49,16 @@ export interface SignupIntent extends Partial<SignupIntentIdentity> {
 }
 
 const SESSION_EXPIRES_IN = parseDuration(config.auth.session.duration) ?? 0;
+/**
+ * How long the token a rotation replaced still matches, as a grace match that gets the current token
+ * back ({@link AuthService.rotateSessionToken}). Long enough for the web app's own recovery from a
+ * refresh whose answer it never got: a reloaded tab refreshes at once. The app retries five seconds
+ * after a refresh Memory did not answer and gives up waiting on one after 25 seconds, so two minutes
+ * also cover a short outage. Shorter than the app's refresh interval (it refreshes a minute before
+ * its five-minute access token runs out), so a stale copy of the cookie that refreshes only on that
+ * schedule usually lands outside the window after a rotation it missed and is refused, as it
+ * always was.
+ */
 const REFRESH_GRACE_PERIOD = parseDuration(config.auth.session.refreshGracePeriod) ?? 0;
 
 /**
@@ -225,32 +235,63 @@ export class AuthService {
     };
   }
 
+  /**
+   * Refresh: replace the session token, or answer a refresh with the token the last rotation
+   * replaced (the grace match) with the session's current token.
+   *
+   * The replacement is conditional on the token this request read, so of several refreshes of one
+   * session that arrive together exactly one replaces it and the others become grace matches. An
+   * unconditional save let each of them write its own token: the last write kept the first old token
+   * as `previous_token` and the other new cookies matched nothing from the start. Nor can a refresh
+   * write back a row a sign-out deleted in the meantime, as that save did.
+   *
+   * A grace match comes from a refresh sent alongside the one that replaced the token, or from a
+   * browser that never got that refresh's answer (the connection dropped, the tab reloaded). Both get
+   * the current token again ({@link currentSessionToken}), so the browser catches up instead of
+   * holding a cookie that stops working when the window ends. The previous token stops matching as
+   * soon as the current one refreshes, because that rotation makes the current one the previous.
+   */
   async rotateSessionToken(userId: string, token: string, meta: SessionMetadata): Promise<RotationResult> {
     const { session, graceMatch } = await this.findSession(userId, token, meta);
 
-    // Token matched the previous (pre-rotation) hash within the grace window.
-    // Don't rotate again, just signal the caller to issue an access token
-    // without setting a new session cookie. This handles N concurrent
-    // refreshes. sessionId is still returned so the response can keep the CSRF
-    // cookie bound to this session.
     if (graceMatch) {
-      return {
-        sessionToken: null,
-        sessionId: session.id,
-      };
+      return this.graceAnswer(userId, session);
     }
 
     // The rotated token is signed with the SAME sid. For a legacy sid-less
     // cookie this first rotation is the upgrade point: the new JWT embeds the
     // session id, and the same response's ensureCsrfCookie re-binds the CSRF
-    // token from the anonymous scope to it.
-    const nextToken = this.generateSessionToken(userId, session.id);
+    // token from the anonymous scope to it. Its `iat` is the second of
+    // `rotated_at`, which is what lets currentSessionToken sign it again.
+    const rotatedAt = new Date();
+    const nextToken = this.generateSessionToken(userId, session.id, rotatedAt);
+    const nextHash = this.digest(nextToken);
 
-    session.previous_token = session.token;
-    session.token = this.digest(nextToken);
-    session.rotated_at = new Date();
+    // Signed in the same second as the token it would replace, so it is that token. Writing it
+    // would move the current hash into previous_token, so the token before it (still in flight
+    // from another tab) would stop matching. The browser already holds this one.
+    if (nextHash === session.token) {
+      return { sessionToken: nextToken, sessionId: session.id };
+    }
 
-    await this.sessionRepository.save(session);
+    const { affected } = await this.sessionRepository.update(
+      { id: session.id, token: session.token },
+      { previous_token: session.token, token: nextHash, rotated_at: rotatedAt },
+    );
+
+    // `affected` is a number on Postgres. Read a missing count as "not written" too: looking again
+    // costs a query and still answers right, while trusting it would hand out a token nothing holds.
+    if (!affected) {
+      // Another refresh replaced this token after it was read, or a sign-out ended the session.
+      // Look again: the first is now a grace match, the second nothing.
+      const raced = await this.findSession(userId, token, meta);
+
+      if (!raced.graceMatch) {
+        throw new UnauthorizedException('Invalid session');
+      }
+
+      return this.graceAnswer(userId, raced.session);
+    }
 
     return {
       sessionToken: nextToken,
@@ -299,6 +340,10 @@ export class AuthService {
    * they're mid-way through. `currentToken` is null for an API-key-authenticated
    * request (native holds no session cookie at all), in which case there is no
    * "current session" to spare and every session is invalidated.
+   *
+   * The session that stays keeps only the token this request holds. The token its last refresh
+   * replaced would still be a grace match for the rest of the window, and a grace match gets the
+   * current token back, so a copy of the old cookie would outlive the credential change.
    */
   async invalidateOtherSessions(userId: string, currentToken: string | null | undefined): Promise<void> {
     const currentHashed = currentToken ? this.digest(currentToken) : null;
@@ -307,6 +352,13 @@ export class AuthService {
       user: { id: userId },
       ...(currentHashed ? { token: Not(currentHashed) } : {}),
     });
+
+    if (currentHashed) {
+      await this.sessionRepository.update(
+        { user: { id: userId }, token: currentHashed },
+        { previous_token: null },
+      );
+    }
 
     if ((result.affected ?? 0) > 0) {
       await this.liveChanges?.publishRevoked(userId);
@@ -449,7 +501,35 @@ export class AuthService {
     }
   }
 
-  private generateSessionToken(userId: string, sessionId: string) {
+  /**
+   * The answer to a grace match: the session's current token again. The session id comes back too,
+   * so the response can keep the CSRF cookie bound to this session.
+   */
+  private graceAnswer(userId: string, session: SessionEntity): RotationResult {
+    return { sessionToken: this.currentSessionToken(userId, session), sessionId: session.id };
+  }
+
+  /**
+   * The session's current token, signed again, for a grace match to send back. Only the token's hash
+   * is stored, but the token itself is deterministic: a rotation signs it with `iat` taken from the
+   * `rotated_at` it stores. Nothing else in it changes.
+   *
+   * Null unless the result hashes to the stored token: a session whose last rotation signed in another
+   * second than the `rotated_at` it stored (possible before `iat` came from `rotated_at`), or one last
+   * rotated before the refresh secret or token lifetime changed. The refresh then sets no cookie, as
+   * it always did on a grace match; it never hands out a token the session does not hold.
+   */
+  private currentSessionToken(userId: string, session: SessionEntity): string | null {
+    if (!session.rotated_at) {
+      return null;
+    }
+
+    const token = this.generateSessionToken(userId, session.id, session.rotated_at);
+
+    return this.digest(token) === session.token ? token : null;
+  }
+
+  private generateSessionToken(userId: string, sessionId: string, issuedAt = new Date()) {
     const payload = {
       sub: userId,
       // Binds the cookie to its session row; resolveCsrfScope reads this claim
@@ -457,10 +537,15 @@ export class AuthService {
       sid: sessionId,
     } satisfies JwtPayload;
 
-    return this.jwtService.sign(payload, {
-      secret: config.auth.jwt.refreshTokenSecret,
-      expiresIn: config.auth.jwt.refreshTokenExpiration as JwtSignOptions['expiresIn'],
-    });
+    // `iat` set here rather than by the signer, so the same claims sign the same token again
+    // (currentSessionToken).
+    return this.jwtService.sign(
+      { ...payload, iat: Math.floor(issuedAt.getTime() / 1000) },
+      {
+        secret: config.auth.jwt.refreshTokenSecret,
+        expiresIn: config.auth.jwt.refreshTokenExpiration as JwtSignOptions['expiresIn'],
+      },
+    );
   }
 
   private digest(value: string): string;

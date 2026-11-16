@@ -21,7 +21,7 @@
     "session": {
       "fieldPepper": "AUTH_SESSION_PEPPER",
       "duration": "7d",
-      "refreshGracePeriod": "30s"
+      "refreshGracePeriod": "2m"
     },
     "csrf": {
       "secret": "AUTH_CSRF_TOKEN_SECRET"

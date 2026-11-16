@@ -45,7 +45,8 @@ describe('AuthService — session id binding', () => {
       return entity;
     }),
     findOne: jest.fn(async () => findOneResults.shift() ?? null),
-    delete: jest.fn(),
+    update: jest.fn(async (_criteria: unknown, _partial: Partial<SessionEntity>) => ({ affected: 1 })),
+    delete: jest.fn(async (_criteria: unknown) => ({ affected: 1 })),
   };
 
   const service = new AuthService(jwtService, sessionRepository as unknown as Repository<SessionEntity>);
@@ -106,14 +107,143 @@ describe('AuthService — session id binding', () => {
 
     it('returns the session id on a grace-period match too (no new cookie)', async () => {
       // First findOne (current hash) misses, second (previous hash within the
-      // grace window) hits. sessionToken stays null — the browser keeps the
-      // cookie from the request that performed the real rotation — but the
-      // caller still needs the id to keep the CSRF cookie bound.
+      // grace window) hits. This row was never rotated, so there is no current
+      // token to sign again and sessionToken stays null, but the caller still
+      // needs the id to keep the CSRF cookie bound.
       findOneResults = [null, sessionRow('sess-1')];
 
       const result = await service.rotateSessionToken('user-1', 'incoming-token', meta);
 
       expect(result).toEqual({ sessionToken: null, sessionId: 'sess-1' });
+    });
+
+    /** Rotate sess-1 once and return the token it issued and the row as the rotation left it. */
+    async function rotatedOnce(): Promise<{ token: string; row: SessionEntity }> {
+      findOneResults = [sessionRow('sess-1')];
+      const { sessionToken } = await service.rotateSessionToken('user-1', 'incoming-token', meta);
+      const [criteria, written] = sessionRepository.update.mock.calls.at(-1)!;
+
+      return {
+        token: sessionToken!,
+        row: { ...sessionRow('sess-1'), ...(criteria as object), ...written } as SessionEntity,
+      };
+    }
+
+    it('replaces the token only where the row still holds the one it read', async () => {
+      const { token } = await rotatedOnce();
+
+      expect(sessionRepository.save).not.toHaveBeenCalled();
+      expect(sessionRepository.update).toHaveBeenCalledWith(
+        { id: 'sess-1', token: 'stored-hash' },
+        { previous_token: 'stored-hash', token: expect.any(String), rotated_at: expect.any(Date) },
+      );
+      // The token is signed in the second rotated_at records.
+      const [, written] = sessionRepository.update.mock.calls[0];
+      expect(jwtService.decode<{ iat: number }>(token).iat).toBe(
+        Math.floor((written.rotated_at as Date).getTime() / 1000),
+      );
+    });
+
+    it('answers a grace match with the current token, signed again byte for byte', async () => {
+      const { token, row } = await rotatedOnce();
+      findOneResults = [null, row];
+
+      const result = await service.rotateSessionToken('user-1', 'incoming-token', meta);
+
+      expect(result).toEqual({ sessionToken: token, sessionId: 'sess-1' });
+      // A grace match replaces nothing.
+      expect(sessionRepository.update).toHaveBeenCalledTimes(1);
+    });
+
+    it('sends nothing on a grace match whose current token does not sign again to the stored hash', async () => {
+      const { row } = await rotatedOnce();
+      // As for a session rotated before the token's iat came from rotated_at.
+      findOneResults = [null, { ...row, rotated_at: new Date((row.rotated_at as Date).getTime() - 2000) }];
+
+      const result = await service.rotateSessionToken('user-1', 'incoming-token', meta);
+
+      expect(result).toEqual({ sessionToken: null, sessionId: 'sess-1' });
+    });
+
+    it('turns a rotation another refresh beat into a grace match with the winner token', async () => {
+      const { token: winner, row } = await rotatedOnce();
+      sessionRepository.update.mockClear();
+      // Read before the winner wrote; the conditional write then finds the token changed.
+      findOneResults = [sessionRow('sess-1'), null, row];
+      sessionRepository.update.mockResolvedValueOnce({ affected: 0 });
+
+      const result = await service.rotateSessionToken('user-1', 'incoming-token', meta);
+
+      expect(result).toEqual({ sessionToken: winner, sessionId: 'sess-1' });
+    });
+
+    it('looks again rather than trusting a write whose row count the driver did not report', async () => {
+      const { token: winner, row } = await rotatedOnce();
+      sessionRepository.update.mockClear();
+      findOneResults = [sessionRow('sess-1'), null, row];
+      sessionRepository.update.mockResolvedValueOnce({ affected: undefined } as never);
+
+      const result = await service.rotateSessionToken('user-1', 'incoming-token', meta);
+
+      expect(result).toEqual({ sessionToken: winner, sessionId: 'sess-1' });
+    });
+
+    it('writes nothing when a rotation in the same second signs the token it was given', async () => {
+      // Pinned inside one second: the second rotation signs the very token the first one issued.
+      jest.useFakeTimers({
+        now: new Date('2026-11-16T10:00:00.100Z'),
+        doNotFake: ['nextTick', 'queueMicrotask', 'setImmediate', 'setTimeout', 'setInterval'],
+      });
+
+      try {
+        const { token, row } = await rotatedOnce();
+        sessionRepository.update.mockClear();
+        jest.setSystemTime(new Date('2026-11-16T10:00:00.900Z'));
+        findOneResults = [row];
+
+        const result = await service.rotateSessionToken('user-1', token, meta);
+
+        expect(result).toEqual({ sessionToken: token, sessionId: 'sess-1' });
+        // previous_token still names the token before it, which another tab may still be sending.
+        expect(sessionRepository.update).not.toHaveBeenCalled();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('refuses a rotation whose session a sign-out ended before it wrote', async () => {
+      findOneResults = [sessionRow('sess-1'), null, null];
+      sessionRepository.update.mockResolvedValueOnce({ affected: 0 });
+
+      await expect(service.rotateSessionToken('user-1', 'incoming-token', meta)).rejects.toThrow(
+        new UnauthorizedException('Invalid session'),
+      );
+      expect(sessionRepository.save).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('invalidateOtherSessions', () => {
+    const digest = (value: string) =>
+      createHmac('sha256', config.auth.session.fieldPepper).update(value).digest('hex');
+
+    it("ends the other sessions and drops the kept session's previous token", async () => {
+      await service.invalidateOtherSessions('user-1', 'current-token');
+
+      expect(sessionRepository.delete).toHaveBeenCalledWith({
+        user: { id: 'user-1' },
+        token: expect.any(FindOperator),
+      });
+      expect(sessionRepository.update).toHaveBeenCalledWith(
+        { user: { id: 'user-1' }, token: digest('current-token') },
+        { previous_token: null },
+      );
+    });
+
+    it('ends every session and updates none without a session cookie', async () => {
+      await service.invalidateOtherSessions('user-1', null);
+
+      expect(sessionRepository.delete).toHaveBeenCalledWith({ user: { id: 'user-1' } });
+      expect(sessionRepository.update).not.toHaveBeenCalled();
     });
   });
 
@@ -216,6 +346,12 @@ describe('AuthService — session id binding', () => {
         save: jest.fn(async (entity: SessionEntity) => entity),
         findOne: jest.fn(async ({ where }: { where: Record<string, unknown> }) => {
           return table.find((row) => matchesWhere(row, where)) ?? null;
+        }),
+        update: jest.fn(async (where: Record<string, unknown>, partial: Partial<SessionEntity>) => {
+          const rows = table.filter((row) => matchesWhere(row, where));
+          rows.forEach((row) => Object.assign(row, partial));
+
+          return { affected: rows.length };
         }),
         delete: jest.fn(async ({ id }: { id: string }) => {
           const before = table.length;
@@ -536,6 +672,7 @@ describe('AuthService: telling open live-update streams', () => {
     const repo = {
       findOne: jest.fn(async () => rows[0] ?? null),
       delete: jest.fn(async () => ({ affected: rows.length })),
+      update: jest.fn(async () => ({ affected: 1 })),
     };
     const liveChanges = { publishRevoked: jest.fn().mockResolvedValue(undefined) };
     const service = new AuthService(
@@ -606,5 +743,15 @@ describe('AuthService: telling open live-update streams', () => {
     await service.invalidateOtherSessions('user-1', 'cookie-token');
 
     expect(liveChanges.publishRevoked).not.toHaveBeenCalled();
+  });
+
+  it('tells open streams only after the kept session has dropped its previous token', async () => {
+    const { service, repo, liveChanges } = makeService([{ id: 'sess-2' }]);
+
+    await service.invalidateOtherSessions('user-1', 'cookie-token');
+
+    expect(repo.update.mock.invocationCallOrder[0]).toBeLessThan(
+      liveChanges.publishRevoked.mock.invocationCallOrder[0] ?? 0,
+    );
   });
 });
