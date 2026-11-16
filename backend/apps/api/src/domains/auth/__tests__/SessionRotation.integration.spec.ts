@@ -257,6 +257,23 @@ describeWithDatabase(`Session refresh, against real Postgres (${availability.tar
       expect(await outcome(previous)).toBe(401);
     });
 
+    it('refuses the previous token of the session that changed the password, inside the window', async () => {
+      // A copy of the cookie from before this browser's last refresh would otherwise get the
+      // current token back and outlive the password change or "Sign out everywhere".
+      const { sessionId, previous, current } = await signInAndRefresh();
+      await authService.invalidateOtherSessions(userId, current);
+
+      expect(await outcome(previous)).toBe(401);
+      // The browser that made the change stays signed in with the token it holds.
+      await nextSecond();
+      expect(typeof (await outcome(current))).toBe('string');
+      expect(
+        await dataSource.query<Array<{ id: string }>>('SELECT id FROM ci.sessions WHERE id = $1', [
+          sessionId,
+        ]),
+      ).toHaveLength(1);
+    });
+
     it('does not bring back a session that a sign-out racing the refresh ended', async () => {
       // An unconditional save of the row the refresh read inserts it again when a sign-out deleted it
       // in between. The conditional update finds no row and the refresh is refused instead.

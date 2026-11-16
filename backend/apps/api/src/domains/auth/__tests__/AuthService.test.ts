@@ -222,6 +222,31 @@ describe('AuthService — session id binding', () => {
     });
   });
 
+  describe('invalidateOtherSessions', () => {
+    const digest = (value: string) =>
+      createHmac('sha256', config.auth.session.fieldPepper).update(value).digest('hex');
+
+    it("ends the other sessions and drops the kept session's previous token", async () => {
+      await service.invalidateOtherSessions('user-1', 'current-token');
+
+      expect(sessionRepository.delete).toHaveBeenCalledWith({
+        user: { id: 'user-1' },
+        token: expect.any(FindOperator),
+      });
+      expect(sessionRepository.update).toHaveBeenCalledWith(
+        { user: { id: 'user-1' }, token: digest('current-token') },
+        { previous_token: null },
+      );
+    });
+
+    it('ends every session and updates none without a session cookie', async () => {
+      await service.invalidateOtherSessions('user-1', null);
+
+      expect(sessionRepository.delete).toHaveBeenCalledWith({ user: { id: 'user-1' } });
+      expect(sessionRepository.update).not.toHaveBeenCalled();
+    });
+  });
+
   describe('resolveCsrfScope', () => {
     it('returns the sid from a valid session cookie', () => {
       const token = jwtService.sign(

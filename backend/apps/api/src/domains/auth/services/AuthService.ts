@@ -329,6 +329,10 @@ export class AuthService {
    * they're mid-way through. `currentToken` is null for an API-key-authenticated
    * request (native holds no session cookie at all), in which case there is no
    * "current session" to spare and every session is invalidated.
+   *
+   * The session that stays keeps only the token this request holds. The token its last refresh
+   * replaced would still be a grace match for the rest of the window, and a grace match gets the
+   * current token back, so a copy of the old cookie would outlive the credential change.
    */
   async invalidateOtherSessions(userId: string, currentToken: string | null | undefined): Promise<void> {
     const currentHashed = currentToken ? this.digest(currentToken) : null;
@@ -337,6 +341,13 @@ export class AuthService {
       user: { id: userId },
       ...(currentHashed ? { token: Not(currentHashed) } : {}),
     });
+
+    if (currentHashed) {
+      await this.sessionRepository.update(
+        { user: { id: userId }, token: currentHashed },
+        { previous_token: null },
+      );
+    }
   }
 
   /**
