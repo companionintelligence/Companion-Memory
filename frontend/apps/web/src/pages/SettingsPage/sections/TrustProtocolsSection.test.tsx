@@ -54,7 +54,7 @@ describe('TrustProtocolsSection', () => {
   it('says beside the Trust Tasks activation line to leave it off, and on no other card', () => {
     render(<TrustProtocolsSection />);
 
-    const caveat = 'Leave off until its security review (CI-Engineering ADR-0015)';
+    const caveat = 'Leave off until its security review is done';
     const card = (name: string) => screen.getByText(name).closest<HTMLElement>('[data-slot="card"]')!;
 
     expect(screen.getAllByText(caveat)).toHaveLength(1);

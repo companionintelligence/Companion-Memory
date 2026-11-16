@@ -90,7 +90,7 @@ export const TRUST_PROTOCOL_SPECS: readonly TrustProtocolSpec[] = [
     cryptoOrProof: 'eddsa-jcs-2022 signed task envelopes & state transitions',
     maturity: 'Provisional (Flag-gated)',
     securityBoundary: 'Fail-closed 404 when flag disabled; bounded task payloads',
-    caveat: 'Leave off until its security review (CI-Engineering ADR-0015)',
+    caveat: 'Leave off until its security review is done',
   },
   {
     id: 'pws',
