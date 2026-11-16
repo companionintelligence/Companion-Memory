@@ -259,7 +259,7 @@ export class AuthService {
   /**
    * End the session `token` belongs to, for sign-out and for the Hub bridge replacing a session.
    * True when a session was ended. False when none was left to end: signed out already, signed out
-   * by a password change on another device, expired, or ended by a concurrent sign-out between the
+   * by a password change on another device, expired or ended by a concurrent sign-out between the
    * lookup and the delete.
    *
    * Matched like {@link resolveLiveSession}: the token's hash (or the previous hash inside the

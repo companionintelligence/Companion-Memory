@@ -325,7 +325,7 @@ describe('HubForwardAuthBridgeService', () => {
       expect(authService.issueSessionToken).toHaveBeenCalledWith('user-a', expect.any(Object));
     });
 
-    it('still replaces the cookie when ending the old session fails, and says so', async () => {
+    it('logs a failure to end the old session and still replaces the cookie', async () => {
       const { service, userService, authService, logger } = makeService();
       authService.validateSessionToken.mockReturnValue({ sub: 'user-a' });
       authService.resolveLiveSession.mockResolvedValue(null);

@@ -706,8 +706,8 @@ export class HubForwardAuthBridgeService {
   }
 
   /**
-   * End the session this browser holds, from whatever address and browser it now has: the session
-   * being replaced must not stay refreshable. Nothing to end (expired, signed out) is fine.
+   * End the session this browser holds, from whatever address and browser it now has: a session
+   * being replaced or refused must not stay refreshable. Nothing to end (expired, signed out) is fine.
    */
   private async invalidate(session: MemorySession | null): Promise<void> {
     if (!session) {
@@ -720,7 +720,7 @@ export class HubForwardAuthBridgeService {
       // Best effort: whatever replaces or clears the cookie below still wins. Nothing to end is a
       // `false`, not a throw, so this is the database failing and the old row is still refreshable.
       this.logger.warn(
-        `could not end the Memory session being replaced: ${error instanceof Error ? error.message : String(error)}`,
+        `could not end this browser's Memory session: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   }
