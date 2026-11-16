@@ -8,6 +8,7 @@ import { HubForwardAuthGuard, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { ValidationPipe } from '@ci/common/pipes';
 import { NodeService } from '@ci/domains/graph';
 
+import type { Delta } from '../entities/DeltaEntity';
 import { DeltaService } from '../services/DeltaService';
 
 // Exported for `__tests__/cliWireContract.test.ts`: zod drops unknown keys, so a
@@ -22,6 +23,21 @@ export const getDeltasSchema = z.object({
 });
 
 type GetDeltasDto = z.infer<typeof getDeltasSchema>;
+
+/**
+ * The entity a delta points at: a relationship's far end, or for a record merged
+ * into another one, the record it was merged into (`merged_into_entity_id` in
+ * its changed fields), so Change History can name it rather than show its id.
+ */
+function toEntityIdOf(delta: Delta): string | null {
+  if (delta.toEntityId) {
+    return delta.toEntityId;
+  }
+
+  const mergedInto = delta.changeType === 'merged' ? delta.changedFields?.merged_into_entity_id?.new : null;
+
+  return typeof mergedInto === 'string' ? mergedInto : null;
+}
 
 @Controller('audit')
 @UseGuards(JwtOrApiKeyAuthGuard)
@@ -84,8 +100,9 @@ export class AuditController {
         relatedEntityIds.add(delta.fromEntityId);
       }
 
-      if (delta.toEntityId) {
-        relatedEntityIds.add(delta.toEntityId);
+      const toEntityId = toEntityIdOf(delta);
+      if (toEntityId) {
+        relatedEntityIds.add(toEntityId);
       }
     }
 
@@ -106,7 +123,8 @@ export class AuditController {
     const mappedDeltas = deltas.map((delta) => {
       const entityNode = delta.entityId ? nodeById.get(delta.entityId) : null;
       const fromEntityNode = delta.fromEntityId ? nodeById.get(delta.fromEntityId) : null;
-      const toEntityNode = delta.toEntityId ? nodeById.get(delta.toEntityId) : null;
+      const toEntityId = toEntityIdOf(delta);
+      const toEntityNode = toEntityId ? nodeById.get(toEntityId) : null;
 
       const fieldChanges = Object.entries(delta.changedFields ?? {}).map(([field, value]) => ({
         field,
@@ -142,9 +160,9 @@ export class AuditController {
               name: fromEntityNode?.name ?? null,
             }
           : null,
-        toEntity: delta.toEntityId
+        toEntity: toEntityId
           ? {
-              entityId: delta.toEntityId,
+              entityId: toEntityId,
               entityType: toEntityNode?.entityType ?? null,
               name: toEntityNode?.name ?? null,
             }

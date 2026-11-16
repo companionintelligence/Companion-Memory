@@ -11,7 +11,7 @@ import { PersonUpdatedEvent } from '@ci/domains/memory/events';
 
 import { type Person, PersonEntity } from '../entities/PersonEntity';
 
-import { GraphDeltaWriter } from './GraphDeltaWriter';
+import { GraphDeltaWriter, changedFieldsBetween } from './GraphDeltaWriter';
 import { sweepLeftoverEdges } from './mergeEdgeSweep';
 
 /** Per-table re-point counts recorded in the ci.entity_merges audit row. */
@@ -106,8 +106,9 @@ export class PersonMergeService {
         description: string | null;
         properties: Record<string, unknown>;
         merged_into_entity_id: string | null;
+        is_active: boolean | null;
       }> = await em.query(
-        `SELECT entity_id, entity_type, name, description, properties, merged_into_entity_id
+        `SELECT entity_id, entity_type, name, description, properties, merged_into_entity_id, is_active
            FROM ci.entities
           WHERE owner_user_id = $1 AND entity_id = ANY($2::uuid[])
           FOR UPDATE`,
@@ -186,22 +187,42 @@ export class PersonMergeService {
         [ownerUserId, sources, targetId],
       );
 
+      // Change History reads a side a delta leaves out as "empty", so a kept
+      // person's row must hold its real before and after values (as
+      // PersonService records an edit) and only the fields the merge moved.
+      // A merge that adds nothing to the kept person writes no row for it.
+      // The hand-set list is bookkeeping rather than a field anyone edited;
+      // no PersonService row records it either.
+      const targetProperties = target.properties ?? {};
+      const propertyKeys = new Set([...Object.keys(targetProperties), ...Object.keys(mergedProperties)]);
+      propertyKeys.delete(USER_EDITED_KEYS);
+      const keptChanges = {
+        ...changedFieldsBetween(
+          { name: target.name, description: target.description },
+          { name: mergedName, description: mergedDescription },
+          ['name', 'description'],
+        ),
+        ...changedFieldsBetween(targetProperties, mergedProperties, propertyKeys),
+      };
+
       await this.graphDeltaWriter.recordMany(
         [
-          {
-            nodeType: 'entity' as const,
-            changeType: 'updated' as const,
-            entityId: targetId,
-            entityType: 'Person',
-            ownerUserId,
-            changeSource: 'PersonMergeService.mergePeople',
-            changedByUserId: ownerUserId,
-            changedFields: {
-              name: { new: mergedName },
-              description: { new: mergedDescription },
-              properties: { new: mergedProperties },
-            },
-          },
+          ...(Object.keys(keptChanges).length > 0
+            ? [
+                {
+                  nodeType: 'entity' as const,
+                  changeType: 'updated' as const,
+                  entityId: targetId,
+                  entityType: 'Person',
+                  ownerUserId,
+                  changeSource: 'PersonMergeService.mergePeople',
+                  changedByUserId: ownerUserId,
+                  changedFields: keptChanges,
+                },
+              ]
+            : []),
+          // A merged-away person keeps its name; what changed is where it points
+          // and that it is no longer live.
           ...sources.map((sourceId) => ({
             nodeType: 'entity' as const,
             changeType: 'merged' as const,
@@ -210,10 +231,11 @@ export class PersonMergeService {
             ownerUserId,
             changeSource: 'PersonMergeService.mergePeople',
             changedByUserId: ownerUserId,
-            changedFields: {
-              name: { old: byId.get(sourceId)?.name ?? null },
-              merged_into_entity_id: { new: targetId },
-            },
+            changedFields: changedFieldsBetween(
+              { merged_into_entity_id: null, is_active: byId.get(sourceId)?.is_active !== false },
+              { merged_into_entity_id: targetId, is_active: false },
+              ['merged_into_entity_id', 'is_active'],
+            ),
           })),
         ],
         em,

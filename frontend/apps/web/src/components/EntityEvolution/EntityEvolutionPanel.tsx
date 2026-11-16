@@ -206,7 +206,29 @@ function isSameValue(oldValue: unknown, newValue: unknown): boolean {
  * left alone — which rendered as "Description: empty -> empty". Identical sides are not a change.
  */
 function meaningfulFieldChanges(delta: EvolutionDelta) {
-  return delta.fieldChanges.filter((change) => !isSameValue(change.oldValue, change.newValue));
+  return delta.fieldChanges.filter(
+    (change) =>
+      !isSameValue(change.oldValue, change.newValue) &&
+      // A merge's headline names the record it went into; its id says nothing more.
+      !(delta.changeType === 'merged' && change.field === 'merged_into_entity_id') &&
+      // A merge row stored before merges recorded both sides held the merged-away record's own name
+      // with no new side, which read as "Name: Yuki Tanaka -> empty". The name did not change.
+      !(delta.changeType === 'merged' && !('new' in (delta.changedFields?.[change.field] ?? {}))),
+  );
+}
+
+/** What happened to an entity's own fields, in words, for the line under the badges. */
+function entityChangeHeadline(delta: EvolutionDelta): string {
+  if (delta.changeType === 'created') {
+    return `Added to your graph as ${renderTimelineTitle(delta)}`;
+  }
+
+  if (delta.changeType === 'merged') {
+    // The API names the record this one was merged into as `toEntity`.
+    return `Merged into ${delta.toEntity?.name ?? 'another record'}`;
+  }
+
+  return 'Fields edited';
 }
 
 export function EntityEvolutionPanel({ entityId, entityName, refreshKey }: Props) {
@@ -400,11 +422,7 @@ export function EntityEvolutionPanel({ entityId, entityName, refreshKey }: Props
                     </p>
                   ) : (
                     <>
-                      <p className="mt-2 text-sm font-medium">
-                        {isCreation
-                          ? `Added to your graph as ${renderTimelineTitle(delta)}`
-                          : 'Fields edited'}
-                      </p>
+                      <p className="mt-2 text-sm font-medium">{entityChangeHeadline(delta)}</p>
 
                       {fieldChanges.length > 0 && (
                         <div className="mt-2 space-y-1">

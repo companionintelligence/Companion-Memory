@@ -22,9 +22,11 @@ interface LocationRow {
   description: string | null;
   properties: Record<string, unknown>;
   merged_into_entity_id: string | null;
+  is_active?: boolean | null;
   parent_place_id: string | null;
   place_kind: string | null;
   has_point: boolean;
+  coordinates?: number[] | null;
   has_boundary: boolean;
 }
 
@@ -498,6 +500,83 @@ describe('PlaceMergeService', () => {
         expect(input.nodeType).toBe('entity');
       }
     }
+  });
+
+  it("records the kept place's real before and after values and each merged-away place's move instead of a name changing to or from nothing", async () => {
+    const harness = makeHarness([
+      locationRow(TARGET, { name: 'Blue Bottle', properties: { address: '1 Ferry Building' } }),
+      locationRow(SOURCE_A, {
+        name: 'Blue Bottle Coffee',
+        place_kind: 'venue',
+        properties: { address: '1 Ferry Bldg', website: 'https://bluebottle.example.com' },
+      }),
+      locationRow(SOURCE_B, { name: 'Blue Bottle', is_active: false }),
+    ]);
+
+    await harness.service.mergePlaces(CONTEXT, [SOURCE_A, SOURCE_B], TARGET);
+
+    const entityDeltas = harness.recordMany.mock.calls
+      .flatMap(([inputs]) => inputs)
+      .filter((input: { nodeType: string }) => input.nodeType === 'entity');
+
+    expect(entityDeltas).toEqual([
+      expect.objectContaining({
+        changeType: 'updated',
+        entityId: TARGET,
+        changedFields: {
+          place_kind: { old: null, new: 'venue' },
+          website: { old: null, new: 'https://bluebottle.example.com' },
+        },
+      }),
+      expect.objectContaining({
+        changeType: 'merged',
+        entityId: SOURCE_A,
+        changedFields: {
+          merged_into_entity_id: { old: null, new: TARGET },
+          is_active: { old: true, new: false },
+        },
+      }),
+      expect.objectContaining({
+        changeType: 'merged',
+        entityId: SOURCE_B,
+        changedFields: { merged_into_entity_id: { old: null, new: TARGET } },
+      }),
+    ]);
+  });
+
+  it('records the point a kept place gains from a source, so a merge that only places it on the map still leaves a row', async () => {
+    const harness = makeHarness([
+      locationRow(TARGET, { name: 'Blue Bottle', has_point: false, coordinates: null }),
+      locationRow(SOURCE_A, { name: 'Blue Bottle', has_point: true, coordinates: [-122.3934, 37.7955] }),
+    ]);
+
+    await harness.service.mergePlaces(CONTEXT, [SOURCE_A], TARGET);
+
+    const kept = harness.recordMany.mock.calls
+      .flatMap(([inputs]) => inputs)
+      .find((input: { entityId: string }) => input.entityId === TARGET);
+
+    expect(kept).toEqual(
+      expect.objectContaining({
+        changeType: 'updated',
+        changedFields: { coordinates: { old: null, new: [-122.3934, 37.7955] } },
+      }),
+    );
+  });
+
+  it('never gives the target a parent that is itself one of the places being merged away', async () => {
+    // SOURCE_A sits inside SOURCE_B, which sits inside CITY: SOURCE_B is about
+    // to become a tombstone, so the parent the target inherits is CITY.
+    const harness = makeHarness([
+      locationRow(TARGET, { name: 'Ferry Building' }),
+      locationRow(SOURCE_A, { name: 'Ferry Building', parent_place_id: SOURCE_B }),
+      locationRow(SOURCE_B, { name: 'Ferry Building Marketplace', parent_place_id: CITY }),
+    ]);
+
+    await harness.service.mergePlaces(CONTEXT, [SOURCE_A, SOURCE_B], TARGET);
+
+    const [, , , , , , parent] = statementsMatching(harness, 'properties = $5::jsonb')[0].params ?? [];
+    expect(parent).toBe(CITY);
   });
 
   it('refuses a sweep answer that is not one { deleted, rescued } row, rather than reading it as "nothing swept"', async () => {

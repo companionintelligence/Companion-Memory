@@ -5,12 +5,13 @@ import { EntityManager, Repository } from 'typeorm';
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { countAffected } from '@ci/common/persistence';
+import { USER_EDITED_KEYS } from '@ci/common/userEditedProperties';
 import { EventService } from '@ci/domains/events';
 import { PlaceUpdatedEvent } from '@ci/domains/memory/events';
 
 import { type Place, PlaceEntity } from '../entities/PlaceEntity';
 
-import { GraphDeltaWriter } from './GraphDeltaWriter';
+import { GraphDeltaWriter, changedFieldsBetween } from './GraphDeltaWriter';
 import { sweepLeftoverEdges } from './mergeEdgeSweep';
 
 /** Per-table re-point counts recorded in the `ci.entity_merges` audit row. */
@@ -55,9 +56,12 @@ interface LocationRow {
   description: string | null;
   properties: Record<string, unknown>;
   merged_into_entity_id: string | null;
+  is_active: boolean | null;
   parent_place_id: string | null;
   place_kind: string | null;
   has_point: boolean;
+  /** `[lng, lat]` of `location_point`, as PlaceService.update records it; null without a point. */
+  coordinates: number[] | null;
   has_boundary: boolean;
 }
 
@@ -122,9 +126,10 @@ export class PlaceMergeService {
 
     const counts = await manager.transaction(async (em) => {
       const rows: LocationRow[] = await em.query(
-        `SELECT entity_id, entity_type, name, description, properties, merged_into_entity_id,
+        `SELECT entity_id, entity_type, name, description, properties, merged_into_entity_id, is_active,
                 parent_place_id, place_kind,
                 location_point IS NOT NULL AS has_point,
+                ST_AsGeoJSON(location_point)::jsonb -> 'coordinates' AS coordinates,
                 location_boundary IS NOT NULL AS has_boundary
            FROM ci.entities
           WHERE owner_user_id = $1 AND entity_id = ANY($2::uuid[])
@@ -197,9 +202,13 @@ export class PlaceMergeService {
       const boundaryDonor = target.has_boundary
         ? null
         : (sourceRows.find((row) => row.has_boundary)?.entity_id ?? null);
+      // Never a source: one source nested under another would hand the target a
+      // parent that is about to become a tombstone.
       const parentDonor =
         target.parent_place_id ??
-        sourceRows.map((row) => row.parent_place_id).find((id) => id != null && id !== targetId) ??
+        sourceRows
+          .map((row) => row.parent_place_id)
+          .find((id) => id != null && id !== targetId && !sources.includes(id)) ??
         null;
       const mergedKind = target.place_kind ?? sourceRows.find((row) => row.place_kind)?.place_kind ?? null;
 
@@ -236,22 +245,51 @@ export class PlaceMergeService {
         [ownerUserId, sources, targetId],
       );
 
+      // Real before and after values only, as PersonMergeService records them:
+      // Change History reads a side a delta leaves out as "empty". A point the
+      // target gains from a source is a change too (PlaceService.update records
+      // it as `coordinates`), or a merge that only places the kept row on the
+      // map would leave no row for it.
+      const targetProperties = target.properties ?? {};
+      const propertyKeys = new Set([...Object.keys(targetProperties), ...Object.keys(mergedProperties)]);
+      propertyKeys.delete(USER_EDITED_KEYS);
+      const keptChanges = {
+        ...changedFieldsBetween(
+          {
+            name: target.name,
+            description: target.description,
+            place_kind: target.place_kind,
+            parent_place_id: target.parent_place_id,
+            coordinates: target.coordinates,
+          },
+          {
+            name: mergedName,
+            description: mergedDescription,
+            place_kind: mergedKind,
+            parent_place_id: parentDonor,
+            coordinates: pointDonor ? (byId.get(pointDonor)?.coordinates ?? null) : target.coordinates,
+          },
+          ['name', 'description', 'place_kind', 'parent_place_id', 'coordinates'],
+        ),
+        ...changedFieldsBetween(targetProperties, mergedProperties, propertyKeys),
+      };
+
       await this.graphDeltaWriter.recordMany(
         [
-          {
-            nodeType: 'entity' as const,
-            changeType: 'updated' as const,
-            entityId: targetId,
-            entityType: LOCATION_ENTITY_TYPE,
-            ownerUserId,
-            changeSource: 'PlaceMergeService.mergePlaces',
-            changedByUserId: ownerUserId,
-            changedFields: {
-              name: { new: mergedName },
-              description: { new: mergedDescription },
-              properties: { new: mergedProperties },
-            },
-          },
+          ...(Object.keys(keptChanges).length > 0
+            ? [
+                {
+                  nodeType: 'entity' as const,
+                  changeType: 'updated' as const,
+                  entityId: targetId,
+                  entityType: LOCATION_ENTITY_TYPE,
+                  ownerUserId,
+                  changeSource: 'PlaceMergeService.mergePlaces',
+                  changedByUserId: ownerUserId,
+                  changedFields: keptChanges,
+                },
+              ]
+            : []),
           ...sources.map((sourceId) => ({
             nodeType: 'entity' as const,
             changeType: 'merged' as const,
@@ -260,10 +298,11 @@ export class PlaceMergeService {
             ownerUserId,
             changeSource: 'PlaceMergeService.mergePlaces',
             changedByUserId: ownerUserId,
-            changedFields: {
-              name: { old: byId.get(sourceId)?.name ?? null },
-              merged_into_entity_id: { new: targetId },
-            },
+            changedFields: changedFieldsBetween(
+              { merged_into_entity_id: null, is_active: byId.get(sourceId)?.is_active !== false },
+              { merged_into_entity_id: targetId, is_active: false },
+              ['merged_into_entity_id', 'is_active'],
+            ),
           })),
         ],
         em,

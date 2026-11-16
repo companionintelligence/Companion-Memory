@@ -234,6 +234,66 @@ describe('EntityEvolutionPanel', () => {
     expect(screen.getByText('New link to Hanzla Mateen')).toBeInTheDocument();
   });
 
+  it('reads a merge as the record it went into, by name rather than id', () => {
+    mockDeltas([
+      delta({
+        changeType: 'merged',
+        changedFields: {
+          merged_into_entity_id: { old: null, new: 'kept-1' },
+          is_active: { old: true, new: false },
+        },
+        fieldChanges: [
+          { field: 'merged_into_entity_id', oldValue: null, newValue: 'kept-1' },
+          { field: 'is_active', oldValue: true, newValue: false },
+        ],
+        toEntity: { entityId: 'kept-1', entityType: 'person', name: 'Yuki Tanaka' },
+      }),
+    ]);
+
+    render(<EntityEvolutionPanel entityId={FOCUS_ID} />);
+
+    expect(screen.getByText('Merged into Yuki Tanaka')).toBeInTheDocument();
+    expect(screen.queryByText('Fields edited')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Merged Into Entity Id/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Is Active:/)).toBeInTheDocument();
+  });
+
+  it('does not read a merge row stored before merges recorded both sides as the name being cleared', () => {
+    mockDeltas([
+      delta({
+        changeType: 'merged',
+        changedFields: {
+          name: { old: 'Yuki Tanaka' },
+          merged_into_entity_id: { new: 'kept-1' },
+        },
+        fieldChanges: [
+          { field: 'name', oldValue: 'Yuki Tanaka', newValue: null },
+          { field: 'merged_into_entity_id', oldValue: null, newValue: 'kept-1' },
+        ],
+        toEntity: { entityId: 'kept-1', entityType: 'person', name: 'Yuki T.' },
+      }),
+    ]);
+
+    render(<EntityEvolutionPanel entityId={FOCUS_ID} />);
+
+    expect(screen.getByText('Merged into Yuki T.')).toBeInTheDocument();
+    expect(screen.queryByText(/Name:/)).not.toBeInTheDocument();
+  });
+
+  it('still reads a merge whose target can no longer be named', () => {
+    mockDeltas([
+      delta({
+        changeType: 'merged',
+        fieldChanges: [{ field: 'merged_into_entity_id', oldValue: null, newValue: 'gone-1' }],
+        toEntity: null,
+      }),
+    ]);
+
+    render(<EntityEvolutionPanel entityId={FOCUS_ID} />);
+
+    expect(screen.getByText('Merged into another record')).toBeInTheDocument();
+  });
+
   it('drops the provenance tiles when there is no provenance', () => {
     mockDeltas(IMPORT_DELTAS);
 
