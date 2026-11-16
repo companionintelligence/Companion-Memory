@@ -184,8 +184,9 @@ Gated by the **`ask` feature flag, which is now `true` by default** — the *loc
 | `askAnswer(…)` | `AskAnswerType` |
 | `myAskGrants` | `[AskGrantType!]!` |
 | `askDisclosureHistory` | `[AskAuditType!]!` |
+| `myPeerLinks` / `peerLink(id)` | `[PeerLinkType!]!` / `PeerLinkType` |
 
-> **Outbound asks need a token you supply.** `SendPeerAskInput.peerAccessToken` is non-nullable: the *caller* must present a CI-Portal-issued access token whose audience is the peer box. CI-Server never mints, exchanges or caches one. An empty `peerAccessToken` sends the ask signed with this box's key alone (`peers.signingKeyJwk`), which only the box's administrator may do ([The token](../peer-federation.md#the-token)). And there is **no API — REST or GraphQL — that creates a `ci.peer_links` row**; both directions hard-require a pre-existing link, so today a link is inserted by hand.
+> **Outbound asks need a token you supply.** `SendPeerAskInput.peerAccessToken` is non-nullable: the *caller* must present a CI-Portal-issued access token whose audience is the peer box. CI-Server never mints, exchanges or caches one. An empty `peerAccessToken` sends the ask signed with this box's key alone (`peers.signingKeyJwk`), which only the box's administrator may do ([The token](../peer-federation.md#the-token)). Both directions require a live `ci.peer_links` row. The owner creates one with `createPeerLink`, `ci peers add`, or the **Link someone new** form on `/asks`. The form cannot set the peer's identity (`peerIssuer`, `peerSubject`), which inbound asks are matched on. Set it with `createPeerLink` or `updatePeerLink`, or with `ci peers add|update --peer-issuer … --peer-subject …` (see [Binding a link to the peer's identity](../peer-federation.md#binding-a-link-to-the-peers-identity)). A peer's public signing key has no API or CLI yet, so it is recorded with SQL (see [Message signatures](../peer-federation.md#message-signatures)).
 
 ### 3.6 Connections / providers / sync jobs
 
@@ -279,9 +280,9 @@ Many newer writes return a `*Payload` wrapper; note also that several entities n
 `createTask`/`updateTask`/`deleteTask`, `completeTask`/`reopenTask`/`deferTask`, `scheduleTask`/`unscheduleTask`, `breakDownTasks`, `acceptProposedTask`/`declineProposedTask`, `acceptTaskPendingChange`/`declineTaskPendingChange`, `acceptCandidate`/`declineCandidate`/`snoozeCandidate`, `syncScheduleSuggestions`.
 
 ### 4.3c Asks & grants writes
-`createAsk`, `approveAsk`/`declineAsk`, `runAsk`, `sendPeerAsk`, `createAskGrant`/`revokeAskGrant`.
+`createAsk`, `approveAsk`/`declineAsk`, `runAsk`, `sendPeerAsk`, `createAskGrant`/`revokeAskGrant`, `createPeerLink`/`updatePeerLink`/`revokePeerLink`.
 
-> The ask **UI components** exist under `frontend/apps/web/src/pages/AsksPage/` but nothing imports them and no route mounts them — the ask surface is backend-plus-component-library today, not reachable in the shipped web app.
+> The ask UI is the `/asks` page (`frontend/apps/web/src/pages/AsksPage/`), which the web app registers only while the `ask` flag is on.
 
 ### 4.4 Connections / providers writes
 `createConnection`/`updateConnection`/`deleteConnection`, `createConnectionSyncJob`/`updateConnectionSyncJob`/`deleteConnectionSyncJob`, `createProviderKey`/`updateProviderKey`/`deleteProviderKey`.
