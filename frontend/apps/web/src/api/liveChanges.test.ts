@@ -716,6 +716,47 @@ describe('liveChanges in the phone app in the background', () => {
     expect(mockedFetch).toHaveBeenCalledTimes(2);
   });
 
+  it('keeps a refused key to its minute when the app returns after the close but inside the wait', async () => {
+    const refused = openStream(401);
+    setLiveChangesAuth('device-key', 'apiKey');
+    subscribeLiveChanges(['tasks'], () => undefined);
+    await refused.opened;
+    await flush();
+
+    // The close runs 15 s in and clears the booked retry; back 30 s after the refusal.
+    goAway();
+    await vi.advanceTimersByTimeAsync(30_000);
+    comeBack();
+    await flush();
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+
+    const retry = openStream();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await retry.opened;
+
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('closes a held stream when the network comes back in the background but reopens it only on return', async () => {
+    const first = openStream();
+    setLiveChangesAuth('device-key', 'apiKey');
+    subscribeLiveChanges(['tasks'], () => undefined);
+    await first.opened;
+    const firstSignal = mockedFetch.mock.calls[0]?.[1]?.signal;
+
+    goAway();
+    window.dispatchEvent(new Event('online'));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(firstSignal?.aborted).toBe(true);
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+
+    const second = openStream();
+    comeBack();
+    await second.opened;
+
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+  });
+
   it('opens no stream for a page that subscribes in the background', async () => {
     goAway();
     setLiveChangesAuth('device-key', 'apiKey');

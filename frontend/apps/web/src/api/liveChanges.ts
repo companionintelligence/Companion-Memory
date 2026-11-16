@@ -349,8 +349,8 @@ function disconnect(): void {
 
 /**
  * Close the stream on purpose (sign-out, a new sign-in, the phone app left in
- * the background). One that subscribers still wanted counts as a drop, so the
- * next stream to open catches up.
+ * the background, a held stream that may be dead). One that subscribers still
+ * wanted counts as a drop, so the next stream to open catches up.
  */
 function closeStream(): void {
   if (controller && subscriberCount() > 0) {
@@ -377,6 +377,7 @@ export function setLiveChangesAuth(next: string | null, kind: LiveChangesAuthKin
 
   if (next && next !== refusedToken) {
     refusedToken = null;
+    refusedAt = null;
 
     if (!controller && subscriberCount() > 0) {
       clearReconnect();
@@ -466,16 +467,6 @@ function reconnectNow(): void {
   }
 }
 
-/** Drop a stream that is still held, as one that may be dead; the next connect catches up. */
-function replaceHeldStream(): void {
-  if (controller && subscriberCount() > 0) {
-    const held = controller;
-    controller = null;
-    missedChanges = true;
-    held.abort();
-  }
-}
-
 /**
  * Back online. A stream that dropped is waiting out a backoff of up to 30 s.
  * One that is still held went through the offline spell and may be dead
@@ -483,7 +474,7 @@ function replaceHeldStream(): void {
  * network goes), so it is replaced rather than trusted.
  */
 function onOnline(): void {
-  replaceHeldStream();
+  closeStream();
   reconnectNow();
 }
 
@@ -518,7 +509,7 @@ function onVisible(): void {
   // Either clock past the grace counts: a needless reconnect costs one request,
   // a dead stream kept costs every change until the next poll.
   if (closePending && away && elapsedSince(away) >= BACKGROUND_CLOSE_MS) {
-    replaceHeldStream();
+    closeStream();
   }
 
   reconnectNow();
