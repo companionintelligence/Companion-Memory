@@ -192,13 +192,11 @@ export class SessionController {
 
     const accessToken = await this.authService.issueAccessToken(userId);
 
-    // If we obtain a new session token from calling `rotateSessionToken` then
-    // we conclude that we have not matched a grace-period rotation and must set
-    // a new cookie value.
-    //
-    // Otherwise we have a grace-period match and we avoid setting a new cookie.
-    // The browser keeps the cookie from the first concurrent request that
-    // performed the real rotation.
+    // A rotation answers with the new token. A grace match (the token the last
+    // rotation replaced: a refresh sent alongside it, or one whose answer never
+    // reached this browser) answers with the session's current token, so the
+    // browser ends up holding it either way. Null only when that token cannot be
+    // signed again; the browser then keeps the cookie it has.
     if (sessionToken) {
       setSessionCookie(req, res, sessionToken);
     }

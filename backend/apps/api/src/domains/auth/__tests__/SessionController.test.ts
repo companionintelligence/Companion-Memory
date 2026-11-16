@@ -322,7 +322,25 @@ describe('SessionController', () => {
         .expect(401);
     });
 
-    it('should not set a session cookie on grace-period match', async () => {
+    it('should set the current token a grace-period match sends back', async () => {
+      // The browser sent the token the last rotation replaced (a refresh alongside it, or one whose
+      // answer never arrived): it gets the session's current token, not a new one.
+      mockAuthService.rotateSessionToken.mockResolvedValue({
+        sessionToken: 'current-session-token',
+        sessionId: MOCK_SESSION_ID,
+      });
+
+      const response = await request(app.getHttpServer())
+        .post('/authenticate/refresh')
+        .set('Cookie', [`${COOKIE_NAME}=old-session-token`, `${CSRF_COOKIE_NAME}=${MOCK_CSRF_TOKEN}`])
+        .set('X-CSRF-Token', MOCK_CSRF_TOKEN)
+        .expect(200);
+
+      expect(parseCookies(response)[COOKIE_NAME].value).toBe('current-session-token');
+      expect(response.body).toEqual({ accessToken: 'access-token-value' });
+    });
+
+    it('should not set a session cookie on a grace-period match with no token to send back', async () => {
       mockAuthService.rotateSessionToken.mockResolvedValue({
         sessionToken: null,
         sessionId: MOCK_SESSION_ID,
