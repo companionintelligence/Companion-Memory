@@ -27,11 +27,8 @@ public class InsightWidgetProvider extends MemoryWidgetProvider {
             return;
         }
 
-        // optString hands back the text "null" for a JSON null, and the snapshot
-        // carries a null prediction until the forecast has been built.
-        String prediction = insight == null || insight.isNull("prediction")
-                ? ""
-                : insight.optString("prediction", "");
+        // The snapshot carries a null prediction until the forecast has been built.
+        String prediction = WidgetSnapshotData.optLabel(insight, "prediction", "No forecast yet");
         double confidence = insight == null ? Double.NaN : insight.optDouble("confidence", Double.NaN);
         String confidenceText = !Double.isNaN(confidence) && !Double.isInfinite(confidence)
                 ? ((int) (Math.max(0, Math.min(1, confidence)) * 100)) + "% likely"
@@ -50,10 +47,10 @@ public class InsightWidgetProvider extends MemoryWidgetProvider {
                     String.format(Locale.getDefault(), "%.1f", kilometers) + " km";
         }
 
-        views.setTextViewText(R.id.insight_prediction, prediction.trim().isEmpty() ? "No forecast yet" : prediction);
+        views.setTextViewText(R.id.insight_prediction, prediction);
         views.setTextViewText(R.id.insight_confidence, confidenceText);
         views.setTextViewText(R.id.insight_metrics, metrics);
-        String forecastUpdatedAt = insight == null ? null : insight.optString("forecastGeneratedAt");
+        String forecastUpdatedAt = WidgetSnapshotData.optText(insight, "forecastGeneratedAt");
         views.setTextViewText(
                 R.id.insight_freshness,
                 WidgetSnapshotData.hasTimestamp(insight, "forecastGeneratedAt")

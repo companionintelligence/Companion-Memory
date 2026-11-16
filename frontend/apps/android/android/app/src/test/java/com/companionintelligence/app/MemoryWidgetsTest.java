@@ -54,6 +54,55 @@ public class MemoryWidgetsTest {
     }
 
     @Test
+    public void planner_widget_says_unscheduled_for_a_task_without_a_due_date() throws Exception {
+        JSONObject undated = snapshot();
+        // The snapshot writes a JSON null for a task with no date.
+        undated.getJSONObject("plan").getJSONArray("tasks").getJSONObject(0).put("dueAt", JSONObject.NULL);
+        undated.getJSONObject("plan").getJSONArray("tasks").put(new JSONObject()
+                .put("id", "task-2")
+                .put("title", "Call the bank"));
+        storeSnapshot(undated);
+        WidgetView widget = render(PlannerWidgetProvider.class, R.layout.widget_plan);
+
+        assertEquals("Unscheduled", text(widget, R.id.plan_due_one));
+        assertEquals("Unscheduled", text(widget, R.id.plan_due_two));
+
+        undated.getJSONObject("plan").getJSONArray("tasks").getJSONObject(0).put("dueAt", "");
+        storeSnapshot(undated);
+        widget = render(PlannerWidgetProvider.class, R.layout.widget_plan);
+
+        assertEquals("Unscheduled", text(widget, R.id.plan_due_one));
+    }
+
+    @Test
+    public void planner_widget_reads_a_null_task_title_or_id_as_missing() throws Exception {
+        JSONObject odd = snapshot();
+        JSONArray tasks = odd.getJSONObject("plan").getJSONArray("tasks");
+        tasks.getJSONObject(0).put("title", JSONObject.NULL);
+        tasks.put(new JSONObject()
+                .put("id", JSONObject.NULL)
+                .put("title", "Call the bank")
+                .put("dueAt", JSONObject.NULL));
+        storeSnapshot(odd);
+        WidgetView widget = render(PlannerWidgetProvider.class, R.layout.widget_plan);
+
+        assertEquals("Untitled task", text(widget, R.id.plan_task_one));
+        assertEquals(View.VISIBLE, widget.view.findViewById(R.id.plan_done_one).getVisibility());
+        assertEquals("Call the bank", text(widget, R.id.plan_task_two));
+        // Without an id there is no task to complete, so no done button.
+        assertEquals(View.GONE, widget.view.findViewById(R.id.plan_done_two).getVisibility());
+
+        tasks.getJSONObject(0).put("title", "   ");
+        tasks.getJSONObject(1).put("id", 42);
+        storeSnapshot(odd);
+        widget = render(PlannerWidgetProvider.class, R.layout.widget_plan);
+
+        assertEquals("Untitled task", text(widget, R.id.plan_task_one));
+        // A number is not a task id the snapshot writes, so no done button either.
+        assertEquals(View.GONE, widget.view.findViewById(R.id.plan_done_two).getVisibility());
+    }
+
+    @Test
     public void insight_widget_renders_forecast_confidence_and_activity_counts() throws Exception {
         storeSnapshot(snapshot());
         WidgetView widget = render(InsightWidgetProvider.class, R.layout.widget_insight);
@@ -77,6 +126,20 @@ public class MemoryWidgetsTest {
 
         assertEquals("No forecast yet", text(widget, R.id.insight_prediction));
         assertEquals("Forecast warming up · still learning", text(widget, R.id.insight_confidence));
+
+        unbuilt.getJSONObject("insight").remove("prediction");
+        unbuilt.getJSONObject("insight").remove("confidence");
+        storeSnapshot(unbuilt);
+        widget = render(InsightWidgetProvider.class, R.layout.widget_insight);
+
+        assertEquals("No forecast yet", text(widget, R.id.insight_prediction));
+        assertEquals("Forecast warming up · still learning", text(widget, R.id.insight_confidence));
+
+        unbuilt.getJSONObject("insight").put("prediction", " ");
+        storeSnapshot(unbuilt);
+        widget = render(InsightWidgetProvider.class, R.layout.widget_insight);
+
+        assertEquals("No forecast yet", text(widget, R.id.insight_prediction));
     }
 
     @Test
