@@ -121,6 +121,49 @@ name: Desktop Release
 #         type: string
 #         default: ''
 #         required: false
+#   workflow_call:
+#     inputs:
+#       version_name:
+#         type: string
+#         required: false
+#       server_image_tag:
+#         type: string
+#         required: false
+#       skip_test_gate:
+#         type: boolean
+#         default: false
+#         required: false
+#       bypass_reason:
+#         type: string
+#         default: ''
+#         required: false
+#     # Repository secrets a caller hands over. The AZURE_* values are declared
+#     # but never passed: the jobs that read them run in the production
+#     # Environment, and GitHub gives a called job with `environment:` that
+#     # Environment's secrets.
+#     secrets:
+#       APPLE_CERTIFICATE:
+#         required: false
+#       APPLE_CERTIFICATE_PASSWORD:
+#         required: false
+#       APPLE_ID:
+#         required: false
+#       APPLE_PASSWORD:
+#         required: false
+#       APPLE_TEAM_ID:
+#         required: false
+#       AZURE_TENANT_ID:
+#         required: false
+#       AZURE_CLIENT_ID:
+#         required: false
+#       AZURE_SUBSCRIPTION_ID:
+#         required: false
+#       AZURE_SIGNING_ENDPOINT:
+#         required: false
+#       AZURE_SIGNING_ACCOUNT:
+#         required: false
+#       AZURE_CERTIFICATE_PROFILE:
+#         required: false
 # <<< ci-local:gated
 on:
   workflow_dispatch:

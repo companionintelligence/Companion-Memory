@@ -111,6 +111,57 @@ name: Mobile Release
 #           - android
 #           - both
 #         default: ios
+#   workflow_call:
+#     inputs:
+#       dry_run:
+#         type: boolean
+#         default: true
+#       version_name:
+#         type: string
+#         required: false
+#       platform:
+#         type: string
+#         default: ios
+#     # The secrets this workflow reads. A lane whose secrets are all absent is skipped.
+#     secrets:
+#       APPSTORE_ISSUER_ID:
+#         required: false
+#       APPSTORE_KEY_ID:
+#         required: false
+#       APPSTORE_PRIVATE_KEY:
+#         required: false
+#       APPLE_TEAM_ID:
+#         required: false
+#       IOS_DIST_CERT_P12_BASE64:
+#         required: false
+#       IOS_DIST_CERT_PASSWORD:
+#         required: false
+#       IOS_PROVISIONING_PROFILE_BASE64:
+#         required: false
+#       IOS_EXTENSION_PROVISIONING_PROFILE_BASE64:
+#         required: false
+#       CI_BROWSER_EXTENSION_DEPLOY_KEY:
+#         required: false
+#       ANDROID_KEYSTORE_BASE64:
+#         required: false
+#       ANDROID_KEYSTORE_PASSWORD:
+#         required: false
+#       ANDROID_KEY_ALIAS:
+#         required: false
+#       ANDROID_KEY_PASSWORD:
+#         required: false
+#       PLAY_SERVICE_ACCOUNT_JSON:
+#         required: false
+#     outputs:
+#       build_number:
+#         description: 'The store build number both lanes used'
+#         value: ${{ jobs.version.outputs.code }}
+#       ios_ran:
+#         description: "'true' when the iOS lane had its secrets and was asked for"
+#         value: ${{ jobs.version.outputs.run_ios }}
+#       android_ran:
+#         description: "'true' when the Android lane had its secrets and was asked for"
+#         value: ${{ jobs.version.outputs.run_android }}
 #
 # # The root install pulls the private @companionintelligence/tokens package from GitHub
 # # Packages; .yarnrc.yml authenticates with ${NODE_AUTH_TOKEN}. Without `packages: read`

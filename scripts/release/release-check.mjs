@@ -396,7 +396,8 @@ class Rows {
     this.add(where, expected, found, versionStatus(expected, found), note);
   }
 
-  async try(where, fn) {
+  // `privateRepo` marks a row that reads another private repository, which a workflow's own token can't.
+  async try(where, fn, { privateRepo = false } = {}) {
     try {
       await fn();
     } catch (err) {
@@ -404,8 +405,7 @@ class Rows {
         .trim()
         .split('\n')[0]
         .slice(0, 200);
-      // CI-Marketplace is private, and a workflow's own token can't read another private repo.
-      if (process.env.GITHUB_ACTIONS === 'true' && /HTTP 40[34]/.test(message)) {
+      if (privateRepo && process.env.GITHUB_ACTIONS === 'true' && /HTTP 40[34]/.test(message)) {
         this.add(
           where,
           '',
@@ -519,11 +519,15 @@ async function checkMemory(requested) {
 
   const pins = {};
   for (const [env, branch] of MARKETPLACE_BRANCHES) {
-    await rows.try(`Hub app store pin (${env})`, async () => {
-      const config = JSON.parse(ghFileText(MARKETPLACE_REPO, 'apps/ci-memory/config.json', branch));
-      pins[env] = normalizeVersion(config.version);
-      rows.version(`Hub app store pin (${env})`, version, pins[env], `CI-Marketplace ${branch}`);
-    });
+    await rows.try(
+      `Hub app store pin (${env})`,
+      async () => {
+        const config = JSON.parse(ghFileText(MARKETPLACE_REPO, 'apps/ci-memory/config.json', branch));
+        pins[env] = normalizeVersion(config.version);
+        rows.version(`Hub app store pin (${env})`, version, pins[env], `CI-Marketplace ${branch}`);
+      },
+      { privateRepo: true },
+    );
   }
 
   for (const [env, host] of STORE_HOSTS) {
