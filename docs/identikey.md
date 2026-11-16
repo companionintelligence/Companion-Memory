@@ -1,15 +1,21 @@
 # IdentiKey: a second way to prove who you are
 
-> **Status: Phase 1 of 5. A library, wired to nothing.** Everything in
-> [`domains/identikey/`](../backend/apps/api/src/domains/identikey/) is pure code and tests: no Nest module,
-> no route, no configuration key, no feature flag, no table, no migration. Nothing in the running
-> application calls it, and merging it changes no behavior. What it gives the next phases is a verifier
+> **Status: Phase 1 of 5. A library, with a route behind a flag that is off by default.** Apart from
+> `IdentikeyModule` and `IdentikeyController`, everything in
+> [`domains/identikey/`](../backend/apps/api/src/domains/identikey/) is pure code and tests, and the domain
+> has no table and no migration. Since Companion-Memory#3439 (merged 2026-11-12, not yet in a
+> release) `IdentikeyModule` is registered with Nest: `POST /auth/identikey/challenge` and
+> `POST /auth/identikey/verify` answer `404` unless `auth.identikey` (`ENABLE_AUTH_IDENTIKEY`, default
+> false) is on. With it on they keep challenges in the process-local `InMemoryNonceStore` and answer a
+> verified response with the key's fingerprint; they enroll and pin nothing, write nothing to the database
+> and create no session.
+> What it gives the next phases is a verifier
 > that has been through an independent attack-and-fix review by a second AI agent (see
 > [Evidence](#evidence-what-was-checked-and-what-was-not)). No person has reviewed it.
-> Phases 2 to 5 are listed under [What is not built](#what-is-not-built) and none of them exists yet.
+> Phases 2 to 5 are listed under [What is not built](#what-is-not-built); of Phase 2, only the route exists.
 > Design record: CI-Engineering
 > [ADR-0020](https://github.com/companionintelligence/CI-Engineering/blob/main/adr/0020-identikey-protocol-alongside-keri.md).
-> Tracking: [CI-Server #1711](https://github.com/companionintelligence/CI-Server/issues/1711).
+> Tracking: [Companion-Memory #1711](https://github.com/companionintelligence/Companion-Memory/issues/1711).
 
 [IdentiKey](https://github.com/identikey) is an open protocol suite (Apache-2.0 OR BSD-2-Clause-Patent,
 Rust reference implementation) for four things a personal-AI appliance needs and the peer-federation work
@@ -26,9 +32,14 @@ Custody of the keys themselves (the IKEYW v2 wallet file) belongs with Phase 2.
 
 ## How this sits next to the KERI-shaped identity
 
-Companion Memory's peer identity today is a **self-certifying identifier**, `did:keri:D<base64url Ed25519 key>`
-([`peers/sovereignKeyId.ts`](../backend/apps/api/src/domains/peers/sovereignKeyId.ts)), carried by RFC 9421 HTTP
-message signatures. It is KERI-_shaped_, not KERI: there is no key event log, no pre-rotation and no CESR.
+A Companion Memory box with a signing key (`peers.signingKeyJwk`, unset by default) signs its peer requests with it,
+using RFC 9421 HTTP message signatures. The `keyid` is the key's RFC 7638 JWK thumbprint, unless the JWK's `kid` is
+the key's own **self-certifying identifier**. A peer that links the box by its Portal OIDC `(iss, sub)` matches the
+thumbprint against the key its link records. The self-certifying forms are `did:keri:D<base64url Ed25519 key>`
+([`peers/sovereignKeyId.ts`](../backend/apps/api/src/domains/peers/sovereignKeyId.ts)) and, since Companion-Memory#3388,
+the W3C `did:key:z6Mk…` form of the same key ([`peers/didKeyId.ts`](../backend/apps/api/src/domains/peers/didKeyId.ts)).
+The Trust Tasks door always presents the `did:keri:D` form, which is KERI-_shaped_, not KERI: there is no key event
+log, no pre-rotation and no CESR.
 The [decentralized-trust design](https://docs.ci.computer/docs/companion-memory/decentralized-trust-keri)
 describes where that is meant to go.
 
@@ -41,11 +52,12 @@ _ceremony_ over the same kind of key:
 | How it proves      | signs each HTTP request (RFC 9421)                 | signs a verifier-issued, single-use challenge                             |
 | Algorithms         | Ed25519 only                                       | Ed25519 or P-256, plus an optional ML-DSA-44/65/87 co-signature           |
 | Replay protection  | `ConsumptionStore.claimOnce` on the signature      | a nonce the verifier issued and spends exactly once                       |
-| Identifier         | `D<jwk x>`                                         | `blake3(dCBOR({alg, key}))`, shown as base58                              |
+| Identifier         | the RFC 7638 thumbprint, `did:keri:D<jwk x>` or `did:key:z6Mk…` | `blake3(dCBOR({alg, key}))`, shown as base58                              |
 | Rotation / history | not implemented                                    | not implemented (the reference's PQ state chain is also not built here)   |
 
-The two identifiers are different strings for the same Ed25519 key, and either is computable from the
-public key alone. [`ed25519KeyFromJwk` / `ed25519JwkOf`](../backend/apps/api/src/domains/identikey/identity/keys.ts)
+These identifiers (the thumbprint, `did:keri:D<x>`, `did:key:z6Mk…` and IdentiKey's fingerprint, a BLAKE3 hash)
+are different strings for the same Ed25519 key, and each is computable from the public key alone.
+[`ed25519KeyFromJwk` / `ed25519JwkOf`](../backend/apps/api/src/domains/identikey/identity/keys.ts)
 convert between this library's key type and the JWK that `config.peers.signingKeyJwk` already uses, so a
 box can answer both ways with one key. Phase 2 decides whether it should (see the ADR).
 
@@ -154,7 +166,7 @@ _them_. What does is that this verifier issued the challenge, and the order is b
 
 | #   | Check                                                                                                                                         | Refusal code                                                | Cost                                 |
 | --- | --------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- | ------------------------------------ |
-| 1   | the response and the challenge inside it decode canonically, within an item budget                                                            | `malformed`, `unknown-algorithm`, `bad-key`, `pq-dangling`  | about 0.1 to 0.2 ms (the key's test) |
+| 1   | the response and the challenge inside it decode canonically, within an item budget                                                            | `malformed`, `unknown-algorithm`, `bad-key`, `bad-signature`, `pq-dangling` | about 0.1 to 0.2 ms (the key's test) |
 | 2   | protocol version is 1                                                                                                                         | `version`                                                   | arithmetic                           |
 | 3   | audience is this verifier                                                                                                                     | `audience`                                                  | arithmetic                           |
 | 4   | nonce is at least 16 bytes                                                                                                                    | `nonce-too-short`                                           | arithmetic                           |
@@ -165,6 +177,9 @@ _them_. What does is that this verifier issued the challenge, and the order is b
 | 9   | the post-quantum **pin** agrees with what the response carries                                                                                | `pq-key-changed`                                            | comparison                           |
 | 10  | policy: `pq-required` demands a PQ signature; if one is present it must verify                                                                | `pq-required`, `bad-signature`                              | milliseconds (ML-DSA)                |
 | 11  | the nonce is spent, for exactly these challenge bytes                                                                                         | `replay`, `unknown-challenge`, `challenge-mismatch`         | one lookup                           |
+
+Step 1 also refuses a classical or post-quantum signature of the wrong length for its algorithm
+(`bad-signature`), so that refusal claims no attempt.
 
 Two different things happen to the nonce. At step 6 the verifier **claims an attempt**: an atomic count,
 made before any signature is checked and whatever the response turns out to say. A challenge allows three
@@ -242,9 +257,10 @@ order. None changes what an honest signer produces, and the reference fixtures s
   protect a first contact made by one.
 - **Rate-limit issuing.** `issue` is unauthenticated by necessity, because the claimant has no credential
   yet, and each challenge holds a slot for its lifetime plus 60 seconds whether or not anyone answers it.
-  One client that issues about 56 challenges a second at the 120-second default (about 3 a second at the
-  3600-second maximum) holds all 10 000 slots, and `issue` then throws `store-full` for everyone. A refused
-  `issue` is cheap (about 0.2 ms), so a full store is a lockout and not an amplifier, but it is a lockout.
+  One client that issues about 56 challenges a second with `ttlSeconds: 120`, the worked example's value
+  (about 3 a second at the 3600-second maximum), holds all 10 000 slots, and `issue` then throws
+  `store-full` for everyone. A refused `issue` is cheap (about 0.2 ms), so a full store is a lockout and not
+  an amplifier, but it is a lockout. `ttlSeconds` has no default: every `ChallengeIssuer` must set it.
   Rate-limit per client in front of `issue`, keep `ttlSeconds` short, and size `maxEntries` for it. A
   shared store needs the same limit.
 - **Share the nonce store between replicas.** `InMemoryNonceStore` is correct for one process. Two API
@@ -297,7 +313,9 @@ key value in the library one that is already known to be usable. Rate-limit the 
 Checked:
 
 - The Rust crate's committed fixtures (`challenge.bin`, `response-ed25519.bin`, `response-p256.bin`)
-  verify here, and the TypeScript signer rebuilds `response-ed25519.bin` **byte for byte** from its seed.
+  verify here, the TypeScript encoder rebuilds `challenge.bin` **byte for byte**, and the TypeScript signer
+  rebuilds `response-ed25519.bin` **byte for byte** from its seed. `response-p256.bin` can only be verified:
+  the Rust crate signs with RFC 6979 nonces, and OpenSSL picks a random one.
 - ML-DSA-44/65/87 public keys and deterministic signatures are byte-identical to those of a second,
   unrelated implementation (`dilithium-py`, pure-Python FIPS 204), and a hybrid response assembled from the
   Rust Ed25519 signature plus the Python ML-DSA signature passes `pq-required`.
@@ -337,7 +355,7 @@ the checksums, provenance and the generator script.
 
 | Phase | Scope | Why it is separate |
 | --- | --- | --- |
-| 2 | Custody and authentication wiring: **enrollment** (registering a key and its post-quantum key in one step, both signing a message that names both, the only place a pin may come from), a database nonce store and pin table, a route behind a default-off flag, rate limiting of `issue`, the IKEYW v2 wallet behind the `Signer` seam | Needs a migration and a decision about who may enroll a key |
+| 2 | Custody and authentication wiring: **enrollment** (registering a key and its post-quantum key in one step, both signing a message that names both, the only place a pin may come from), a database nonce store and pin table, a route behind a default-off flag, rate limiting of `issue`, the IKEYW v2 wallet behind the `Signer` seam. Of these, only the route exists (Companion-Memory#3439, `auth.identikey`), over the in-memory nonce store | Needs a migration and a decision about who may enroll a key |
 | 3 | Capability tokens (Biscuit) for agent and MCP scopes | Needs a Biscuit implementation for Node chosen and tested against Rust-made tokens |
 | 4 | Encrypted sharing (`identikey-share` v1) | Needs a proxy re-encryption (Recrypt) implementation or a service boundary |
 | 5 | Signed operation log (`identikey-log`) for grants, revocations and audit | Needs tags, negative integers and Gordian Envelope in the codec |

@@ -630,8 +630,9 @@ export class HubForwardAuthBridgeService {
     { issuer, subject }: HubStableId,
     signedInAs: SignedInAs = SIGNED_IN_AS_NOBODY,
   ): Promise<Placement> {
-    // Only the signed (issuer, subject) and username decide the account. The KERI AID the Hub
-    // sends beside them is unsigned (see `UnsignedKeriHints`), so it never takes part here.
+    // Only the signed (issuer, subject) and username decide the account. The KERI AID headers are
+    // reserved names the Hub no longer sets and no signature covers (see `UnsignedKeriHints`), so
+    // they never take part here.
     const linkedUserId = await this.federatedIdentityService.findUserId(issuer, subject);
     if (linkedUserId) {
       const linked = await this.userService.findById({ userId: SYSTEM_USER }, linkedUserId);

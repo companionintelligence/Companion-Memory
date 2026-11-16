@@ -26,10 +26,15 @@
  * pair first cannot.
  *
  * The record is kept as long as the consumer is willing to execute the document (§7.2, "Bounding the
- * record"), so `expiresAtMs` is the end of the acceptance window plus its skew. A store that cannot
- * reach its backing state returns false from `claimOnce` (fail closed), which reads here as `duplicate`:
- * nothing executes. It also means an outage is indistinguishable from a replay — a limitation of the
- * store's boolean contract, not of this rule.
+ * record"), so `expiresAtMs` is the end of the acceptance window plus its skew.
+ *
+ * A claim statement that fails returns false from `claimOnce` (fail closed), which reads here as
+ * `duplicate`. Nothing executes, but the document is answered 204 rather than `unavailable` (503,
+ * retryable), which HTTPS binding 0.3 §5.1 item 5 requires, and a 204 tells the producer the task
+ * completed. (A whole-store outage is caught earlier, by admission and the throttle.) A failure between
+ * the two claims records the pair without the `id`; the producer then hears `idConflict` and must send a
+ * new document. Telling a failure from a taken key needs a store result that can say so, with both
+ * claims in one transaction (TRUST-TASKS.md G-TT7).
  */
 
 export type ClaimOutcome = 'first' | 'duplicate' | 'conflict';

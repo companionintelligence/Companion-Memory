@@ -10,8 +10,9 @@
  * - a key of SMALL ORDER (the eight points whose order divides 8, including the all-zero string and
  *   the identity). Under such a key a signature can be produced WITHOUT any private key, so an
  *   identifier built from one would let anyone sign as it. `libsodium` refuses them for the same
- *   reason, and `peers/sovereignKeyId.ts` does not check, so this module is the stricter of the two:
- *   assurance may only tighten.
+ *   reason, and so does `peers/sovereignKeyId.ts`, since #3388, with a y-value test that needs no
+ *   curve arithmetic (`peers/ed25519Weak.ts`). This module additionally refuses a string that is not
+ *   a point on the curve, which is the only way it is stricter: assurance may only tighten.
  *
  * The check is plain affine arithmetic on BigInt (decode, multiply by 8, compare with the identity).
  * It costs on the order of a millisecond, so callers run the cheap shape test first and this only for

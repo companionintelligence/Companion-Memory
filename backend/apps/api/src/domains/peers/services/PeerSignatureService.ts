@@ -115,6 +115,10 @@ export class PeerSignatureService {
    * `transportHasBody` in BodyParserMiddleware), and it is required: whether
    * bytes were captured depends on which parser ran, so it cannot answer
    * whether there was a body. A body with no captured bytes is refused.
+   *
+   * With no body announced, an absent `rawBody` is read as an empty body, so a
+   * signature whose covered `content-digest` names any other body is refused as
+   * `bad-digest`.
    */
   async verifyInbound(request: {
     method: string;
@@ -157,7 +161,13 @@ export class PeerSignatureService {
       return { ok: false, reason: 'unsupported-components' };
     }
 
-    if (hasBody && !verifyContentDigest(request.contentDigestHeader, request.rawBody ?? '')) {
+    // A covered Content-Digest is always checked against the bytes received, so
+    // a signed digest never stands in for a body this box did not keep (RFC 9421
+    // section 7.2.8).
+    if (
+      (hasBody || parsed.params.components.includes(BODY_COMPONENT)) &&
+      !verifyContentDigest(request.contentDigestHeader, request.rawBody ?? '')
+    ) {
       return { ok: false, reason: 'bad-digest' };
     }
 
@@ -343,7 +353,12 @@ export class PeerSignatureService {
     } catch (error) {
       // Never throw out of here: a misconfigured key must degrade to "this box
       // does not sign", not take down every outbound ask.
-      this.logger.warn(`peers.signingKeyJwk is unusable, outbound asks will be unsigned: ${String(error)}`);
+      //
+      // Only the error class is logged: a JSON parse error quotes part of its
+      // input, and the input is a private key.
+      this.logger.warn(
+        `peers.signingKeyJwk is unusable (${error instanceof Error ? error.name : 'unknown error'}); outbound asks will be unsigned`,
+      );
       this.cachedSigningKey = null;
     }
 

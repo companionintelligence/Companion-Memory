@@ -21,8 +21,9 @@ import { base64urlDecode, base64urlEncode } from './crypto/multibase';
  *
  * The parse below is a deliberate copy of that file's SHAPE test, not an import: the dependency rules
  * forbid reaching into another domain's internals, and its barrel does not export the helper. Keep the
- * shape test identical. The KEY is checked more strictly here than there (a small-order or non-canonical
- * key is refused, see `sovereignKeyBytes`), because an identifier spelling such a key is not an identity.
+ * shape test identical. The KEY is checked one step more strictly here. Like `sovereignKeyId.ts`
+ * (since #3388), this refuses small-order and non-canonical keys, and it also refuses a string that is
+ * not a point on the curve (see `sovereignKeyBytes`).
  *
  * ═══ THE CONTROLLER DOCUMENT IS SYNTHESIZED, NOT FETCHED ═══
  *
@@ -80,10 +81,10 @@ export function isSovereignVidShape(vid: string): boolean {
 /**
  * The 32-byte Ed25519 key a self-certifying `did:keri:D<x>` spells out, or null for anything else.
  *
- * Stricter than `peers/sovereignKeyId.ts` in one way, on purpose: the key must be a usable one. A
- * small-order key (the all-zero string, the identity, and six more) lets anyone produce a signature
- * that verifies without a private key, so an identifier spelling one is not an identity; a non-canonical
- * or off-curve string is not a key. See `crypto/ed25519.ts`.
+ * Stricter than `peers/sovereignKeyId.ts` in one way, on purpose: the 32 bytes must be a point on the
+ * curve. Both refuse a small-order key (the all-zero string, the identity, and six more), under which a
+ * signature can be produced without a private key, and both refuse a non-canonical spelling (since #3388).
+ * See `crypto/ed25519.ts`.
  */
 export function sovereignKeyBytes(vid: string): Uint8Array | null {
   if (!SOVEREIGN_PATTERN.test(vid)) {

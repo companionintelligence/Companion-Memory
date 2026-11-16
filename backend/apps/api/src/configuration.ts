@@ -1248,9 +1248,9 @@ export const ConfigSchema = z.object({
     /**
      * Enables saved-search sharing: the `/shared/<token>` capability-link path
      * (resolving a shared saved search and running it as its owner) and the
-     * frontend "make public" control. Off by default — the access model is still
-     * being hardened, so the shared-URL surface stays dark unless explicitly
-     * enabled.
+     * frontend "make public" control. On by default (config/default.json, since
+     * 23151975e). ENABLE_SHARED_SEARCH=false turns the path and the control off,
+     * and a share token then resolves as an unknown one does.
      */
     'shared.search': booleanStringSchema,
     /** Shows would-you-rather preference steps during onboarding (food/movie/activity). */
@@ -1276,10 +1276,13 @@ export const ConfigSchema = z.object({
      * and per-item redaction are all in place — the reason it shipped dark
      * ("while the surface is being built") no longer holds.
      *
-     * Enabling this does NOT open federation: an inbound peer ask additionally
-     * requires `peers.audience` to be configured, and the peer route refuses
-     * every request until it is. What this flag turns on is the LOCAL ask
-     * surface, where every ask still defaults to owner review.
+     * Enabling this does NOT open federation on its own. An inbound peer ask that
+     * carries a Portal token also needs `peers.audience`, and one signed under a
+     * self-certifying keyid (`did:keri:D<x>`, `did:key`) needs
+     * `peers.memoryEndpoint` and a link the owner made for that identifier; the
+     * peer route refuses each kind until then. The flag also gates the outbound
+     * sendPeerAsk mutation. What this flag turns on is the LOCAL ask surface,
+     * where every ask still defaults to owner review.
      */
     ask: booleanStringSchema,
     /**
@@ -1394,12 +1397,23 @@ export const ConfigSchema = z.object({
     })
     .default({}),
   // Peer federation (CI-Server #1711 Phase 3). `directoryUrl` is CI-Portal's
-  // peer-discovery API base (handle → Companion endpoint + issuer); empty
-  // disables discovery, and with it any outbound ask. Inbound peer asks are
-  // additionally gated by the `ask` feature flag.
+  // peer-discovery API base (handle → Companion endpoint + issuer). Empty
+  // disables directory lookups (PeerDirectoryService), which nothing calls yet;
+  // it does not affect outbound asks. Those post to the endpoint stored on the
+  // caller's peer link, and need the `ask` flag, an active link, `handle` (a
+  // receiver refuses an empty askerHandle), and a Portal token for the peer or
+  // `signingKeyJwk` (only the box's administrator may send with the key alone).
+  // Inbound peer asks need the `ask` flag plus `audience` (Portal-token asks) or
+  // `memoryEndpoint` (signed did:keri:D<x> or did:key asks).
   peers: z.object({
     directoryUrl: z.string().optional(),
-    /** This box's own Companion endpoint, published to the directory. */
+    /**
+     * This box's own `/agent/v1` base: the address the owner gives peers, which
+     * they store on their link to this box (behind Companion Memory's gateway,
+     * https://<host>/api/agent/v1). Inbound signatures are checked against the
+     * `@target-uri` rebuilt from it, so signed did:keri:D<x> and did:key asks
+     * need it. Nothing publishes it to the directory.
+     */
     memoryEndpoint: z.string().optional(),
     /** This box's Portal handle. */
     handle: z.string().optional(),

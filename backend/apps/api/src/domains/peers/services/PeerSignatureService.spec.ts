@@ -122,6 +122,28 @@ describe('signOutbound', () => {
     expect(logger.warn).toHaveBeenCalledTimes(1);
   });
 
+  describe('logs only the error class for an unusable key', () => {
+    const UNUSABLE_WARNING = 'peers.signingKeyJwk is unusable (SyntaxError); outbound asks will be unsigned';
+
+    it('when the key is a bare base64url d', () => {
+      const { d } = generateKeyPairSync('ed25519').privateKey.export({ format: 'jwk' });
+      peersConfig.signingKeyJwk = d as string;
+      const { service, logger } = makeService();
+
+      expect(service.signOutbound({ method: 'POST', targetUri: TARGET, body: BODY })).toBeNull();
+      expect(logger.warn).toHaveBeenCalledWith(UNUSABLE_WARNING);
+    });
+
+    it('when the key is a JWK whose d is unquoted', () => {
+      const { x, d } = generateKeyPairSync('ed25519').privateKey.export({ format: 'jwk' });
+      peersConfig.signingKeyJwk = `{"kty":"OKP","crv":"Ed25519","x":"${x as string}","d":${d as string}}`;
+      const { service, logger } = makeService();
+
+      expect(service.signOutbound({ method: 'POST', targetUri: TARGET, body: BODY })).toBeNull();
+      expect(logger.warn).toHaveBeenCalledWith(UNUSABLE_WARNING);
+    });
+  });
+
   it('emits a content-digest and a signature pair for a body request', () => {
     const peer = makePeer();
 
@@ -239,6 +261,34 @@ describe('verifyInbound — refusals', () => {
     const peer = makePeer();
 
     await expectRefusal(verify(service, peer, { rawBody: `${BODY} ` }), 'bad-digest');
+  });
+
+  it('checks a covered content-digest against an empty body when no body was announced or kept', async () => {
+    const { service } = makeService();
+    // makePeer's POST signature covers content-digest, so the digest it signed
+    // must match the bytes this box received, and here it received none.
+    const peer = makePeer();
+
+    await expectRefusal(verify(service, peer, { rawBody: undefined, transportHasBody: false }), 'bad-digest');
+    await expectRefusal(verify(service, peer, { rawBody: '', transportHasBody: false }), 'bad-digest');
+  });
+
+  it('still accepts a body-less GET, whose signature covers no content-digest, with no raw body', async () => {
+    const { service } = makeService();
+    const peer = makePeer();
+    const headers = peer.signer.signOutbound({ method: 'GET', targetUri: TARGET, now: NOW })!;
+
+    const result = await service.verifyInbound({
+      method: 'GET',
+      targetUri: TARGET,
+      transportHasBody: false,
+      signatureInput: headers['signature-input'],
+      signature: headers.signature,
+      peerPublicJwk: peer.publicJwk,
+      now: NOW,
+    });
+
+    expect(result).toEqual({ ok: true, keyThumbprint: expect.any(String) });
   });
 
   it('refuses when the digest header is absent but the request has a body', async () => {

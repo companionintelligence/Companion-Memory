@@ -17,6 +17,8 @@ import {
   buildDisclosedAnswer,
   disclosureCeiling,
   minRung,
+  normalizeText,
+  parseAskQueryInput,
   GrantService,
   type AskQuery,
   type DisclosedAnswer,
@@ -952,13 +954,17 @@ export function boundedWindow(fromIso: string, toIso: string): { from: Date; to:
   return { from, to };
 }
 
-/** Translate a wire archetype into the local ask query vocabulary. */
+/**
+ * Translate a wire archetype into the local ask query vocabulary.
+ *
+ * The question, the data class and the actor go through `parseAskQueryInput`, the parser a
+ * local ask goes through (`AskResolver.createAsk`), so an ask from a peer is stored as a local
+ * one is: without zero-width, bidi or tag characters, and with `promptHiddenCharactersRemoved`
+ * set when any were removed. Both doors arrive here, since `POST /agent/v1/ask` and the Trust
+ * Tasks `ask/request` both call `handle`. `requestDigest` is taken over the wire body before
+ * this runs, so a replay is recognized exactly as before.
+ */
 export function toAskQuery(body: PeerAskBody): AskQuery {
-  // Carried on EVERY archetype: delegation is a property of who is asking, not
-  // of what they are asking about, and an archetype that dropped it would be a
-  // way around a `delegation` restriction rather than a gap in one.
-  const actor = body.actor ? { actor: body.actor } : {};
-
   // WHY, carried on every archetype.
   //
   // `scopeCoversQuery` reads `filters.purpose`, and nothing ever wrote one:
@@ -966,33 +972,64 @@ export function toAskQuery(body: PeerAskBody): AskQuery {
   // field at all, so a purpose-limited grant matched no inbound peer ask ever.
   // The body-level `purpose` is preferred; availability's own is the fallback,
   // so a peer that predates the body field still binds correctly.
+  //
+  // Normalized like the prompt, because the owner reads it beside the prompt.
+  // Grant matching canonicalizes both sides itself (`canonicalPurpose`), so
+  // which grants match is unchanged.
   const statedPurpose =
-    body.purpose ?? (body.request.archetype === 'availability' ? body.request.purpose : undefined);
+    normalizeText(
+      body.purpose ?? (body.request.archetype === 'availability' ? body.request.purpose : undefined),
+    ) ?? undefined;
   const purpose = statedPurpose ? { purpose: statedPurpose } : {};
 
+  // The actor is passed on EVERY archetype: delegation is a property of who is
+  // asking, not of what they are asking about, and an archetype that dropped it
+  // would be a way around a `delegation` restriction rather than a gap in one.
   switch (body.request.archetype) {
     case 'relationship':
       return {
-        queryType: 'relationship',
-        prompt: body.request.subject,
+        ...parsePeerAskQuery({ queryType: 'relationship', prompt: body.request.subject, actor: body.actor }),
         filters: { ...purpose },
-        ...actor,
       };
     case 'content':
       return {
-        queryType: 'content',
-        dataClass: body.request.dataClass,
-        prompt: body.request.subject,
+        ...parsePeerAskQuery({
+          queryType: 'content',
+          dataClass: body.request.dataClass,
+          prompt: body.request.subject,
+          actor: body.actor,
+        }),
         filters: { from: body.request.from, to: body.request.to, ...purpose },
-        ...actor,
       };
     case 'availability':
       return {
-        queryType: 'availability',
-        dataClass: 'calendar',
-        prompt: body.request.purpose ?? body.prompt,
+        ...parsePeerAskQuery({
+          queryType: 'availability',
+          dataClass: 'calendar',
+          // The wire allows an empty purpose, and one with nothing visible in it
+          // is no question to show the owner: the ask's own prompt is used then.
+          prompt: normalizeText(body.request.purpose) == null ? body.prompt : body.request.purpose,
+          actor: body.actor,
+        }),
         filters: { from: body.request.from, to: body.request.to, ...purpose },
-        ...actor,
       };
+  }
+}
+
+/**
+ * {@link parseAskQueryInput} with the peer surface's one refusal. The parser's own messages (a
+ * subject made only of invisible characters reads 'prompt must not be empty') answer a local
+ * caller; a peer is told `Malformed ask`, as it is for a body off the wire schema. Anything that
+ * is not a 400 is rethrown unchanged.
+ */
+function parsePeerAskQuery(raw: Parameters<typeof parseAskQueryInput>[0]): AskQuery {
+  try {
+    return parseAskQueryInput(raw);
+  } catch (error) {
+    if (error instanceof BadRequestException) {
+      throw new BadRequestException('Malformed ask');
+    }
+
+    throw error;
   }
 }

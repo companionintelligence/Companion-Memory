@@ -2,6 +2,7 @@ import { gzipSync } from 'node:zlib';
 
 import { ORIGIN, World, alice, app, bob, carol } from './__tests__/testKit';
 import type { Identity } from './__tests__/testKit';
+import { IDENTITY_DID_KEY, KEYLESS_SIGNATURES } from './__tests__/weakEd25519';
 import { signRequest } from './httpSignature';
 import { delegateCapability, formatCapabilityInvocation, rootZcapId } from './zcap';
 import type { DelegatedZcap } from './zcap';
@@ -150,6 +151,37 @@ describe('signature layer: failures describe the request (400) and never depend 
     expect((await sign(`${alice.did}#z6MkwrongFragment`)).status).toBe(400);
     expect((await sign(alice.did)).status).toBe(400);
   });
+
+  it.each(KEYLESS_SIGNATURES)(
+    'rejects a request signed as the did:key of a small-order key, which needs no private key to sign for (%s)',
+    async (_name, signature) => {
+      const w = new World();
+      const url = w.url('spaces/');
+      const body = new TextEncoder().encode(JSON.stringify({ controller: IDENTITY_DID_KEY }));
+      // Built by hand, because keyIdFromDidKey refuses this DID. Its signature is one that verifies under
+      // the identity key for every message.
+      const signer = {
+        id: `${IDENTITY_DID_KEY}#${IDENTITY_DID_KEY.slice('did:key:'.length)}`,
+        sign: async () => signature,
+      };
+      const headers = await signRequest({
+        method: 'POST',
+        url,
+        headers: { 'content-type': 'application/json' },
+        body,
+        signer,
+        created: Math.floor(w.now.getTime() / 1000),
+        capabilityInvocation: formatCapabilityInvocation({ rootId: rootZcapId(url), action: 'POST' }),
+      });
+      const res = await w.handler.handle({ method: 'POST', url, headers, body });
+
+      expect(res.status).toBe(400);
+      expect(JSON.parse(new TextDecoder().decode(res.body)).type).toBe(
+        'https://w3id.org/pws#invalid-authorization-header',
+      );
+      expect(await w.store.transaction((tx) => tx.countSpaces())).toBe(0);
+    },
+  );
 
   it('requires the body to match its signed Digest, and the Digest to be signed', async () => {
     const w = await world();

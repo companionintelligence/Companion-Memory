@@ -4,18 +4,23 @@
  *
  * Two trust stacks live in this service and are kept apart on purpose:
  *
- *   - `domains/peers` + `domains/asks`: Companion-to-Companion asks, signed with a key id in
- *     Companion Memory's own `did:keri:D<x>` convention. KERI-shaped, not interoperable.
+ *   - `domains/peers` + `domains/asks`: Companion-to-Companion asks, signed with a key id that is a
+ *     JWK thumbprint, Companion Memory's own `did:keri:D<x>` convention (KERI-shaped, not
+ *     interoperable) or, since #3388, a `did:key`.
  *   - this domain: W3C Verifiable Credentials 2.0 with DTG Credentials v1, Data Integrity
  *     `eddsa-jcs-2022` proofs and Bitstring Status Lists, the formats OpenVTC's Verifiable Trust
  *     Infrastructure documents. The canonical JSON, base58, `did:key` and proof code reproduce
  *     published test vectors and the status-list reader expands the specification's own example; the
  *     rest has unit tests only. Nothing has been
  *     run against OpenVTC's software, and the status list its live community serves is refused
- *     today (it carries a proof set and an `encodedList` without the multibase prefix).
+ *     today (it carries a proof set and an `encodedList` without the multibase prefix), and so, by
+ *     inference from OpenVTC's source, is any credential that community issues, which carries the
+ *     same two-proof set.
  *
- * Nothing here is registered with Nest, exposed over HTTP or written to the database yet. See
- * `docs/vtc.md` for what exists, what does not, and how it is meant to be wired.
+ * Since #3439 `VtcModule` registers `VtcController` (`POST /vtc/verify`; #3443 added
+ * `POST /vtc/status-list/evaluate`) behind the `vtc.credentials` flag, which is off by default; while
+ * it is off both routes answer 404. Nothing here is written to the database. See `docs/vtc.md` for
+ * what exists, what does not, and how it is meant to be wired.
  */
 export { VtcController } from './VtcController';
 export { VtcModule } from './VtcModule';

@@ -120,6 +120,14 @@ export class InMemoryNonceStore implements NonceStore {
     if (!Number.isSafeInteger(this.maxAttempts) || this.maxAttempts < 1 || this.maxAttempts > 10) {
       throw new RangeError('maxAttempts must be an integer from 1 to 10');
     }
+
+    if (!Number.isSafeInteger(this.maxEntries) || this.maxEntries < 1) {
+      throw new RangeError('maxEntries must be a positive integer');
+    }
+
+    if (!Number.isSafeInteger(this.retainSeconds) || this.retainSeconds < 0) {
+      throw new RangeError('retainSeconds must be a non-negative integer');
+    }
   }
 
   /** Entries currently held, for tests and metrics. */

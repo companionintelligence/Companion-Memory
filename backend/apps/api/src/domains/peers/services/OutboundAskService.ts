@@ -16,6 +16,7 @@ import {
   type AnswerForm,
   type DisclosedAnswer,
 } from '@ci/domains/asks';
+import { UserService } from '@ci/domains/user';
 
 import { type PeerLink } from '../entities/PeerLinkEntity';
 import type { AskerVisiblePeerReply, PeerAskBody, PeerAskRequest } from '../protocol';
@@ -79,6 +80,7 @@ export class OutboundAskService {
     @InjectRepository(AskEntity)
     private readonly askRepository: Repository<AskEntity>,
     private readonly logger: LoggerService,
+    private readonly userService: UserService,
     @Optional()
     private readonly signatureService?: PeerSignatureService,
   ) {
@@ -91,15 +93,13 @@ export class OutboundAskService {
    * `accessToken` must be a Portal-issued token whose audience is the PEER box
    * (the peer verifies that binding on receipt). Until Portal token exchange
    * lands, the caller supplies it; this service never mints or caches one.
-   * For sovereign KERI peers, an outbound signature satisfies authentication.
+   * With no token the request is signed with this box's key alone, which only
+   * the box's administrator may do (see {@link peerToken}).
    */
   async send(context: UserServiceContext, dto: SendAskDto, accessToken?: string): Promise<SendAskResult> {
     const link = await this.activeLink(context, dto.handle);
 
-    const effectiveToken = accessToken?.trim() ?? '';
-    if (!effectiveToken && !this.signatureService?.hasSigningKey) {
-      throw new BadRequestException('A peer access token or signing key is required');
-    }
+    const effectiveToken = await this.peerToken(context, accessToken);
 
     const ask = await this.askService.create(context, {
       responderUserId: null,
@@ -162,10 +162,7 @@ export class OutboundAskService {
       throw new NotFoundException('No outbound ask with that id');
     }
 
-    const effectiveToken = accessToken?.trim() ?? '';
-    if (!effectiveToken && !this.signatureService?.hasSigningKey) {
-      throw new BadRequestException('A peer access token or signing key is required');
-    }
+    const effectiveToken = await this.peerToken(context, accessToken);
 
     if (ask.status === 'answered') {
       const stored = await this.answerService.findByAskId(ask.id);
@@ -223,6 +220,39 @@ export class OutboundAskService {
     }
 
     return link;
+  }
+
+  /**
+   * The Portal token to send, or `''` for a request signed with this box's key
+   * alone, which `PeerAskClient` sends as `Bearer keri`.
+   *
+   * An ask with no Portal token is authenticated by this box's signing key
+   * alone, so the peer reads it as the box's own identity (the `did:key` or
+   * `did:keri:D<x>` link it made for this box), and it carries this box's
+   * `peers.handle`. Only the appliance's administrator (`UserEntity.role`
+   * `admin`, the account that claimed the box) may send one. Anyone else on the
+   * box asks with a Portal token of their own.
+   *
+   * "No token" is decided as the peer decides it ({@link readsAsNoToken}), so a
+   * token the peer would read as none is held to the same rule and sent as none.
+   */
+  private async peerToken(context: UserServiceContext, accessToken: string | undefined): Promise<string> {
+    const token = accessToken?.trim() ?? '';
+    if (!readsAsNoToken(token)) {
+      return token;
+    }
+
+    if (!this.signatureService?.hasSigningKey) {
+      throw new BadRequestException('A peer access token or signing key is required');
+    }
+
+    const user = await this.userService.findById(context, context.userId);
+
+    if (user?.role !== 'admin') {
+      throw new BadRequestException('A peer access token is required');
+    }
+
+    return '';
   }
 
   private toBody(link: PeerLink, dto: SendAskDto): PeerAskBody {
@@ -387,4 +417,18 @@ export function toStoredAnswer(answer: NonNullable<AskerVisiblePeerReply['answer
     summary: answer.summary,
     consentBasis: null,
   };
+}
+
+/**
+ * Whether a peer reads `token` (already trimmed) as no token at all.
+ *
+ * `PeerAskClient` sends `Bearer <token>`, and `PeerAskController.authenticate`
+ * on the receiving box takes the first space-separated word after `Bearer`,
+ * trims it, and treats an empty word or `keri` in any case as no token. This is
+ * true for every token read that way (a header value cannot carry a letter
+ * beyond Latin-1, so only ASCII case matters), and also for `keri` followed by
+ * any other whitespace, which no Portal token begins with.
+ */
+function readsAsNoToken(token: string): boolean {
+  return token === '' || /^keri(?:\s|$)/i.test(token);
 }

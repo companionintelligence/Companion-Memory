@@ -1,6 +1,7 @@
 /**
  * Test vectors from the DIDComm reference implementation in Rust (sicpa-dlab/didcomm-rust, commit
- * 4388350, 2024-08-14; Apache-2.0), src/test_vectors/{encrypted,signed,plaintext,from_prior_jwt}.rs.
+ * 4388350, 2024-08-14; Apache-2.0 (LICENSES/Apache-2.0.txt; NOTICE.md)),
+ * src/test_vectors/{encrypted,signed,plaintext,from_prior_jwt}.rs.
  * Generated verbatim; do not edit by hand. They use the same Alice and Bob keys as the DIDComm
  * Messaging specification's appendix, plus Charlie (did:example:charlie#key-1, Ed25519), the
  * signer of the from_prior JWTs.

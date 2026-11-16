@@ -32,9 +32,19 @@ COPY --chmod=755 entrypoint.sh /usr/local/bin/ci-object-store-entrypoint.sh
 # already mount the volume, so this image and the MinIO one it replaces run
 # under the same manifest and a rollback is an image change alone. A path
 # that differs from the manifest's serves an empty store instead of the data.
+#
+# Minimal health responses. RustFS answers its health probes without
+# credentials, and by default their JSON carries the RustFS version and a
+# timestamp besides the status (the console's adds its uptime), plus
+# per-component readiness detail on readiness probes.
+# RUSTFS_HEALTH_MINIMAL_RESPONSE_ENABLE=true cuts that to `status`, and
+# `ready` on readiness probes. Status codes are unchanged, and the
+# HEALTHCHECK below reads only the code. The name and its default (false)
+# are RustFS 1.0.0's: check them again when moving the pin.
 ENV RUSTFS_VOLUMES=/data/objects \
     RUSTFS_ADDRESS=:9000 \
-    RUSTFS_CONSOLE_ADDRESS=:9001
+    RUSTFS_CONSOLE_ADDRESS=:9001 \
+    RUSTFS_HEALTH_MINIMAL_RESPONSE_ENABLE=true
 
 # The probe lives with the server it probes: /health is RustFS's own, and
 # MinIO answers it 403 (RustFS also answers MinIO's /minio/health/live, but

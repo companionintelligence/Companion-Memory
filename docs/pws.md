@@ -1,12 +1,14 @@
 # Portable Web Spaces (PWS)
 
-> **Status (2026-11-05): a tested library, not yet a feature.** `backend/apps/api/src/domains/pws/`
+> **Status (2026-11-15): a tested library behind a flag that is off by default.** `backend/apps/api/src/domains/pws/`
 > implements the W3C Credentials Community Group's
 > [Portable Web Spaces](https://w3c-ccg.github.io/portable-web-spaces-spec/) storage API (draft v0.5,
 > formerly Wallet Attached Storage) and its
-> [Authorization Profile](https://w3c-ccg.github.io/portable-web-spaces-spec/authz-profile/) (v0.1). It is
-> **not** registered with Nest, has **no route** in the API, writes **no database rows** and is imported
-> by **nothing else** in `src`. Against the Interop Alliance's conformance suite it passes 203 of 305
+> [Authorization Profile](https://w3c-ccg.github.io/portable-web-spaces-spec/authz-profile/) (v0.1). Since
+> Companion-Memory#3439 (merged 2026-11-12, not yet in a release) `PwsModule` is registered with Nest:
+> `/pws/*` answers `404` unless `pws.storage` (`ENABLE_PWS_STORAGE`, default false) is on, and then serves
+> the handler over the in-memory store, so it writes **no database rows** and keeps nothing across a
+> restart. Nothing else in `src` calls it. Against the Interop Alliance's conformance suite it passes 203 of 305
 > checks (55 fail, 47 are skipped). Every failure traces to a feature that is not built (Encrypted
 > Collections, pluggable backends and quotas, export/import, `Ed25519Signature2020`); for 17 of them the
 > suite's setup creates an Encrypted Collection first, so the checks never ran. The suite calls that
@@ -33,7 +35,7 @@ interoperable, and this module must not pretend otherwise.
 | | Peer asks (`domains/peers`, `domains/asks`) | PWS (`domains/pws`) |
 |---|---|---|
 | Question it answers | "Is this the Companion I paired with?" | "May this key act on this Space, and who gave it that right?" |
-| Identifier | `did:keri:D<x>`, Companion Memory's **own convention**, not CESR (`peers/sovereignKeyId.ts`) | `did:key` (Ed25519 Multikey); `did:keri` is **refused** |
+| Identifier | `did:keri:D<x>`, Companion Memory's **own convention**, not CESR (`peers/sovereignKeyId.ts`), or, since Companion-Memory#3388, `did:key:z6Mk…` (`peers/didKeyId.ts`) | `did:key` (Ed25519 Multikey); `did:keri` is **refused** |
 | Authority | grant rows in the database (consent ladder, ceilings, `revoked_at`) | zCaps: signed, delegatable, attenuated by target, action and `expires` |
 | Proof | RFC 9421 HTTP message signature | Cavage draft-12 HTTP Signature + `Digest`, `eddsa-jcs-2022` delegation proofs |
 | Revocation | `revoked_at` on the grant | expiry, a key leaving the signer's DID document, and a hook (`isRevoked`); no endpoint yet |
@@ -44,7 +46,9 @@ Companion-Hub). PWS does not need it, and refusing `did:keri` is not a house rul
 specification's Space Controller DID Method Registry makes `did:key` the mandatory floor and says a
 server refuses a controller of any method it does not support with `invalid-request-body` (`400`), at
 creation and on update. That registry is also the seam where a conformant KERI resolver would plug in
-later (`keys.ts`, `DidRegistry`); none exists, and this document does not claim one.
+later (`keys.ts`, `DidRegistry`), once the specification's Space Controller DID Method Registry lists a
+KERI method with a controller profile (at `ed033eb` it lists only `did:key` and `did:webvh`); none
+exists, and this document does not claim one.
 
 ## What is in the module
 
@@ -64,9 +68,9 @@ later (`keys.ts`, `DidRegistry`); none exists, and this document does not claim 
 | `index.ts` | The public barrel: what a wiring step may import |
 | `jcs.ts`, `multibase.ts`, `ed25519.ts`, `didKey.ts`, `dataIntegrity.ts`, `digest.ts`, `httpSignature.ts` | The primitives. Each encoding is pinned to a published vector, except `httpSignature.ts`, which is pinned to the layout of the printed example and to the reference libraries' output (below). No new dependency: `node:crypto` and `node:zlib` only |
 | `stamp.ts` | The write stamp (a hybrid logical clock; an extension, see decision 9) |
-| `scripts/pws-dev-server.ts` | Runs the handler on a port over the in-memory store, on `127.0.0.1` only (`PWS_HOST` overrides). Not imported by `src` |
+| `scripts/pws-dev-server.ts` | Runs the handler on a port over the in-memory store, on `127.0.0.1` only (`PWS_HOST` overrides). Not imported by `src`. Not in the API image: the Dockerfile drops its compiled copy |
 
-`yarn jest src/domains/pws` runs 22 suites and 503 tests in a few seconds.
+`yarn jest src/domains/pws` runs 24 suites and 605 tests in a few seconds.
 
 ## Using it
 
@@ -329,11 +333,14 @@ Collection to run at all.
 
 ## What this does not decide
 
-- **Where a Companion's controller key comes from.** A Companion's Ed25519 key spells a `did:key`;
-  Local.Pub's session wrote `peers/didKeyId.ts` for that mapping (unmerged, not imported here). Key custody
-  and how the Hub's signed forward-auth identity (`X-CI-Hub-User-Issuer` with `X-CI-Hub-User-Id`) maps to a
-  controller are open. The reserved `X-CI-Hub-User-AID` is never set by the Hub and is only a hint to Memory;
-  it must never select a controller.
+- **Where a Companion's controller key comes from.** A Companion's Ed25519 key spells a `did:key`, and
+  `peers/didKeyId.ts` (Companion-Memory#3388, written in the Local.Pub work) is that mapping. This domain does
+  not import it, by design (ADR-0019 decision 5: PWS imports nothing from another domain). `pws/didKey.ts` is
+  a separate copy; since Companion-Memory#PR_MEMORY it refuses the same small-order and non-canonical keys.
+  It does not test that a key is a point on the curve, which `peers/didKeyId.ts` does when it admits a key;
+  a key that is not one verifies no signature. Key custody and how the Hub's signed forward-auth identity
+  (`X-CI-Hub-User-Issuer` with `X-CI-Hub-User-Id`) maps to a controller are open. The reserved
+  `X-CI-Hub-User-AID` is never set by the Hub and is only a hint to Memory; it must never select a controller.
 - **Persistence.** `PwsStore` is the seam; `transaction()` must serialize the read-authorize-write sequence
   (row locks or a serializable transaction).
 - **Revocation.** The specification says it is not yet defined. `isRevoked(capabilityId)` is where Memory's
@@ -342,10 +349,17 @@ Collection to run at all.
   signature. For `did:key` that costs nothing; for `did:webvh` or anything that fetches it must go through
   the box's hardened egress (no redirects, DNS pinned at connect time, a size cap; Asks ADR-0004) and be
   cached, or an unauthenticated request could make the server fetch.
-- **Duplication.** This is another copy of JCS and `eddsa-jcs-2022` (after `domains/vtc` and
-  `domains/trust-tasks`), of `did:key` (after `domains/vtc` and `domains/didcomm`) and of base58btc (after all
-  three), all on `main` already. Deduplicate them, keeping each copy pinned to the same W3C vector; that is
-  deliberately not done here.
+- **Duplication.** This is another copy of JCS (after `domains/vtc`, `domains/trust-tasks` and
+  `src/common/crypto/jcs.ts`, #3439) and of `eddsa-jcs-2022` (after `domains/vtc` and
+  `domains/trust-tasks`), of the Ed25519 `did:key`/Multikey codec (after `domains/vtc`, `domains/didcomm`,
+  `domains/trust-tasks` and `peers/didKeyId.ts`, #3388), of base58btc (after those and `domains/identikey`,
+  #3387), of the Ed25519 weak-key check (`peers/ed25519Weak.ts`, #3388, beside those in `domains/identikey`,
+  `domains/vtc` and `domains/trust-tasks`), and of RFC 3339 parsing (`vtc/dateTime.ts`,
+  `trust-tasks/document.ts`), all on `main` already. The copies already differ: the JCS depth limit and the
+  handling of `undefined` members, base58 input caps, the Data Integrity `@context` rule, and which keys count
+  as weak. Deduplicate them into `src/common/crypto/`, keeping each copy pinned to the same published vectors
+  and each caller's documented bounds; that is deliberately not done here. Companion Hub's `did-key.ts` is a
+  separate copy in another repository and outside this deduplication.
 
 ## How it is meant to be wired
 
@@ -355,12 +369,17 @@ Collection to run at all.
 2. A TypeORM `PwsStore` with serializable transactions, Resource bytes in the existing object store, a
    migration, and quotas.
 3. A `PwsModule` and controller on the handler (`nodeListener` is the model), registered behind a feature
-   flag that defaults off, like `solid.protocol`; Hub security review before any route.
+   flag that defaults off, like `solid.protocol`; Hub security review before any route. The module, its
+   controller and the flag (`pws.storage`) landed in Companion-Memory#3439, over the in-memory store, and
+   Companion-Memory#3442 rewrote that controller: among other changes it reads the raw body itself, up to
+   25 MiB, and the shared body parser skips `/pws`. Neither pull request records a review, so the Hub
+   security review is still to do.
 4. Consent grants issued as zCaps and revoked through `isRevoked`.
 5. Export and import of a user's data to and from a Space, once the Space Archive Format
    ([spec PR #92](https://github.com/w3c-ccg/portable-web-spaces-spec/pull/92)) settles; `domains/portability`
    is the existing archive code.
-6. `did:webvh` controllers (pre-rotation), and a KERI bridge only if ADR-0013 ever ships a conformant resolver.
+6. `did:webvh` controllers (pre-rotation), and a KERI bridge only if ADR-0013 ever ships a conformant resolver
+   and the specification's registry lists its method.
 
 ## References
 

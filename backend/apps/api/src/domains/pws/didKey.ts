@@ -1,3 +1,4 @@
+import { isWeakEd25519PublicKey } from './ed25519';
 import { base58btcDecode, base58btcEncode, MultibaseError } from './multibase';
 
 /**
@@ -12,6 +13,10 @@ import { base58btcDecode, base58btcEncode, MultibaseError } from './multibase';
  *
  * Only Ed25519 is accepted. Every other multicodec (secp256k1, P-256, X25519, ...) is refused rather than
  * guessed at, and so is every other DID method: this module never sees `did:keri`, `did:web` or `did:webvh`.
+ *
+ * A `did:key` that spells a small-order or non-canonical key is refused too (`isWeakEd25519PublicKey` in
+ * `ed25519.ts`): a signature can be made for a small-order key without its private key, so such a key names no
+ * one, and a non-canonical encoding is a second spelling of a key.
  */
 
 export class DidKeyError extends Error {
@@ -80,7 +85,12 @@ export function publicKeyFromDidKey(did: string): Uint8Array {
     throw new DidKeyError('only Ed25519 did:key identifiers (multicodec 0xed01, 32 bytes) are supported');
   }
 
-  return decoded.slice(2);
+  const key = decoded.slice(2);
+  if (isWeakEd25519PublicKey(key)) {
+    throw new DidKeyError('a small-order or non-canonical Ed25519 key is not accepted');
+  }
+
+  return key;
 }
 
 /** Whether `did` is a well-formed Ed25519 `did:key` (a DID, so with no fragment). */

@@ -15,6 +15,7 @@ import {
   type PeerLinkStatus,
   type PeerTrustTier,
 } from '../entities/PeerLinkEntity';
+import { jwkThumbprint } from '../httpSignature';
 import {
   DID_KEY_ISSUER,
   SOVEREIGN_ISSUER,
@@ -542,6 +543,14 @@ export class PeerLinkService {
    * each have linked the same peer, and the caller must disambiguate rather than
    * answering as an arbitrary one.
    *
+   * A link matches on any of three clauses:
+   *
+   *   1. it records the key whose thumbprint is the keyid;
+   *   2. for a self-certifying keyid (`did:keri:D<x>` or `did:key`), it names
+   *      that keyid as its identity, under the issuer that goes with it;
+   *   3. for a self-certifying keyid, it records the key the keyid spells out,
+   *      found by that key's thumbprint.
+   *
    * Note what this deliberately does NOT consult: the OIDC issuer or subject.
    * A signature proves possession of the key; whether the peer also presented a
    * Portal token that says who operates it is a separate, additive fact. Mixing
@@ -567,6 +576,20 @@ export class PeerLinkService {
         status: 'active',
         revokedAt: IsNull(),
       });
+
+      // A link that RECORDS the key this keyid spells is found too, by that key's thumbprint, so a box
+      // signing under its own `did:key` or `did:keri:D<x>` can be checked against the Portal link its
+      // peer recorded the key on. `PeerAskController`'s issuer/subject match still decides which link
+      // answers, so a token-less request, whose identity is `did:key` or `did:keri`, never matches a
+      // Portal link.
+      const spelled = selfCertifyingPublicJwk(thumbprint);
+      if (spelled != null) {
+        whereConditions.push({
+          peerKeyThumbprint: jwkThumbprint(spelled),
+          status: 'active',
+          revokedAt: IsNull(),
+        });
+      }
     }
 
     const rows = await this.repository.find({

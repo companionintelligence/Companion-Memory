@@ -7,7 +7,9 @@ before trusting either more than it deserves.
 
 Copied **unmodified** from <https://github.com/identikey/identikey-protocol>, directory
 `crates/identikey-auth/tests/fixtures/`, at commit `e4fe668c7e6b21d6fb103d755dffcef86dd286e1`
-(2026-11-04). The upstream license is Apache-2.0 OR BSD-2-Clause-Patent; the attribution is in the
+(2026-11-04). Copyright © 2026 Identikey Inc. Upstream licenses them under Apache-2.0 OR
+BSD-2-Clause-Patent. They are used here under BSD-2-Clause-Patent, whose text, with that copyright
+notice, is in the repository's `LICENSES/BSD-2-Clause-Patent.txt`. The attribution is in the
 repository's `NOTICE.md`.
 
 | File                   | Bytes | sha256                                                             |

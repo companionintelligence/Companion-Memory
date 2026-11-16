@@ -176,7 +176,7 @@ Entities surface as the typed `PersonType`/`PlaceType`/`ConceptType` lists (rows
 
 ### 3.5d Asks & grants (peer federation)
 
-Gated by the **`ask` feature flag, which is now `true` by default** — the *local* ask/grant surface is live out of the box. Only the inbound peer REST route stays dark, and for a different reason (it also needs `peers.audience` configured).
+Gated by the **`ask` feature flag, which is now `true` by default** — the *local* ask/grant surface is live out of the box. Only the inbound peer REST route stays dark, and for a different reason: it needs settings that ship empty. `peers.audience` gates the asks that carry a Portal token, and an ask signed under a `did:keri:D<x>` or `did:key` keyid carries no token and needs `peers.memoryEndpoint` and a link the owner made for exactly that keyid instead. The signed `@target-uri`, which the box rebuilds from `peers.memoryEndpoint`, and a single-use nonce bind that ask to the box (see [Keyids that name themselves](../peer-federation.md#keyids-that-name-themselves-didkey-and-didkeridx)).
 
 | Query | Return |
 |---|---|
@@ -185,7 +185,7 @@ Gated by the **`ask` feature flag, which is now `true` by default** — the *loc
 | `myAskGrants` | `[AskGrantType!]!` |
 | `askDisclosureHistory` | `[AskAuditType!]!` |
 
-> **Outbound asks need a token you supply.** `SendPeerAskInput.peerAccessToken` is non-nullable: the *caller* must present a CI-Portal-issued access token whose audience is the peer box. CI-Server never mints, exchanges or caches one. And there is **no API — REST or GraphQL — that creates a `ci.peer_links` row**; both directions hard-require a pre-existing link, so today a link is inserted by hand.
+> **Outbound asks need a token you supply.** `SendPeerAskInput.peerAccessToken` is non-nullable: the *caller* must present a CI-Portal-issued access token whose audience is the peer box. CI-Server never mints, exchanges or caches one. An empty `peerAccessToken` sends the ask signed with this box's key alone (`peers.signingKeyJwk`), which only the box's administrator may do ([The token](../peer-federation.md#the-token)). And there is **no API — REST or GraphQL — that creates a `ci.peer_links` row**; both directions hard-require a pre-existing link, so today a link is inserted by hand.
 
 ### 3.6 Connections / providers / sync jobs
 

@@ -1,7 +1,10 @@
 import { gzipSync } from 'node:zlib';
 
 import { alice, app, bob } from './__tests__/testKit';
-import { DidRegistry } from './keys';
+import { didKeyOf, fromHex, GENUINE, WEAK } from './__tests__/weakEd25519';
+import { DidRegistry, publicKeyFromEd25519Multikey } from './keys';
+import type { DidMethodSupport } from './keys';
+import { base58btcEncode } from './multibase';
 import {
   ROOT_PREFIX,
   ZCAP_CONTEXT,
@@ -392,6 +395,52 @@ describe('an embedded parent whose own chain holds something that is neither an 
         ok: false,
         reason: 'malformed',
       });
+    }
+  });
+});
+
+describe('DidRegistry: a small-order or non-canonical key resolves for nothing', () => {
+  const multikeyOf = (key: Uint8Array) => `z${base58btcEncode(Uint8Array.from([0xed, 0x01, ...key]))}`;
+
+  it.each(WEAK)('resolves no key for the did:key of %s', async (_name, key) => {
+    const did = didKeyOf(fromHex(key));
+    const registry = new DidRegistry();
+
+    expect(await registry.resolveDocument(did)).toBeUndefined();
+    for (const relationship of ['capabilityInvocation', 'capabilityDelegation'] as const) {
+      expect(await registry.resolveKey(`${did}#${did.slice(8)}`, relationship)).toBeUndefined();
+    }
+  });
+
+  it.each(WEAK)('publicKeyFromEd25519Multikey refuses %s', (_name, key) => {
+    expect(publicKeyFromEd25519Multikey(multikeyOf(fromHex(key)))).toBeUndefined();
+  });
+
+  it('refuses one in a document any method returns, not only in a did:key', async () => {
+    // A method whose documents list the given Multikey for both relationships, so that only the key check
+    // in resolveKey stands between the document and the caller.
+    const listing = (publicKeyMultibase: string): DidMethodSupport => ({
+      method: 'example',
+      resolve: async (did) => ({
+        '@context': ['https://www.w3.org/ns/did/v1', 'https://w3id.org/security/multikey/v1'],
+        id: did,
+        verificationMethod: [{ id: `${did}#k`, type: 'Multikey', controller: did, publicKeyMultibase }],
+        authentication: [],
+        assertionMethod: [],
+        capabilityDelegation: [`${did}#k`],
+        capabilityInvocation: [`${did}#k`],
+      }),
+    });
+    const genuine = new DidRegistry([listing(multikeyOf(fromHex(GENUINE[0][1])))]);
+
+    // The control: the same document with a genuine key resolves.
+    expect(await genuine.resolveKey('did:example:a#k', 'capabilityInvocation')).toBeDefined();
+
+    for (const [, key] of WEAK) {
+      const registry = new DidRegistry([listing(multikeyOf(fromHex(key)))]);
+
+      expect(await registry.resolveKey('did:example:a#k', 'capabilityInvocation')).toBeUndefined();
+      expect(await registry.resolveKey('did:example:a#k', 'capabilityDelegation')).toBeUndefined();
     }
   });
 });

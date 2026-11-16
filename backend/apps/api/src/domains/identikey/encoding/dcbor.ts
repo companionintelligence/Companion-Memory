@@ -7,10 +7,14 @@ import { IdentiKeyError } from '../errors';
  * ═══ WHY A CODEC OF OUR OWN ═══
  *
  * This is a port of `identikey-auth`'s `cbor.rs`, which is itself hand-rolled "so the encoding the
- * protocol signs over is small, auditable, and fully under our control". The same reasoning holds
- * here: a signature is over BYTES, so two implementations that disagree about how a value is written
- * disagree about whether a signature is valid. The committed Rust fixtures (`__tests__/fixtures`) are
- * what pin this file to the reference, byte for byte.
+ * protocol signs over is small, auditable, and fully under our control". Ported from
+ * `crates/identikey-auth/src/cbor.rs` in identikey/identikey-protocol (commit
+ * e4fe668c7e6b21d6fb103d755dffcef86dd286e1), Copyright © 2026 Identikey Inc., used under the
+ * BSD-2-Clause Plus Patent License (LICENSES/BSD-2-Clause-Patent.txt; NOTICE.md). Translated to
+ * TypeScript and modified. The same reasoning holds here: a signature is over BYTES, so two
+ * implementations that disagree about how a value is written disagree about whether a signature is
+ * valid. The committed Rust fixtures (`__tests__/fixtures`) are what pin this file to the reference,
+ * byte for byte.
  *
  * The rules, from identikey's `dcbor-determinism.md` and RFC 8949 §4.2.1:
  *

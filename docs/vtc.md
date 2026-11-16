@@ -1,10 +1,16 @@
 # Verifiable Trust Community (VTC) credentials
 
-> **Status (2026-11-05): a tested library, not yet a feature.** `backend/apps/api/src/domains/vtc/`
+> **Status (2026-11-15): a tested library behind a flag that is off by default.** `backend/apps/api/src/domains/vtc/`
 > issues, reads and checks credentials in the formats an [OpenVTC](https://github.com/OpenVTC/verifiable-trust-infrastructure)
-> Verifiable Trust Community documents. It is **not** registered with Nest, has **no HTTP route**, writes
-> **no database rows** and is imported by **nothing else** in the API. It has **not been run against
-> OpenVTC's software**, and the status list OpenVTC's live test community serves is **refused today**
+> Verifiable Trust Community documents. Since Companion-Memory#3439 (merged 2026-11-12) `VtcModule` is
+> registered with Nest. That pull request added `POST /vtc/verify`, and Companion-Memory#3443 (merged
+> 2026-11-13 UTC) added `POST /vtc/status-list/evaluate` and the checks on caller-presented status lists
+> in `/vtc/verify`. Neither is in a release yet. Both routes answer `404` unless `vtc.credentials`
+> (`ENABLE_VTC_CREDENTIALS`, default false) is on. They check a credential and a status list that the caller
+> presents, accept proofs from `did:key` issuers only (configuration pins no community), make no
+> outbound request and write **no database rows**; nothing else in the API calls the module. It has **not been run against
+> OpenVTC's software**, and the status list OpenVTC's live test community serves is **refused today**,
+> and so, by OpenVTC's source, are the credentials any community holding more than one key issues
 > ([Interoperability evidence](#interoperability-evidence)). Section
 > [What is not built](#what-is-not-built) lists the rest, and
 > [How it is meant to be wired](#how-it-is-meant-to-be-wired) says what connecting it takes.
@@ -16,11 +22,14 @@ Two trust stacks live in this service and are kept apart on purpose.
 | | Peer asks (`domains/peers`, `domains/asks`) | VTC credentials (`domains/vtc`) |
 |---|---|---|
 | Question it answers | "Is this the Companion I paired with?" | "Is this DID a current member of a community I recognise?" |
-| Identifier | `did:keri:D<x>`, Companion Memory's **own convention**, not CESR (`peers/sovereignKeyId.ts`) | `did:key` and pinned community DIDs; `did:keri` issuers and keys are **refused**, and a member's DID is compared as a string, never resolved |
+| Identifier | `did:keri:D<x>`, Companion Memory's **own convention**, not CESR (`peers/sovereignKeyId.ts`), or, since Companion-Memory#3388, a W3C CCG `did:key:z6Mk…` (`peers/didKeyId.ts`) | `did:key` and pinned community DIDs; `did:keri` issuers and keys are **refused**, and a member's DID is compared as a string, never resolved |
 | Credential | none yet (grants are database rows; the ACDC/TEL design is [ADR-0013](https://github.com/companionintelligence/CI-Engineering/blob/main/adr/0013-keri-toip-decentralized-identity-and-trust-graphs.md)) | W3C VC 2.0 + DTG Credentials v1 |
 | Proof | RFC 9421 HTTP message signature | Data Integrity `eddsa-jcs-2022` |
 | Revocation | grant row (`revoked_at`) | Bitstring Status List |
 | Interoperable with an outside implementation | No, and says so in its source | Not yet run against one. The canonical JSON, base58, `did:key` and proof code reproduce published test vectors and the status-list reader expands the specification's own example; the rest has unit tests only |
+
+Both stacks now read `did:key`, each with its own codec (`peers/didKeyId.ts`, `vtc/didKey.ts`); nothing
+connects a peer link's `did:key` to a community member's DID.
 
 The Hub froze its in-tree KERI module on 2026-10-30 because it produced identifiers that look like
 KERI and are not (`packages/common/src/keri/FROZEN.md` in the Hub repository, now `Companion-Hub`), and this service's `auditSaid.ts`
@@ -163,7 +172,9 @@ The page at <https://first.openvtc.net/> describes a whole community service. Th
 credential core. Not built, and tracked in
 [`CI-Engineering/projects/decentralized-trust-graphs/OPENVTC-VTC.md`](https://github.com/companionintelligence/CI-Engineering/blob/main/projects/decentralized-trust-graphs/OPENVTC-VTC.md):
 
-- the join request, admin review and member sign-in (passkey or wallet) flows, and any HTTP surface;
+- the join request, admin review and member sign-in (passkey or wallet) flows, and an HTTP surface for
+  them (the only routes are `POST /vtc/verify` and `POST /vtc/status-list/evaluate`, behind
+  `vtc.credentials`);
 - capability-based roles (the authority credential, VAC), step-up and second-party consent;
 - renewal on the same slot (each renewal takes a new one) and publishing a suspension list (the reader
   checks one; `CommunityIssuer` issues only the revocation list);
@@ -171,13 +182,15 @@ credential core. Not built, and tracked in
 - a trust registry (TRQP) and OID4VP presentation;
 - verifiable data rooms, git governance, the public website and the admin console;
 - a `did:webvh` resolver and a Token Status List (SD-JWT VC) reader;
-- a reader for the status list OpenVTC's live community serves (see below).
+- a reader for proof sets and for an `encodedList` without the `u` prefix, which the live community's
+  status list and, by OpenVTC's source, its credentials need (see below).
 
 ## Interoperability evidence
 
 Tags: **[V]** reproduced by a test in this repository against a published source; **[docs]** follows a
 specification's text and is covered by unit tests only; **[obs]** observed on a live OpenVTC service on
-the date given; **manual** done once by hand and not repeatable from the repository; **UNKNOWN** not tested.
+the date given; **[src]** read from OpenVTC's source at the commit given, not run; **manual** done once by
+hand and not repeatable from the repository; **UNKNOWN** not tested.
 
 | Claim | Evidence | Tag |
 |---|---|---|
@@ -187,28 +200,34 @@ the date given; **manual** done once by hand and not repeatable from the reposit
 | Ed25519 matches RFC 8032 and refuses a malleated signature | RFC 8032 test 1 reproduced byte for byte; `S + L` and every single-bit change refused (`ed25519.spec.ts`) | **[V]** |
 | Status list reading follows the specification | The specification's `encodedList` example expands to 16,384 zero bytes; bit 0 is the left-most bit; §3.2 steps in `statusList.spec.ts` | **[V]** against the example, **[docs]** for the algorithm |
 | The specs notice a defect | 71 planted defects, each turned a suite red; none survived the final run (2026-11-05). The script is not in the repository | **manual** |
-| OpenVTC's live community "The First VTC" (`first.openvtc.net`, a test community for the Decentralized Trust Graph working groups) publishes a status list this module can read | Its revocation list has a two-member proof set (`eddsa-jcs-2022` and `mldsa44-jcs-2024`) and an `encodedList` without the multibase `u` prefix. This module refuses both. It has `validFrom` (the request time) and no `validUntil` or `ttl`, and is served `no-store` | **[obs]** 2026-11-05: **refused today** |
+| OpenVTC's live community "The First VTC" (`first.openvtc.net`, a test community for the Decentralized Trust Graph working groups) publishes a status list this module can read | Its revocation list has a two-member proof set (`eddsa-jcs-2022` and `mldsa44-jcs-2024`) and an `encodedList` without the multibase `u` prefix. This module refuses both. It has `validFrom` (the request time) and no `validUntil` or `ttl`, and is served `no-store`. Its credentials are expected to carry the same proof set. OpenVTC's VTC signs every credential with every key its VTA holds (`vtc-service/src/server.rs` at `d069ed7`), and the community's DID lists two assertion keys (Ed25519 `#key-0`, ML-DSA-44 `#key-2`) | **[obs]** 2026-11-05: **refused today**; **[src]** OpenVTC @`d069ed7` for its credentials |
 | OpenVTC's status lists carry `validUntil` | No (same observation; OpenVTC's `vtc-service/src/status_list/credential.rs` sets `valid_from` only) | **[obs]** |
-| A credential issued by OpenVTC's own `vtc` verifies here | not run | **UNKNOWN** |
+| A credential issued by OpenVTC's own `vtc` verifies here | Not run. Expected to be refused at the proof step for any community holding more than one signing key, the live First VTC included. OpenVTC @`d069ed7` signs every membership (VMC) and authority (VAC) credential with one proof per key (`vtc-service/src/credentials/signer.rs` `sign_doc`, used by `dtg.rs` `issue_membership`). The First VTC's list carries two proofs (`#key-0` `eddsa-jcs-2022`, `#key-2` `mldsa44-jcs-2024`), and `dataIntegrity.ts` refuses every proof array. Untested for a single-key community, whose credentials would still stop at the status step, because OpenVTC's `encodedList` has no `u` prefix | **[src]** OpenVTC @`d069ed7`; **[obs]** 2026-11-08; **UNKNOWN** for a single-key community |
 | A credential issued here verifies in OpenVTC's `dtg-credentials` | not run | **UNKNOWN** |
 
 Reading a credential OpenVTC issued needs one from a running `vtc` (joining the live community takes a
 wallet and an administrator's approval); checking one issued here needs OpenVTC's Rust
-`dtg-credentials`. The live status list is the first thing to settle, because a plain `GET` returns it:
-this module must either learn to read it (accept a proof set whose `eddsa-jcs-2022` member verifies
-under a pinned key and ignore the suites it cannot check; accept an `encodedList` with no prefix) or
-the difference goes upstream. That is a deliberate decision, not a bug fix, and it is not made here.
+`dtg-credentials`. What to settle first is proof sets, not the status list alone. `verifyProof`
+(`dataIntegrity.ts`) refuses any `proof` array, and `recognition.ts` runs it on the presented credential
+as well as on the list, while OpenVTC signs both with one proof per key its community holds. This module
+must either learn to read a proof set (accept one whose `eddsa-jcs-2022` member verifies under a pinned
+key, and ignore the suites it cannot check) and an `encodedList` with no prefix, or the difference goes
+upstream. That is a deliberate decision, not a bug fix, and it is not made here.
 
 ## How it is meant to be wired
 
 1. A `VtcModule` that provides a recognizer built from configuration (the list of recognised
-   communities and their pinned keys), registered behind a feature flag that defaults off.
+   communities and their pinned keys), registered behind a feature flag that defaults off. The module
+   and its flag (`vtc.credentials`) landed in Companion-Memory#3439; the recognizer built from
+   configuration did not, so its routes pin no community and verify `did:key` issuers only.
 2. A `fetchStatusList` built on the existing peer egress, with a size cap and a cache that honours
    the list's `ttl` when it has one (OpenVTC's lists have none and are served `no-store`).
 3. `StatusSlots` and issued credentials persisted in `ci.*` tables, behind a service that serializes
    allocation.
 4. A route that takes a presented credential together with an authenticated DID, calls the
-   recognizer with `expectedSubject`, and writes each decision to the audit chain.
+   recognizer with `expectedSubject`, and writes each decision to the audit chain. Not built:
+   `POST /vtc/verify` (#3439) takes `expectedSubject` from the request body and writes nothing to the
+   audit chain.
 5. Only then: grants that name a community ("anyone in this community may ask for my availability")
    in place of one person at a time.
 

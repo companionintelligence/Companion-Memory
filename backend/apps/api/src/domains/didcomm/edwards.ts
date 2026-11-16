@@ -27,10 +27,19 @@ const D = mod(-121665n * modInverse(121666n));
 const LOW_ORDER_U = new Set<bigint>([
   0n,
   1n,
+  // The two order-8 values, the u of P − ORDER_8_Y and of ORDER_8_Y; libsodium's blocklist lists both.
   325606250916557431795983626356110631294008115727848805560023387167927233504n,
-  39382357235489614581723060781553021112529692952767895144619396159265364849312n,
+  39382357235489614581723060781553021112529911719440698176882885853963445705823n,
   P - 1n,
 ]);
+
+/** y of the points of order 8: libsodium's blocklist entry, read little-endian. The other is P − ORDER_8_Y. */
+const ORDER_8_Y = readLittleEndian(
+  Buffer.from('26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05', 'hex'),
+);
+
+/** y of the eight points of order dividing 8: the identity (1), order 2 (P − 1), order 4 (0) and order 8. */
+const SMALL_ORDER_Y: ReadonlySet<bigint> = new Set([0n, 1n, P - 1n, ORDER_8_Y, P - ORDER_8_Y]);
 
 function mod(value: bigint): bigint {
   const result = value % P;
@@ -93,6 +102,29 @@ function isOnCurve(y: bigint): boolean {
   const x2 = mod((y2 - 1n) * modInverse(denominator));
 
   return x2 === 0n || modPow(x2, (P - 1n) / 2n) === 1n;
+}
+
+/**
+ * Whether a raw Ed25519 public key is a point of small order or a non-canonical encoding (y ≥ p),
+ * reading the 32 bytes as RFC 8032 does: little-endian, bit 255 the sign of x. Any other length is weak.
+ *
+ * A signature can be made for a small-order key without its private key, so such a key names no one,
+ * and a non-canonical encoding is a second spelling of a key. This is the y-value test of
+ * `peers/ed25519Weak.ts` (the same 48 encodings), copied because the dependency rules keep this
+ * domain from importing another domain's internals. It needs no curve arithmetic, and it does not ask
+ * whether the key is on the curve, since an off-curve key verifies no signature.
+ */
+export function isWeakEd25519PublicKey(key: Uint8Array): boolean {
+  if (!(key instanceof Uint8Array) || key.length !== 32) {
+    return true;
+  }
+
+  const encoded = Buffer.from(key);
+  // The top bit is the sign of x; y is the other 255 bits.
+  encoded[31] &= 0x7f;
+  const y = readLittleEndian(encoded);
+
+  return y >= P || SMALL_ORDER_Y.has(y);
 }
 
 /**

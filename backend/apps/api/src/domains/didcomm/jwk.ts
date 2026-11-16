@@ -6,6 +6,7 @@ import {
   type KeyObject,
 } from 'node:crypto';
 
+import { isWeakEd25519PublicKey } from './edwards';
 import { base64urlDecode, isRecord } from './encoding';
 import { DidcommError } from './errors';
 
@@ -90,6 +91,14 @@ function parseShape(value: unknown, withPrivate: boolean): PublicJwk | PrivateJw
 
     jwk = { kty, crv, x: fixedLength(value.x, 32, 'x') };
     privateBytes = 32;
+
+    // A signature can be made for a small-order Ed25519 key without its private key, so such a key
+    // names no one, and a non-canonical encoding is a second spelling of a key. Every Ed25519 key this
+    // domain reads arrives here: did:key and did:peer:2 through `jwkFromMultikey`, and did:web
+    // material through `didDocument.ts`.
+    if (crv === 'Ed25519' && isWeakEd25519PublicKey(Buffer.from(jwk.x, 'base64url'))) {
+      throw new DidcommError('invalid-key', 'a small-order or non-canonical Ed25519 key is not accepted');
+    }
   } else if (kty === 'EC' && isEcCurve(crv)) {
     const size = EC_COORDINATE_BYTES[crv];
 
@@ -143,7 +152,8 @@ export function privateKeyObject(jwk: PrivateJwk): KeyObject {
  * Validates a public JWK taken from untrusted input (a DID document, a JWE `epk`): shape, lengths,
  * no private member, and, for the NIST and secp256k1 curves, that the point is on the curve. The
  * on-curve check is the "invalid curve attack" defence DIDComm Messaging v2.1 makes mandatory
- * when decrypting.
+ * when decrypting. An Ed25519 key of small order, or one that is not canonically encoded, is
+ * refused (`isWeakEd25519PublicKey`).
  */
 export function parsePublicJwk(value: unknown): PublicJwk {
   const jwk = parseShape(value, false) as PublicJwk;

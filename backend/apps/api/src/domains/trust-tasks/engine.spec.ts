@@ -392,6 +392,34 @@ describe('TrustTasksEngine', () => {
 
       expect(await engine.handle(discover('0.4'))).toEqual({ kind: 'refused' });
     });
+
+    it('refuses a discovery document that does not say when it was issued, without spending the poll budget', async () => {
+      const { engine, calls } = harness();
+      const unsigned = draft({
+        from: alice,
+        to: box.vid,
+        type: registryTypeUri('trust-task-discovery', '0.4'),
+        payload: {},
+      });
+      delete (unsigned as { issuedAt?: string }).issuedAt;
+
+      const reply = await engine.handle(sign(unsigned, alice));
+
+      expect(reply.kind).toBe('refused');
+      expect(calls.poll).toEqual([]);
+    });
+
+    it('answers a discovery document inside its acceptance window and refuses the same copy after it', async () => {
+      let clock = T0;
+      const { engine, calls } = harness({ now: () => clock });
+      const request = discover('0.4');
+
+      documentOf(await engine.handle(request));
+
+      clock = T0 + 331_000;
+      expect((await engine.handle(request)).kind).toBe('refused');
+      expect(calls.poll).toHaveLength(1);
+    });
   });
 
   describe('what a stranger is told — nothing', () => {

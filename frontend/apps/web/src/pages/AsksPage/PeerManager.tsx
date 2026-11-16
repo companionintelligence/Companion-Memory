@@ -209,10 +209,14 @@ function AddPeerForm({ busy, onAdd }: { busy: boolean; onAdd: Props['onAdd'] }) 
         <span className="text-sm">Their Companion’s address</span>
         <Input
           value={memoryEndpoint}
-          placeholder="https://ada.example/api/peer"
+          placeholder="https://ada.example/api/agent/v1"
           disabled={busy}
           onChange={(event) => setMemoryEndpoint(event.target.value)}
         />
+        <span className="text-muted-foreground text-xs">
+          Their Companion’s peer address. It ends in /agent/v1; behind Companion Memory’s gateway that is{' '}
+          {'https://<their host>/api/agent/v1'}.
+        </span>
       </label>
 
       <label className="flex flex-col gap-1">

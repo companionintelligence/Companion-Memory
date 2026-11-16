@@ -355,3 +355,41 @@ describe('BodyParserMiddleware NDJSON streaming bypass', () => {
     expect((json as jest.Mock).mock.calls[0]?.[0]?.type).toBe('application/json');
   });
 });
+
+/**
+ * The peer surface's signatures cover a digest of the body as sent, so the raw
+ * bytes must be kept for every spelling of the prefix express routes there: in
+ * any case, and for an absolute-form request, which express routes by its
+ * parsed path. A lookalike prefix keeps none.
+ */
+describe('BodyParserMiddleware signed peer prefix', () => {
+  it.each(['/AGENT/V1/ask', '/agent/v1/trust-tasks'])('keeps the raw body for %s', (url) => {
+    runMiddleware(url, 'application/json');
+
+    expect(typeof (json as jest.Mock).mock.calls[0][0].verify).toBe('function');
+  });
+
+  it('keeps the raw body for an absolute-form request, matched by its parsed path', () => {
+    jest.clearAllMocks();
+    const middleware = new BodyParserMiddleware({ get: () => undefined } as unknown as Reflector);
+    const req = {
+      originalUrl: 'http://host/agent/v1/ask',
+      url: 'http://host/agent/v1/ask',
+      path: '/agent/v1/ask',
+      baseUrl: '',
+      headers: { 'content-type': 'application/json' },
+    } as unknown as Request;
+    const next = jest.fn();
+
+    middleware.use(req, {} as Response, next);
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(typeof (json as jest.Mock).mock.calls[0][0].verify).toBe('function');
+  });
+
+  it.each(['/agent/v10/ask', '/agentv1', '/v1/events'])('keeps no raw body for %s', (url) => {
+    runMiddleware(url, 'application/json');
+
+    expect((json as jest.Mock).mock.calls[0][0].verify).toBeUndefined();
+  });
+});

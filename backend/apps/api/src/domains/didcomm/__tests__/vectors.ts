@@ -2,7 +2,8 @@
  * Test vectors from DIDComm Messaging (DIF), Appendix A (secrets), B (DID documents) and C (messages).
  * Generated verbatim from the specification source (decentralized-identity/didcomm-messaging,
  * docs/spec-files/appendix.md at c78bcc4, 2024-05-06), except that the secrets' "kid " members
- * (trailing space in the source) are normalized to "kid". Do not edit by hand.
+ * (trailing space in the source) are normalized to "kid". Apache-2.0 (LICENSES/Apache-2.0.txt;
+ * NOTICE.md). Do not edit by hand.
  *
  * Alice is the sender and Bob the recipient; the private keys of both are published, which is what
  * lets every encrypted message below be decrypted here.

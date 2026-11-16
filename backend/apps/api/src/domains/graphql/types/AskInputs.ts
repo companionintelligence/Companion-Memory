@@ -319,6 +319,8 @@ export class SendPeerAskInput {
   /**
    * Portal-issued access token whose audience is the PEER box. Supplied by the
    * caller until Portal token exchange lands; this box never mints or stores it.
+   * An empty string sends the ask signed with this box's key alone
+   * (`peers.signingKeyJwk`), which only the box's administrator may do.
    */
   @Field(() => String)
   peerAccessToken!: string;

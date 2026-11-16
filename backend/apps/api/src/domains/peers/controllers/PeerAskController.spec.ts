@@ -1,6 +1,6 @@
 import { generateKeyPairSync, randomBytes } from 'node:crypto';
 
-import { ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 
 import { InMemoryConsumptionStore } from '@ci/domains/consumption';
 
@@ -11,9 +11,11 @@ import {
   buildSignatureBase,
   contentDigest,
   formatSignatureParams,
+  jwkThumbprint,
   signSignatureBase,
   type SignatureParams,
 } from '../httpSignature';
+import { selfCertifyingIssuerOf, selfCertifyingPublicJwk } from '../selfCertifyingKeyId';
 import { PeerSignatureService } from '../services/PeerSignatureService';
 
 import { PeerAskController } from './PeerAskController';
@@ -107,13 +109,72 @@ function signUnder(keyid: string, rawBody: string) {
   };
 }
 
-function makeController(links: unknown[] = [], askEnabled = true) {
+/** A self-certifying keyid for a peer's public key. */
+type Spelling = (publicJwk: Record<string, unknown>) => string;
+
+const asDidKey: Spelling = (publicJwk) => didKeyIdFor(publicJwk) as string;
+const asDidKeri: Spelling = (publicJwk) => `did:keri:D${publicJwk.x as string}`;
+
+/**
+ * A peer key whose `kid` is the self-certifying keyid `spell` makes of it, and a `sign` that makes the
+ * headers that peer sends. One key for every request, so a test can show the same peer refused for one
+ * target and answered for another.
+ */
+function selfCertifyingPeer(spell: Spelling) {
+  const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+  const publicJwk = publicKey.export({ format: 'jwk' }) as Record<string, unknown>;
+  const keyid = spell(publicJwk);
+
+  function sign(rawBody: string | undefined, method = 'POST', targetUri = `${ENDPOINT}/ask`) {
+    peersConfig.signingKeyJwk = JSON.stringify({ ...privateKey.export({ format: 'jwk' }), kid: keyid });
+    const signer = new PeerSignatureService(new InMemoryConsumptionStore(), logger() as never);
+    const headers = signer.signOutbound({ method, targetUri, body: rawBody }) as Record<string, string>;
+    delete peersConfig.signingKeyJwk;
+
+    return headers;
+  }
+
+  return { publicJwk, keyid, sign };
+}
+
+/**
+ * A `findActiveByKeyThumbprint` that answers the way `PeerLinkService`'s query does: a link whose
+ * recorded key has the keyid as its thumbprint; for a self-certifying keyid, the link that names it under
+ * its own issuer; and a link that records the key a self-certifying keyid spells out. A link that records
+ * a key carries that key's thumbprint as `peerKeyThumbprint`, as a stored row does.
+ */
+function lookupLike(links: Array<Record<string, unknown>>) {
+  return jest.fn(async (keyid: string) => {
+    const issuer = selfCertifyingIssuerOf(keyid);
+    const spelled = selfCertifyingPublicJwk(keyid);
+    const spelledThumbprint = spelled == null ? null : jwkThumbprint(spelled);
+
+    return links.filter(
+      (candidate) =>
+        candidate.peerKeyThumbprint === keyid ||
+        (issuer != null && candidate.peerIssuer === issuer && candidate.peerSubject === keyid) ||
+        (spelledThumbprint != null && candidate.peerKeyThumbprint === spelledThumbprint),
+    );
+  });
+}
+
+/**
+ * Unless a test passes its own lookup, `findActiveByKeyThumbprint` answers every keyid with every link:
+ * most tests here are about which of the links found may answer. Which links a keyid finds is covered by
+ * the 'a Portal-token ask signed under a did:key keyid' cases, through {@link lookupLike}, and against the
+ * real query in PeerLinkService.didKey.spec.ts.
+ */
+function makeController(
+  links: unknown[] = [],
+  askEnabled = true,
+  findActiveByKeyThumbprint: jest.Mock = jest.fn().mockResolvedValue(links),
+) {
   const portalTokenVerifier = { verifyClaims: jest.fn().mockResolvedValue(IDENTITY) };
   const peerAskService = {
     handle: jest.fn().mockResolvedValue({ askId: 'abc12345', status: 'pending' }),
     result: jest.fn().mockResolvedValue({ askId: 'abc12345', status: 'pending' }),
   };
-  const peerLinkService = { findActiveByKeyThumbprint: jest.fn().mockResolvedValue(links) };
+  const peerLinkService = { findActiveByKeyThumbprint };
   const rateLimitService = { consume: jest.fn(), consumePoll: jest.fn() };
   const featureService = { isFeatureEnabled: jest.fn().mockResolvedValue(askEnabled) };
   const signatureService = new PeerSignatureService(new InMemoryConsumptionStore(), logger() as never);
@@ -148,7 +209,7 @@ describe('PeerAskController — signatures not required', () => {
   it('accepts an unsigned request, without looking up any key', async () => {
     const { controller, peerAskService, peerLinkService } = makeController();
 
-    await controller.ask('Bearer t', request({}), BODY);
+    await controller.ask('Bearer t', request({}, JSON.stringify(BODY)));
 
     expect(peerAskService.handle).toHaveBeenCalledTimes(1);
     expect(peerLinkService.findActiveByKeyThumbprint).not.toHaveBeenCalled();
@@ -163,12 +224,45 @@ describe('PeerAskController — signatures not required', () => {
     const { controller } = makeController([link(peer.publicJwk)]);
 
     await expect(
-      controller.ask(
-        'Bearer t',
-        request({ ...peer.headers, 'content-digest': 'sha-256=:bogus:' }, raw),
-        BODY,
-      ),
+      controller.ask('Bearer t', request({ ...peer.headers, 'content-digest': 'sha-256=:bogus:' }, raw)),
     ).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  it('refuses a signed request whose raw bytes were not kept', async () => {
+    // The signature covers a Content-Digest, but no bytes were kept for the request, so the digest is
+    // checked against an empty body and fails. It is refused like every other signature failure, and the
+    // body is never read.
+    const peer = signAs(JSON.stringify(BODY), 'POST', `${ENDPOINT}/ask`);
+    const { controller, peerAskService } = makeController([link(peer.publicJwk)]);
+
+    await expect(controller.ask('Bearer t', request(peer.headers, undefined))).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
+    expect(peerAskService.handle).not.toHaveBeenCalled();
+
+    // The same on the token-less did:key path, where the signature is the only authentication.
+    const didKeyPeer = selfCertifyingPeer(asDidKey);
+    const didKey = makeController([
+      { peerHandle: 'did-key-peer', peerIssuer: 'did:key', peerSubject: didKeyPeer.keyid, peerKeyJwk: null },
+    ]);
+
+    await expect(
+      didKey.controller.ask(undefined, request(didKeyPeer.sign(JSON.stringify(BODY)), undefined)),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(didKey.peerAskService.handle).not.toHaveBeenCalled();
+  });
+
+  it('answers Malformed ask to an unsigned request whose body is not JSON', async () => {
+    const { controller, peerAskService } = makeController();
+
+    for (const rawBody of [undefined, 'askId=abc12345&request%5Barchetype%5D=relationship']) {
+      const attempt = controller.ask('Bearer t', request({}, rawBody));
+
+      await expect(attempt).rejects.toBeInstanceOf(BadRequestException);
+      await expect(attempt).rejects.toThrow('Malformed ask');
+    }
+
+    expect(peerAskService.handle).not.toHaveBeenCalled();
   });
 });
 
@@ -180,7 +274,7 @@ describe('PeerAskController — signatures required', () => {
   it('refuses an unsigned request', async () => {
     const { controller, peerAskService } = makeController();
 
-    await expect(controller.ask('Bearer t', request({}), BODY)).rejects.toBeInstanceOf(UnauthorizedException);
+    await expect(controller.ask('Bearer t', request({}))).rejects.toBeInstanceOf(UnauthorizedException);
     expect(peerAskService.handle).not.toHaveBeenCalled();
   });
 
@@ -189,7 +283,7 @@ describe('PeerAskController — signatures required', () => {
     const peer = signAs(raw, 'POST', `${ENDPOINT}/ask`);
     const { controller, peerAskService } = makeController([link(peer.publicJwk)]);
 
-    await controller.ask('Bearer t', request(peer.headers, raw), BODY);
+    await controller.ask('Bearer t', request(peer.headers, raw));
 
     expect(peerAskService.handle).toHaveBeenCalledTimes(1);
   });
@@ -199,7 +293,7 @@ describe('PeerAskController — signatures required', () => {
     const peer = signAs(raw, 'POST', `${ENDPOINT}/ask`);
     const { controller } = makeController([]);
 
-    await expect(controller.ask('Bearer t', request(peer.headers, raw), BODY)).rejects.toBeInstanceOf(
+    await expect(controller.ask('Bearer t', request(peer.headers, raw))).rejects.toBeInstanceOf(
       UnauthorizedException,
     );
   });
@@ -217,7 +311,7 @@ describe('PeerAskController — signatures required', () => {
       link(peer.publicJwk, { peerSubject: 'somebody-else', peerHandle: 'other' }),
     ]);
 
-    await expect(controller.ask('Bearer t', request(peer.headers, raw), BODY)).rejects.toBeInstanceOf(
+    await expect(controller.ask('Bearer t', request(peer.headers, raw))).rejects.toBeInstanceOf(
       UnauthorizedException,
     );
   });
@@ -227,8 +321,8 @@ describe('PeerAskController — signatures required', () => {
     const peer = signAs(raw, 'POST', `${ENDPOINT}/ask`);
     const { controller } = makeController([link(peer.publicJwk)]);
 
-    await controller.ask('Bearer t', request(peer.headers, raw), BODY);
-    await expect(controller.ask('Bearer t', request(peer.headers, raw), BODY)).rejects.toBeInstanceOf(
+    await controller.ask('Bearer t', request(peer.headers, raw));
+    await expect(controller.ask('Bearer t', request(peer.headers, raw))).rejects.toBeInstanceOf(
       UnauthorizedException,
     );
   });
@@ -245,7 +339,7 @@ describe('PeerAskController — signatures required', () => {
     const { controller } = makeController([link(peer.publicJwk)]);
 
     await expect(
-      controller.ask('Bearer t', request({ ...peer.headers, host: 'evil.example' }, raw), BODY),
+      controller.ask('Bearer t', request({ ...peer.headers, host: 'evil.example' }, raw)),
     ).rejects.toBeInstanceOf(UnauthorizedException);
   });
 
@@ -255,7 +349,7 @@ describe('PeerAskController — signatures required', () => {
     const peer = signAs(raw, 'POST', `${ENDPOINT}/ask`);
     const { controller } = makeController([link(peer.publicJwk)]);
 
-    await expect(controller.ask('Bearer t', request(peer.headers, raw), BODY)).rejects.toBeInstanceOf(
+    await expect(controller.ask('Bearer t', request(peer.headers, raw))).rejects.toBeInstanceOf(
       ServiceUnavailableException,
     );
   });
@@ -290,7 +384,7 @@ describe('PeerAskController — signatures required', () => {
       'content-length': String(form.length),
     };
 
-    await expect(controller.ask('Bearer t', request(headers, undefined), BODY)).rejects.toBeInstanceOf(
+    await expect(controller.ask('Bearer t', request(headers, undefined))).rejects.toBeInstanceOf(
       UnauthorizedException,
     );
     expect(peerAskService.handle).not.toHaveBeenCalled();
@@ -299,7 +393,6 @@ describe('PeerAskController — signatures required', () => {
     await controller.ask(
       'Bearer t',
       request({ ...peer.headers, 'content-length': String(Buffer.byteLength(raw)) }, raw),
-      BODY,
     );
     expect(peerAskService.handle).toHaveBeenCalledTimes(1);
   });
@@ -344,7 +437,7 @@ describe('PeerAskController — signatures required', () => {
         sovereignLink(peer.aid, peer.publicJwk),
       ]);
 
-      await expect(controller.ask('Bearer keri', request(peer.headers, raw), BODY)).resolves.toEqual({
+      await expect(controller.ask('Bearer keri', request(peer.headers, raw))).resolves.toEqual({
         askId: 'abc12345',
         status: 'pending',
       });
@@ -363,7 +456,7 @@ describe('PeerAskController — signatures required', () => {
       const peer = signSovereign(raw);
       const { controller, peerAskService } = makeController([sovereignLink(peer.aid, null)]);
 
-      await controller.ask(undefined, request(peer.headers, raw), BODY);
+      await controller.ask(undefined, request(peer.headers, raw));
 
       expect(peerAskService.handle).toHaveBeenCalledTimes(1);
     });
@@ -381,7 +474,7 @@ describe('PeerAskController — signatures required', () => {
       };
       const { controller, peerAskService } = makeController([sovereignLink(peer.aid, null)]);
 
-      await expect(controller.ask('Bearer keri', request(tampered, raw), BODY)).rejects.toBeInstanceOf(
+      await expect(controller.ask('Bearer keri', request(tampered, raw))).rejects.toBeInstanceOf(
         UnauthorizedException,
       );
       expect(peerAskService.handle).not.toHaveBeenCalled();
@@ -392,7 +485,7 @@ describe('PeerAskController — signatures required', () => {
       const peer = signSovereign(raw);
       const { controller, peerAskService } = makeController([]);
 
-      await expect(controller.ask('Bearer keri', request(peer.headers, raw), BODY)).rejects.toBeInstanceOf(
+      await expect(controller.ask('Bearer keri', request(peer.headers, raw))).rejects.toBeInstanceOf(
         UnauthorizedException,
       );
       expect(peerAskService.handle).not.toHaveBeenCalled();
@@ -407,7 +500,7 @@ describe('PeerAskController — signatures required', () => {
       >;
       const { controller, peerAskService } = makeController([sovereignLink(peer.aid, recorded)]);
 
-      await expect(controller.ask('Bearer keri', request(peer.headers, raw), BODY)).rejects.toBeInstanceOf(
+      await expect(controller.ask('Bearer keri', request(peer.headers, raw))).rejects.toBeInstanceOf(
         UnauthorizedException,
       );
       expect(peerAskService.handle).not.toHaveBeenCalled();
@@ -421,7 +514,7 @@ describe('PeerAskController — signatures required', () => {
         link({}, { peerKeyJwk: null }),
       ]);
 
-      await expect(controller.ask('Bearer keri', request(peer.headers, raw), BODY)).rejects.toBeInstanceOf(
+      await expect(controller.ask('Bearer keri', request(peer.headers, raw))).rejects.toBeInstanceOf(
         UnauthorizedException,
       );
       expect(peerAskService.handle).not.toHaveBeenCalled();
@@ -435,7 +528,7 @@ describe('PeerAskController — signatures required', () => {
       const peer = signUnder(eAid, raw);
       const { controller, peerAskService } = makeController([sovereignLink(eAid, peer.publicJwk)]);
 
-      await expect(controller.ask('Bearer keri', request(peer.headers, raw), BODY)).rejects.toBeInstanceOf(
+      await expect(controller.ask('Bearer keri', request(peer.headers, raw))).rejects.toBeInstanceOf(
         UnauthorizedException,
       );
       expect(peerAskService.handle).not.toHaveBeenCalled();
@@ -468,7 +561,7 @@ describe('PeerAskController — signatures required', () => {
         didKeyLink(peer.did, peer.publicJwk),
       ]);
 
-      await expect(controller.ask(undefined, request(peer.headers, raw), BODY)).resolves.toEqual({
+      await expect(controller.ask(undefined, request(peer.headers, raw))).resolves.toEqual({
         askId: 'abc12345',
         status: 'pending',
       });
@@ -487,7 +580,7 @@ describe('PeerAskController — signatures required', () => {
       const peer = signDidKey(raw);
       const { controller, peerAskService } = makeController([didKeyLink(peer.did, null)]);
 
-      await controller.ask('Bearer keri', request(peer.headers, raw), BODY);
+      await controller.ask('Bearer keri', request(peer.headers, raw));
 
       expect(peerAskService.handle).toHaveBeenCalledTimes(1);
     });
@@ -517,7 +610,7 @@ describe('PeerAskController — signatures required', () => {
       };
       const { controller, peerAskService } = makeController([didKeyLink(peer.did, null)]);
 
-      await expect(controller.ask(undefined, request(tampered, raw), BODY)).rejects.toBeInstanceOf(
+      await expect(controller.ask(undefined, request(tampered, raw))).rejects.toBeInstanceOf(
         UnauthorizedException,
       );
       expect(peerAskService.handle).not.toHaveBeenCalled();
@@ -528,7 +621,7 @@ describe('PeerAskController — signatures required', () => {
       const other = JSON.stringify({ ...BODY, prompt: 'something else' });
       const { controller, peerAskService } = makeController([didKeyLink(peer.did, null)]);
 
-      await expect(controller.ask(undefined, request(peer.headers, other), BODY)).rejects.toBeInstanceOf(
+      await expect(controller.ask(undefined, request(peer.headers, other))).rejects.toBeInstanceOf(
         UnauthorizedException,
       );
       expect(peerAskService.handle).not.toHaveBeenCalled();
@@ -539,7 +632,7 @@ describe('PeerAskController — signatures required', () => {
       const peer = signDidKey(raw);
       const { controller, peerAskService } = makeController([]);
 
-      await expect(controller.ask(undefined, request(peer.headers, raw), BODY)).rejects.toBeInstanceOf(
+      await expect(controller.ask(undefined, request(peer.headers, raw))).rejects.toBeInstanceOf(
         UnauthorizedException,
       );
       expect(peerAskService.handle).not.toHaveBeenCalled();
@@ -554,7 +647,7 @@ describe('PeerAskController — signatures required', () => {
       >;
       const { controller, peerAskService } = makeController([didKeyLink(peer.did, recorded)]);
 
-      await expect(controller.ask(undefined, request(peer.headers, raw), BODY)).rejects.toBeInstanceOf(
+      await expect(controller.ask(undefined, request(peer.headers, raw))).rejects.toBeInstanceOf(
         UnauthorizedException,
       );
       expect(peerAskService.handle).not.toHaveBeenCalled();
@@ -596,7 +689,7 @@ describe('PeerAskController — signatures required', () => {
         link(peer.publicJwk),
       ]);
 
-      await expect(controller.ask(undefined, request(peer.headers, raw), BODY)).rejects.toBeInstanceOf(
+      await expect(controller.ask(undefined, request(peer.headers, raw))).rejects.toBeInstanceOf(
         UnauthorizedException,
       );
       expect(peerAskService.handle).not.toHaveBeenCalled();
@@ -609,7 +702,7 @@ describe('PeerAskController — signatures required', () => {
         didKeyLink(peer.aid, peer.publicJwk, 'did:key'),
       ]);
 
-      await expect(controller.ask(undefined, request(peer.headers, raw), BODY)).rejects.toBeInstanceOf(
+      await expect(controller.ask(undefined, request(peer.headers, raw))).rejects.toBeInstanceOf(
         UnauthorizedException,
       );
       expect(peerAskService.handle).not.toHaveBeenCalled();
@@ -622,7 +715,7 @@ describe('PeerAskController — signatures required', () => {
         didKeyLink(IDENTITY.subject, peer.publicJwk, 'did:key'),
       ]);
 
-      await expect(controller.ask('Bearer t', request(peer.headers, raw), BODY)).rejects.toBeInstanceOf(
+      await expect(controller.ask('Bearer t', request(peer.headers, raw))).rejects.toBeInstanceOf(
         UnauthorizedException,
       );
       expect(peerAskService.handle).not.toHaveBeenCalled();
@@ -640,7 +733,7 @@ describe('PeerAskController — signatures required', () => {
         },
       ]);
 
-      await expect(controller.ask(undefined, request(peer.headers, raw), BODY)).rejects.toBeInstanceOf(
+      await expect(controller.ask(undefined, request(peer.headers, raw))).rejects.toBeInstanceOf(
         UnauthorizedException,
       );
       expect(peerAskService.handle).not.toHaveBeenCalled();
@@ -666,7 +759,7 @@ describe('PeerAskController — signatures required', () => {
         const peer = signDidKey(raw);
         const { controller, peerAskService } = makeController([didKeyLink(other(), peer.publicJwk, issuer)]);
 
-        await expect(controller.ask(undefined, request(peer.headers, raw), BODY)).rejects.toBeInstanceOf(
+        await expect(controller.ask(undefined, request(peer.headers, raw))).rejects.toBeInstanceOf(
           UnauthorizedException,
         );
         expect(peerAskService.handle).not.toHaveBeenCalled();
@@ -682,7 +775,7 @@ describe('PeerAskController — signatures required', () => {
       const stranger = signDidKey(raw);
       const { controller, peerAskService } = makeController([link({}, { peerKeyJwk: null })]);
 
-      await expect(controller.ask('Bearer t', request(stranger.headers, raw), BODY)).rejects.toBeInstanceOf(
+      await expect(controller.ask('Bearer t', request(stranger.headers, raw))).rejects.toBeInstanceOf(
         UnauthorizedException,
       );
       expect(peerAskService.handle).not.toHaveBeenCalled();
@@ -693,7 +786,7 @@ describe('PeerAskController — signatures required', () => {
       const peer = signDidKey(raw);
       const { controller, peerAskService } = makeController([didKeyLink(peer.did, peer.publicJwk)]);
 
-      await controller.ask(undefined, request(peer.headers, raw), BODY);
+      await controller.ask(undefined, request(peer.headers, raw));
 
       expect(peerAskService.handle).toHaveBeenCalledTimes(1);
     });
@@ -708,7 +801,7 @@ describe('PeerAskController — signatures required', () => {
         const peer = signUnder(odd, raw);
         const { controller, peerAskService } = makeController([didKeyLink(odd, peer.publicJwk)]);
 
-        await expect(controller.ask(undefined, request(peer.headers, raw), BODY)).rejects.toBeInstanceOf(
+        await expect(controller.ask(undefined, request(peer.headers, raw))).rejects.toBeInstanceOf(
           UnauthorizedException,
         );
         expect(peerAskService.handle).not.toHaveBeenCalled();
@@ -724,7 +817,7 @@ describe('PeerAskController — signatures required', () => {
           false,
         );
 
-        await expect(controller.ask(undefined, request(peer.headers, raw), BODY)).rejects.toBeInstanceOf(
+        await expect(controller.ask(undefined, request(peer.headers, raw))).rejects.toBeInstanceOf(
           ServiceUnavailableException,
         );
         expect(featureService.isFeatureEnabled).toHaveBeenCalledWith('ask');
@@ -735,7 +828,7 @@ describe('PeerAskController — signatures required', () => {
       it('is dark for a Portal-token ask while the feature is off', async () => {
         const { controller, portalTokenVerifier, peerAskService } = makeController([], false);
 
-        await expect(controller.ask('Bearer t', request({}), BODY)).rejects.toBeInstanceOf(
+        await expect(controller.ask('Bearer t', request({}))).rejects.toBeInstanceOf(
           ServiceUnavailableException,
         );
         expect(portalTokenVerifier.verifyClaims).not.toHaveBeenCalled();
@@ -750,7 +843,7 @@ describe('PeerAskController — signatures required', () => {
       const peer = signAs(raw, 'POST', `${ENDPOINT}/ask`);
       const { controller, peerLinkService, peerAskService } = makeController([link(peer.publicJwk)]);
 
-      await expect(controller.ask(undefined, request(peer.headers, raw), BODY)).rejects.toBeInstanceOf(
+      await expect(controller.ask(undefined, request(peer.headers, raw))).rejects.toBeInstanceOf(
         UnauthorizedException,
       );
       expect(peerLinkService.findActiveByKeyThumbprint).not.toHaveBeenCalled();
@@ -764,7 +857,7 @@ describe('PeerAskController — signatures required', () => {
         const peer = signDidKey(raw);
         const { controller, peerAskService } = makeController([didKeyLink(peer.did, null)]);
 
-        await controller.ask(undefined, request(peer.headers, raw), BODY);
+        await controller.ask(undefined, request(peer.headers, raw));
 
         expect(peerAskService.handle).toHaveBeenCalledTimes(1);
       });
@@ -773,11 +866,144 @@ describe('PeerAskController — signatures required', () => {
         delete peersConfig.audience;
         const { controller, peerAskService } = makeController();
 
-        await expect(controller.ask('Bearer t', request({}), BODY)).rejects.toBeInstanceOf(
+        await expect(controller.ask('Bearer t', request({}))).rejects.toBeInstanceOf(
           ServiceUnavailableException,
         );
         expect(peerAskService.handle).not.toHaveBeenCalled();
       });
     });
+  });
+
+  /**
+   * A box whose `kid` is its own did:key signs every outbound ask under it and still attaches the caller's
+   * Portal token. The link that answers is then the Portal link, found by the key it records; these cases
+   * look links up the way `PeerLinkService` does rather than handing every link back.
+   */
+  describe('a Portal-token ask signed under a did:key keyid', () => {
+    it("is answered by the Portal link that records the signer's key", async () => {
+      const raw = JSON.stringify(BODY);
+      const peer = selfCertifyingPeer(asDidKey);
+      const links = [link(peer.publicJwk, { peerKeyThumbprint: jwkThumbprint(peer.publicJwk) })];
+      const { controller, peerAskService, peerLinkService } = makeController(links, true, lookupLike(links));
+
+      await controller.ask('Bearer t', request(peer.sign(raw), raw));
+
+      expect(peerLinkService.findActiveByKeyThumbprint).toHaveBeenCalledWith(peer.keyid);
+      expect(peerAskService.handle).toHaveBeenCalledWith(
+        IDENTITY,
+        BODY,
+        expect.objectContaining({ covered: expect.any(Array) }),
+      );
+    });
+
+    it('is refused when that Portal link records no key', async () => {
+      const raw = JSON.stringify(BODY);
+      const peer = selfCertifyingPeer(asDidKey);
+      const links = [link({}, { peerKeyJwk: null, peerKeyThumbprint: null })];
+      const { controller, peerAskService } = makeController(links, true, lookupLike(links));
+
+      await expect(controller.ask('Bearer t', request(peer.sign(raw), raw))).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
+      expect(peerAskService.handle).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe('PeerAskController — an endpoint published behind the gateway prefix', () => {
+  /** What a box behind Companion Memory's gateway gives its peers. The gateway strips `/api`. */
+  const GATEWAY_ENDPOINT = 'https://us.example/api/agent/v1';
+
+  beforeEach(() => {
+    peersConfig.memoryEndpoint = GATEWAY_ENDPOINT;
+    peersConfig.requireHttpSignature = true;
+  });
+
+  it('accepts a POST signed over the published base, which reaches this process as /agent/v1/ask', async () => {
+    const raw = JSON.stringify(BODY);
+    const peer = signAs(raw, 'POST', `${GATEWAY_ENDPOINT}/ask`);
+    const { controller, peerAskService } = makeController([link(peer.publicJwk)]);
+
+    await controller.ask('Bearer t', request(peer.headers, raw, '/agent/v1/ask'));
+
+    expect(peerAskService.handle).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts a collect signed over the published base', async () => {
+    const peer = signAs(undefined, 'GET', `${GATEWAY_ENDPOINT}/ask/abc12345`);
+    const { controller, peerAskService } = makeController([link(peer.publicJwk)]);
+
+    await controller.result(
+      'Bearer t',
+      request(peer.headers, undefined, '/agent/v1/ask/abc12345', 'GET'),
+      'abc12345',
+    );
+
+    expect(peerAskService.result).toHaveBeenCalledWith(IDENTITY, 'abc12345');
+  });
+
+  it('refuses a signature over the endpoint without the prefix it is published under', async () => {
+    const raw = JSON.stringify(BODY);
+    const peer = signAs(raw, 'POST', 'https://us.example/agent/v1/ask');
+    const { controller, peerAskService } = makeController([link(peer.publicJwk)]);
+
+    await expect(controller.ask('Bearer t', request(peer.headers, raw))).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
+    expect(peerAskService.handle).not.toHaveBeenCalled();
+  });
+
+  it('refuses a request whose path is not under /agent/v1, before any link is looked up', async () => {
+    const raw = JSON.stringify(BODY);
+    const peer = signAs(raw, 'POST', `${GATEWAY_ENDPOINT}/ask`);
+    const { controller, peerAskService, peerLinkService } = makeController([link(peer.publicJwk)]);
+
+    await expect(
+      controller.ask('Bearer t', request(peer.headers, raw, 'http://us.example/agent/v1/ask')),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(peerLinkService.findActiveByKeyThumbprint).not.toHaveBeenCalled();
+    expect(peerAskService.handle).not.toHaveBeenCalled();
+  });
+
+  it('still reads an endpoint published at the bare origin as that origin plus the path received', async () => {
+    peersConfig.memoryEndpoint = 'https://us.example';
+    const raw = JSON.stringify(BODY);
+    const peer = signAs(raw, 'POST', 'https://us.example/agent/v1/ask');
+    const { controller, peerAskService } = makeController([link(peer.publicJwk)]);
+
+    await controller.ask('Bearer t', request(peer.headers, raw));
+
+    expect(peerAskService.handle).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * ═══ THE SIGNED TARGET BINDS A TOKEN-LESS ASK TO THIS BOX ═══
+   *
+   * An ask signed under a self-certifying keyid carries no Portal token, so there is no audience to check.
+   * What ties it to this box is `@target-uri`: every signature covers it, and this box rebuilds it from its
+   * own `peers.memoryEndpoint`, so a signature made for another box's endpoint names a different target.
+   */
+  it.each([
+    ['did:keri', asDidKeri],
+    ['did:key', asDidKey],
+  ])('refuses a %s ask signed for another box, before any ask is created', async (issuer, spell) => {
+    const raw = JSON.stringify(BODY);
+    const peer = selfCertifyingPeer(spell);
+    const { controller, peerAskService } = makeController([
+      { peerHandle: 'self-certifying-peer', peerIssuer: issuer, peerSubject: peer.keyid, peerKeyJwk: null },
+    ]);
+
+    await expect(
+      controller.ask(
+        undefined,
+        request(peer.sign(raw, 'POST', 'https://them.example/api/agent/v1/ask'), raw),
+      ),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(peerAskService.handle).not.toHaveBeenCalled();
+
+    // The control: the same peer and the same link, signing for this box, is answered.
+    await controller.ask(undefined, request(peer.sign(raw, 'POST', `${GATEWAY_ENDPOINT}/ask`), raw));
+
+    expect(peerAskService.handle).toHaveBeenCalledTimes(1);
   });
 });
