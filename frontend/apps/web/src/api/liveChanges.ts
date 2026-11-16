@@ -41,15 +41,15 @@ import { isNativePlatform, streamingFetch } from '@ci/common';
  * ═══ THE PHONE APP IN THE BACKGROUND ═══
  *
  * A hidden phone app reads nothing the stream announces, but an open stream
- * still takes the server's keep-alive every 25 s, and on mobile data each one
+ * still takes the server's keep-alive every 25 s. On mobile data each one
  * wakes the phone's radio. So once the app has been in the background for
- * `BACKGROUND_CLOSE_MS` the stream is closed, and no stream opens while it
+ * `BACKGROUND_CLOSE_MS` the stream is closed and no stream opens while it
  * stays there. A quick switch to another app and back keeps it. On return it
  * opens at once and catches up like any other drop.
  *
- * The close is a timer, and a phone can freeze a background app or sleep
- * before it runs. A stream held through that may have been dropped by the
- * network without noticing, so on return it is replaced, not trusted.
+ * The close is a timer. A phone can freeze a background app or sleep before
+ * it runs. A stream held through that may have been dropped by the network
+ * without noticing, so on return it is replaced, not trusted.
  *
  * A browser tab or the desktop window keeps its stream in the background.
  */
@@ -71,7 +71,7 @@ const RECONNECT_CEILING_MS = 30_000;
 const UNAUTHORIZED_WAIT_MS = 60_000;
 /**
  * How long the phone app stays in the background before its stream closes.
- * Long enough for a quick look at another app, and shorter than the server's
+ * Long enough for a quick look at another app and shorter than the server's
  * 25 s keep-alive, so a backgrounded app takes one at most.
  */
 export const BACKGROUND_CLOSE_MS = 15_000;
@@ -88,8 +88,11 @@ let streamKind: LiveChangesAuthKind = 'bearer';
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectDelay = RECONNECT_FLOOR_MS;
 let refusedToken: string | null = null;
-/** When `refusedToken` may be tried again: never for a bearer, after a wait for a key. */
-let refusedUntil = 0;
+/**
+ * When a refused key was refused, by `performance.now()` and by the wall clock.
+ * Null for a refused bearer, which is never tried again.
+ */
+let refusedAt: { ticks: number; wall: number } | null = null;
 /** A stream subscribers wanted was down, so changes may have gone unannounced. */
 let missedChanges = false;
 let backgroundTimer: ReturnType<typeof setTimeout> | null = null;
@@ -123,6 +126,19 @@ function clearBackgroundTimer(): void {
 /** The phone app is in the background, where it opens no stream. */
 function inBackgroundOnPhone(): boolean {
   return typeof document !== 'undefined' && document.visibilityState === 'hidden' && isNativePlatform();
+}
+
+/**
+ * Time since `at`, by whichever clock moved further. `performance.now()` can
+ * stand still while the phone sleeps and the wall clock can be set. A clock set
+ * back reads as no time at all, never as a longer wait.
+ */
+function elapsedSince(at: { ticks: number; wall: number }): number {
+  return Math.max(performance.now() - at.ticks, Date.now() - at.wall);
+}
+
+function now(): { ticks: number; wall: number } {
+  return { ticks: performance.now(), wall: Date.now() };
 }
 
 function emit(topic: LiveChangeTopic): void {
@@ -195,14 +211,17 @@ async function connect(): Promise<void> {
   }
 
   if (token === refusedToken) {
-    // `performance.now()`, not the wall clock: a clock set back would put the
-    // retry off by the size of the jump.
-    const wait = refusedUntil - performance.now();
+    if (!refusedAt) {
+      // A refused bearer waits for the next one.
+      return;
+    }
+
+    const wait = UNAUTHORIZED_WAIT_MS - elapsedSince(refusedAt);
 
     if (wait > 0) {
       // A refused key's retry stays booked whatever cleared the timer (the
-      // last subscriber leaving, a return to the app). A bearer waits forever.
-      if (Number.isFinite(wait) && !reconnectTimer) {
+      // last subscriber leaving, a return to the app).
+      if (!reconnectTimer) {
         scheduleReconnect(Math.max(wait, RECONNECT_FLOOR_MS));
       }
 
@@ -210,6 +229,7 @@ async function connect(): Promise<void> {
     }
 
     refusedToken = null;
+    refusedAt = null;
     // The minute's wait doubled the backoff to its ceiling; this is a fresh try.
     reconnectDelay = RECONNECT_FLOOR_MS;
   }
@@ -247,7 +267,7 @@ async function connect(): Promise<void> {
       // A bearer waits for the next one, which comes when it rotates. A key has
       // no next one coming, so after a minute the same key is tried again.
       refusedToken = usedToken;
-      refusedUntil = usedKind === 'apiKey' ? performance.now() + UNAUTHORIZED_WAIT_MS : Infinity;
+      refusedAt = usedKind === 'apiKey' ? now() : null;
       controller = null;
       missedChanges = true;
       scheduleReconnect(UNAUTHORIZED_WAIT_MS);
@@ -284,7 +304,15 @@ async function connect(): Promise<void> {
         break;
       }
 
-      buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
+      if (controller !== own) {
+        // Replaced or closed by a fetch whose body did not stop on the abort.
+        // Nothing more from it is announced.
+        void reader.cancel().catch(() => undefined);
+        break;
+      }
+
+      // Normalised on the whole buffer: a `\r\n` can arrive split across two reads.
+      buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/g, '\n');
 
       let boundary = buffer.indexOf('\n\n');
 
@@ -320,6 +348,19 @@ function disconnect(): void {
 }
 
 /**
+ * Close the stream on purpose (sign-out, a new sign-in, the phone app left in
+ * the background). One that subscribers still wanted counts as a drop, so the
+ * next stream to open catches up.
+ */
+function closeStream(): void {
+  if (controller && subscriberCount() > 0) {
+    missedChanges = true;
+  }
+
+  disconnect();
+}
+
+/**
  * The credential the next connect uses: the bearer token, or with `'apiKey'`
  * the phone's API key. A new one clears a 401 wait and reconnects at once if
  * subscribers are waiting. A bearer that merely rotates leaves an open stream
@@ -331,8 +372,7 @@ export function setLiveChangesAuth(next: string | null, kind: LiveChangesAuthKin
   tokenKind = kind;
 
   if (next && controller && streamToken !== next && (kind === 'apiKey' || streamKind === 'apiKey')) {
-    missedChanges = true;
-    disconnect();
+    closeStream();
   }
 
   if (next && next !== refusedToken) {
@@ -353,11 +393,7 @@ export function setLiveChangesAuth(next: string | null, kind: LiveChangesAuthKin
     // The listeners stay mounted through a lapsed session (a JWT that expired
     // while the laptop slept), so whatever changes before a token comes back
     // goes unannounced like any other drop.
-    if (controller && subscriberCount() > 0) {
-      missedChanges = true;
-    }
-
-    disconnect();
+    closeStream();
   }
 }
 
@@ -416,7 +452,7 @@ export function resetLiveChangesForTests(): void {
   streamToken = null;
   streamKind = 'bearer';
   refusedToken = null;
-  refusedUntil = 0;
+  refusedAt = null;
   reconnectDelay = RECONNECT_FLOOR_MS;
   missedChanges = false;
 }
@@ -457,27 +493,21 @@ function onHidden(): void {
     return;
   }
 
-  hiddenAt = { ticks: performance.now(), wall: Date.now() };
+  hiddenAt = now();
   backgroundTimer = setTimeout(() => {
     backgroundTimer = null;
 
-    if (!inBackgroundOnPhone()) {
-      return;
+    if (inBackgroundOnPhone()) {
+      closeStream();
     }
-
-    if (controller && subscriberCount() > 0) {
-      missedChanges = true;
-    }
-
-    disconnect();
   }, BACKGROUND_CLOSE_MS);
 }
 
 /**
  * Back in view. A backgrounded tab or a phone app may have lost its stream
- * while away: try now, and the catch-up on connect covers whatever was missed.
+ * while away. Try now: the catch-up on connect covers whatever was missed.
  * A phone app whose close never ran although it was away long enough was
- * frozen or asleep, and the stream it still holds is replaced.
+ * frozen or asleep. The stream it still holds is replaced.
  */
 function onVisible(): void {
   const away = hiddenAt;
@@ -485,14 +515,9 @@ function onVisible(): void {
   hiddenAt = null;
   clearBackgroundTimer();
 
-  // `performance.now()` can stand still while the phone sleeps, and the wall
-  // clock can be set. Either one past the grace counts: a needless reconnect
-  // costs one request, a dead stream kept costs every change until the next poll.
-  if (
-    closePending &&
-    away &&
-    Math.max(performance.now() - away.ticks, Date.now() - away.wall) >= BACKGROUND_CLOSE_MS
-  ) {
+  // Either clock past the grace counts: a needless reconnect costs one request,
+  // a dead stream kept costs every change until the next poll.
+  if (closePending && away && elapsedSince(away) >= BACKGROUND_CLOSE_MS) {
     replaceHeldStream();
   }
 

@@ -316,6 +316,43 @@ describe('liveChanges', () => {
 
     expect(mockedFetch).toHaveBeenCalledTimes(1);
   });
+
+  it('reads a frame whose CRLF ending is split across two reads', async () => {
+    const stream = openStream();
+    setLiveChangesAuth('tok');
+    const tasks = vi.fn();
+    subscribeLiveChanges(['tasks'], tasks);
+    await stream.opened;
+
+    stream.push('event: change\r\ndata: {"topic":"tasks"}\r\n\r');
+    await flush();
+    stream.push('\nevent: change\r\ndata: {"topic":"calendar"}\r\n\r\n');
+    await flush();
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+    expect(tasks).toHaveBeenCalledTimes(1);
+  });
+
+  it('announces nothing more from a replaced stream whose body ignored the abort', async () => {
+    const first = openStream();
+    setLiveChangesAuth('old-key', 'apiKey');
+    const tasks = vi.fn();
+    subscribeLiveChanges(['tasks'], tasks);
+    await first.opened;
+
+    const second = openStream();
+    setLiveChangesAuth('new-key', 'apiKey');
+    await second.opened;
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+    tasks.mockClear();
+
+    // The test body is not tied to the signal, so it still delivers.
+    first.push('event: change\ndata: {"topic":"tasks"}\n\n');
+    await flush();
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+    expect(tasks).not.toHaveBeenCalled();
+  });
 });
 
 // The phone app signs in with the device's API key, not a bearer.
@@ -357,6 +394,22 @@ describe('liveChanges with the phone API key', () => {
 
     const retry = openStream();
     await vi.advanceTimersByTimeAsync(60_000);
+    await retry.opened;
+
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries a refused key at once on return when the phone slept through the wait', async () => {
+    const refused = openStream(401);
+    setLiveChangesAuth('device-key', 'apiKey');
+    subscribeLiveChanges(['tasks'], () => undefined);
+    await refused.opened;
+    await flush();
+
+    // Asleep: `performance.now()` stood still while the wall clock moved on.
+    vi.setSystemTime(Date.now() + 10 * 60_000);
+    const retry = openStream();
+    comeBack();
     await retry.opened;
 
     expect(mockedFetch).toHaveBeenCalledTimes(2);
