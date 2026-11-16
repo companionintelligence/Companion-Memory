@@ -934,6 +934,99 @@ describe("an Android export's own lines", () => {
       await times(['05/11/26, 9:31 PM - Robin Hale: first', '11/14/26, 9:32 AM - Robin Hale: later']),
     ).toEqual(['2026-05-11T21:31:00.000Z', '2026-11-14T09:32:00.000Z']);
   });
+
+  it('reads a 12-hour export whose dates are all 12 or under the way that keeps them close together', async () => {
+    // Read month first, a three-day chat would span two months. Exported again
+    // once a later day is past the 12th, it is read day first, so reading it
+    // month first now would give every one of these messages a second id.
+    const times = async (lines: string[]) =>
+      (await importAndroid(lines, 'UTC')).items.map((g) => g.item.timestamp?.toISOString());
+
+    expect(
+      await times([
+        '05/11/26, 9:31 PM - Robin Hale: first',
+        '06/11/26, 8:02 AM - Robin Hale: next day',
+        '07/11/26, 8:03 AM - Dana Brooks: day after',
+      ]),
+    ).toEqual(['2026-11-05T21:31:00.000Z', '2026-11-06T08:02:00.000Z', '2026-11-07T08:03:00.000Z']);
+    // Across New Year, either order.
+    expect(
+      await times([
+        '12/31/25, 11:58 PM - Robin Hale: almost',
+        '1/1/26, 12:01 AM - Robin Hale: happy new year',
+      ]),
+    ).toEqual(['2025-12-31T23:58:00.000Z', '2026-01-01T00:01:00.000Z']);
+    expect(
+      await times([
+        '01/01/26, 12:01 AM - Robin Hale: happy new year',
+        '02/01/26, 9:00 AM - Dana Brooks: back to work',
+      ]),
+    ).toEqual(['2026-01-01T00:01:00.000Z', '2026-01-02T09:00:00.000Z']);
+    expect(
+      await times([
+        '1/1/26, 12:01 AM - Robin Hale: happy new year',
+        '1/2/26, 9:00 AM - Dana Brooks: back to work',
+      ]),
+    ).toEqual(['2026-01-01T00:01:00.000Z', '2026-01-02T09:00:00.000Z']);
+    // One day says nothing either way: month first.
+    expect(
+      await times(['05/11/26, 9:31 PM - Robin Hale: first', '05/11/26, 9:40 PM - Robin Hale: second']),
+    ).toEqual(['2026-05-11T21:31:00.000Z', '2026-05-11T21:40:00.000Z']);
+  });
+
+  it("keeps a line pasted in another export's header shape inside its message", async () => {
+    // An iPhone chat, a 24-hour Android one and a 12-hour Android one, with
+    // lines pasted from other exports. Read as headers they would cut the
+    // message short and, with a sender, number a new message: every id after
+    // it would move by one.
+    const pasted = [
+      '14/11/2026, 10:02 - Robin Hale added Casey Moreno',
+      '11/14/26, 10:02 AM - Robin: hi',
+      'and more text',
+    ];
+    const ios = await importAndroid(
+      ['[1/3/26, 8:00:00 AM] Alex: look at this', ...pasted, '[1/3/26, 8:01:00 AM] Sam: ok'],
+      'UTC',
+    );
+
+    expect(said(ios.items)).toEqual([`Alex: look at this\n${pasted.join('\n')}`, 'Sam: ok']);
+    expect(ios.items.map((g) => g.item.id)).toEqual([
+      `whatsapp:Ferry trip:${new Date('1/3/26 8:00:00 AM').toISOString()}:0`,
+      `whatsapp:Ferry trip:${new Date('1/3/26 8:01:00 AM').toISOString()}:1`,
+    ]);
+    expect(ios.drops).toEqual([]);
+
+    const android = await importAndroid(
+      [
+        '14/11/2026, 09:00 - Dana Brooks: look at this',
+        '11/14/26, 10:02 AM - Robin: hi',
+        '14/11/2026, 09:01 - Sam: ok',
+      ],
+      'UTC',
+    );
+
+    expect(said(android.items)).toEqual([
+      'Dana Brooks: look at this\n11/14/26, 10:02 AM - Robin: hi',
+      'Sam: ok',
+    ]);
+
+    const twelveHour = await importAndroid(
+      [
+        '11/14/26, 9:00 AM - Dana Brooks: look at this',
+        '[1/3/26, 8:00:00 AM] Alex: pasted from an iPhone',
+        '14/11/2026, 09:00 - Robin: pasted from a 24-hour export',
+        'and more text',
+        '11/14/26, 9:01 AM - Sam: ok',
+      ],
+      'UTC',
+    );
+
+    expect(said(twelveHour.items)).toEqual([
+      'Dana Brooks: look at this\n[1/3/26, 8:00:00 AM] Alex: pasted from an iPhone\n14/11/2026, 09:00 - Robin: pasted from a 24-hour export\nand more text',
+      'Sam: ok',
+    ]);
+    expect(twelveHour.drops).toEqual([]);
+  });
 });
 
 describe('a _chat.txt in a folder the system named', () => {
@@ -1130,8 +1223,7 @@ describe('a _chat.txt in a folder the system named', () => {
       spy.mockRestore();
     }
 
-    // The name, the date order of a 12-hour Android export, then the import.
-    // The first two stop early.
+    // The kind of header, the name, then the import. The first two stop early.
     expect(created).toHaveLength(3);
     expect(created.every((stream) => stream.destroyed)).toBe(true);
   });
