@@ -2,10 +2,11 @@
 
 > **Status (2026-11-15): a tested library behind a flag that is off by default.** `backend/apps/api/src/domains/vtc/`
 > issues, reads and checks credentials in the formats an [OpenVTC](https://github.com/OpenVTC/verifiable-trust-infrastructure)
-> Verifiable Trust Community documents. Since Companion-Memory#3439 (merged 2026-11-12, not yet in a
-> release) `VtcModule` is registered with Nest and serves `POST /vtc/verify` and
-> `POST /vtc/status-list/evaluate` behind `vtc.credentials` (`ENABLE_VTC_CREDENTIALS`, default false);
-> with the flag off both answer `404`. They check a credential and a status list that the caller
+> Verifiable Trust Community documents. Since Companion-Memory#3439 (merged 2026-11-12) `VtcModule` is
+> registered with Nest. That pull request added `POST /vtc/verify`, and Companion-Memory#3443 (merged
+> 2026-11-13 UTC) added `POST /vtc/status-list/evaluate` and the checks on caller-presented status lists
+> in `/vtc/verify`. Neither is in a release yet. Both routes answer `404` unless `vtc.credentials`
+> (`ENABLE_VTC_CREDENTIALS`, default false) is on. They check a credential and a status list that the caller
 > presents, accept proofs from `did:key` issuers only (configuration pins no community), make no
 > outbound request and write **no database rows**; nothing else in the API calls the module. It has **not been run against
 > OpenVTC's software**, and the status list OpenVTC's live test community serves is **refused today**,
@@ -171,7 +172,9 @@ The page at <https://first.openvtc.net/> describes a whole community service. Th
 credential core. Not built, and tracked in
 [`CI-Engineering/projects/decentralized-trust-graphs/OPENVTC-VTC.md`](https://github.com/companionintelligence/CI-Engineering/blob/main/projects/decentralized-trust-graphs/OPENVTC-VTC.md):
 
-- the join request, admin review and member sign-in (passkey or wallet) flows, and any HTTP surface;
+- the join request, admin review and member sign-in (passkey or wallet) flows, and an HTTP surface for
+  them (the only routes are `POST /vtc/verify` and `POST /vtc/status-list/evaluate`, behind
+  `vtc.credentials`);
 - capability-based roles (the authority credential, VAC), step-up and second-party consent;
 - renewal on the same slot (each renewal takes a new one) and publishing a suspension list (the reader
   checks one; `CommunityIssuer` issues only the revocation list);

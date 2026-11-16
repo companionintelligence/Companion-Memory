@@ -370,8 +370,10 @@ Collection to run at all.
    migration, and quotas.
 3. A `PwsModule` and controller on the handler (`nodeListener` is the model), registered behind a feature
    flag that defaults off, like `solid.protocol`; Hub security review before any route. The module, its
-   controller and the flag (`pws.storage`) landed in Companion-Memory#3439, over the in-memory store. That
-   pull request records no review, so the Hub security review is still to do.
+   controller and the flag (`pws.storage`) landed in Companion-Memory#3439, over the in-memory store, and
+   Companion-Memory#3442 rewrote that controller: among other changes it reads the raw body itself, up to
+   25 MiB, and the shared body parser skips `/pws`. Neither pull request records a review, so the Hub
+   security review is still to do.
 4. Consent grants issued as zCaps and revoked through `isRevoked`.
 5. Export and import of a user's data to and from a Space, once the Space Archive Format
    ([spec PR #92](https://github.com/w3c-ccg/portable-web-spaces-spec/pull/92)) settles; `domains/portability`

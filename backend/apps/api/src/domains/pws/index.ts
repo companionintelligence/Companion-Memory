@@ -11,8 +11,9 @@
  *
  * It sits beside the KERI design on purpose. Controllers are `did:key`; `did:keri` is refused with
  * the error the specification prescribes for an unsupported DID method. The frozen KERI module and
- * `peers/sovereignKeyId.ts` are not imported, and nothing but `application.ts` imports this domain.
- * The DID method registry (`keys.ts`) is the seam where a conformant KERI resolver would plug in.
+ * `peers/sovereignKeyId.ts` are not imported, and nothing in `src` but `application.ts` imports this
+ * domain (`scripts/pws-dev-server.ts` does, outside `src`). The DID method registry (`keys.ts`) is the
+ * seam where a conformant KERI resolver would plug in.
  *
  * Since #3439 `PwsModule` registers `PwsController`, which serves `/pws/*` over the in-memory store
  * behind the `pws.storage` flag. The flag is off by default, and while it is off `/pws/*` answers 404.

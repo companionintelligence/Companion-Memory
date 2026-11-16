@@ -3,13 +3,13 @@
 > **Status (2026-11-15): a tested library behind a flag that is off by default.** `backend/apps/api/src/domains/didcomm/`
 > packs and unpacks [DIDComm Messaging v2.1](https://identity.foundation/didcomm-messaging/spec/)
 > envelopes (authcrypt, anoncrypt, signed, and the combinations), routes them through mediators, and
-> speaks the small protocols DIDComm itself defines. Since Companion-Memory#3439 (merged 2026-11-12, not
-> yet in a release) `DidcommModule` is registered with Nest: `GET /didcomm/did`, `POST /didcomm/oob`,
-> `POST /didcomm/oob/parse` and `POST /didcomm/message` answer `404` unless `didcomm.messaging`
-> (`ENABLE_DIDCOMM_MESSAGING`, default false) is on. With it on they use a `did:peer` identity the
-> process generates at first use, an in-memory replay guard, and a resolver for `did:key` and
-> `did:peer` only. The module writes **no database rows** and makes **no network request**, and nothing
-> else in the API calls it. [What is not built](#what-is-not-built) lists the rest and
+> speaks the small protocols DIDComm itself defines. Since Companion-Memory#3439, #3442 and #3443 (merged
+> 2026-11-12 and 2026-11-13 UTC, not yet in a release) `DidcommModule` is registered with Nest:
+> `GET /didcomm/did`, `POST /didcomm/oob`, `POST /didcomm/oob/parse` and `POST /didcomm/message` answer
+> `404` unless `didcomm.messaging` (`ENABLE_DIDCOMM_MESSAGING`, default false) is on. With it on they use
+> a `did:peer` identity the process generates at first use, an in-memory replay guard, and a resolver for
+> `did:key` and `did:peer` only. The module writes **no database rows** and makes **no network request**,
+> and nothing else in the API calls it. [What is not built](#what-is-not-built) lists the rest and
 > [How it is meant to be wired](#how-it-is-meant-to-be-wired) says what connecting it takes.
 > The decision and its history are in
 > [ADR-0018](https://github.com/companionintelligence/CI-Engineering/blob/main/adr/0018-didcomm-messaging-alongside-keri.md).
@@ -167,7 +167,7 @@ const { message, metadata } = await unpack(packed, { resolver, secrets, require:
 
 | Not built | Note |
 |---|---|
-| An HTTP endpoint, WebSocket listener or any transport | `receive` takes bytes, `send` returns bytes and an endpoint |
+| An HTTP transport that follows the binding (`202` with no body) and has a rate limit, a WebSocket listener, outbound delivery | `POST /didcomm/message` exists behind `didcomm.messaging` (see *Status*) and hands its body to `receive`. It answers `201` with a JSON body that says whether the message was handled and carries the agent's packed replies, if any, and its only body cap is the API's 100kb default. `send` returns bytes and an endpoint, and nothing sends them. The agent's `did:peer` gives `https://localhost/didcomm/message` as its service endpoint, not this box's address |
 | A mediator, and Message Pickup 3.0 | Needed for a Companion behind NAT; who runs the mediator is undecided. Only the sending side of routing exists |
 | Persistent keys, a replay store, an outbound queue | `SecretsResolver` has only an in-memory implementation; the replay guard is per process |
 | `did:peer` numalgo 0, 1, 3, 4; `did:webvh`; a KERI-backed `did:webs` | Refused with `unsupported-did-method`. `did:keri` is refused with the same code, on purpose |
@@ -228,11 +228,15 @@ Gate, in this order, before anything is connected:
 4. **A shared replay store** if more than one process receives.
 5. **A flag that defaults off**, and Hub security review.
 
-Companion-Memory#3439 registered the routes listed under *Status* behind gate 5's flag
-(`didcomm.messaging`). The rest of gate 1, gates 2 to 4 and the Hub security review are still open: the
-routes use an identity generated in the process rather than the device key, and a process-local replay
-guard. `POST /didcomm/message` also differs from the binding above: it answers with a JSON body that
-carries the agent's packed replies, where the binding answers `202` with none.
+Companion-Memory#3439 registered `DidcommModule` and `POST /didcomm/message` behind gate 5's flag
+(`didcomm.messaging`). #3442 added `GET /didcomm/did` and the packed replies in the `/didcomm/message`
+response, let `/didcomm/*` take `application/didcomm-*+json` bodies, and removed the controller export
+that kept the API from starting. #3443 added `POST /didcomm/oob` and `POST /didcomm/oob/parse`. None of
+the three records a review. The rest of gate 1, gates 2 to 4 and the Hub security review are still open:
+the routes use an identity generated in the process rather than the device key, and a process-local
+replay guard. They have no rate limit, and their body cap is the API's 100kb default.
+`POST /didcomm/message` also differs from the binding above: it answers with a JSON body that carries
+the agent's packed replies, where the binding answers `202` with none.
 
 ### Carrying Trust Tasks
 

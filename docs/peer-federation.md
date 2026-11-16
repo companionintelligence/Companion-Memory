@@ -782,7 +782,7 @@ Full protocol reference, with the verification-order chart and the threat table:
 
 ### The token
 
-`sendPeerAsk` takes a `peerAccessToken` — a Portal-issued token whose audience is the **peer** box. It is a **non-nullable** field on `SendPeerAskInput`: until Portal token exchange (RFC 8693) lands, the *caller* must supply it, and this box never mints, exchanges or caches one. The peer verifies that binding on receipt, which is what stops a token for one box being replayed at another. An empty `peerAccessToken` sends the ask signed with this box's key alone (`peers.signingKeyJwk`), which only the box's administrator may do. Such a send from any other account is refused with `A peer access token is required`, and on a box with no signing key with `A peer access token or signing key is required`.
+`sendPeerAsk` takes a `peerAccessToken` — a Portal-issued token whose audience is the **peer** box. It is a **non-nullable** field on `SendPeerAskInput`: until Portal token exchange (RFC 8693) lands, the *caller* must supply it, and this box never mints, exchanges or caches one. The peer verifies that binding on receipt, which is what stops a token for one box being replayed at another. An empty or blank `peerAccessToken`, or one that starts with the word `keri` in any case (the word a peer reads as no token), is sent as no token: the ask goes out signed with this box's key alone (`peers.signingKeyJwk`), which only the box's administrator may do. On a box with no signing key such a send is refused with `A peer access token or signing key is required`; on a box with one, a send from any account but the administrator is refused with `A peer access token is required`.
 
 ## Status
 

@@ -17,7 +17,7 @@
  *     inference from OpenVTC's source, is any credential that community issues, which carries the
  *     same two-proof set.
  *
- * Since #3439 `VtcModule` registers `VtcController` (`POST /vtc/verify` and
+ * Since #3439 `VtcModule` registers `VtcController` (`POST /vtc/verify`; #3443 added
  * `POST /vtc/status-list/evaluate`) behind the `vtc.credentials` flag, which is off by default; while
  * it is off both routes answer 404. Nothing here is written to the database. See `docs/vtc.md` for
  * what exists, what does not, and how it is meant to be wired.
