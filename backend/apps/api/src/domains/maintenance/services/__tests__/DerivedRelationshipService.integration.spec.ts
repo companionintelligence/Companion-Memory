@@ -341,17 +341,23 @@ describeWithDatabase(`DerivedRelationshipService against the live schema (${avai
 
   afterAll(async () => {
     if (dataSource?.isInitialized) {
-      await dataSource.query('DELETE FROM ci.graph_deltas WHERE owner_user_id = $1', [userId]);
-      await dataSource.query('DELETE FROM ci.relationships WHERE owner_user_id = $1', [userId]);
-      await dataSource.query('DELETE FROM ci.position WHERE user_id = $1', [userId]);
-      await dataSource.query('DELETE FROM ci.communications WHERE user_id = $1', [userId]);
-      // ci.users.entity_id has no ON DELETE action, so the anchor has to be
-      // released before the entity it points at can go.
-      await dataSource.query('UPDATE ci.users SET entity_id = NULL WHERE id = $1', [userId]);
-      await dataSource.query('DELETE FROM ci.entities WHERE owner_user_id = $1', [userId]);
-      await dataSource.query('DELETE FROM ci.users WHERE id = $1', [userId]);
-      await schemaLock?.release();
-      await dataSource.destroy();
+      // The schema lock goes back even when a step here fails: a jest worker
+      // keeps its process (with the connection holding the lock) for the files
+      // it runs next.
+      try {
+        await dataSource.query('DELETE FROM ci.graph_deltas WHERE owner_user_id = $1', [userId]);
+        await dataSource.query('DELETE FROM ci.relationships WHERE owner_user_id = $1', [userId]);
+        await dataSource.query('DELETE FROM ci.position WHERE user_id = $1', [userId]);
+        await dataSource.query('DELETE FROM ci.communications WHERE user_id = $1', [userId]);
+        // ci.users.entity_id has no ON DELETE action, so the anchor has to be
+        // released before the entity it points at can go.
+        await dataSource.query('UPDATE ci.users SET entity_id = NULL WHERE id = $1', [userId]);
+        await dataSource.query('DELETE FROM ci.entities WHERE owner_user_id = $1', [userId]);
+        await dataSource.query('DELETE FROM ci.users WHERE id = $1', [userId]);
+      } finally {
+        await schemaLock?.release();
+        await dataSource.destroy();
+      }
     }
   });
 

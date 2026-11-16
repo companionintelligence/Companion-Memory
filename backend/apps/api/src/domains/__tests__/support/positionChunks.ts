@@ -18,8 +18,13 @@
  *
  * {@link createPositionChunks} creates a suite's missing chunks before its
  * first fix, in a transaction that takes `ci.users` first, the way the delete
- * does. The two then wait for each other instead. When every chunk already
- * exists (any run after the first on the same database) it takes no lock.
+ * does. Then one waits for the other instead of the two deadlocking. It
+ * takes `ci.devices` and `ci.entities` in that same statement rather than
+ * leaving them to the chunk a round trip later. A transaction that writes
+ * `ci.entities` and then `ci.users` still meets it in a cycle, but the chunk
+ * side is then the one that waited first, so Postgres cancels it and it runs
+ * again. When every chunk already exists (any run after the first on the same
+ * database) it takes no lock.
  *
  * ## Compressing a chunk
  *
@@ -34,9 +39,10 @@
  *     Process B: DELETE FROM ci.users WHERE id = $1
  *
  * {@link compressPositionChunk} and {@link decompressPositionChunk} first take
- * `ci.position` itself (ONLY the table, not its chunks) in SHARE mode. A
- * statement that writes `ci.position` takes the table before it reaches a
- * chunk, so the two wait for each other instead.
+ * `ci.position` itself (ONLY the table, not its other chunks) and then the one
+ * chunk, both in SHARE mode and in one statement. A statement that writes
+ * `ci.position` takes the table before it reaches a chunk, so one waits for
+ * the other instead.
  *
  * A cascade does not always. Each chunk carries its own copy of the foreign
  * keys. Postgres fires a table's triggers in name order:
@@ -44,10 +50,16 @@
  * gained a digit between the migration that built `ci.position` and the chunk
  * (every scratch-database suite runs the whole migration chain, so a full
  * `make test-db` run gets there), `..._a_108128` on the chunk fires before
- * `..._a_25212` on the table. A `DELETE FROM ci.users` then holds the chunks
- * and waits for the table while the compress holds the table and waits for a
- * chunk. Postgres cancels the side that waited first, which is the compress,
- * and {@link inTransactionRetryingDeadlocks} runs it again.
+ * `..._a_25212` on the table. The same goes for the `ON DELETE SET NULL`
+ * cascades from `ci.entities` and `ci.devices`. A `DELETE FROM ci.users` then
+ * holds the chunk and waits for the table while the compress holds the table
+ * and waits for the chunk. Postgres cancels the side that waited first. The
+ * compress asks for the chunk in the same statement that got it the table, so
+ * that is almost always the compress, and
+ * {@link inTransactionRetryingDeadlocks} runs it again. Taking the chunk a
+ * statement later (or leaving it to `compress_chunk`) left the cascade time to
+ * reach the table first, and then the cancelled statement was the other
+ * suite's teardown, which nothing retries.
  */
 import type { DataSource, EntityManager } from 'typeorm';
 
@@ -92,7 +104,8 @@ export async function createPositionChunks(
   }
 
   await inTransactionRetryingDeadlocks(dataSource, async (manager) => {
-    await manager.query('LOCK TABLE ci.users IN SHARE ROW EXCLUSIVE MODE');
+    // Every table a new chunk's foreign keys point at, ci.users first.
+    await manager.query('LOCK TABLE ci.users, ci.devices, ci.entities IN SHARE ROW EXCLUSIVE MODE');
     // Re-read under the lock: another suite may have created some meanwhile.
     const written: Array<{ time: string }> = await manager.query(
       `INSERT INTO ci.position (time, user_id, source, location)
@@ -108,7 +121,7 @@ export async function createPositionChunks(
   });
 }
 
-/** `compress_chunk` on one `ci.position` chunk, with the table locked first. */
+/** `compress_chunk` on one `ci.position` chunk, with the table and then the chunk locked first. */
 export async function compressPositionChunk(dataSource: DataSource, chunk: string): Promise<void> {
   await withPositionLocked(
     dataSource,
@@ -117,14 +130,19 @@ export async function compressPositionChunk(dataSource: DataSource, chunk: strin
   );
 }
 
-/** `decompress_chunk` on one `ci.position` chunk, with the table locked first. */
+/** `decompress_chunk` on one `ci.position` chunk, with the table and then the chunk locked first. */
 export async function decompressPositionChunk(dataSource: DataSource, chunk: string): Promise<void> {
   await withPositionLocked(dataSource, 'SELECT decompress_chunk($1::regclass, if_compressed => true)', chunk);
 }
 
 async function withPositionLocked(dataSource: DataSource, sql: string, chunk: string): Promise<void> {
   await inTransactionRetryingDeadlocks(dataSource, async (manager) => {
-    await manager.query('LOCK TABLE ONLY ci.position IN SHARE MODE');
+    // LOCK takes no parameters, so Postgres quotes the chunk's name itself.
+    const [{ lock }]: Array<{ lock: string }> = await manager.query(
+      `SELECT format('LOCK TABLE ONLY ci.position, ONLY %s IN SHARE MODE', $1::regclass) AS lock`,
+      [chunk],
+    );
+    await manager.query(lock);
     await manager.query(sql, [chunk]);
   });
 }
