@@ -88,6 +88,17 @@ final class WidgetSnapshotData {
         return format.format(new Date());
     }
 
+    /**
+     * A text field of the snapshot, or null when it is missing or a JSON null.
+     * {@code optString} hands back the text "null" for a JSON null. The snapshot
+     * writes null for a value it does not have (a task's due date, the
+     * prediction before the forecast is built).
+     */
+    static String optText(JSONObject object, String key) {
+        if (object == null || object.isNull(key)) return null;
+        return object.optString(key, null);
+    }
+
     static boolean hasTimestamp(JSONObject object, String key) {
         if (object == null) return false;
         Object value = object.opt(key);

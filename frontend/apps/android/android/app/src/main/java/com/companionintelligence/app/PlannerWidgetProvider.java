@@ -67,13 +67,13 @@ public class PlannerWidgetProvider extends MemoryWidgetProvider {
         String title = task.optString("title", "Untitled task");
         if (taskId.trim().isEmpty() || taskId.length() > 256) {
             views.setTextViewText(titleView, title);
-            views.setTextViewText(dueView, WidgetSnapshotData.dueLabel(task.optString("dueAt")));
+            views.setTextViewText(dueView, WidgetSnapshotData.dueLabel(WidgetSnapshotData.optText(task, "dueAt")));
             views.setViewVisibility(doneView, View.GONE);
             return;
         }
 
         views.setTextViewText(titleView, title);
-        views.setTextViewText(dueView, WidgetSnapshotData.dueLabel(task.optString("dueAt")));
+        views.setTextViewText(dueView, WidgetSnapshotData.dueLabel(WidgetSnapshotData.optText(task, "dueAt")));
         views.setViewVisibility(doneView, View.VISIBLE);
         views.setContentDescription(doneView, "Complete " + title);
 

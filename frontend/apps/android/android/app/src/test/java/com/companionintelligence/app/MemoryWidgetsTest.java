@@ -54,6 +54,17 @@ public class MemoryWidgetsTest {
     }
 
     @Test
+    public void planner_widget_says_unscheduled_for_a_task_without_a_due_date() throws Exception {
+        JSONObject undated = snapshot();
+        // The snapshot writes a JSON null for a task with no date.
+        undated.getJSONObject("plan").getJSONArray("tasks").getJSONObject(0).put("dueAt", JSONObject.NULL);
+        storeSnapshot(undated);
+        WidgetView widget = render(PlannerWidgetProvider.class, R.layout.widget_plan);
+
+        assertEquals("Unscheduled", text(widget, R.id.plan_due_one));
+    }
+
+    @Test
     public void insight_widget_renders_forecast_confidence_and_activity_counts() throws Exception {
         storeSnapshot(snapshot());
         WidgetView widget = render(InsightWidgetProvider.class, R.layout.widget_insight);
