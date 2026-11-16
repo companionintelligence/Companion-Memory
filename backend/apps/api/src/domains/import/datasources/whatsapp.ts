@@ -162,7 +162,7 @@ async function conversationNameFromTranscript(chatPath: string): Promise<string>
       // Only the sender and text are read here, so the times need no account zone.
       const parsed = parseWALine(line, undefined);
 
-      if (parsed == null) {
+      if (parsed == null || parsed.system) {
         continue;
       }
 
@@ -188,7 +188,45 @@ async function conversationNameFromTranscript(chatPath: string): Promise<string>
 }
 
 // Android: DD/MM/YYYY, HH:MM - Sender: message
-const ANDROID_RE = /^(\d{2}\/\d{2}\/\d{4}), (\d{2}:\d{2}) - ([^:]+):[ ]?([\s\S]*)$/;
+// The sender is split off afterwards ({@link androidSender}): the lines
+// WhatsApp writes itself have the same header and no sender.
+const ANDROID_RE = /^(\d{2}\/\d{2}\/\d{4}), (\d{2}:\d{2}) - ([\s\S]*)$/;
+
+// Android in US English: M/D/YY, H:MM AM - Sender: message. Newer phones put a
+// U+202F NARROW NO-BREAK SPACE before AM/PM, which `\s` matches.
+const ANDROID_US_RE = /^(\d{1,2}\/\d{1,2}\/\d{2}), (\d{1,2}:\d{2}\s[AP]M) - ([\s\S]*)$/;
+
+/** `Sender: message`, split at the first colon: how Android lines were always read. */
+const SENDER_RE = /^([^:]+):[ ]?([\s\S]*)$/;
+
+/** The same, except that a colon inside double quotes doesn't end the sender. */
+const QUOTED_SENDER_RE = /^((?:[^:"]|"[^"]*")+):[ ]?([\s\S]*)$/;
+
+/**
+ * The sender and text after an Android header, or null for a line WhatsApp
+ * wrote itself, which has no sender: `Robin Hale added Casey Moreno`.
+ *
+ * WhatsApp puts a group's name in double quotes in those lines, and a name may
+ * hold a colon. Split at the first colon, `Robin Hale created group "Trip:
+ * Lisbon"` became a message from `Robin Hale created group "Trip`. So a colon
+ * inside quotes doesn't end the sender. When a line's quotes don't pair up,
+ * they can't be read that way and the first colon ends it, as before.
+ */
+function androidSender(rest: string): { sender: string; text: string } | null {
+  const m = SENDER_RE.exec(rest);
+
+  if (m == null) {
+    return null;
+  }
+
+  if (m[1].includes('"') && rest.split('"').length % 2 === 1) {
+    const quoted = QUOTED_SENDER_RE.exec(rest);
+
+    return quoted && { sender: quoted[1], text: quoted[2] };
+  }
+
+  return { sender: m[1], text: m[2] };
+}
 
 // WhatsApp's iOS export prefixes many lines — overwhelmingly the ones
 // announcing an attachment or "omitted" media — with an invisible U+200E
@@ -227,6 +265,18 @@ interface ParsedLine {
   idTime: Date | undefined;
   sender: string;
   text: string;
+  /**
+   * A line WhatsApp wrote itself, which an Android export writes with no
+   * sender (`14/11/2026, 10:02 - Robin Hale added Casey Moreno`). It is
+   * dropped, and the lines under it go with it.
+   */
+  system?: boolean;
+  /**
+   * For a `system` line: the parser before it was recognised read it as a
+   * message, which took a sequence number. Only a day-first line with a colon
+   * in a quoted name was; every other one was added to the message before it.
+   */
+  savedBefore?: boolean;
 }
 
 /** `d`, or undefined when it is an Invalid Date. */
@@ -304,31 +354,46 @@ function parseWALine(line: string, accountZone: string | undefined): ParsedLine 
   const cleaned = stripLeadingInvisible(line);
   let wall: WallClock | undefined;
   let idTime: Date | undefined;
+  let said: { sender: string; text: string } | null;
+  let savedBefore = false;
   let m = IOS_RE.exec(cleaned);
 
   if (m) {
     wall = iosWallClock(m[1], m[2]);
     idTime = dated(new Date(`${m[1]} ${m[2]}`));
+    said = { sender: m[3], text: m[4] };
   } else {
     m = ANDROID_RE.exec(cleaned);
 
-    if (m == null) {
-      return null;
+    if (m) {
+      // DD/MM/YYYY as an ISO local date-time, exactly as the old code built it.
+      const [day, month, year] = m[1].split('/');
+
+      wall = androidWallClock(m[1], m[2]);
+      idTime = dated(new Date(`${year}-${month}-${day}T${m[2]}:00`));
+      savedBefore = SENDER_RE.test(m[3]);
+    } else {
+      m = ANDROID_US_RE.exec(cleaned);
+
+      if (m == null) {
+        return null;
+      }
+
+      // Month first and a 12-hour clock, as on the iPhone.
+      wall = iosWallClock(m[1], m[2]);
+      idTime = dated(new Date(`${m[1]} ${m[2]}`));
     }
 
-    // DD/MM/YYYY as an ISO local date-time, exactly as the old code built it.
-    const [day, month, year] = m[1].split('/');
-
-    wall = androidWallClock(m[1], m[2]);
-    idTime = dated(new Date(`${year}-${month}-${day}T${m[2]}:00`));
+    said = androidSender(m[3]);
   }
 
-  return {
-    ts: accountZone == null ? idTime : wall && wallClockToUTC(wall, accountZone),
-    idTime,
-    sender: m[3].trim(),
-    text: m[4],
-  };
+  const ts = accountZone == null ? idTime : wall && wallClockToUTC(wall, accountZone);
+
+  if (said == null) {
+    return { ts, idTime, sender: '', text: m[3], system: true, savedBefore };
+  }
+
+  return { ts, idTime, sender: said.sender.trim(), text: said.text };
 }
 
 const SYSTEM_VERB_RE =
@@ -534,19 +599,21 @@ export class WhatsAppFileImporter implements FileImporter {
         return;
       }
 
-      if (isSystemLine(p.text)) {
+      if (p.system || isSystemLine(p.text)) {
         // Counted, not silent. The bare `return` here reported `dropped: 0` and
         // `reconciled: true` while discarding rows — and because it sits above
         // the attachment block, a photo whose caption tripped the old regex lost
         // its bytes with no record either.
         params.pipeline.drop?.('whatsapp_system_line');
 
-        // A line the old check let through (the iPhone encryption notice) was
-        // saved as a message and took a number. It still takes one. The ids
-        // after it end in that number: if they moved down by one, importing a
-        // chat that was imported back then would save every message in it a
-        // second time.
-        if (!LEGACY_SYSTEM_VERB_RE.test(p.text)) {
+        // A line the old check let through (the iPhone encryption notice, an
+        // Android line with a colon in a quoted group name) was saved as a
+        // message and took a number. It still takes one. The ids after it end
+        // in that number: if they moved down by one, importing a chat that was
+        // imported back then would save every message in it a second time.
+        // Other Android system lines were added to the message before them
+        // and took none.
+        if (p.system ? p.savedBefore : !LEGACY_SYSTEM_VERB_RE.test(p.text)) {
           seq++;
         }
 
