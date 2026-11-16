@@ -49,8 +49,19 @@ async function runGeneric(root: string, excludePaths?: readonly string[]) {
   return pipeline.map((g) => path.relative(root, g.item.intermediateLocation as string));
 }
 
+/** Every folder `mkdtemp` makes, removed after each test whether it passed or not. */
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(tempDirs.splice(0).map((dir) => fs.promises.rm(dir, { recursive: true, force: true })));
+});
+
 async function mkdtemp(prefix: string): Promise<string> {
-  return fs.promises.mkdtemp(path.join(tmpdir(), prefix));
+  const dir = await fs.promises.mkdtemp(path.join(tmpdir(), prefix));
+
+  tempDirs.push(dir);
+
+  return dir;
 }
 
 async function writeFiles(dir: string, relPaths: string[]): Promise<void> {

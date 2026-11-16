@@ -38,8 +38,19 @@ const READY_IMPORTERS = Array.from(
   .filter((name) => !EXCLUDED.has(name))
   .sort();
 
+/** Every folder `tempFile` makes, removed after each test whether it passed or not. */
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 function tempFile(contents: string | Buffer, name = 'garbage'): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-harden-'));
+
+  tempDirs.push(dir);
   const filePath = path.join(dir, name);
 
   fs.writeFileSync(filePath, contents);
