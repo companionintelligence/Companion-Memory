@@ -45,7 +45,7 @@ const SYNC_STAMP_KEYS = new Set(['last_synced', 'last_synced_at']);
  * A re-sync that moves only a stamp has not changed the person, and recording
  * one would add a row per contact on every sync.
  */
-function withoutSyncStamps(value: unknown): unknown {
+export function withoutSyncStamps(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map(withoutSyncStamps);
   }

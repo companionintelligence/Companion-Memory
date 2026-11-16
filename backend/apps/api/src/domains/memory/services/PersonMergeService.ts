@@ -21,8 +21,9 @@ import {
   serializePersonAddress,
 } from '../types';
 
-import { GraphDeltaWriter } from './GraphDeltaWriter';
+import { GraphDeltaWriter, mergeDeltaInputs } from './GraphDeltaWriter';
 import { sweepLeftoverEdges } from './mergeEdgeSweep';
+import { withoutSyncStamps } from './PersonService';
 
 /** Per-table re-point counts recorded in the ci.entity_merges audit row. */
 export interface MergeCounts {
@@ -116,8 +117,9 @@ export class PersonMergeService {
         description: string | null;
         properties: Record<string, unknown>;
         merged_into_entity_id: string | null;
+        is_active: boolean | null;
       }> = await em.query(
-        `SELECT entity_id, entity_type, name, description, properties, merged_into_entity_id
+        `SELECT entity_id, entity_type, name, description, properties, merged_into_entity_id, is_active
            FROM ci.entities
           WHERE owner_user_id = $1 AND entity_id = ANY($2::uuid[])
           FOR UPDATE`,
@@ -196,36 +198,28 @@ export class PersonMergeService {
         [ownerUserId, sources, targetId],
       );
 
+      // Real before and after values, as PersonService records an edit, sync
+      // stamps aside like there: carrying a source's stamp over has not changed
+      // the person, so the kept row lists only the merge itself.
       await this.graphDeltaWriter.recordMany(
-        [
-          {
-            nodeType: 'entity' as const,
-            changeType: 'updated' as const,
-            entityId: targetId,
-            entityType: 'Person',
-            ownerUserId,
-            changeSource: 'PersonMergeService.mergePeople',
-            changedByUserId: ownerUserId,
-            changedFields: {
-              name: { new: mergedName },
-              description: { new: mergedDescription },
-              properties: { new: mergedProperties },
-            },
+        mergeDeltaInputs({
+          entityType: 'Person',
+          ownerUserId,
+          changeSource: 'PersonMergeService.mergePeople',
+          targetId,
+          columns: {
+            before: { name: target.name, description: target.description },
+            after: { name: mergedName, description: mergedDescription },
           },
-          ...sources.map((sourceId) => ({
-            nodeType: 'entity' as const,
-            changeType: 'merged' as const,
+          properties: {
+            before: withoutSyncStamps(target.properties ?? {}) as Record<string, unknown>,
+            after: withoutSyncStamps(mergedProperties) as Record<string, unknown>,
+          },
+          sources: sources.map((sourceId) => ({
             entityId: sourceId,
-            entityType: 'Person',
-            ownerUserId,
-            changeSource: 'PersonMergeService.mergePeople',
-            changedByUserId: ownerUserId,
-            changedFields: {
-              name: { old: byId.get(sourceId)?.name ?? null },
-              merged_into_entity_id: { new: targetId },
-            },
+            isActive: byId.get(sourceId)?.is_active,
           })),
-        ],
+        }),
         em,
       );
 

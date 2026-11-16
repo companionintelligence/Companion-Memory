@@ -153,4 +153,40 @@ describeWithDb(`PlaceService.update against Postgres (${availability.target})`, 
     expect(await places.remove(owner, cafe)).toBe(true);
     expect(await row(cafe)).toBeUndefined();
   });
+
+  it('removes a city that same-named cities were merged into, and those duplicates with it', async () => {
+    // What two merges leave: the kept city took a region, and each city merged
+    // into it is left without one. A live, unparented city of that name came
+    // later. The kept city's delete would set the duplicates' merged_into_entity_id
+    // to NULL, and each would then share its key with the others and the newer city.
+    const region = uuidv7();
+    const kept = uuidv7();
+    const newer = uuidv7();
+    const duplicates = [uuidv7(), uuidv7()];
+
+    await dataSource.query(
+      `INSERT INTO ci.entities (entity_id, entity_type, name, properties, owner_user_id, place_kind, parent_place_id)
+       VALUES ($1, 'Location', 'Remove Test Region', '{}'::jsonb, $3, 'region', NULL),
+              ($2, 'Location', 'Brockway', '{}'::jsonb, $3, 'city', $1),
+              ($4, 'Location', 'Brockway', '{}'::jsonb, $3, 'city', NULL)`,
+      [region, kept, ownerId, newer],
+    );
+    for (const duplicate of duplicates) {
+      await dataSource.query(
+        `INSERT INTO ci.entities
+                (entity_id, entity_type, name, properties, owner_user_id, place_kind, merged_into_entity_id, is_active)
+         VALUES ($1, 'Location', 'Brockway', '{}'::jsonb, $2, 'city', $3, FALSE)`,
+        [duplicate, ownerId, kept],
+      );
+    }
+
+    expect(await places.remove(owner, kept)).toBe(true);
+
+    expect(await row(kept)).toBeUndefined();
+    for (const duplicate of duplicates) {
+      expect(await row(duplicate)).toBeUndefined();
+    }
+
+    expect(await row(newer)).toEqual({ name: 'Brockway', properties: {} });
+  });
 });

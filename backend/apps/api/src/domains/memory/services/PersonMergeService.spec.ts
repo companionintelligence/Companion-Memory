@@ -22,6 +22,7 @@ interface EntityRow {
   description: string | null;
   properties: Record<string, unknown>;
   merged_into_entity_id: string | null;
+  is_active?: boolean | null;
 }
 
 function personRow(id: string, overrides: Partial<EntityRow> = {}): EntityRow {
@@ -513,6 +514,141 @@ describe('PersonMergeService', () => {
         expect(input.nodeType).toBe('entity');
       }
     }
+  });
+
+  it("records the kept person's real before and after values and only what the merge changed", async () => {
+    // Change History reads a side a delta leaves out as "empty": the kept row
+    // used to hold only `new` values, which showed its unchanged name as
+    // "empty -> Yuki Tanaka" and its whole properties bag as new.
+    const harness = makeHarness([
+      personRow(TARGET, {
+        name: 'Yuki Tanaka',
+        properties: { first_name: 'Yuki', phones: ['5550100177'] },
+      }),
+      personRow(SOURCE_A, {
+        name: 'Yuki Tanaka',
+        properties: { first_name: 'Yuki', emails: ['yuki.tanaka@example.com'] },
+      }),
+    ]);
+
+    await harness.service.mergePeople(CONTEXT, [SOURCE_A], TARGET);
+
+    const entityDeltas = harness.recordMany.mock.calls.flatMap(([inputs]) =>
+      inputs.filter((input: { nodeType: string }) => input.nodeType === 'entity'),
+    );
+    const kept = entityDeltas.find((input: { entityId: string }) => input.entityId === TARGET);
+
+    expect(kept).toEqual(
+      expect.objectContaining({
+        changeType: 'merged',
+        changeSource: 'PersonMergeService.mergePeople',
+        changedFields: {
+          emails: { old: null, new: ['yuki.tanaka@example.com'] },
+          merged_from_entity_ids: { old: null, new: [SOURCE_A] },
+        },
+      }),
+    );
+  });
+
+  it("keeps the hand-set list out of the kept person's row: it is bookkeeping, not a field anyone edited", async () => {
+    const harness = makeHarness([
+      personRow(TARGET, { name: 'Dana' }),
+      personRow(SOURCE_A, {
+        name: 'Dana Q',
+        properties: { website: 'https://dana.example.com', user_edited_keys: ['website'] },
+      }),
+    ]);
+
+    await harness.service.mergePeople(CONTEXT, [SOURCE_A], TARGET);
+
+    const kept = harness.recordMany.mock.calls
+      .flatMap(([inputs]) => inputs)
+      .find((input: { entityId: string }) => input.entityId === TARGET);
+
+    expect(kept?.changedFields).toEqual({
+      website: { old: null, new: 'https://dana.example.com' },
+      merged_from_entity_ids: { old: null, new: [SOURCE_A] },
+    });
+  });
+
+  it("still records the merge on the kept person's page when the merge brought nothing new, naming whom it took in", async () => {
+    // Before, a merge of two identical copies left no row on the kept page at
+    // all. The merged-away record's page is no longer linked from anywhere.
+    const harness = makeHarness([
+      personRow(TARGET, { name: 'Johnny Doe', properties: { emails: ['johnny.doe@example.com'] } }),
+      personRow(SOURCE_A, { name: 'Johnny D.', properties: { emails: ['johnny.doe@example.com'] } }),
+    ]);
+
+    await harness.service.mergePeople(CONTEXT, [SOURCE_A], TARGET);
+
+    const entityDeltas = harness.recordMany.mock.calls.flatMap(([inputs]) =>
+      inputs.filter((input: { nodeType: string }) => input.nodeType === 'entity'),
+    );
+    expect(entityDeltas.map((input: { entityId: string }) => input.entityId)).toEqual([TARGET, SOURCE_A]);
+    expect(entityDeltas[0]).toEqual(
+      expect.objectContaining({
+        changeType: 'merged',
+        changeSource: 'PersonMergeService.mergePeople',
+        changedFields: { merged_from_entity_ids: { old: null, new: [SOURCE_A] } },
+      }),
+    );
+  });
+
+  it("lists no field on the kept person's row when the merge only carried a sync stamp over, as PersonService records an edit", async () => {
+    const harness = makeHarness([
+      personRow(TARGET, { name: 'Dana', properties: { emails: ['dana@example.com'] } }),
+      personRow(SOURCE_A, {
+        name: 'Dana',
+        properties: { emails: ['dana@example.com'], last_synced_at: '2026-11-15T06:21:44.000Z' },
+      }),
+    ]);
+
+    await harness.service.mergePeople(CONTEXT, [SOURCE_A], TARGET);
+
+    const kept = harness.recordMany.mock.calls
+      .flatMap(([inputs]) => inputs)
+      .find((input: { entityId: string }) => input.entityId === TARGET);
+
+    expect(kept?.changedFields).toEqual({ merged_from_entity_ids: { old: null, new: [SOURCE_A] } });
+  });
+
+  it('records each merged-away person as moved into the kept one and no longer live, not as losing its name', async () => {
+    const harness = makeHarness([
+      personRow(TARGET, { name: 'Dana' }),
+      personRow(SOURCE_A, { name: 'Dana Q' }),
+      // Archived before the merge: it was not live, so only the move is recorded.
+      personRow(SOURCE_B, { name: 'D. Q', is_active: false }),
+    ]);
+
+    await harness.service.mergePeople(CONTEXT, [SOURCE_A, SOURCE_B], TARGET);
+
+    const merged = harness.recordMany.mock.calls
+      .flatMap(([inputs]) => inputs)
+      .filter((input: { changeType: string }) => input.changeType === 'merged');
+
+    expect(merged).toEqual([
+      // One row on the kept page names both, whatever else the merge carried.
+      expect.objectContaining({
+        nodeType: 'entity',
+        entityId: TARGET,
+        changedFields: expect.objectContaining({
+          merged_from_entity_ids: { old: null, new: [SOURCE_A, SOURCE_B] },
+        }),
+      }),
+      expect.objectContaining({
+        nodeType: 'entity',
+        entityId: SOURCE_A,
+        changedFields: {
+          merged_into_entity_id: { old: null, new: TARGET },
+          is_active: { old: true, new: false },
+        },
+      }),
+      expect.objectContaining({
+        nodeType: 'entity',
+        entityId: SOURCE_B,
+        changedFields: { merged_into_entity_id: { old: null, new: TARGET } },
+      }),
+    ]);
   });
 
   it('refuses a sweep answer that is not one { deleted, rescued } row, rather than reading it as "nothing swept"', async () => {
