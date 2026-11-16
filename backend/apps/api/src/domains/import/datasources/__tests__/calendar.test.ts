@@ -4,9 +4,9 @@ import os from 'node:os';
 import path from 'path';
 
 import { serverTimezone, wallClockInTZ } from '@ci/common/time/zoned';
-import { expandSeries, parseRecurrence } from '@ci/domains/memory';
+import { expandAll, expandSeries, parseRecurrence } from '@ci/domains/memory';
 
-import { CalendarFileImporter, icsEventStatus, parseIcsEvents } from '../calendar';
+import { CalendarFileImporter, icsEventStatus, MAX_RECURRENCE_DATES, parseIcsEvents } from '../calendar';
 import type { ImportParams } from '../timeline';
 
 import { metaText, type EmittedGraph } from './support/emitted';
@@ -643,6 +643,131 @@ describe('Calendar datasource', () => {
       expect(event.isRecurring).toBe(true);
       expect(event.recurrence).toBeUndefined();
       expect(event.recurrenceTimeZone).toBeUndefined();
+    });
+
+    /**
+     * Calendar drops an occurrence when an override row is keyed by its UTC
+     * instant. A floating RECURRENCE-ID, or one in a zone the runtime does not
+     * know, keeps its wall clock as its key, so the series has to be told.
+     */
+    it.each([
+      ['a zone the runtime does not know', ';TZID=Pacific Standard Time'],
+      ['a floating time', ''],
+    ])('does not draw the occurrence an override replaces, for %s', (_, tzid) => {
+      const events = parseIcsEvents(
+        [
+          'BEGIN:VCALENDAR',
+          'BEGIN:VEVENT',
+          'UID:moved@x',
+          'RECURRENCE-ID' + tzid + ':20261019T100000',
+          'DTSTART' + tzid + ':20261020T150000',
+          'SUMMARY:Sync, moved to Tuesday',
+          'END:VEVENT',
+          'BEGIN:VEVENT',
+          'UID:moved@x',
+          'DTSTART' + tzid + ':20261005T100000',
+          'RRULE:FREQ=WEEKLY;COUNT=4',
+          'SUMMARY:Sync',
+          'END:VEVENT',
+          'BEGIN:VEVENT',
+          'UID:moved@x',
+          'RECURRENCE-ID' + tzid + ':20261012T100000',
+          'DTSTART' + tzid + ':20261012T100000',
+          'STATUS:CANCELLED',
+          'END:VEVENT',
+          'END:VCALENDAR',
+        ].join('\r\n'),
+        'moved.ics',
+      );
+      const master = events.find((event) => event.id === 'moved@x')!;
+      const overrideIds = events.filter((event) => event !== master).map((event) => event.id);
+
+      expect(overrideIds).toEqual(['moved@x#20261019T100000', 'moved@x#20261012T100000']);
+      expect(master.recurrence).toEqual([
+        'RRULE:FREQ=WEEKLY;COUNT=4',
+        `EXDATE${tzid}:20261019T100000`,
+        `EXDATE${tzid}:20261012T100000`,
+      ]);
+
+      const zone = master.recurrenceTimeZone!;
+      const drawn = expandAll(
+        [
+          {
+            id: 'series',
+            startTime: master.dtStart as Date,
+            endTime: null,
+            isAllDay: false,
+            metadata: { recurrenceRule: master.recurrence, recurrenceTimeZone: zone },
+            recurrencePattern: null,
+            sourceSystem: 'calendar',
+            sourceId: master.id,
+          },
+        ],
+        { from: new Date('2026-09-01T00:00:00Z'), to: new Date('2026-12-01T00:00:00Z') },
+        { fallbackTimeZone: 'UTC' },
+      ).map((occurrence) => {
+        const wall = wallClockInTZ(occurrence.startTime, zone);
+
+        return `${wall.month}/${wall.day} ${wall.hour}:00`;
+      });
+
+      // October 5 is the stored row itself. October 12 was cancelled and
+      // October 19 moved to the 20th, which is the override's own row.
+      expect(drawn).toEqual(['10/26 10:00']);
+    });
+
+    it('adds no EXDATE for an override Calendar already matches by its UTC instant', () => {
+      const events = parseIcsEvents(
+        [
+          'BEGIN:VCALENDAR',
+          'BEGIN:VEVENT',
+          'UID:zoned@x',
+          'DTSTART;TZID=America/Los_Angeles:20261005T100000',
+          'RRULE:FREQ=WEEKLY;COUNT=4',
+          'END:VEVENT',
+          'BEGIN:VEVENT',
+          'UID:zoned@x',
+          'RECURRENCE-ID;TZID=America/Los_Angeles:20261019T100000',
+          'DTSTART;TZID=America/Los_Angeles:20261020T150000',
+          'END:VEVENT',
+          'END:VCALENDAR',
+        ].join('\r\n'),
+        'zoned.ics',
+      );
+
+      expect(events.map((event) => event.id)).toEqual(['zoned@x', 'zoned@x#20261019T170000Z']);
+      expect(events[0].recurrence).toEqual(['RRULE:FREQ=WEEKLY;COUNT=4']);
+    });
+
+    it(`leaves the rule off a series listing more than ${MAX_RECURRENCE_DATES} dates`, () => {
+      const stamps = (count: number) =>
+        Array.from({ length: count }, (_, day) =>
+          new Date(Date.UTC(2020, 0, 1 + day, 10)).toISOString().replace(/[-:]|\.\d{3}/g, ''),
+        );
+      const parse = (exdates: string[], rdates: string[]) =>
+        parseIcsEvents(
+          [
+            'BEGIN:VCALENDAR',
+            'BEGIN:VEVENT',
+            'UID:busy@x',
+            'DTSTART:20200101T100000Z',
+            'RRULE:FREQ=DAILY',
+            `EXDATE:${exdates.join(',')}`,
+            `RDATE:${rdates.join(',')}`,
+            'END:VEVENT',
+            'END:VCALENDAR',
+          ].join('\r\n'),
+          'busy.ics',
+        )[0];
+      const dates = stamps(MAX_RECURRENCE_DATES + 1);
+
+      expect(parse(dates.slice(0, 500), dates.slice(500, MAX_RECURRENCE_DATES)).recurrence).toHaveLength(3);
+
+      const over = parse(dates.slice(0, 500), dates.slice(500));
+
+      expect(over.isRecurring).toBe(true);
+      expect(over.recurrence).toBeUndefined();
+      expect(over.recurrenceTimeZone).toBeUndefined();
     });
 
     it('leaves the rule off an override, which is one occurrence and not a series', async () => {

@@ -41,8 +41,13 @@ export interface ParsedIcsEvent {
    * in the order they appear. Stored as `metadata.recurrenceRule`, the shape
    * Google sync writes there, which is where the calendar reads a series' rule
    * from (`seriesRuleOf`). Absent on a one-off event, on an override, on an
-   * all-day series and on a series whose DTSTART did not parse (see where it is
-   * set in {@link parseIcsEvents}).
+   * all-day series, on a series whose DTSTART did not parse and on one that
+   * lists more than {@link MAX_RECURRENCE_DATES} dates (see where it is set in
+   * {@link parseIcsEvents}).
+   *
+   * One kind of line is added: an `EXDATE` for each override in the same file
+   * whose `RECURRENCE-ID` is floating or names a zone the runtime does not know
+   * (see {@link exdateForOverride}).
    */
   recurrence?: string[];
   /**
@@ -170,6 +175,16 @@ export function icsEventStatus(value: string | undefined): ImportedEventStatus |
 }
 
 /**
+ * The most `EXDATE` and `RDATE` dates a series keeps its rule with. Calendar
+ * reads every one of them each time it expands the series: 40,000 dates took
+ * half a second on every read of that person's calendar. A series with more
+ * keeps no rule and shows on its first date, as an imported series did before
+ * the rule was kept. Real calendars stay far below this: a daily meeting
+ * skipped on every holiday for ten years lists about 100.
+ */
+export const MAX_RECURRENCE_DATES = 1_000;
+
+/**
  * Parse one .ics file's VEVENT blocks. Shared between the live importer
  * (processICS) and the backfill (backfillCalendarMetadata), so an item id
  * produced by either path matches the row in items.
@@ -178,6 +193,8 @@ export function parseIcsEvents(raw: string, fpath: string): ParsedIcsEvent[] {
   const unfolded = raw.replace(/\r?\n[ \t]/g, '');
   const blocks = unfolded.split(/BEGIN:VEVENT/).slice(1);
   const out: ParsedIcsEvent[] = [];
+  // Per series id, the EXDATE lines its overrides need (see exdateForOverride).
+  const overrideExdates = new Map<string, string[]>();
   for (const blockRaw of blocks) {
     const block = blockRaw.split(/END:VEVENT/)[0];
     const lines = block.split(/\r?\n/);
@@ -328,6 +345,12 @@ export function parseIcsEvents(raw: string, fpath: string): ParsedIcsEvent[] {
       ? normalizeIcsRecurrenceId(rawRecurrenceId, recurrenceTzid ?? null)
       : '';
     const id = recurrenceId ? `${baseId}#${recurrenceId}` : baseId;
+    const overrideExdate = recurrenceId ? exdateForOverride(recurrenceId, recurrenceTzid) : undefined;
+
+    if (overrideExdate) {
+      overrideExdates.set(baseId, [...(overrideExdates.get(baseId) ?? []), overrideExdate]);
+    }
+
     // Read from the depth-0 `map`, so a nested component's STATUS cannot stand
     // in for the event's own (see the depth counter above).
     const status = icsEventStatus(map['STATUS']);
@@ -343,7 +366,17 @@ export function parseIcsEvents(raw: string, fpath: string): ParsedIcsEvent[] {
     // `BYDAY` rule lands a day late east of UTC and no DATE-valued EXDATE
     // matches. Until the expander follows the repair, the series shows on its
     // first date only, as it did before.
-    const recurrence = isRecurring && !recurrenceId && dtStart && !isAllDay ? recurrenceLines : undefined;
+    //
+    // And none for a series listing more dates than Calendar can afford to read
+    // on every expansion (MAX_RECURRENCE_DATES).
+    const recurrence =
+      isRecurring &&
+      !recurrenceId &&
+      dtStart &&
+      !isAllDay &&
+      countDates(recurrenceLines) <= MAX_RECURRENCE_DATES
+        ? recurrenceLines
+        : undefined;
     const recurrenceTimeZone = recurrence ? seriesTimeZone(map['DTSTART'], paramsMap['DTSTART']) : undefined;
     out.push({
       id,
@@ -359,6 +392,23 @@ export function parseIcsEvents(raw: string, fpath: string): ParsedIcsEvent[] {
       ...(status ? { status } : {}),
       ...(inlineCids.length ? { inlineCids } : {}),
     });
+  }
+
+  for (const event of out) {
+    const exdates = event.recurrence ? overrideExdates.get(event.id) : undefined;
+
+    if (!event.recurrence || !exdates) {
+      continue;
+    }
+
+    const lines = [...event.recurrence, ...exdates.filter((line) => !event.recurrence?.includes(line))];
+
+    if (countDates(lines) <= MAX_RECURRENCE_DATES) {
+      event.recurrence = lines;
+    } else {
+      delete event.recurrence;
+      delete event.recurrenceTimeZone;
+    }
   }
 
   return out;
@@ -492,6 +542,43 @@ export class CalendarFileImporter implements FileImporter {
 /** A property's `TZID` parameter, from its `;KEY=VAL;…` segment (the `paramsMap` entry). */
 function tzidParam(params: string | undefined): string | undefined {
   return params?.match(/(?:^|;)TZID=([^;]+)/)?.[1];
+}
+
+/** How many dates a set of RRULE, EXDATE and RDATE lines lists (an RRULE lists none). */
+function countDates(lines: readonly string[]): number {
+  let count = 0;
+
+  for (const line of lines) {
+    if (!/^RRULE[;:]/i.test(line)) {
+      count += line.slice(line.indexOf(':') + 1).split(',').length;
+    }
+  }
+
+  return count;
+}
+
+/**
+ * The `EXDATE` line a series needs so Calendar does not draw an occurrence an
+ * override in the same file replaces, or undefined when it needs none.
+ *
+ * Calendar drops an occurrence when a row keyed `<uid>#<UTC instant>` exists
+ * (`dropExistingOverrides`). An override whose `RECURRENCE-ID` names a zone the
+ * runtime knows, or is already UTC, is keyed that way. A floating one, or one
+ * in a zone the runtime does not know (Outlook writes Windows names such as
+ * `Pacific Standard Time`), keeps its wall clock as written
+ * (`normalizeIcsRecurrenceId`), so its key never matches: a moved meeting would
+ * show at both times and a cancelled one would still show. Changing that key
+ * would re-key overrides already imported, so the series is told instead. The
+ * line names the wall clock as the override does, and Calendar reads it in the
+ * series' zone, the same zone it walks the rule in.
+ */
+function exdateForOverride(recurrenceId: string, tzid: string | undefined): string | undefined {
+  // Normalized ids end in `Z`; one left as written is a bare wall clock.
+  if (!/^\d{8}T\d{6}$/.test(recurrenceId)) {
+    return undefined;
+  }
+
+  return tzid ? `EXDATE;TZID=${tzid}:${recurrenceId}` : `EXDATE:${recurrenceId}`;
 }
 
 /**
