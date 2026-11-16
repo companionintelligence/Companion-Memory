@@ -1684,12 +1684,10 @@ export class ContentService {
 
     await this.drainQueuedObjects(queuedObjectIds);
 
-    await this.eventService.send(ContentRemovedEvent, {
-      contentId: id,
-    });
+    await this.sendAfterCommit(ContentRemovedEvent, { contentId: id });
 
     for (const fileId of files.fileIds) {
-      await this.eventService.send(FileRemovedEvent, { fileId });
+      await this.sendAfterCommit(FileRemovedEvent, { fileId });
     }
 
     return true;
@@ -1697,21 +1695,46 @@ export class ContentService {
 
   /**
    * Deletes the objects a committed delete or purge queued ({@link drainStoredObjectDeletes}). Never
-   * throws for the store: the rows are already gone, and what it could not delete stays queued for
-   * `StoredObjectDeletionSweepCron`, which is said here.
+   * throws, for the store or for the database: the rows are already gone, and what it could not delete
+   * stays queued for `StoredObjectDeletionSweepCron`, which is said here. A caller told that the delete
+   * failed would retry something that is done.
    */
   private async drainQueuedObjects(ids: string[]): Promise<void> {
     if (ids.length === 0) {
       return;
     }
 
-    const drained = await drainStoredObjectDeletes(this.contentRepository.manager, this.storedObjects, {
-      ids,
-    });
+    try {
+      const drained = await drainStoredObjectDeletes(this.contentRepository.manager, this.storedObjects, {
+        ids,
+      });
 
-    if (drained.pending > 0) {
-      this.logger.warn(
-        `${drained.pending} stored object(s) could not be deleted yet and are queued for the retry sweep: ${drained.errors.join('; ')}`,
+      if (drained.pending > 0) {
+        this.logger.warn(
+          `${drained.pending} stored object(s) could not be deleted yet and are queued for the retry sweep: ${drained.errors.join('; ')}`,
+        );
+      }
+    } catch (error) {
+      this.logger.error(
+        `Could not finish deleting up to ${ids.length} stored object(s) after the commit; any not yet deleted stay queued for the retry sweep: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  /**
+   * Announces a removal that has already committed. A send that fails is logged at error and does not
+   * fail the call: the delete has happened, and each announcement is sent on its own, so one failure
+   * does not stop the rest.
+   */
+  private async sendAfterCommit(
+    event: typeof ContentRemovedEvent | typeof FileRemovedEvent,
+    payload: { contentId: string } | { fileId: string },
+  ): Promise<void> {
+    try {
+      await this.eventService.send(event, payload as never);
+    } catch (error) {
+      this.logger.error(
+        `Could not announce a content removal that has already committed: ${String(event)} ${JSON.stringify(payload)}: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   }
@@ -1755,11 +1778,11 @@ export class ContentService {
     // The index rows were deleted in the transaction. This tells anything else
     // that listens, and is what announces a removal everywhere else in the app.
     for (const contentId of purged.contentIds) {
-      await this.eventService.send(ContentRemovedEvent, { contentId });
+      await this.sendAfterCommit(ContentRemovedEvent, { contentId });
     }
 
     for (const fileId of purged.files.fileIds) {
-      await this.eventService.send(FileRemovedEvent, { fileId });
+      await this.sendAfterCommit(FileRemovedEvent, { fileId });
     }
 
     return purged;
