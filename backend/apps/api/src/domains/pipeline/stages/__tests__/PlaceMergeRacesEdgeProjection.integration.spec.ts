@@ -8,6 +8,7 @@ import { GraphDeltaWriter, PlaceEntity, PlaceMergeService } from '@ci/domains/me
 
 import { createSyntheticTestUser } from '../../../__tests__/support/applianceUser';
 import { databaseAvailability, resolveConnection } from '../../../__tests__/support/databaseConnection';
+import { createPositionChunks } from '../../../__tests__/support/positionChunks';
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
 import { PIPELINE_QUEUES } from '../../constants';
 import { PipelineSliceListener } from '../../listeners/PipelineSliceListener';
@@ -504,6 +505,8 @@ describeWithDb(`a place merge racing the edge projection, against Postgres (${av
       ),
     } as UserServiceContext;
     userIds.push(ctx.userId);
+    // The chunk `fixAt` writes into, created up front: see positionChunks.ts.
+    await createPositionChunks(dataSource, ctx.userId, '1985-03-01T00:00:00Z', '1985-03-02T00:00:00Z');
   });
 
   afterAll(async () => {

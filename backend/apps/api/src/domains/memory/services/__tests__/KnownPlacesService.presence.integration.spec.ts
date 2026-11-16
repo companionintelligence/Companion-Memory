@@ -5,6 +5,11 @@ import type { UserServiceContext } from '@ci/common/context';
 import type { LoggerService } from '@ci/common/logging';
 
 import { databaseAvailability, resolveConnection } from '../../../__tests__/support/databaseConnection';
+import {
+  compressPositionChunk,
+  createPositionChunks,
+  decompressPositionChunk,
+} from '../../../__tests__/support/positionChunks';
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
 import { KNOWN_PLACE_PRESENCE_SQL, KnownPlacesService } from '../KnownPlacesService';
 import type { PlaceService } from '../PlaceService';
@@ -164,6 +169,9 @@ describeWithDb(`KnownPlacesService measured presence against Postgres (${availab
        VALUES ($1, 'Location', 'Station', '{}'::jsonb, $2)`,
       [stationLocationId, ownerId],
     );
+    // The chunks the August and September fixes go into, created up front: see
+    // positionChunks.ts.
+    await createPositionChunks(dataSource, ownerId, '1986-08-01T00:00:00Z', '1986-09-30T00:00:00Z');
 
     // Home: 10:00 JST on nine days, three in each of the first three weeks.
     for (const day of ['01', '02', '03', '08', '09', '10', '15', '16', '17']) {
@@ -274,16 +282,23 @@ describeWithDb(`KnownPlacesService measured presence against Postgres (${availab
   afterAll(async () => {
     if (dataSource?.isInitialized) {
       const users = [ownerId, strangerId];
-      for (const chunk of compressedChunks) {
-        await dataSource.query(`SELECT decompress_chunk($1::regclass, if_compressed => true)`, [chunk]);
-      }
 
-      await dataSource.query('DELETE FROM ci.position WHERE user_id = ANY($1)', [users]);
-      await dataSource.query('DELETE FROM ci.events WHERE user_id = ANY($1)', [users]);
-      await dataSource.query('DELETE FROM ci.entities WHERE owner_user_id = ANY($1)', [users]);
-      await dataSource.query('DELETE FROM ci.users WHERE id = ANY($1)', [users]);
-      await schemaLock?.release();
-      await dataSource.destroy();
+      // The schema lock goes back even when a step here fails: a jest worker
+      // keeps its process (with the connection holding the lock) for the files
+      // it runs next.
+      try {
+        for (const chunk of compressedChunks) {
+          await decompressPositionChunk(dataSource, chunk);
+        }
+
+        await dataSource.query('DELETE FROM ci.position WHERE user_id = ANY($1)', [users]);
+        await dataSource.query('DELETE FROM ci.events WHERE user_id = ANY($1)', [users]);
+        await dataSource.query('DELETE FROM ci.entities WHERE owner_user_id = ANY($1)', [users]);
+        await dataSource.query('DELETE FROM ci.users WHERE id = ANY($1)', [users]);
+      } finally {
+        await schemaLock?.release();
+        await dataSource.destroy();
+      }
     }
   });
 
@@ -371,7 +386,7 @@ describeWithDb(`KnownPlacesService measured presence against Postgres (${availab
     expect(compressedChunks.length).toBeGreaterThan(0);
 
     for (const chunk of compressedChunks) {
-      await dataSource.query(`SELECT compress_chunk($1::regclass, if_not_compressed => true)`, [chunk]);
+      await compressPositionChunk(dataSource, chunk);
     }
 
     const [{ uncompressed }] = await dataSource.query(

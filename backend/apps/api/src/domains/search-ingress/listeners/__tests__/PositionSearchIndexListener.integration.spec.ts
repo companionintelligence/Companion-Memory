@@ -4,6 +4,7 @@ import { v7 as uuidv7 } from 'uuid';
 import { SYSTEM_USER } from '@ci/common/context';
 
 import { databaseAvailability, resolveConnection } from '../../../__tests__/support/databaseConnection';
+import { createPositionChunks } from '../../../__tests__/support/positionChunks';
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
 import { PositionSearchIndexListener } from '../PositionSearchIndexListener';
 
@@ -73,6 +74,9 @@ describeWithDatabase(`PositionSearchIndexListener — against real Postgres (${a
          ON CONFLICT (id) DO NOTHING`,
       [userId, `position.${userId}@example.test`],
     );
+    // The chunk every ping below goes into, created up front: see
+    // positionChunks.ts.
+    await createPositionChunks(dataSource, userId, '2026-08-10T00:00:00Z', '2026-08-10T23:59:00Z');
   });
 
   afterAll(async () => {

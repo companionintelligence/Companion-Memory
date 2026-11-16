@@ -17,6 +17,7 @@ import {
   seedBareFootprint,
   wipeGraphEntities,
 } from '../../../__tests__/support/graphEntityFootprint';
+import { createPositionChunks } from '../../../__tests__/support/positionChunks';
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
 import { BaseEntity } from '../../entities/BaseEntity';
 import { PlaceEntity } from '../../entities/PlaceEntity';
@@ -142,6 +143,16 @@ describeWithDb(`PlaceService.purge against Postgres (${availability.target})`, (
     for (const userId of [ownerId, strangerId]) {
       await createSyntheticTestUser((sql, params) => dataSource.query(sql, params), 'PlacePurge', userId);
     }
+
+    // The fixes below are dated now, by the database's clock, which can run a
+    // little behind this process's. Their chunk is created up front, an hour
+    // either side: see positionChunks.ts.
+    await createPositionChunks(
+      dataSource,
+      ownerId,
+      new Date(Date.now() - 60 * 60_000).toISOString(),
+      new Date(Date.now() + 60 * 60_000).toISOString(),
+    );
 
     places = new PlaceService(
       dataSource.getRepository(PlaceEntity),
