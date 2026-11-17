@@ -31,8 +31,11 @@ import { NoteService, type Note } from '@ci/domains/notes';
 import { FileChunkService, type FileChunk } from '@ci/domains/parsing';
 import { TaskService, type Task } from '@ci/domains/planning/task.module';
 import {
+  COMMUNICATION_TYPES,
   INDEXABLE_ENTITIES,
   SearchService,
+  TIME_BUCKETS,
+  type TimeBucketCounts,
   type EntityIdentifier,
   type IndexableEntity,
   type SearchPage,
@@ -63,21 +66,23 @@ export function requireQueryUnlessCounting(
   }
 }
 
-const DatabaseSearchInputSchema = z
-  .object({
-    query: z.string().max(500).optional(),
-    searchMode: z.enum(['semantic', 'keyword', 'hybrid', 'auto']).optional(),
-    scopes: z.array(z.enum(['entities', 'documents', 'messages'])).optional(),
-    entityTypes: z.array(z.string()).optional(),
-    includeRelationships: booleanish().optional(),
-    maxResults: z.number().int().min(1).max(100).optional(),
-    countOnly: booleanish().optional(),
-    since: unwrapped(isoDate()).optional(),
-    until: unwrapped(isoDate()).optional(),
-    sort: unwrapped(z.enum(['relevance', 'recent'])).optional(),
-    includeAgentConversations: booleanish().optional(),
-  })
-  .superRefine(requireQueryUnlessCounting);
+const DatabaseSearchInputSchema = z.object({
+  query: z.string().max(500).optional(),
+  searchMode: z.enum(['semantic', 'keyword', 'hybrid', 'auto']).optional(),
+  scopes: z.array(z.enum(['entities', 'documents', 'messages'])).optional(),
+  entityTypes: z.array(z.string()).optional(),
+  includeRelationships: booleanish().optional(),
+  maxResults: z.number().int().min(1).max(100).optional(),
+  countOnly: booleanish().optional(),
+  since: unwrapped(isoDate()).optional(),
+  until: unwrapped(isoDate()).optional(),
+  sort: unwrapped(z.enum(['relevance', 'recent'])).optional(),
+  includeAgentConversations: booleanish().optional(),
+  communicationTypes: z.array(z.enum(COMMUNICATION_TYPES)).optional(),
+  groupBy: unwrapped(z.enum(TIME_BUCKETS)).optional(),
+});
+// No `requireQueryUnlessCounting` here: no query is a request for the newest entries in scope
+// (SearchService.recentPage). media.findPhotos keeps the rule for a relevance page only.
 
 /**
  * A scalar the model wrapped in a one-element array (`sort: ["recent"]`): accepted as the element.
@@ -94,7 +99,7 @@ export function unwrapped<T extends z.ZodTypeAny>(schema: T) {
  * parse is accepted, so a small model's `2025-10-1` still works; what it cannot parse is refused
  * with the reason, not silently ignored (a dropped `since` would quietly answer the wrong question).
  */
-function isoDate() {
+export function isoDate() {
   return z
     .string()
     .min(4)
@@ -260,6 +265,14 @@ export interface SearchToolResult {
    * subject word, so a photo count without this is a floor presented as a total.
    */
   coverage?: { images: number; described: number };
+  /**
+   * Present when the call set `groupBy`: how many matches fall in each hour, weekday, month, year
+   * or date, by each one's own time in `timeZone`. `undated` matches are in `totalMatches` and in
+   * no group.
+   */
+  groups?: TimeBucketCounts['groups'];
+  undated?: number;
+  timeZone?: string;
 }
 
 /** The entity-type filter's allowed values in the full schema. */
@@ -353,7 +366,14 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
       'entries without paging them, so prefer it over counting items. With countOnly you may omit ' +
       'query to count everything of the given entityTypes (e.g. all files). ' +
       'A multi-word query matches entries containing ANY of its words; for a count, use the ' +
-      'single most specific word (e.g. "rabbit", not "photos of rabbits").',
+      'single most specific word (e.g. "rabbit", not "photos of rabbits"). ' +
+      'For "most recent" / "latest" / "last" questions, leave query out and set sort: "recent" with the ' +
+      'scope (entityTypes, communicationTypes, since/until): a query word only finds entries containing ' +
+      'that word, so "email" would miss every email that does not say "email". Common words ' +
+      '("the", "your", "I") match nothing. ' +
+      'For "when do I most often ..." / "what time of day" / "which month" questions set groupBy ' +
+      '(hour, weekday, month, year or date): it returns a count per group instead of items, so never ' +
+      'page through items to tally times yourself.',
     category: 'database',
     parameters: {
       type: 'object',
@@ -361,8 +381,9 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
         query: {
           type: 'string',
           description:
-            'Natural language search query or keywords to search for. Required unless countOnly is true, ' +
-            'when omitting it counts everything in scope.',
+            'Natural language search query or keywords to search for. Omit it to list the newest entries ' +
+            'in scope (entityTypes, communicationTypes, since/until) — the way to answer "most recent" / ' +
+            '"latest" questions, which need no word. With countOnly, omitting it counts everything in scope.',
           maxLength: 500,
         },
         searchMode: {
@@ -412,6 +433,24 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
           description:
             'recent = newest first by each entry\'s own time, for "most recent" / "latest" / "last" questions. ' +
             'Forces keyword matching. Default: relevance.',
+        },
+        groupBy: {
+          type: 'string',
+          enum: [...TIME_BUCKETS],
+          description:
+            "Count the matches per hour of day (00-23), weekday, month, year or date, by each entry's own " +
+            'time in the user\'s time zone, and return those counts instead of items. Use it for "what time ' +
+            'of day / which day / which month do I most often ..." and any "how is X spread over time" ' +
+            'question: one call answers it, where paging items cannot. Takes query, entityTypes and ' +
+            'since/until like a count.',
+        },
+        communicationTypes: {
+          type: 'array',
+          items: { type: 'string', enum: [...COMMUNICATION_TYPES] },
+          description:
+            'Only communications of these kinds: email, sms (texts), chat (messaging apps), call, ' +
+            'video_call, voice_note, post. Implies entityTypes ["communication"] when entityTypes is not set. ' +
+            'For "my latest email": communicationTypes ["email"], sort "recent", no query.',
         },
         includeAgentConversations: {
           type: 'boolean',
@@ -471,39 +510,89 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
     scope: DatabaseSearchScope = {},
   ): Promise<SearchToolResult> {
     const serviceContext = toServiceContext(context);
-    const includeTypes = input.entityTypes as IndexableEntity[];
+    const communicationTypes = input.communicationTypes?.length ? input.communicationTypes : undefined;
+    // Only communications can be emails, so naming a kind with no type scope means communications.
+    const includeTypes = (input.entityTypes ??
+      (communicationTypes ? ['communication'] : undefined)) as IndexableEntity[];
     const mediaContentOnly = scope.mediaContentOnly === true;
     // Agents store every turn they hold with the user (POST /memory/turn). Searched by default,
     // those turns answered for the mail: on 2026-11-13 OpenClaw's newest-first "email" search
     // returned its own earlier replies. They stay out unless the agent asks for them.
-    const agentTurns = input.includeAgentConversations === true ? {} : { showAgentTurnsFrom: [] };
+    const agentTurns = {
+      ...(input.includeAgentConversations === true ? {} : { showAgentTurnsFrom: [] }),
+      ...(communicationTypes ? { communicationTypes } : {}),
+    };
+    const typedQuery = input.query?.trim() || undefined;
+    const window = {
+      ...(mediaContentOnly ? { mediaContentOnly } : {}),
+      ...(input.since != null ? { since: new Date(input.since) } : {}),
+      ...(input.until != null ? { until: new Date(input.until) } : {}),
+    };
+
+    // A query of only words the index drops ("the", "your") matches nothing, and its empty answer
+    // read as "nothing there" (Hermes, 2026-11-16). Checked only once a term has come back empty,
+    // so a search that found something costs no extra statement: such a query is then run as no
+    // query at all, and the summary says so.
+    const onlyCommonWords = async (matched: number | null): Promise<boolean> =>
+      typedQuery != null && matched === 0 && !(await this.searchService.hasSearchTerms(typedQuery));
+    const ignoredNote = (ignored: boolean): string =>
+      ignored
+        ? ` "${typedQuery}" has only common words the search index ignores, so no word filter was applied.`
+        : '';
+
+    if (input.groupBy) {
+      const groupBy = input.groupBy;
+      const countBy = (query: string | undefined) =>
+        this.searchService.countBy(serviceContext, {
+          query,
+          includeTypes,
+          ...agentTurns,
+          ...window,
+          groupBy,
+        });
+      const counted = await countBy(typedQuery);
+      const ignored = await onlyCommonWords(counted.total);
+      const grouped = ignored ? await countBy(undefined) : counted;
+      const query = ignored ? undefined : typedQuery;
+
+      return {
+        summary:
+          describeGrouped(grouped, groupBy, query, includeTypes, mediaContentOnly) + ignoredNote(ignored),
+        totalMatches: grouped.total,
+        truncated: false,
+        limit: 0,
+        mode: 'count',
+        items: [],
+        groups: grouped.groups,
+        undated: grouped.undated,
+        timeZone: grouped.timeZone,
+      };
+    }
 
     if (input.countOnly) {
       // A count is a `count(*)` against the full-text index: no cap, no rows,
       // nothing for the context budget to drop. It is the same predicate the
       // page below would run, so the two numbers agree by construction. A
       // blank query counts the whole scope.
-      const query = input.query?.trim() || undefined;
+      const countOf = (query: string | undefined) =>
+        this.searchService.count(serviceContext, { query, includeTypes, ...agentTurns, ...window });
 
       // A photo can only match a subject word through its generated
       // description, so a count over files is only as complete as that pass.
       // Say how complete, or the model presents a floor as a total.
-      const [totalMatches, coverage] = await Promise.all([
-        this.searchService.count(serviceContext, {
-          query,
-          includeTypes,
-          ...agentTurns,
-          ...(mediaContentOnly ? { mediaContentOnly } : {}),
-          ...(input.since != null ? { since: new Date(input.since) } : {}),
-          ...(input.until != null ? { until: new Date(input.until) } : {}),
-        }),
+      const [counted, coverage] = await Promise.all([
+        countOf(typedQuery),
         includeTypes?.includes('file') || mediaContentOnly
           ? this.fileService.describedImageCoverage(serviceContext)
           : undefined,
       ]);
+      const ignored = await onlyCommonWords(counted);
+      const totalMatches = ignored ? await countOf(undefined) : counted;
+      const query = ignored ? undefined : typedQuery;
 
       return {
-        summary: describeCount(totalMatches, query, includeTypes, coverage, mediaContentOnly),
+        summary:
+          describeCount(totalMatches, query, includeTypes, coverage, mediaContentOnly) + ignoredNote(ignored),
         totalMatches,
         truncated: false,
         limit: 0,
@@ -517,18 +606,34 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
     // lexical modes can apply and count: a nearest-neighbour list has no "all matches since Tuesday".
     const timed = input.since != null || input.until != null || input.sort === 'recent';
 
-    // The refinement guarantees a term here; a page cannot rank without one.
-    const page = await this.searchService.searchPage(serviceContext, {
-      query: input.query ?? '',
-      mode: timed ? 'keyword' : input.searchMode,
-      includeTypes,
-      ...agentTurns,
-      maxResults: input.maxResults,
-      ...(mediaContentOnly ? { mediaContentOnly } : {}),
-      ...(input.since != null ? { since: new Date(input.since) } : {}),
-      ...(input.until != null ? { until: new Date(input.until) } : {}),
-      ...(input.sort === 'recent' ? { sort: 'recent' as const } : {}),
-    });
+    // No term to rank on: the newest entries in scope, which is what "most recent" asks for.
+    const newest = () =>
+      this.searchService.recentPage(serviceContext, {
+        includeTypes,
+        ...agentTurns,
+        maxResults: input.maxResults,
+        ...window,
+      });
+
+    let page =
+      typedQuery == null
+        ? await newest()
+        : await this.searchService.searchPage(serviceContext, {
+            query: typedQuery,
+            mode: timed ? 'keyword' : input.searchMode,
+            includeTypes,
+            ...agentTurns,
+            maxResults: input.maxResults,
+            ...window,
+            ...(input.sort === 'recent' ? { sort: 'recent' as const } : {}),
+          });
+    const ignored = page.items.length === 0 && (await onlyCommonWords(page.totalMatches ?? 0));
+
+    if (ignored) {
+      page = await newest();
+    }
+
+    const newestFirst = typedQuery == null || ignored || input.sort === 'recent';
 
     const { items, omitted } = await this.resolveEntities(serviceContext, page.items);
     // Hits left out for size make the page a cut of the match set even when the search was not.
@@ -540,7 +645,8 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
         : '';
 
     return {
-      summary: describePage({ ...page, truncated }, items.length, input.sort === 'recent') + sizeNote,
+      summary:
+        describePage({ ...page, truncated }, items.length, newestFirst) + ignoredNote(ignored) + sizeNote,
       totalMatches: page.totalMatches,
       truncated,
       limit: page.limit,
@@ -831,6 +937,43 @@ export function describeCount(
   return (
     `${base} ${coverage.described} of ${coverage.images} photos have a generated description, ` +
     'and only described photos can match a subject word — treat subject counts as a floor.'
+  );
+}
+
+const BUCKET_NOUN: Record<(typeof TIME_BUCKETS)[number], string> = {
+  hour: 'hour of the day',
+  weekday: 'weekday',
+  month: 'month',
+  year: 'year',
+  date: 'date',
+};
+
+/**
+ * The sentence a grouped count hands the model: the total, the busiest group and how many entries
+ * no group could hold, so the answer to "when do I most often" is in the sentence itself.
+ */
+export function describeGrouped(
+  grouped: TimeBucketCounts,
+  groupBy: (typeof TIME_BUCKETS)[number],
+  query: string | undefined,
+  includeTypes?: IndexableEntity[],
+  mediaContentOnly = false,
+): string {
+  const what = query
+    ? `${grouped.total} ${scopeLabel(includeTypes, mediaContentOnly)} match "${query}"`
+    : `${grouped.total} ${scopeLabel(includeTypes, mediaContentOnly)} in Memory`;
+  const top = [...grouped.groups].sort((a, b) => b.count - a.count)[0];
+  const busiest =
+    top != null
+      ? ` The busiest ${BUCKET_NOUN[groupBy]} is ${groupBy === 'hour' ? `${top.key}:00` : top.key} with ${top.count}.`
+      : '';
+  const undated =
+    grouped.undated > 0 ? ` ${grouped.undated} have no time of their own and are in no group.` : '';
+
+  return (
+    `${what}, counted per ${BUCKET_NOUN[groupBy]} by each one's own time in ${grouped.timeZone} ` +
+    `(exact counts, no items).${busiest}${undated} ` +
+    'A busy group can be one long day: check groupBy "date" before calling it a habit.'
   );
 }
 

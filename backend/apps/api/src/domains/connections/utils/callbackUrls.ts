@@ -1,12 +1,12 @@
 import type { IncomingHttpHeaders } from 'http';
 
-import config from '@ci/configuration';
 import {
   type OidcCallbackRequestOrigin,
   readRequestOrigin,
   requestNamesHost,
   resolveRequestOrigin,
-} from '@ci/domains/auth/utils/oidcCallbackUrl';
+} from '@ci/common/http/oidcCallbackUrl';
+import config from '@ci/configuration';
 
 import type { Connection } from '../entities/ConnectionEntity';
 

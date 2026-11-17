@@ -21,6 +21,12 @@ import { z } from 'zod/v3';
 
 import { SYSTEM_USER } from '@ci/common/context';
 import { FeatureService } from '@ci/common/feature';
+import {
+  OIDC_ORIGIN_BOUNCE_PARAM,
+  readRequestOrigin,
+  resolveOidcCallbackUrl,
+  resolveOidcOriginBounce,
+} from '@ci/common/http/oidcCallbackUrl';
 import { LoggerService } from '@ci/common/logging';
 import { ValidationPipe } from '@ci/common/pipes';
 import config from '@ci/configuration';
@@ -34,12 +40,6 @@ import { OidcNativeCodeService } from '../services/OidcNativeCodeService';
 import { SignupCodeService } from '../services/SignupCodeService';
 import { MEMORY_SIGN_IN_CLIENT } from '../utils/applianceAudience';
 import { ensureCsrfCookie, setCsrfCookie, setSessionCookie } from '../utils/authCookies';
-import {
-  OIDC_ORIGIN_BOUNCE_PARAM,
-  readRequestOrigin,
-  resolveOidcCallbackUrl,
-  resolveOidcOriginBounce,
-} from '../utils/oidcCallbackUrl';
 import { renderSignupConfirmPage } from '../utils/signupConfirmPage';
 
 /**
