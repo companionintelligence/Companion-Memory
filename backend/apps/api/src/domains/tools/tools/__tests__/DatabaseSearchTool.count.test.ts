@@ -44,7 +44,7 @@ function fileServiceOf(options: { files?: File[]; coverage?: { images: number; d
 }
 
 function makeTool(options: {
-  search: Partial<Pick<SearchService, 'searchPage' | 'count' | 'recentPage' | 'hasSearchTerms'>>;
+  search: Partial<Pick<SearchService, 'searchPage' | 'count' | 'recentPage' | 'hasSearchTerms' | 'countBy'>>;
   file?: ReturnType<typeof fileServiceOf>;
 }) {
   const noop = emptyResolver();
@@ -367,6 +367,94 @@ describe('DatabaseSearchTool — honest counts', () => {
       2,
       { userId: CONTEXT.userId },
       { query: undefined, includeTypes: ['content'], mediaContentOnly: true, showAgentTurnsFrom: [] },
+    );
+  });
+
+  it('groupBy answers "when do I most often" with counts per group, not a page', async () => {
+    // OpenClaw paged 105 bird photos eight at a time to tally their hours and overflowed its
+    // window (2026-11-16). The tally is a dozen numbers.
+    const countBy = jest.fn().mockResolvedValue({
+      groups: [
+        { key: '10', count: 6 },
+        { key: '14', count: 42 },
+      ],
+      undated: 2,
+      total: 50,
+      timeZone: 'America/Los_Angeles',
+    });
+    const searchPage = jest.fn();
+    const hasSearchTerms = jest.fn().mockResolvedValue(true);
+    const { tool } = makeTool({ search: { countBy, searchPage, hasSearchTerms } });
+
+    const result = await tool.execute(CONTEXT, {
+      query: 'bird',
+      entityTypes: ['content'],
+      groupBy: 'hour',
+      since: '2026-01-01',
+    });
+
+    expect(result.success).toBe(true);
+    expect(searchPage).not.toHaveBeenCalled();
+    expect(countBy).toHaveBeenCalledWith(
+      { userId: CONTEXT.userId },
+      {
+        query: 'bird',
+        includeTypes: ['content'],
+        showAgentTurnsFrom: [],
+        since: new Date('2026-01-01'),
+        groupBy: 'hour',
+      },
+    );
+    expect(result.data).toMatchObject({
+      mode: 'count',
+      totalMatches: 50,
+      items: [],
+      undated: 2,
+      timeZone: 'America/Los_Angeles',
+      groups: [
+        { key: '10', count: 6 },
+        { key: '14', count: 42 },
+      ],
+    });
+    expect(result.data?.summary).toContain('The busiest hour of the day is 14:00 with 42.');
+    expect(result.data?.summary).toContain('2 have no time of their own');
+  });
+
+  it('refuses a groupBy that is not a time bucket', async () => {
+    const { tool } = makeTool({ search: {} });
+
+    const result = await tool.execute(CONTEXT, { query: 'bird', groupBy: 'minute' });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('media.findPhotos takes since/until and groupBy, scoped to photo content, no query needed', async () => {
+    const countBy = jest.fn().mockResolvedValue({ groups: [], undated: 0, total: 0, timeZone: 'UTC' });
+    const recentPage = jest.fn().mockResolvedValue(emptyPage('recent'));
+    const hasSearchTerms = jest.fn().mockResolvedValue(true);
+    const { tool: search } = makeTool({ search: { countBy, recentPage, hasSearchTerms } });
+    const places = noPlaces() as unknown as { photosAtNamedPlace: jest.Mock };
+    const photos = new MediaFindPhotosTool(search, places as never, logger());
+
+    const grouped = await photos.execute(CONTEXT, { query: 'Blue Bottle Coffee', groupBy: 'weekday' });
+    const windowed = await photos.execute(CONTEXT, { since: '2026-04-01', until: '2026-04-30' });
+
+    expect(grouped.success).toBe(true);
+    expect(windowed.success).toBe(true);
+    // A grouped count is always counts: no detour through the photos-at-a-place path.
+    expect(places.photosAtNamedPlace).not.toHaveBeenCalled();
+    expect(countBy).toHaveBeenCalledWith(
+      { userId: CONTEXT.userId },
+      expect.objectContaining({ includeTypes: ['content'], mediaContentOnly: true, groupBy: 'weekday' }),
+    );
+    expect(recentPage).toHaveBeenCalledWith(
+      { userId: CONTEXT.userId },
+      expect.objectContaining({
+        includeTypes: ['content'],
+        mediaContentOnly: true,
+        since: new Date('2026-04-01'),
+        until: new Date('2026-04-30'),
+      }),
     );
   });
 

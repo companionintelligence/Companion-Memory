@@ -4,6 +4,7 @@ import { z } from 'zod/v3';
 import { toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { PlaceService, type PhotosAtNamedPlace } from '@ci/domains/memory';
+import { TIME_BUCKETS } from '@ci/domains/search-next';
 
 import { BaseTool } from '../core/BaseTool';
 import type { IntentDefinition, ToolExecutionContext } from '../core/types';
@@ -11,6 +12,7 @@ import type { IntentDefinition, ToolExecutionContext } from '../core/types';
 import { booleanish } from './booleanish';
 import {
   DatabaseSearchTool,
+  isoDate,
   requireQueryUnlessCounting,
   unwrapped,
   type SearchToolResult,
@@ -22,8 +24,16 @@ const MediaFindPhotosInputSchema = z
     maxResults: z.number().int().min(1).max(100).optional(),
     countOnly: booleanish().optional(),
     sort: unwrapped(z.enum(['relevance', 'recent'])).optional(),
+    since: unwrapped(isoDate()).optional(),
+    until: unwrapped(isoDate()).optional(),
+    groupBy: unwrapped(z.enum(TIME_BUCKETS)).optional(),
   })
-  .superRefine(requireQueryUnlessCounting);
+  // A grouped count, a window or newest-first all have an answer with no word: every photo in it.
+  .superRefine((input, ctx) =>
+    input.groupBy != null || input.since != null || input.until != null || input.sort === 'recent'
+      ? undefined
+      : requireQueryUnlessCounting(input, ctx),
+  );
 
 export type MediaFindPhotosInput = z.infer<typeof MediaFindPhotosInputSchema>;
 
@@ -104,7 +114,9 @@ export class MediaFindPhotosTool extends BaseTool<MediaFindPhotosInput, SearchTo
       "taken there instead, so pass a place's whole name, for a count too. " +
       'For "most recent", "latest" or "last" set sort: recent; otherwise results are ordered by relevance. ' +
       "Photos at a named place always come newest first. Each item's takenAt is when it was taken; " +
-      'give that date, never createdAt, which is when it was imported.',
+      'give that date, never createdAt, which is when it was imported. since/until select by when they ' +
+      'were taken. For "what time of day / which month do I most often photograph X" set groupBy ' +
+      '(hour, weekday, month, year, date): it returns counts per group, never page items to tally them.',
     privacy: { access: 'read', sensitivity: 'personal', destructive: false, external: false },
     // Photos and videos are already ON the device — this is the intent most obviously local.
     localCapable: true,
@@ -133,6 +145,24 @@ export class MediaFindPhotosTool extends BaseTool<MediaFindPhotosInput, SearchTo
             'recent = newest first by when each was taken, for "most recent" / "latest" / "last". ' +
             'Default: relevance.',
         },
+        since: {
+          type: 'string',
+          maxLength: 40,
+          description: 'Only photos/videos taken on or after this date or instant (YYYY-MM-DD or ISO 8601).',
+        },
+        until: {
+          type: 'string',
+          maxLength: 40,
+          description: 'Only photos/videos taken on or before this date or instant.',
+        },
+        groupBy: {
+          type: 'string',
+          enum: [...TIME_BUCKETS],
+          description:
+            'Count the matching photos/videos per hour of day (00-23), weekday, month, year or date taken, ' +
+            'in the user\'s time zone, instead of returning items. Use it for "what time of day / which ' +
+            'month do I most often photograph ..." — one call, no paging.',
+        },
       },
       required: [],
     },
@@ -155,7 +185,8 @@ export class MediaFindPhotosTool extends BaseTool<MediaFindPhotosInput, SearchTo
     context: ToolExecutionContext,
     input: MediaFindPhotosInput,
   ): Promise<SearchToolResult> {
-    const atPlace = await this.findAtNamedPlace(context, input);
+    // A grouped count is always counts: the named-place path answers with photos, not groups.
+    const atPlace = input.groupBy != null ? null : await this.findAtNamedPlace(context, input);
 
     // A named place with no photos taken at it falls through to the text search.
     if (atPlace && atPlace.total > 0) {
@@ -174,6 +205,9 @@ export class MediaFindPhotosTool extends BaseTool<MediaFindPhotosInput, SearchTo
         maxResults: input.maxResults,
         countOnly: input.countOnly,
         entityTypes: ['content'],
+        ...(input.since != null ? { since: input.since } : {}),
+        ...(input.until != null ? { until: input.until } : {}),
+        ...(input.groupBy != null ? { groupBy: input.groupBy } : {}),
         // Asked for and not offered, the model said "let me pull the newest one" and ended its turn
         // with nothing called: relevance order was all it could get.
         ...(input.sort ? { sort: input.sort } : {}),

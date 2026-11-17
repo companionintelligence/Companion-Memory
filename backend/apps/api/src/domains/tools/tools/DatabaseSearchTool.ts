@@ -34,6 +34,8 @@ import {
   COMMUNICATION_TYPES,
   INDEXABLE_ENTITIES,
   SearchService,
+  TIME_BUCKETS,
+  type TimeBucketCounts,
   type EntityIdentifier,
   type IndexableEntity,
   type SearchPage,
@@ -77,9 +79,10 @@ const DatabaseSearchInputSchema = z.object({
   sort: unwrapped(z.enum(['relevance', 'recent'])).optional(),
   includeAgentConversations: booleanish().optional(),
   communicationTypes: z.array(z.enum(COMMUNICATION_TYPES)).optional(),
+  groupBy: unwrapped(z.enum(TIME_BUCKETS)).optional(),
 });
 // No `requireQueryUnlessCounting` here: no query is a request for the newest entries in scope
-// (SearchService.recentPage). media.findPhotos keeps the rule.
+// (SearchService.recentPage). media.findPhotos keeps the rule for a relevance page only.
 
 /**
  * A scalar the model wrapped in a one-element array (`sort: ["recent"]`): accepted as the element.
@@ -96,7 +99,7 @@ export function unwrapped<T extends z.ZodTypeAny>(schema: T) {
  * parse is accepted, so a small model's `2025-10-1` still works; what it cannot parse is refused
  * with the reason, not silently ignored (a dropped `since` would quietly answer the wrong question).
  */
-function isoDate() {
+export function isoDate() {
   return z
     .string()
     .min(4)
@@ -262,6 +265,14 @@ export interface SearchToolResult {
    * subject word, so a photo count without this is a floor presented as a total.
    */
   coverage?: { images: number; described: number };
+  /**
+   * Present when the call set `groupBy`: how many matches fall in each hour, weekday, month, year
+   * or date, by each one's own time in `timeZone`. `undated` matches are in `totalMatches` and in
+   * no group.
+   */
+  groups?: TimeBucketCounts['groups'];
+  undated?: number;
+  timeZone?: string;
 }
 
 /** The entity-type filter's allowed values in the full schema. */
@@ -359,7 +370,10 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
       'For "most recent" / "latest" / "last" questions, leave query out and set sort: "recent" with the ' +
       'scope (entityTypes, communicationTypes, since/until): a query word only finds entries containing ' +
       'that word, so "email" would miss every email that does not say "email". Common words ' +
-      '("the", "your", "I") match nothing.',
+      '("the", "your", "I") match nothing. ' +
+      'For "when do I most often ..." / "what time of day" / "which month" questions set groupBy ' +
+      '(hour, weekday, month, year or date): it returns a count per group instead of items, so never ' +
+      'page through items to tally times yourself.',
     category: 'database',
     parameters: {
       type: 'object',
@@ -419,6 +433,16 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
           description:
             'recent = newest first by each entry\'s own time, for "most recent" / "latest" / "last" questions. ' +
             'Forces keyword matching. Default: relevance.',
+        },
+        groupBy: {
+          type: 'string',
+          enum: [...TIME_BUCKETS],
+          description:
+            "Count the matches per hour of day (00-23), weekday, month, year or date, by each entry's own " +
+            'time in the user\'s time zone, and return those counts instead of items. Use it for "what time ' +
+            'of day / which day / which month do I most often ..." and any "how is X spread over time" ' +
+            'question: one call answers it, where paging items cannot. Takes query, entityTypes and ' +
+            'since/until like a count.',
         },
         communicationTypes: {
           type: 'array',
@@ -515,6 +539,35 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
       ignored
         ? ` "${typedQuery}" has only common words the search index ignores, so no word filter was applied.`
         : '';
+
+    if (input.groupBy) {
+      const groupBy = input.groupBy;
+      const countBy = (query: string | undefined) =>
+        this.searchService.countBy(serviceContext, {
+          query,
+          includeTypes,
+          ...agentTurns,
+          ...window,
+          groupBy,
+        });
+      const counted = await countBy(typedQuery);
+      const ignored = await onlyCommonWords(counted.total);
+      const grouped = ignored ? await countBy(undefined) : counted;
+      const query = ignored ? undefined : typedQuery;
+
+      return {
+        summary:
+          describeGrouped(grouped, groupBy, query, includeTypes, mediaContentOnly) + ignoredNote(ignored),
+        totalMatches: grouped.total,
+        truncated: false,
+        limit: 0,
+        mode: 'count',
+        items: [],
+        groups: grouped.groups,
+        undated: grouped.undated,
+        timeZone: grouped.timeZone,
+      };
+    }
 
     if (input.countOnly) {
       // A count is a `count(*)` against the full-text index: no cap, no rows,
@@ -884,6 +937,43 @@ export function describeCount(
   return (
     `${base} ${coverage.described} of ${coverage.images} photos have a generated description, ` +
     'and only described photos can match a subject word — treat subject counts as a floor.'
+  );
+}
+
+const BUCKET_NOUN: Record<(typeof TIME_BUCKETS)[number], string> = {
+  hour: 'hour of the day',
+  weekday: 'weekday',
+  month: 'month',
+  year: 'year',
+  date: 'date',
+};
+
+/**
+ * The sentence a grouped count hands the model: the total, the busiest group and how many entries
+ * no group could hold, so the answer to "when do I most often" is in the sentence itself.
+ */
+export function describeGrouped(
+  grouped: TimeBucketCounts,
+  groupBy: (typeof TIME_BUCKETS)[number],
+  query: string | undefined,
+  includeTypes?: IndexableEntity[],
+  mediaContentOnly = false,
+): string {
+  const what = query
+    ? `${grouped.total} ${scopeLabel(includeTypes, mediaContentOnly)} match "${query}"`
+    : `${grouped.total} ${scopeLabel(includeTypes, mediaContentOnly)} in Memory`;
+  const top = [...grouped.groups].sort((a, b) => b.count - a.count)[0];
+  const busiest =
+    top != null
+      ? ` The busiest ${BUCKET_NOUN[groupBy]} is ${groupBy === 'hour' ? `${top.key}:00` : top.key} with ${top.count}.`
+      : '';
+  const undated =
+    grouped.undated > 0 ? ` ${grouped.undated} have no time of their own and are in no group.` : '';
+
+  return (
+    `${what}, counted per ${BUCKET_NOUN[groupBy]} by each one's own time in ${grouped.timeZone} ` +
+    `(exact counts, no items).${busiest}${undated} ` +
+    'A busy group can be one long day: check groupBy "date" before calling it a habit.'
   );
 }
 

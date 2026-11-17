@@ -480,6 +480,32 @@ export interface SearchPage {
   modeTaken: SearchModeTaken;
 }
 
+/** How {@link SearchService.countBy} buckets each entry's own time, in the owner's time zone. */
+export const TIME_BUCKETS = ['hour', 'weekday', 'month', 'year', 'date'] as const;
+
+export type TimeBucket = (typeof TIME_BUCKETS)[number];
+
+/** What {@link SearchService.countBy} returns. */
+export interface TimeBucketCounts {
+  /** Every bucket that holds at least one entry, in calendar order (hours 0-23, Monday first). */
+  groups: { key: string; count: number }[];
+  /** Matching entries with no time of their own (an undated photo): in `total`, in no bucket. */
+  undated: number;
+  /** The whole match set, dated or not: the same number {@link SearchService.count} returns. */
+  total: number;
+  /** The IANA zone the buckets were cut in: the owner's, or UTC when theirs is unset or unknown. */
+  timeZone: string;
+}
+
+/** Each bucket's key and its calendar order, over `local` (a timestamp without zone). */
+const TIME_BUCKET_SQL: Record<TimeBucket, { key: string; order: string }> = {
+  hour: { key: `lpad(extract(hour FROM local)::int::text, 2, '0')`, order: 'extract(hour FROM local)' },
+  weekday: { key: `trim(to_char(local, 'Dy'))`, order: 'extract(isodow FROM local)' },
+  month: { key: `to_char(local, 'YYYY-MM')`, order: `to_char(local, 'YYYY-MM')` },
+  year: { key: `to_char(local, 'YYYY')`, order: `to_char(local, 'YYYY')` },
+  date: { key: `to_char(local, 'YYYY-MM-DD')`, order: `to_char(local, 'YYYY-MM-DD')` },
+};
+
 /**
  * Options for {@link SearchService.recentPage}: the scope and window of a keyword page. `query`
  * is ignored; there is no text to match.
@@ -855,6 +881,81 @@ export class SearchService {
   }
 
   /**
+   * How many entries in scope fall in each hour of the day, weekday, month, year or date, by each
+   * entry's own time in the owner's time zone: "what time of day do I take photos of birds".
+   *
+   * The same match set as {@link count} (same query, scope and window), so the buckets plus
+   * `undated` add up to its number. Without it the only way to answer was to page every match
+   * through the context: seen 2026-11-16, OpenClaw paged 105 bird photos eight at a time and
+   * overflowed its window, while the answer is a dozen numbers.
+   */
+  async countBy(
+    context: UserServiceContext,
+    options: CountOptions & { groupBy: TimeBucket },
+  ): Promise<TimeBucketCounts> {
+    const query = options.query?.trim() ?? '';
+    const resolvedOptions = this.applyDefaultTypeExclusions({ ...options, query });
+    const bucket = TIME_BUCKET_SQL[options.groupBy];
+    const startedAt = Date.now();
+
+    const select = `${entityTimeSql('v')} AS t`;
+    const { sql: matched, params } =
+      query.length > 0
+        ? this.buildKeywordCountPlan(context.userId, query, resolvedOptions, options, select)
+        : this.buildScopeCountPlan(context.userId, resolvedOptions, options, select);
+
+    // An unknown zone would fail the statement, so it is checked against the server's own list.
+    const sql = `
+      WITH zone AS (
+        SELECT COALESCE(
+          (SELECT tz.name FROM pg_timezone_names tz
+            WHERE tz.name = (SELECT btrim(u.timezone) FROM ci.users u WHERE u.id = $1)),
+          'UTC') AS name
+      ),
+      matched AS (${matched}),
+      local AS (
+        SELECT (matched.t AT TIME ZONE zone.name) AS local FROM matched CROSS JOIN zone
+      )
+      SELECT NULL AS key, NULL AS ord, count(*) FILTER (WHERE local IS NULL) AS n, count(*) AS total,
+             (SELECT name FROM zone) AS zone
+        FROM local
+      UNION ALL
+      SELECT ${bucket.key}, ${bucket.order}, count(*), NULL, NULL
+        FROM local
+       WHERE local IS NOT NULL
+       GROUP BY 1, 2
+      ORDER BY 2 NULLS FIRST
+    `;
+
+    const rows: {
+      key: string | null;
+      n: string | number;
+      total: string | number | null;
+      zone: string | null;
+    }[] = await this.dataSource.query(sql, params);
+    const [head, ...buckets] = rows;
+
+    this.recordQuery({
+      userId: context.userId,
+      caller: 'search_count',
+      modeTaken: query.length > 0 ? 'keyword' : 'scope',
+      queryTokenCount: queryTokenCount(query),
+      includeTypes: resolvedOptions.includeTypes ?? null,
+      excludeTypes: resolvedOptions.excludeTypes ?? null,
+      resultCount: Number(head?.total ?? 0),
+      topScore: null,
+      latencyMs: Date.now() - startedAt,
+    });
+
+    return {
+      groups: buckets.map((row) => ({ key: String(row.key), count: Number(row.n) })),
+      undated: Number(head?.n ?? 0),
+      total: Number(head?.total ?? 0),
+      timeZone: head?.zone ?? 'UTC',
+    };
+  }
+
+  /**
    * Whether `query` leaves anything for the keyword index to match. The index drops common words
    * ("the", "your", "I"), so a query of only those matches nothing, and an empty page from it
    * says nothing about what is in Memory.
@@ -881,6 +982,7 @@ export class SearchService {
       'includeTypes' | 'excludeTypes' | 'mediaContentOnly' | 'showAgentTurnsFrom' | 'communicationTypes'
     >,
     window: { since?: Date; until?: Date } = {},
+    select = 'count(*) AS total_matches',
   ): { sql: string; params: (string | string[])[] } {
     const typeFilter = this.buildTypeFilter(scope, 3, 'v');
     const timeFilter = buildTimeFilter(window, 3 + (typeFilter.param ? 1 : 0), 'v');
@@ -889,7 +991,7 @@ export class SearchService {
       WITH q AS (
         SELECT ${KEYWORD_TSQUERY_SQL} AS tq
       )
-      SELECT count(*) AS total_matches
+      SELECT ${select}
       FROM
         ci_search.vectors v
         CROSS JOIN q
@@ -919,12 +1021,13 @@ export class SearchService {
       'includeTypes' | 'excludeTypes' | 'mediaContentOnly' | 'showAgentTurnsFrom' | 'communicationTypes'
     >,
     window: { since?: Date; until?: Date } = {},
+    select = 'count(*) AS total_matches',
   ): { sql: string; params: (string | string[])[] } {
     const typeFilter = this.buildTypeFilter(scope, 2, 'v');
     const timeFilter = buildTimeFilter(window, 2 + (typeFilter.param ? 1 : 0), 'v');
 
     const sql = `
-      SELECT count(*) AS total_matches
+      SELECT ${select}
       FROM ci_search.vectors v
       WHERE v.user_id = $1
         ${typeFilter.clause}

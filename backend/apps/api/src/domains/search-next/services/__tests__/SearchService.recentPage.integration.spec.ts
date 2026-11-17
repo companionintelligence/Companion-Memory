@@ -206,6 +206,67 @@ describeWithDatabase(`SearchService newest entries (${availability.target})`, ()
     expect(count).toBe(1);
   });
 
+  it('counts per hour in the owner’s time zone, with undated entries in the total and no group', async () => {
+    await dataSource.query(`UPDATE ci.users SET timezone = 'America/Los_Angeles' WHERE id = $1`, [userId]);
+
+    const byHour = await service.countBy(context, {
+      includeTypes: ['communication', 'person'],
+      showAgentTurnsFrom: [],
+      groupBy: 'hour',
+    });
+
+    // 2026-09-22 03:01Z = 20:01 PDT on the 21st; 11-13 12:06Z = 04:06 PST; 11-14 09:00Z = 01:00 PST.
+    expect(byHour).toEqual({
+      groups: [
+        { key: '01', count: 1 },
+        { key: '04', count: 1 },
+        { key: '20', count: 1 },
+      ],
+      undated: 1,
+      total: 4,
+      timeZone: 'America/Los_Angeles',
+    });
+    expect(byHour.total).toBe(
+      await service.count(context, { includeTypes: ['communication', 'person'], showAgentTurnsFrom: [] }),
+    );
+  });
+
+  it('orders weekdays Monday first, and narrows by kind, query and window like a count', async () => {
+    const byWeekday = await service.countBy(context, {
+      includeTypes: ['communication'],
+      showAgentTurnsFrom: [],
+      groupBy: 'weekday',
+    });
+    const emails = await service.countBy(context, {
+      includeTypes: ['communication'],
+      communicationTypes: ['email'],
+      since: new Date('2026-11-01T00:00:00Z'),
+      groupBy: 'month',
+    });
+    const matched = await service.countBy(context, { query: 'gfiber', groupBy: 'date' });
+
+    // Mon 09-21 (local), Fri 11-13, Sat 11-14.
+    expect(byWeekday.groups.map((group) => group.key)).toEqual(['Mon', 'Fri', 'Sat']);
+    expect(emails.groups).toEqual([{ key: '2026-11', count: 1 }]);
+    expect(matched.groups).toEqual([{ key: '2026-11-13', count: 1 }]);
+  });
+
+  it('cuts buckets in UTC when the owner’s zone is unknown', async () => {
+    await dataSource.query(`UPDATE ci.users SET timezone = 'Mars/Olympus_Mons' WHERE id = $1`, [userId]);
+
+    const byHour = await service.countBy(context, {
+      includeTypes: ['communication'],
+      communicationTypes: ['email'],
+      groupBy: 'hour',
+    });
+
+    expect(byHour.timeZone).toBe('UTC');
+    expect(byHour.groups).toEqual([
+      { key: '03', count: 1 },
+      { key: '12', count: 1 },
+    ]);
+  });
+
   it('knows a query of only common words from one with a real term', async () => {
     await expect(service.hasSearchTerms('the')).resolves.toBe(false);
     await expect(service.hasSearchTerms('your I you')).resolves.toBe(false);
