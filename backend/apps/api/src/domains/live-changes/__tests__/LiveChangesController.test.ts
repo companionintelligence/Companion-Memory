@@ -61,7 +61,9 @@ function makeController() {
       return unsubscribeRevocations;
     }),
     isCredentialLive: jest.fn(async () => true),
-    // The real one, on the two mocks above.
+    // What the real watchCredential logs a throwing revoke handler with.
+    logger: { warn: jest.fn() },
+    // The real one, on the mocks above.
     watchCredential(...args: Parameters<LiveChangesService['watchCredential']>) {
       return LiveChangesService.prototype.watchCredential.apply(this, args);
     },

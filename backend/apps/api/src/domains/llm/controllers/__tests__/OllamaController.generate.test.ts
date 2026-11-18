@@ -338,7 +338,7 @@ describe('OllamaController generate attach', () => {
     it('hands the turn the key that asked for it', async () => {
       const { liveChanges } = liveChangesWith(signedIn);
       const { controller, chatTurnService } = buildController({}, undefined, liveChanges);
-      const { res } = mockResponse();
+      const { res, closeHandlers } = mockResponse();
 
       await controller.generate(
         context as never,
@@ -350,6 +350,28 @@ describe('OllamaController generate attach', () => {
       expect(chatTurnService.enqueueGenerate).toHaveBeenCalledWith(
         expect.objectContaining({ credential: { kind: 'apiKey', keyId: 'key-1' } }),
       );
+      closeHandlers.forEach((handler) => handler());
+    });
+
+    it('leaves alone a later turn on the thread once its own reply has ended', async () => {
+      const { liveChanges, revoke } = liveChangesWith(signedIn);
+      const { controller, broker } = buildController({}, undefined, liveChanges);
+      const { res } = mockResponse();
+
+      await controller.generate(
+        context as never,
+        { prompt: 'hello', threadId: 'thread-1' } as never,
+        res as never,
+        { apiKeyId: 'key-1' } as never,
+      );
+      // Its turn finished and ended the response; `finish` waits on a slow client.
+      broker.complete('thread-1');
+      Object.assign(res, { writableEnded: true });
+      const later = broker.signal('thread-1');
+
+      await revoke();
+
+      expect(later.aborted).toBe(false);
     });
 
     it('stops the turn the way Stop does when the session that asked for it signs out', async () => {

@@ -277,6 +277,10 @@ export class OllamaController {
    * now hear neither `close` nor `finish`, so a watch on it ran its timer and its lookups until the
    * credential went, or for good on a key. The generate one then aborted whatever turn held the
    * thread by that time. A token with no session has nothing to look up.
+   *
+   * The watch stops on `finish`, which waits for a slow client to drain what was written. Between
+   * `end()` and then, the thread may already hold a turn someone else asked for, so a response that
+   * has ended does nothing.
    */
   private watchResponse(
     res: Response,
@@ -288,7 +292,16 @@ export class OllamaController {
       return;
     }
 
-    const watch = this.liveChanges.watchCredential(userId, credential, onRevoked, CREDENTIAL_RECHECK_MS);
+    const watch = this.liveChanges.watchCredential(
+      userId,
+      credential,
+      () => {
+        if (!res.writableEnded) {
+          onRevoked();
+        }
+      },
+      CREDENTIAL_RECHECK_MS,
+    );
 
     res.on('close', watch.stop);
     res.on('finish', watch.stop);

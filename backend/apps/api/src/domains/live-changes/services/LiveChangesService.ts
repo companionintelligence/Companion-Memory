@@ -253,9 +253,9 @@ export class LiveChangesService implements OnModuleInit, OnModuleDestroy {
    * ({@link isCredentialLive}). Watching stops then. A revoke notice for that user looks it up at once,
    * `check()` whenever the caller asks (on its keep-alive) and `everyMs`, when given, on a timer.
    *
-   * A notice that lands while a lookup is out asks again once that one is back: it may have read
-   * before the revoke was written. A failed lookup is not a revoke ({@link isCredentialLive} logs it);
-   * the next one asks again. An `onRevoked` that throws is logged.
+   * A notice that lands while a lookup is out asks again once that one is back, failed or not: it
+   * may have read before the revoke was written. A failed lookup is not a revoke
+   * ({@link isCredentialLive} logs it); the next one asks again. An `onRevoked` that throws is logged.
    */
   watchCredential(
     userId: string,
@@ -273,10 +273,13 @@ export class LiveChangesService implements OnModuleInit, OnModuleDestroy {
       try {
         do {
           askedAgain = false;
-          live = await this.isCredentialLive(userId, credential);
+
+          try {
+            live = await this.isCredentialLive(userId, credential);
+          } catch {
+            // A database hiccup is not a revoke: `live` keeps the true it had going in.
+          }
         } while (live && askedAgain && !stopped);
-      } catch {
-        // A database hiccup is not a revoke.
       } finally {
         checking = null;
       }

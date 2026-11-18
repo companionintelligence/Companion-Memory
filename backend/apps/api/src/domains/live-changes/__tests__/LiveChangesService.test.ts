@@ -311,6 +311,28 @@ describe('LiveChangesService', () => {
       );
     });
 
+    it('still asks again for a notice that landed while a lookup was out and failed', async () => {
+      const { service, dataSource } = makeService();
+      const onRevoked = jest.fn();
+      let fail: (error: Error) => void = () => undefined;
+      dataSource.query.mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            fail = reject;
+          }) as never,
+      );
+      const watch = service.watchCredential('alice', key, onRevoked);
+
+      const first = watch.check();
+      dataSource.query.mockResolvedValue([] as never);
+      service.dispatch(notice('alice'));
+      fail(new Error('connection reset'));
+      await first;
+
+      expect(dataSource.query).toHaveBeenCalledTimes(2);
+      expect(onRevoked).toHaveBeenCalledTimes(1);
+    });
+
     it('takes a failed lookup for no answer, not a revoke', async () => {
       const { service, dataSource } = makeService();
       const onRevoked = jest.fn();
