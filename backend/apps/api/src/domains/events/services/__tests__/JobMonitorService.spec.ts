@@ -389,7 +389,8 @@ describe('JobMonitorService.getDashboard', () => {
       ],
     });
 
-    const { jobs } = await service.getDashboard(context);
+    // An administrator, who reads every job's failure.
+    const { jobs } = await service.getDashboard(context, { userId: context.userId, admin: true });
     const [record] = jobs;
     const serialised = JSON.stringify(jobs);
 
@@ -406,6 +407,53 @@ describe('JobMonitorService.getDashboard', () => {
       stack: 'QueryFailedError: column fq.metadata does not exist',
       failedAt: '2026-08-17T04:42:09.806Z',
     });
+  });
+
+  // A failure's message and stack name what the job was working on, in its account's data.
+  it("shows a non-admin only their own jobs' failures, and every job's to an admin", async () => {
+    const timestamp = new Date('2026-08-17T00:00:00.000Z');
+    const failed = (id: string, userId: string) => ({
+      id,
+      name: 'default',
+      state: 'failed',
+      priority: 0,
+      retryLimit: 3,
+      retryCount: 3,
+      retryDelay: 10,
+      retryBackoff: true,
+      createdOn: timestamp,
+      startAfter: timestamp,
+      deadLetter: 'dead-letter',
+      policy: 'standard',
+      data: { name: 'graph.person.created', workType: null, userId },
+      output: { message: `failed for ${userId}`, stack: `Error: failed for ${userId}` },
+    });
+    const { service } = makeService({
+      jobEntities: [failed('mine', 'user-1'), failed('theirs', 'user-2'), failed('system', '')],
+    });
+
+    const member = await service.getDashboard(context, { userId: 'user-1', admin: false });
+    expect(member.jobs.map((job) => [job.id, job.failure?.message ?? null])).toEqual([
+      ['mine', 'failed for user-1'],
+      ['theirs', null],
+      ['system', null],
+    ]);
+    expect(JSON.stringify(member)).not.toContain('user-2');
+
+    const admin = await service.getDashboard(context, { userId: 'user-1', admin: true });
+    expect(admin.jobs.map((job) => job.failure?.message ?? null)).toEqual([
+      'failed for user-1',
+      'failed for user-2',
+      'failed for',
+    ]);
+
+    // Without a viewer the service assumes the least: the caller's own failures only.
+    const unstated = await service.getDashboard(context);
+    expect(unstated.jobs.map((job) => job.failure?.message ?? null)).toEqual([
+      'failed for user-1',
+      null,
+      null,
+    ]);
   });
 
   it('projects a deferred success payload to no failure at all', async () => {
