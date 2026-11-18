@@ -44,6 +44,7 @@ from ci.hbpe.pipeline.serve import (  # noqa: E402
     MODEL_B1,
     MODEL_B2,
     MODEL_HMT,
+    MODEL_LOGIT,
     pick_served_model,
 )
 
@@ -346,3 +347,59 @@ def test_histogram_keeps_pipeline_step_while_still_learning(monkeypatch):
     assert out["pipeline_detail"] == "3 of 50"
     assert out["still_learning"] is True
     assert out["model_version"] == "b1"
+
+
+def _engine_over(monkeypatch, occupancy):
+    """An InferenceEngine with no checkpoint over *occupancy*, without a database."""
+    from ci.hbpe.model.vocab import build_l0_vocab
+    from ci.hbpe.pipeline import inference_engine as ie
+
+    monkeypatch.setattr(ie, "fetch_metric_rows", lambda *_a, **_k: [])
+    monkeypatch.setattr(ie, "fetch_rhythm", lambda _uid: None)
+    monkeypatch.setattr(ie, "fetch_timezone", lambda _uid: None)
+    engine = object.__new__(ie.InferenceEngine)
+    engine.user_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    engine._session = None
+    engine._try_reload_session = lambda: None
+    engine._l0_vocab = build_l0_vocab()
+    engine._l1_dim = 1
+    engine._l1_display_names = {}
+    engine._l1_l0 = {}
+    engine._output_cache = {}
+    engine._logit_cache = {}
+    engine._occupancy = occupancy
+    engine.last_model_version = MODEL_HMT
+    engine.last_still_learning = False
+    return engine
+
+
+@pytest.mark.parametrize(("n_days", "served"), [(1, MODEL_B1), (4, MODEL_LOGIT)])
+def test_starter_prior_is_b2_still_learning_only_without_history(
+    monkeypatch, n_days, served
+):
+    """The web app reads model b2 marked still learning as "no forecast built
+    from this account's data yet" (forecastBuilt in
+    frontend/packages/common/src/utils/widgetSnapshots.ts), so the pair has to
+    mean exactly that: no history days at all."""
+    horizon = datetime.datetime(2026, 8, 18)
+    as_of = datetime.date(2026, 8, 18)
+
+    engine = _engine_over(monkeypatch, [])
+    buckets = engine.predict(horizon_start=horizon, as_of=as_of)
+    assert engine.last_model_version == MODEL_B2
+    assert engine.last_still_learning is True
+    # One class for every slot: there is nothing to tell the slots apart by.
+    assert len({bucket["predicted_l0"] for bucket in buckets}) == 1
+
+    rows = []
+    for i in range(n_days):
+        day = as_of - datetime.timedelta(days=i + 1)
+        for b in range(68):
+            if b < 28 or b >= 40:
+                token = SLEEP if b < 28 else WORK
+                rows.append({"date": day, "bucket_idx": b, "token_id": token})
+    engine = _engine_over(monkeypatch, rows)
+    engine.predict(horizon_start=horizon, as_of=as_of)
+    # The occupancy baseline below the head's row floor, the head above it.
+    assert engine.last_model_version == served
+    assert engine.last_still_learning is (served == MODEL_B1)
