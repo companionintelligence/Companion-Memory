@@ -18,7 +18,7 @@ const EMPTY: MemoryTotals = {
 };
 
 const h = vi.hoisted(() => ({
-  user: { id: 'u1', onboarded: true } as { id: string; onboarded: boolean } | null,
+  user: { id: 'u1', onboarded: true, isAdmin: true } as { id: string; onboarded: boolean; isAdmin: boolean } | null,
   isMobile: false as boolean | undefined,
   models: [{ model: 'llama3' }] as Array<{ model: string }>,
   modelsLoading: false,
@@ -111,7 +111,7 @@ function renderBanner() {
 
 beforeEach(() => {
   window.localStorage.clear();
-  h.user = { id: 'u1', onboarded: true };
+  h.user = { id: 'u1', onboarded: true, isAdmin: true };
   h.isMobile = false;
   h.models = [{ model: 'llama3' }];
   h.modelsLoading = false;
@@ -385,7 +385,7 @@ describe('GettingStartedBanner', () => {
         expect(await screen.findByTestId('recommended-model-hint')).toBeInTheDocument();
         expect(invoke).toHaveBeenCalledTimes(1);
 
-        // Downloading, or done while Memory is stopped: Memory Desktop does not ask the Ollama then.
+        // Done while Memory is stopped: Memory Desktop does not ask the Ollama then.
         invoke.mockResolvedValue({
           ownOllama: true,
           recommended: 'gemma4:e4b',
@@ -403,12 +403,80 @@ describe('GettingStartedBanner', () => {
         await waitFor(() => expect(screen.queryByTestId('recommended-model-hint')).toBeNull());
         expect(invoke).toHaveBeenCalledTimes(2);
 
-        // Nothing on offer, nothing more to ask.
+        // Memory started and runs on it: nothing on offer, nothing more to ask.
+        invoke.mockResolvedValue({
+          ownOllama: true,
+          recommended: 'gemma4:e4b',
+          chatModel: 'gemma4:e4b',
+          missing: [],
+          download: {
+            state: 'done',
+            downloaded: ['gemma4:e4b'],
+            chatModel: 'gemma4:e4b',
+            waitsForStart: false,
+          },
+        });
+        vi.advanceTimersByTime(15_000);
+        await waitFor(() => expect(invoke).toHaveBeenCalledTimes(3));
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+
         vi.advanceTimersByTime(60_000);
-        expect(invoke).toHaveBeenCalledTimes(2);
+        expect(invoke).toHaveBeenCalledTimes(3);
+        expect(screen.queryByTestId('recommended-model-hint')).toBeNull();
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    it('brings the line back when a download started in Settings fails', async () => {
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+
+      try {
+        markGettingStartedActive('u1');
+        const invoke = installDesktop({});
+        renderBanner();
+
+        expect(await screen.findByTestId('recommended-model-hint')).toBeInTheDocument();
+
+        invoke.mockResolvedValue({
+          ownOllama: true,
+          recommended: 'gemma4:e4b',
+          chatModel: 'qwen3.5:122b',
+          missing: null,
+          download: { state: 'downloading', model: 'gemma4:e4b', completedBytes: 1, totalBytes: 2 },
+        });
+        vi.advanceTimersByTime(15_000);
+        await waitFor(() => expect(screen.queryByTestId('recommended-model-hint')).toBeNull());
+
+        invoke.mockResolvedValue({
+          ownOllama: true,
+          recommended: 'gemma4:e4b',
+          chatModel: 'qwen3.5:122b',
+          missing: ['gemma4:e4b'],
+          download: { state: 'failed', message: 'Your Ollama stopped answering.' },
+        });
+        vi.advanceTimersByTime(15_000);
+
+        expect(await screen.findByTestId('recommended-model-hint')).toHaveTextContent(
+          'Memory Desktop recommends gemma4:e4b',
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('says nothing to a member who is not an administrator', async () => {
+      markGettingStartedActive('u1');
+      h.user = { id: 'u1', onboarded: true, isAdmin: false };
+      const invoke = installDesktop({});
+      renderBanner();
+
+      expect(screen.getByText('Chat model ready')).toBeInTheDocument();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(screen.queryByTestId('recommended-model-hint')).toBeNull();
+      expect(invoke).not.toHaveBeenCalled();
     });
   });
 

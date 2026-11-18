@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { getDesktopRecommendedModel, type DesktopRecommendedModel } from '@ci/common';
 import { Link } from 'react-router-dom';
 
+import { useCurrentUser } from '@/hooks';
 import { useLlmEndpoint } from '@/hooks/useLlmEndpoint';
 import {
   listOf,
@@ -12,9 +13,9 @@ import {
 } from '@/pages/SettingsPage/sections/RecommendedModelCard';
 
 /**
- * How often a line on screen asks Memory Desktop again. A download started in Settings ends the offer, but this page
- * hears nothing of it: Settings opens over the page without leaving it. A download that ends while Memory is stopped
- * never reloads the model list either.
+ * How often Memory Desktop is asked again while the line is on screen or a download is under way. A download started
+ * in Settings ends the offer, but this page hears nothing of it: Settings opens over the page without leaving it. A
+ * download that fails or ends while Memory is stopped never reloads the model list either.
  */
 const RECHECK_MS = 15_000;
 
@@ -30,9 +31,16 @@ interface ModelSettingsTarget {
  *
  * Shown under the same conditions as the card's offer. Settings points Memory at the person's own Ollama. That Ollama
  * lacks a recommended model or Memory runs on another chat model. Nothing in a browser, on a phone or with Memory
- * Desktop's own Ollama.
+ * Desktop's own Ollama. Only for an administrator: anyone else finds a card there that says an administrator can
+ * download it.
  */
-export function RecommendedModelHint({
+export function RecommendedModelHint(props: { target: ModelSettingsTarget; recheck: unknown }) {
+  const { user } = useCurrentUser();
+
+  return user?.isAdmin ? <AdminHint {...props} /> : null;
+}
+
+function AdminHint({
   target,
   recheck,
 }: {
@@ -58,8 +66,45 @@ export function RecommendedModelHint({
 
   const offer = recommendedModelOffer(status);
 
+  // A download takes the line away: Memory Desktop does not ask the Ollama while one runs or waits for Memory to
+  // start. Asked again until it ends, so the line comes back after a failed one.
+  const download = status?.download;
+  const inFlight =
+    status?.ownOllama === true &&
+    (download?.state === 'downloading' ||
+      download?.state === 'switching' ||
+      (download?.state === 'done' && download.waitsForStart));
+  useRecheck(inFlight, setStatus);
+
   // The endpoint is asked for only once there is an offer, so a browser or a phone never fetches it for this line.
   return offer ? <OfferLine offer={offer} target={target} onAnswer={setStatus} /> : null;
+}
+
+/** Asks Memory Desktop again every RECHECK_MS while `active` and the page is visible. A failed ask changes nothing. */
+function useRecheck(active: boolean, onAnswer: (status: DesktopRecommendedModel) => void) {
+  useEffect(() => {
+    if (!active) {
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'hidden') {
+        return;
+      }
+
+      void getDesktopRecommendedModel().then((next) => {
+        if (!cancelled && next) {
+          onAnswer(next);
+        }
+      });
+    }, RECHECK_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [active, onAnswer]);
 }
 
 function OfferLine({
@@ -76,30 +121,7 @@ function OfferLine({
 
   // Asks again only while the line is on screen. With Memory pointed at another inference server it never is. Each ask
   // would then list the person's Ollama for nothing.
-  useEffect(() => {
-    if (!shown) {
-      return;
-    }
-
-    let cancelled = false;
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === 'hidden') {
-        return;
-      }
-
-      void getDesktopRecommendedModel().then((next) => {
-        // A failed ask says nothing new about the offer, so the line stays until Memory Desktop answers again.
-        if (!cancelled && next) {
-          onAnswer(next);
-        }
-      });
-    }, RECHECK_MS);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [shown, onAnswer]);
+  useRecheck(shown, onAnswer);
 
   if (!shown) {
     return null;
