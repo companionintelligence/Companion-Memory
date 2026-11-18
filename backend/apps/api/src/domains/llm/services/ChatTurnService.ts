@@ -22,6 +22,7 @@ import { DescriptiveQuestionService } from '@ci/domains/daily-metrics';
 import { Events, EventService, INTERACTIVE_JOB_PRIORITY } from '@ci/domains/events';
 import { FileService } from '@ci/domains/files';
 import { ActionService } from '@ci/domains/intelligence';
+import { CREDENTIAL_RECHECK_MS, LiveChangesService } from '@ci/domains/live-changes';
 import { UserContextService } from '@ci/domains/memory';
 import { FileChunkService } from '@ci/domains/parsing';
 import { ACTIVE_TASK_STATUSES, TaskService } from '@ci/domains/planning';
@@ -241,6 +242,11 @@ export class ChatTurnService {
      * `LLMModule` imports; `ChatTurnService.di.test.ts` is what proves that stays true.
      */
     @Optional() private readonly fileChunkService?: FileChunkService,
+    /**
+     * Stops a turn whose key or session was revoked (see {@link watchAsker}). Optional like the two
+     * above: a service built by hand has none. Its turns run to the end as they did before.
+     */
+    @Optional() private readonly liveChanges?: LiveChangesService,
   ) {
     this.logger.setContext(ChatTurnService.name);
   }
@@ -266,7 +272,8 @@ export class ChatTurnService {
 
     // Stop / delete set status to idle (and abort the broker) before this
     // worker may run — after an API restart there is no in-process signal.
-    if (signal.aborted || thread.generationStatus === 'idle') {
+    // A key or session revoked while the job waited is closed the same way.
+    if (signal.aborted || thread.generationStatus === 'idle' || (await this.askerRevoked(payload))) {
       await this.finishCanceled(serviceContext, payload);
 
       return;
@@ -287,6 +294,7 @@ export class ChatTurnService {
     let model = payload.model;
     let shrinkLevel = 0;
     let firstResponseAttempts = 0;
+    const stopWatching = this.watchAsker(payload);
 
     try {
       for (;;) {
@@ -431,6 +439,8 @@ export class ChatTurnService {
         throw err;
       }
     } finally {
+      stopWatching();
+
       // The empty-turn guarantee. `latestText` is every TEXT chunk the model
       // streamed; when it is blank and the turn neither failed nor was
       // stopped, whatever happened above produced nothing a person can read.
@@ -572,6 +582,64 @@ export class ChatTurnService {
     }
 
     return this.threadService.nameIfUnnamed(context, payload.threadId, name);
+  }
+
+  /**
+   * Whether the key or session that asked for the turn has stopped letting its owner in: the key
+   * deleted, the session signed out (Sign out, Sign out everywhere, a password change) or the
+   * account deleted. A failed lookup is not a revoke. A job queued before the credential was
+   * recorded, or a service with no {@link LiveChangesService}, is never revoked.
+   */
+  private async askerRevoked(payload: ChatGeneratePayload): Promise<boolean> {
+    if (!payload.credential || !this.liveChanges) {
+      return false;
+    }
+
+    try {
+      if (await this.liveChanges.isCredentialLive(payload.ownerId, payload.credential)) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+
+    this.logger.log('Chat turn not run: the key or session that asked for it was revoked', {
+      threadId: payload.threadId,
+      credential: payload.credential.kind,
+    });
+
+    return true;
+  }
+
+  /**
+   * Stop the running turn the way Stop does once {@link askerRevoked} would say so: the model call is
+   * aborted and what streamed is kept (see {@link persistTurn}). Looked up on every revoke notice for
+   * the owner and every {@link CREDENTIAL_RECHECK_MS}, whether or not anyone is watching the reply.
+   * Looked up once at the start as well: a revoke written after {@link askerRevoked} read sent its
+   * notice before anything here listened. A token with no session has nothing to look up.
+   * Returns the stop.
+   */
+  private watchAsker(payload: ChatGeneratePayload): () => void {
+    if (!payload.credential || payload.credential.kind === 'token' || !this.liveChanges) {
+      return () => undefined;
+    }
+
+    const watch = this.liveChanges.watchCredential(
+      payload.ownerId,
+      payload.credential,
+      () => {
+        this.logger.log('Chat turn stopped: the key or session that asked for it was revoked', {
+          threadId: payload.threadId,
+          credential: payload.credential?.kind,
+        });
+        this.broker.abort(payload.threadId);
+      },
+      CREDENTIAL_RECHECK_MS,
+    );
+
+    void watch.check();
+
+    return watch.stop;
   }
 
   enqueueGenerate(payload: ChatGeneratePayload): Promise<string[]> {

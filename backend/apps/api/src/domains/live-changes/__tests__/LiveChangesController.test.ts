@@ -11,7 +11,7 @@ import {
   LiveChangesController,
   streamCredentialOf,
 } from '../controllers/LiveChangesController';
-import type { LiveChangeListener, LiveChangesService } from '../services/LiveChangesService';
+import { type LiveChangeListener, LiveChangesService } from '../services/LiveChangesService';
 
 type FakeRes = Response & { written: string[] };
 
@@ -61,6 +61,10 @@ function makeController() {
       return unsubscribeRevocations;
     }),
     isCredentialLive: jest.fn(async () => true),
+    // The real one, on the two mocks above.
+    watchCredential(...args: Parameters<LiveChangesService['watchCredential']>) {
+      return LiveChangesService.prototype.watchCredential.apply(this, args);
+    },
   };
   const controller = new LiveChangesController(service as unknown as LiveChangesService);
 

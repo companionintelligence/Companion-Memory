@@ -1,4 +1,6 @@
-import { ConflictException } from '@nestjs/common';
+import { ConflictException, UnauthorizedException } from '@nestjs/common';
+
+import { LiveChangesService } from '@ci/domains/live-changes';
 
 import { ChatGenerationBroker } from '../../services/ChatGenerationBroker';
 import { OllamaController } from '../OllamaController';
@@ -28,7 +30,11 @@ describe('OllamaController generate attach', () => {
   const context = { userId: 'user-1' };
   const thread = { id: 'thread-1', generationStatus: 'idle', name: null };
 
-  function buildController(overrides: Record<string, unknown> = {}, actionService?: unknown) {
+  function buildController(
+    overrides: Record<string, unknown> = {},
+    actionService?: unknown,
+    liveChanges?: LiveChangesService,
+  ) {
     const broker = new ChatGenerationBroker();
     const messageService = {
       create: jest
@@ -63,6 +69,7 @@ describe('OllamaController generate attach', () => {
       (overrides.desktopAppService ?? desktopAppService) as never,
       logger as never,
       actionService as never,
+      liveChanges,
     );
 
     return { controller, broker, chatTurnService, threadService, messageService };
@@ -275,9 +282,151 @@ describe('OllamaController generate attach', () => {
     const { controller } = buildController();
     const { res } = mockResponse();
 
-    await controller.stream(context as never, 'thread-1', res as never);
+    await controller.stream(context as never, 'thread-1', res as never, {} as never);
 
     expect(res.status).toHaveBeenCalledWith(204);
     expect(res.end).toHaveBeenCalled();
+  });
+
+  /**
+   * A reply streaming when the key or session it was asked with is revoked used to run to its end and keep
+   * sending text.
+   */
+  describe('when the key or session behind a reply is revoked', () => {
+    /** An unsigned JWT: the guard verified the real one, the controller only reads its claims. */
+    function bearer(claims: Record<string, unknown>) {
+      const part = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
+
+      return { headers: { authorization: `Bearer ${part({ alg: 'HS256' })}.${part(claims)}.signature` } };
+    }
+
+    /** A real LiveChangesService on a fake database whose lookups answer `rows`; `revoke()` empties them and sends the notice. */
+    function liveChangesWith(rows: unknown[]) {
+      const dataSource = { query: jest.fn(async () => rows) };
+      const liveChanges = new LiveChangesService(
+        dataSource as never,
+        { setContext: jest.fn(), log: jest.fn(), warn: jest.fn() } as never,
+      );
+      const revoke = async () => {
+        dataSource.query.mockResolvedValue([]);
+        liveChanges.dispatch(JSON.stringify({ userId: 'user-1', revoked: true }));
+        await new Promise(setImmediate);
+      };
+
+      return { liveChanges, dataSource, revoke };
+    }
+
+    const signedIn = [{ '?column?': 1 }];
+
+    it('refuses with 401 a bearer whose session was signed out, before anything is written', async () => {
+      const { liveChanges } = liveChangesWith([]);
+      const { controller, messageService, chatTurnService } = buildController({}, undefined, liveChanges);
+      const { res } = mockResponse();
+
+      await expect(
+        controller.generate(
+          context as never,
+          { prompt: 'hello', threadId: 'thread-1' } as never,
+          res as never,
+          bearer({ sub: 'user-1', sid: 'sess-1' }) as never,
+        ),
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+      expect(messageService.create).not.toHaveBeenCalled();
+      expect(chatTurnService.enqueueGenerate).not.toHaveBeenCalled();
+    });
+
+    it('hands the turn the key that asked for it', async () => {
+      const { liveChanges } = liveChangesWith(signedIn);
+      const { controller, chatTurnService } = buildController({}, undefined, liveChanges);
+      const { res } = mockResponse();
+
+      await controller.generate(
+        context as never,
+        { prompt: 'hello', threadId: 'thread-1' } as never,
+        res as never,
+        { apiKeyId: 'key-1' } as never,
+      );
+
+      expect(chatTurnService.enqueueGenerate).toHaveBeenCalledWith(
+        expect.objectContaining({ credential: { kind: 'apiKey', keyId: 'key-1' } }),
+      );
+    });
+
+    it('stops the turn the way Stop does when the session that asked for it signs out', async () => {
+      const { liveChanges, revoke } = liveChangesWith(signedIn);
+      const { controller, broker } = buildController({}, undefined, liveChanges);
+      const { res } = mockResponse();
+
+      await controller.generate(
+        context as never,
+        { prompt: 'hello', threadId: 'thread-1' } as never,
+        res as never,
+        bearer({ sub: 'user-1', sid: 'sess-1' }) as never,
+      );
+      const signal = broker.signal('thread-1');
+
+      await revoke();
+
+      expect(signal.aborted).toBe(true);
+      expect(res.end).toHaveBeenCalled();
+    });
+
+    it('ends only the viewer whose key was deleted and leaves the turn running', async () => {
+      const { liveChanges, revoke } = liveChangesWith(signedIn);
+      const { controller, broker } = buildController(
+        {
+          threadService: { findById: jest.fn(async () => ({ ...thread, generationStatus: 'running' })) },
+        },
+        undefined,
+        liveChanges,
+      );
+      broker.ensure('thread-1');
+      const signal = broker.signal('thread-1');
+      const { res } = mockResponse();
+
+      await controller.stream(context as never, 'thread-1', res as never, { apiKeyId: 'key-2' } as never);
+      await revoke();
+
+      expect(res.end).toHaveBeenCalled();
+      expect(signal.aborted).toBe(false);
+    });
+
+    it('does not watch for a client that left before the reply was piped, nor abort the turn later', async () => {
+      const { liveChanges, dataSource, revoke } = liveChangesWith(signedIn);
+      const { controller, broker } = buildController({}, undefined, liveChanges);
+      const { res } = mockResponse();
+      // Node's own state once the socket closed during the awaits: `close` has fired, `end` was never called.
+      Object.assign(res, { destroyed: true });
+
+      await controller.generate(
+        context as never,
+        { prompt: 'hello', threadId: 'thread-1' } as never,
+        res as never,
+        { apiKeyId: 'key-1' } as never,
+      );
+      const signal = broker.signal('thread-1');
+      const lookups = dataSource.query.mock.calls.length;
+
+      await revoke();
+
+      expect(dataSource.query).toHaveBeenCalledTimes(lookups);
+      expect(signal.aborted).toBe(false);
+    });
+
+    it('refuses to attach a bearer whose session was signed out', async () => {
+      const { liveChanges } = liveChangesWith([]);
+      const { controller } = buildController({}, undefined, liveChanges);
+      const { res } = mockResponse();
+
+      await expect(
+        controller.stream(
+          context as never,
+          'thread-1',
+          res as never,
+          bearer({ sub: 'user-1', sid: 'sess-1' }) as never,
+        ),
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+      expect(res.writeHead).not.toHaveBeenCalled();
+    });
   });
 });

@@ -29,6 +29,21 @@ export type LiveChangeListener = (topic: LiveChangeTopic) => void;
 export type LiveChangesCredential =
   { kind: 'apiKey'; keyId: string } | { kind: 'session'; sessionId: string } | { kind: 'token' };
 
+/**
+ * How often a long-lived response looks its credential up again on a timer of its own, for what sends no
+ * revoke notice: a key that expires, a deleted account, a key the system removes. The live-update stream's
+ * keep-alive beat (`HEARTBEAT_MS`).
+ */
+export const CREDENTIAL_RECHECK_MS = 25_000;
+
+/** What {@link LiveChangesService.watchCredential} returns. */
+export interface CredentialWatch {
+  /** Look the credential up again now. Settles once that lookup is back, with any repeat it was asked for. */
+  check(): Promise<void>;
+  /** Stop listening for notices and stop the timer. Safe to call again. */
+  stop(): void;
+}
+
 interface LiveChangePayload {
   userId: string;
   topic: LiveChangeTopic;
@@ -231,6 +246,94 @@ export class LiveChangesService implements OnModuleInit, OnModuleDestroy {
 
       throw error;
     }
+  }
+
+  /**
+   * Run `onRevoked` once, when the credential `userId` opened something with stops letting them in
+   * ({@link isCredentialLive}). Watching stops then. A revoke notice for that user looks it up at once,
+   * `check()` whenever the caller asks (on its keep-alive) and `everyMs`, when given, on a timer.
+   *
+   * A notice that lands while a lookup is out asks again once that one is back: it may have read
+   * before the revoke was written. A failed lookup is not a revoke ({@link isCredentialLive} logs it);
+   * the next one asks again. An `onRevoked` that throws is logged.
+   */
+  watchCredential(
+    userId: string,
+    credential: LiveChangesCredential,
+    onRevoked: () => void,
+    everyMs?: number,
+  ): CredentialWatch {
+    let stopped = false;
+    let checking: Promise<void> | null = null;
+    let askedAgain = false;
+
+    const lookUp = async () => {
+      let live = true;
+
+      try {
+        do {
+          askedAgain = false;
+          live = await this.isCredentialLive(userId, credential);
+        } while (live && askedAgain && !stopped);
+      } catch {
+        // A database hiccup is not a revoke.
+      } finally {
+        checking = null;
+      }
+
+      if (live || stopped) {
+        return;
+      }
+
+      stop();
+
+      try {
+        onRevoked();
+      } catch (error) {
+        this.logger.warn('Credential revoke handler threw', {
+          userId,
+          kind: credential.kind,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    };
+
+    const check = (): Promise<void> => {
+      if (stopped) {
+        return Promise.resolve();
+      }
+
+      if (checking) {
+        askedAgain = true;
+
+        return checking;
+      }
+
+      checking = lookUp();
+
+      return checking;
+    };
+
+    const unsubscribe = this.subscribeRevocations(userId, () => void check());
+    const timer = everyMs ? setInterval(() => void check(), everyMs) : null;
+
+    timer?.unref?.();
+
+    const stop = () => {
+      if (stopped) {
+        return;
+      }
+
+      stopped = true;
+
+      if (timer) {
+        clearInterval(timer);
+      }
+
+      unsubscribe();
+    };
+
+    return { check, stop };
   }
 
   /** How many sessions are listening, across every user. Diagnostics only. */

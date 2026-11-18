@@ -20,10 +20,13 @@ import { LiveChangesService } from './services/LiveChangesService';
 })
 export class LiveChangesModule {}
 
+export { streamCredentialOf } from './controllers/LiveChangesController';
 export {
+  CREDENTIAL_RECHECK_MS,
   LIVE_CHANGES_CHANNEL,
   LIVE_CHANGE_TOPICS,
   LiveChangesService,
+  type CredentialWatch,
   type LiveChangeListener,
   type LiveChangesCredential,
   type LiveChangeTopic,
