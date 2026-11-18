@@ -145,12 +145,14 @@ function renderPrediction(
   predictedL0: string,
   probability: number,
   stillLearning = false,
+  modelVersion: string | null = null,
 ) {
   const snapshot = buildWidgetSnapshot({
     now: NOW,
     forecast: {
       generatedAt: '2026-11-12T11:00:00.000Z',
       systemStatus,
+      modelVersion,
       stillLearning,
       buckets: [
         {
@@ -204,32 +206,45 @@ describe('WidgetDashboardView: the Prediction card', () => {
     expect(screen.queryByText(/NIGHTLY/)).not.toBeInTheDocument();
   });
 
-  // Before the first run has built the forecast, every slot carries a
-  // placeholder class: the card read "Unsorted, 97% likely" on a new account.
+  // Until the account has history the forecast service serves its starter
+  // prior, the same class in every slot: the card read "Work, 12% likely" on a
+  // new account.
   it('says a new account is waiting for its first model, not COLD_START or a placeholder class', () => {
-    renderPrediction('COLD_START', 'UNKNOWN', 0.97, true);
+    renderPrediction('COLD_START', 'WORK', 0.125, true, 'b2');
 
     expect(screen.getByText('Forecast is updating')).toBeInTheDocument();
     expect(screen.getByText('Waiting to initialize...')).toBeInTheDocument();
     expect(screen.queryByText(/COLD_START/)).not.toBeInTheDocument();
-    expect(screen.queryByText('Unsorted')).not.toBeInTheDocument();
+    expect(screen.queryByText('Work')).not.toBeInTheDocument();
     expect(screen.queryByText(/likely|Confidence/)).not.toBeInTheDocument();
   });
 
   it('says the forecast is updating while the first run is going', () => {
-    renderPrediction('BOOTSTRAP:label', 'UNKNOWN', 0.97, true);
+    renderPrediction('BOOTSTRAP:label', 'WORK', 0.125, true, 'b2');
 
     expect(screen.getByText('Forecast is updating')).toBeInTheDocument();
     expect(screen.getByText('Labeling your events and content...')).toBeInTheDocument();
-    expect(screen.queryByText('Unsorted')).not.toBeInTheDocument();
+    expect(screen.queryByText('Work')).not.toBeInTheDocument();
     expect(screen.queryByText(/likely/)).not.toBeInTheDocument();
   });
 
   it('still names the activity during a later run over a built forecast', () => {
-    renderPrediction('NIGHTLY:label', 'WORK', 0.62, false);
+    renderPrediction('NIGHTLY:label', 'WORK', 0.62, false, 'logit');
 
     expect(screen.getByText('Work')).toBeInTheDocument();
     expect(screen.getByText('62% likely')).toBeInTheDocument();
+    expect(screen.getByText('Labeling new events...')).toBeInTheDocument();
+    expect(screen.queryByText('Forecast is updating')).not.toBeInTheDocument();
+  });
+
+  // An account with a few days of history is served the b1 baseline, which the
+  // service marks still learning for its first 16 days. The card used to read
+  // "Forecast is updating" through every run in that time.
+  it('names the activity during a later run while the forecast is still learning', () => {
+    renderPrediction('NIGHTLY:label', 'WORK', 0.4, true, 'b1');
+
+    expect(screen.getByText('Work')).toBeInTheDocument();
+    expect(screen.getByText('40% likely · still learning')).toBeInTheDocument();
     expect(screen.getByText('Labeling new events...')).toBeInTheDocument();
     expect(screen.queryByText('Forecast is updating')).not.toBeInTheDocument();
   });

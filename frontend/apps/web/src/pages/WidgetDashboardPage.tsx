@@ -20,7 +20,7 @@ const WIDGET_TASKS = gql(
   'query WidgetBoardTasks { tasks(first: 100) { edges { node { id title status dueAt scheduledFor } } } }',
 );
 const WIDGET_FORECAST = gql(
-  'query WidgetBoardForecast { forecast(horizon: "24h") { generatedAt systemStatus stillLearning buckets { startTime predictedL0 l0Probs { label probability } } } }',
+  'query WidgetBoardForecast { forecast(horizon: "24h") { generatedAt systemStatus modelVersion stillLearning buckets { startTime predictedL0 l0Probs { label probability } } } }',
 );
 const WIDGET_METRICS = gql(
   'query WidgetBoardMetrics($from: String!, $to: String!) { dailyMetrics(from: $from, to: $to) { nMessages nPlaces kmTraveled } }',
@@ -44,6 +44,7 @@ interface ForecastData {
   forecast?: {
     generatedAt?: string;
     systemStatus?: string;
+    modelVersion?: string | null;
     stillLearning?: boolean;
     buckets?: Array<{
       startTime?: string;
@@ -231,8 +232,8 @@ export function WidgetDashboardView({ snapshot, prompts, paths }: WidgetDashboar
               <p className="text-xl font-semibold leading-snug">
                 {snapshot.insight.prediction ?? 'Forecast is updating'}
               </p>
-              {/* No prediction until the first run has built the forecast; a
-                  likelihood under "Forecast is updating" would describe nothing. */}
+              {/* No prediction until the forecast has been built; a likelihood
+                  under "Forecast is updating" would describe nothing. */}
               {snapshot.insight.prediction !== null ? (
                 <p className="mt-2 text-sm text-muted-foreground">
                   {snapshot.insight.confidence === null

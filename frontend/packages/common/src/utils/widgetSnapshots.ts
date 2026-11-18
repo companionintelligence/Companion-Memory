@@ -56,6 +56,7 @@ export interface WidgetSnapshotInput {
   forecast?: {
     generatedAt?: unknown;
     systemStatus?: unknown;
+    modelVersion?: unknown;
     stillLearning?: unknown;
     buckets?: readonly {
       startTime?: unknown;
@@ -106,17 +107,32 @@ function safeLabel(value: unknown, maxLength = 72): string | null {
 }
 
 /**
- * Whether the forecast has been built yet, so a slot's class means something.
+ * Whether the forecast service has built this account's forecast yet.
  *
- * The forecast service answers before its first run has finished, with a
- * placeholder class for every slot: COLD_START while nothing has run, or a
- * pipeline step ("BOOTSTRAP:label", "NIGHTLY:train") over a cold-start
- * baseline (`stillLearning`) while that first run is going. Printed, that read
- * "Unsorted, 97% likely" on a new account. READY has a forecast. So does a
- * later run over a model that is already built.
+ * Until the account has any history, the service answers with its starter
+ * prior: model `b2` over no history, marked still learning, which names the
+ * same class for every slot ("Work, 12% likely"). The status is COLD_START
+ * while nothing has run, or the step ("BOOTSTRAP:label", "NIGHTLY:label")
+ * while the first run labels. Once the account has history every answer comes
+ * from it: `b1` or `logit` straight away, `hmt` once a model is trained and
+ * `b2` again only when a trained model's scores pick it, then not still
+ * learning. That holds during a later run too, so neither the step nor
+ * `stillLearning` alone says whether there is a forecast.
+ *
+ * Only READY or a pipeline step can carry one. A status this does not know,
+ * or none at all, says nothing has been built.
  */
-function forecastBuilt(systemStatus: string, stillLearning: boolean): boolean {
-  return systemStatus === 'READY' || (systemStatus.includes(':') && !stillLearning);
+export function forecastBuilt(forecast: {
+  systemStatus?: unknown;
+  modelVersion?: unknown;
+  stillLearning?: unknown;
+}): boolean {
+  const status = forecast.systemStatus;
+  if (typeof status !== 'string' || (status !== 'READY' && !status.includes(':'))) {
+    return false;
+  }
+
+  return !(forecast.modelVersion === 'b2' && forecast.stillLearning === true);
 }
 
 function safeDate(value: unknown): string | null {
@@ -202,10 +218,14 @@ export function buildWidgetSnapshot(input: WidgetSnapshotInput): CompanionWidget
 
   const systemStatus = safeLabel(input.forecast?.systemStatus, 32) ?? 'UNKNOWN';
   const stillLearning = input.forecast?.stillLearning === true;
-  // Nothing to name until the first run has built the forecast. Until then the
-  // snapshot carries no prediction and no likelihood: the Widgets card says the
-  // forecast is updating and the home-screen widgets say "No forecast yet".
-  const predictedClass = forecastBuilt(systemStatus, stillLearning)
+  // Nothing to name until the forecast has been built. Until then the snapshot
+  // carries no prediction and no likelihood: the Widgets card says the forecast
+  // is updating and the home-screen widgets say "No forecast yet".
+  const predictedClass = forecastBuilt({
+    systemStatus,
+    modelVersion: input.forecast?.modelVersion,
+    stillLearning,
+  })
     ? safeLabel(forecastBucket?.predictedL0, 48)
     : null;
   // A likelihood belongs to the class it is for. With no class named there is

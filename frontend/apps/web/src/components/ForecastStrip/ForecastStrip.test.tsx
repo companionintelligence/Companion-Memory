@@ -33,12 +33,18 @@ function bucket(overrides: Partial<ForecastBucket> = {}): ForecastBucket {
   };
 }
 
-function renderStrip(buckets: ForecastBucket[]) {
-  const forecast: Pick<ForecastResponse, 'generatedAt' | 'systemStatus' | 'modelVersion'> = {
-    generatedAt: '2026-09-02T16:55:37.000Z',
-    systemStatus: 'READY',
-    modelVersion: 'logit',
-  };
+function renderStrip(
+  buckets: ForecastBucket[],
+  overrides: Partial<Pick<ForecastResponse, 'systemStatus' | 'modelVersion' | 'stillLearning'>> = {},
+) {
+  const forecast: Pick<ForecastResponse, 'generatedAt' | 'systemStatus' | 'modelVersion' | 'stillLearning'> =
+    {
+      generatedAt: '2026-09-02T16:55:37.000Z',
+      systemStatus: 'READY',
+      modelVersion: 'logit',
+      stillLearning: false,
+      ...overrides,
+    };
 
   return renderWithProviders(
     <ForecastStrip
@@ -46,7 +52,7 @@ function renderStrip(buckets: ForecastBucket[]) {
       generatedAt={forecast.generatedAt}
       systemStatus={forecast.systemStatus}
       stalled={false}
-      stillLearning={false}
+      stillLearning={forecast.stillLearning}
       modelVersion={forecast.modelVersion}
       pipelineEtaSeconds={null}
       pipelineDetail={null}
@@ -82,6 +88,51 @@ describe('ForecastStrip class selection', () => {
     const { container } = renderStrip([withoutField]);
 
     expect(slotColors(container)).toContain(classColor(normalizeClass('UNKNOWN')));
+  });
+});
+
+// Until the account has history the service serves its starter prior, which
+// names the same class for every slot. During a first run the strip painted
+// all of them that colour.
+describe('ForecastStrip before the forecast is built', () => {
+  const starterPrior = bucket({
+    predictedL0: 'WORK',
+    l0Probs: [{ label: 'WORK', probability: 0.125 }],
+    q50: 0,
+  });
+
+  it('paints no class while the first run labels', () => {
+    const { container, queryByText, getByText } = renderStrip([starterPrior], {
+      systemStatus: 'BOOTSTRAP:label',
+      modelVersion: 'b2',
+      stillLearning: true,
+    });
+
+    expect(slotColors(container)).toEqual([]);
+    expect(queryByText('WORK')).not.toBeInTheDocument();
+    expect(getByText(/Labeling your events and content/)).toBeInTheDocument();
+  });
+
+  // A checkpoint with no history days left to read still gets the starter prior.
+  it('paints no class for the starter prior on READY', () => {
+    const { container, queryByText } = renderStrip([starterPrior], {
+      systemStatus: 'READY',
+      modelVersion: 'b2',
+      stillLearning: true,
+    });
+
+    expect(slotColors(container)).toEqual([]);
+    expect(queryByText('WORK')).not.toBeInTheDocument();
+  });
+
+  it('paints the classes during a later run over a forecast that is still learning', () => {
+    const { container } = renderStrip([bucket({ predictedL0: 'EXERCISE' })], {
+      systemStatus: 'NIGHTLY:label',
+      modelVersion: 'b1',
+      stillLearning: true,
+    });
+
+    expect(slotColors(container)).toContain(classColor(normalizeClass('EXERCISE')));
   });
 });
 

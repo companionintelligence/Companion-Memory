@@ -20,7 +20,7 @@ const WIDGET_TASKS = gql(
   'query CompanionWidgetTasks { tasks(first: 100) { edges { node { id title status dueAt scheduledFor } } } }',
 );
 const WIDGET_FORECAST = gql(
-  'query CompanionWidgetForecast { forecast(horizon: "24h") { generatedAt systemStatus stillLearning buckets { startTime predictedL0 l0Probs { label probability } } } }',
+  'query CompanionWidgetForecast { forecast(horizon: "24h") { generatedAt systemStatus modelVersion stillLearning buckets { startTime predictedL0 l0Probs { label probability } } } }',
 );
 const WIDGET_DAILY_METRICS = gql(
   'query CompanionWidgetDailyMetrics($from: String!, $to: String!) { dailyMetrics(from: $from, to: $to) { date nMessages nPlaces kmTraveled } }',
@@ -47,6 +47,7 @@ interface ForecastQuery {
   forecast?: {
     generatedAt?: string;
     systemStatus?: string;
+    modelVersion?: string | null;
     stillLearning?: boolean;
     buckets?: Array<{
       startTime?: string;
