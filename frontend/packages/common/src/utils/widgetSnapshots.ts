@@ -219,8 +219,9 @@ export function buildWidgetSnapshot(input: WidgetSnapshotInput): CompanionWidget
   const systemStatus = safeLabel(input.forecast?.systemStatus, 32) ?? 'UNKNOWN';
   const stillLearning = input.forecast?.stillLearning === true;
   // Nothing to name until the forecast has been built. Until then the snapshot
-  // carries no prediction and no likelihood: the Widgets card says the forecast
-  // is updating and the home-screen widgets say "No forecast yet".
+  // carries no prediction and no likelihood: the home-screen widgets say "No
+  // forecast yet", and so does the Widgets card unless a run is going, when it
+  // says "Forecast is updating" with the step.
   const predictedClass = forecastBuilt({
     systemStatus,
     modelVersion: input.forecast?.modelVersion,

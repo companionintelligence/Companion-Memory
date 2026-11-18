@@ -161,6 +161,8 @@ export function WidgetDashboardView({ snapshot, prompts, paths }: WidgetDashboar
   const tasksAvailable = snapshot.plan.updatedAt !== null;
   const jobsAvailable = snapshot.jobs.updatedAt !== null;
   const forecastStatus = forecastStatusLabel(snapshot.insight.systemStatus);
+  // A run is going while the forecast service reports its step ("NIGHTLY:label").
+  const forecastRunning = snapshot.insight.systemStatus.includes(':');
 
   return (
     <>
@@ -230,10 +232,13 @@ export function WidgetDashboardView({ snapshot, prompts, paths }: WidgetDashboar
           {forecastAvailable ? (
             <>
               <p className="text-xl font-semibold leading-snug">
-                {snapshot.insight.prediction ?? 'Forecast is updating'}
+                {snapshot.insight.prediction ??
+                  (forecastRunning ? 'Forecast is updating' : 'No forecast yet')}
               </p>
-              {/* No prediction until the forecast has been built; a likelihood
-                  under "Forecast is updating" would describe nothing. */}
+              {/* No prediction until the forecast has been built. Then the card
+                  says a run is building it, or that there is none yet, as the
+                  phone widgets do; a likelihood under either would describe
+                  nothing. */}
               {snapshot.insight.prediction !== null ? (
                 <p className="mt-2 text-sm text-muted-foreground">
                   {snapshot.insight.confidence === null

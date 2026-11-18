@@ -166,7 +166,7 @@ function renderPrediction(
     predictionLabel: classTitle,
   });
 
-  renderWithProviders(<WidgetDashboardView snapshot={snapshot} prompts={[]} paths={PATHS} />);
+  return renderWithProviders(<WidgetDashboardView snapshot={snapshot} prompts={[]} paths={PATHS} />);
 }
 
 /**
@@ -209,23 +209,42 @@ describe('WidgetDashboardView: the Prediction card', () => {
   // Until the account has history the forecast service serves its starter
   // prior, the same class in every slot: the card read "Work, 12% likely" on a
   // new account.
-  it('says a new account is waiting for its first model, not COLD_START or a placeholder class', () => {
+  it('says there is no forecast yet on a new account, not COLD_START or a placeholder class', () => {
     renderPrediction('COLD_START', 'WORK', 0.125, true, 'b2');
 
-    expect(screen.getByText('Forecast is updating')).toBeInTheDocument();
+    expect(screen.getByText('No forecast yet')).toBeInTheDocument();
     expect(screen.getByText('Waiting to initialize...')).toBeInTheDocument();
+    expect(screen.queryByText('Forecast is updating')).not.toBeInTheDocument();
     expect(screen.queryByText(/COLD_START/)).not.toBeInTheDocument();
     expect(screen.queryByText('Work')).not.toBeInTheDocument();
     expect(screen.queryByText(/likely|Confidence/)).not.toBeInTheDocument();
   });
 
-  it('says the forecast is updating while the first run is going', () => {
-    renderPrediction('BOOTSTRAP:label', 'WORK', 0.125, true, 'b2');
+  // A trained model over history the service can't read: READY, nothing running,
+  // and still the starter prior.
+  it('says there is no forecast yet when nothing is built and no run is going', () => {
+    renderPrediction('READY', 'WORK', 0.125, true, 'b2');
 
-    expect(screen.getByText('Forecast is updating')).toBeInTheDocument();
-    expect(screen.getByText('Labeling your events and content...')).toBeInTheDocument();
+    expect(screen.getByText('No forecast yet')).toBeInTheDocument();
+    expect(screen.queryByText('Forecast is updating')).not.toBeInTheDocument();
     expect(screen.queryByText('Work')).not.toBeInTheDocument();
-    expect(screen.queryByText(/likely/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/likely|Confidence|\.\.\./)).not.toBeInTheDocument();
+  });
+
+  it('says the forecast is updating, with the step, while the first run is going', () => {
+    for (const [status, step] of [
+      ['BOOTSTRAP:label', 'Labeling your events and content...'],
+      ['NIGHTLY:label', 'Labeling new events...'],
+    ]) {
+      const { unmount } = renderPrediction(status, 'WORK', 0.125, true, 'b2');
+
+      expect(screen.getByText('Forecast is updating')).toBeInTheDocument();
+      expect(screen.getByText(step)).toBeInTheDocument();
+      expect(screen.queryByText('No forecast yet')).not.toBeInTheDocument();
+      expect(screen.queryByText('Work')).not.toBeInTheDocument();
+      expect(screen.queryByText(/likely/)).not.toBeInTheDocument();
+      unmount();
+    }
   });
 
   it('still names the activity during a later run over a built forecast', () => {
