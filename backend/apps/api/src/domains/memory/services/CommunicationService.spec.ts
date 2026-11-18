@@ -198,14 +198,18 @@ describe('CommunicationService bulk createMany', () => {
  * would be written.
  */
 describe('CommunicationService update: falsy-but-legitimate values', () => {
-  function patchFor(data: Record<string, unknown>) {
+  // A patch that depends on the stored row arrives as a function of it; it is
+  // resolved against `stored` here, the way applyUpdate resolves it.
+  type DetailPatch = Record<string, unknown> | ((before: Record<string, unknown>) => Record<string, unknown>);
+
+  function patchFor(data: Record<string, unknown>, stored: Record<string, unknown> = {}) {
     const { service } = makeService();
 
     const captured: Record<string, unknown>[] = [];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (service as any).aggregate = {
-      applyUpdate: jest.fn(async (_ctx: unknown, _id: string, patch: { detail: Record<string, unknown> }) => {
-        captured.push(patch.detail);
+      applyUpdate: jest.fn(async (_ctx: unknown, _id: string, patch: { detail: DetailPatch }) => {
+        captured.push(typeof patch.detail === 'function' ? patch.detail(stored) : patch.detail);
 
         return null;
       }),
@@ -254,6 +258,34 @@ describe('CommunicationService update: falsy-but-legitimate values', () => {
   it('leaves the subject alone when a re-sync sends none', async () => {
     await expect(patchFor({ subject: null })).resolves.not.toHaveProperty('subject');
     await expect(patchFor({ content: 'body' })).resolves.not.toHaveProperty('subject');
+  });
+
+  const longText = 'Shopping list for the cabin:\n- bread\n- coffee';
+  const withClip = { content: longText, preview: 'Shopping list for the cabin: - bread - coffee' };
+
+  it('clears the preview of the old text when the text changes and none comes with it', async () => {
+    await expect(patchFor({ content: 'Shopping list: bread' }, withClip)).resolves.toMatchObject({
+      content: 'Shopping list: bread',
+      preview: null,
+    });
+  });
+
+  it('keeps the preview when a save or a re-sync hands back the stored text', async () => {
+    await expect(patchFor({ content: longText, subject: '' }, withClip)).resolves.not.toHaveProperty(
+      'preview',
+    );
+  });
+
+  it('takes the preview a caller sends with new text', async () => {
+    await expect(
+      patchFor({ content: 'Shopping list: bread', preview: 'Bread' }, withClip),
+    ).resolves.toMatchObject({
+      preview: 'Bread',
+    });
+  });
+
+  it('leaves the preview alone when no text comes', async () => {
+    await expect(patchFor({ subject: 'Cabin' }, withClip)).resolves.not.toHaveProperty('preview');
   });
 
   it('names a message whose subject was cleared from its preview, then its content', async () => {

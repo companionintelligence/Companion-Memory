@@ -162,6 +162,26 @@ describe('CtiAggregate.applyUpdate', () => {
     expect(baseRepo.update).toHaveBeenCalledWith({ id: 'd1' }, { description: 'Real summary' });
   });
 
+  it('builds a detail patch given as a function from the row the transaction loaded', async () => {
+    const { aggregate, detailRepo, baseRepo } = makeAggregate();
+
+    const before = { id: 'd1', name: 'Old name', summary: 'Real summary' };
+    detailRepo.findOne.mockResolvedValueOnce(before).mockResolvedValueOnce({ ...before, name: 'New name' });
+    const detail = jest.fn((loaded: typeof before) => ({
+      name: 'New name',
+      ...(loaded.name !== 'New name' && { summary: null }),
+    }));
+
+    await aggregate.applyUpdate({} as never, 'd1', {
+      detail,
+      base: ((after: typeof before) => ({ name: after.name, description: after.summary })) as never,
+    } as never);
+
+    expect(detail).toHaveBeenCalledWith(before);
+    expect(detailRepo.update).toHaveBeenCalledWith({ id: 'd1' }, { name: 'New name', summary: null });
+    expect(baseRepo.update).toHaveBeenCalledWith({ id: 'd1' }, { name: 'New name', description: null });
+  });
+
   /**
    * The reload `applyUpdate` hands a hook as `after` predates the hook. A hook
    * that writes to the detail row itself (CalendarEventService clears what the

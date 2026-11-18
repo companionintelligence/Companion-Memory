@@ -302,7 +302,10 @@ export class RedditRecordWriter {
       await this.communicationService.update(context, existing.id, {
         content,
         subject: row.subject,
-        preview: row.preview,
+        // The clip of the text written here, or null when the text is its own
+        // clip, so a preview a shorter edit left behind does not outlive it.
+        // No text means `update` keeps the stored body and its preview too.
+        preview: row.preview ?? (content ? null : undefined),
         metadata: { ...(existing.metadata ?? {}), ...sourceData },
         attachments: attachments.length > 0 ? attachments : (existing.attachments ?? undefined),
       });

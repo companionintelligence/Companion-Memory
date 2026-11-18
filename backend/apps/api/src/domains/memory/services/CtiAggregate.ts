@@ -267,13 +267,18 @@ export class CtiAggregate<TDetail extends ObjectLiteral & { id: string }, TBase 
    * row's update-date column (when it has one), so incremental consumers
    * watermarking on the detail table see the change.
    *
+   * `detail` may be a function as well: it receives the row this transaction
+   * loaded, for a patch that depends on what is stored (a field cleared only
+   * when another one changes). Deciding that from a read outside the
+   * transaction would race the writes it is meant to follow.
+   *
    * @returns the reloaded detail row, or `null` if no matching row exists.
    */
   async applyUpdate(
     context: ServiceContext,
     id: string,
     patches: {
-      detail?: QueryDeepPartialEntity<TDetail>;
+      detail?: QueryDeepPartialEntity<TDetail> | ((before: TDetail) => QueryDeepPartialEntity<TDetail>);
       base?: QueryDeepPartialEntity<TBase> | ((after: TDetail) => QueryDeepPartialEntity<TBase> | null);
     },
     hooks?: CtiWriteHooks<TDetail, TBase>,
@@ -292,7 +297,8 @@ export class CtiAggregate<TDetail extends ObjectLiteral & { id: string }, TBase 
       // on the primary key alone (an UPDATE cannot express a relation-`where`).
       const byId = { id } as FindOptionsWhere<TDetail>;
 
-      const detailPatch = patches.detail ?? {};
+      const detailPatch =
+        (typeof patches.detail === 'function' ? patches.detail(before) : patches.detail) ?? {};
       const detailTouched = Object.keys(detailPatch).length > 0;
 
       // Before-state merged with the patch — what the detail row now holds —
