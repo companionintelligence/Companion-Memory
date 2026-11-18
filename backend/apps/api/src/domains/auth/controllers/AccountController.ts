@@ -7,6 +7,7 @@ import {
   ForbiddenException,
   Get,
   HttpCode,
+  HttpException,
   HttpStatus,
   Patch,
   Post,
@@ -28,6 +29,7 @@ import { ApiKeyService } from '../services/ApiKeyService';
 import { AuthService } from '../services/AuthService';
 import { FederatedIdentityService } from '../services/FederatedIdentityService';
 import { HubForwardAuthBridgeService } from '../services/HubForwardAuthBridgeService';
+import { LoginThrottleService } from '../services/LoginThrottleService';
 import { isManagedAppPrincipal } from '../types';
 import { newPasswordSchema } from '../utils/passwordPolicy';
 
@@ -102,6 +104,7 @@ export class AccountController {
     private readonly federatedIdentityService: FederatedIdentityService,
     private readonly hubBridge: HubForwardAuthBridgeService,
     private readonly apiKeyService: ApiKeyService,
+    private readonly loginThrottle: LoginThrottleService,
   ) {}
 
   /** What the account settings UI needs to render itself: address, whether a
@@ -379,10 +382,30 @@ export class AccountController {
       throw new BadRequestException('Current password is required');
     }
 
+    // The same budget a sign-in spends, keyed on this account: a wrong current password is a guess at
+    // the same secret. Without it, whoever held a session (a stolen token, a browser left signed in)
+    // could guess the password here without limit, then change the email or the password with it.
+    const { ip } = this.authService.getSessionMetadata(req);
+    const throttled = this.loginThrottle.check(ip, user.email);
+
+    if (throttled.locked) {
+      throw new HttpException(
+        {
+          statusCode: HttpStatus.TOO_MANY_REQUESTS,
+          message: 'Too many attempts. Please try again later.',
+          retryAfterSeconds: throttled.retryAfterSeconds,
+        },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
     const validated = await this.userService.validatePassword(user.email, currentPassword);
 
     if (!validated) {
+      this.loginThrottle.recordFailure(ip, user.email, undefined, { accountExists: true });
       throw new UnauthorizedException('Current password is incorrect');
     }
+
+    this.loginThrottle.recordSuccess(ip, user.email);
   }
 }

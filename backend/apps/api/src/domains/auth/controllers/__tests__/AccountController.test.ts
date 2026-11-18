@@ -1,4 +1,5 @@
 import {
+  HttpException,
   BadRequestException,
   ConflictException,
   ForbiddenException,
@@ -11,6 +12,7 @@ import { ValidationPipe } from '@ci/common/pipes';
 import config from '@ci/configuration';
 import { LastAdminDeletionRefused } from '@ci/domains/user';
 
+import { LoginThrottleService } from '../../services/LoginThrottleService';
 import { CONNECT_PROVENANCE } from '../../types';
 import {
   AccountController,
@@ -67,6 +69,7 @@ function makeController(
   };
 
   const authService = {
+    getSessionMetadata: jest.fn().mockReturnValue({ ip: '203.0.113.7' }),
     invalidateOtherSessions: jest.fn().mockResolvedValue(undefined),
     sessionEstablishedAt: jest
       .fn()
@@ -86,15 +89,32 @@ function makeController(
     revokeAllExceptConnect: jest.fn().mockResolvedValue(5),
   };
 
+  const loginThrottle = new LoginThrottleService({
+    setContext: jest.fn(),
+    warn: jest.fn(),
+    log: jest.fn(),
+    debug: jest.fn(),
+    error: jest.fn(),
+  } as never);
+
   const controller = new AccountController(
     userService as never,
     authService as never,
     federatedIdentityService as never,
     hubBridge as never,
     apiKeyService as never,
+    loginThrottle,
   );
 
-  return { controller, userService, authService, federatedIdentityService, hubBridge, apiKeyService };
+  return {
+    controller,
+    userService,
+    authService,
+    federatedIdentityService,
+    hubBridge,
+    apiKeyService,
+    loginThrottle,
+  };
 }
 
 /** An OIDC-provisioned account: a random password it has never seen, unless it has since set one. */
@@ -290,6 +310,32 @@ describe('AccountController — change email', () => {
     await expect(
       controller.changeEmail(requestContext(), mockRequest(), { newEmail: 'new@example.com' }),
     ).rejects.toThrow(BadRequestException);
+    expect(userService.changeEmail).not.toHaveBeenCalled();
+  });
+
+  // A held session (a stolen token, a browser left signed in) could guess the password here without
+  // limit, then change the email with it. Wrong guesses spend the same budget a sign-in does.
+  it('refuses with 429 once wrong current passwords have spent the sign-in budget, before checking another', async () => {
+    const { controller, userService } = makeController(undefined, { validPassword: false });
+    const attempt = () =>
+      controller.changeEmail(requestContext(), mockRequest(), {
+        newEmail: 'new@example.com',
+        currentPassword: 'guess',
+      });
+
+    let status: number | undefined;
+    for (let guess = 0; guess < 100 && status === undefined; guess += 1) {
+      await attempt().catch((error: unknown) => {
+        if (error instanceof HttpException && error.getStatus() === 429) {
+          status = 429;
+        }
+      });
+    }
+
+    expect(status).toBe(429);
+    const checked = userService.validatePassword.mock.calls.length;
+    await expect(attempt()).rejects.toMatchObject({ status: 429 });
+    expect(userService.validatePassword).toHaveBeenCalledTimes(checked);
     expect(userService.changeEmail).not.toHaveBeenCalled();
   });
 
