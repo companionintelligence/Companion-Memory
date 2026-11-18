@@ -516,6 +516,42 @@ describe('GettingStartedBanner', () => {
       }
     });
 
+    it('keeps asking while the Ollama does not answer after a failed download', async () => {
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+
+      try {
+        markGettingStartedActive('u1');
+        // The person's Ollama stopped during the download and is not answering yet.
+        const invoke = installDesktop({
+          missing: null,
+          download: { state: 'failed', message: 'Your Ollama stopped answering.' },
+        });
+        renderBanner();
+
+        await waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        vi.advanceTimersByTime(15_000);
+        await waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
+        expect(screen.queryByTestId('recommended-model-hint')).toBeNull();
+
+        // It answers again.
+        invoke.mockResolvedValue({
+          ownOllama: true,
+          recommended: 'gemma4:e4b',
+          chatModel: 'qwen3.5:122b',
+          missing: ['gemma4:e4b'],
+          download: { state: 'failed', message: 'Your Ollama stopped answering.' },
+        });
+        vi.advanceTimersByTime(15_000);
+
+        expect(await screen.findByTestId('recommended-model-hint')).toBeInTheDocument();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('says nothing to a member who is not an administrator', async () => {
       markGettingStartedActive('u1');
       h.user = { id: 'u1', onboarded: true, isAdmin: false };

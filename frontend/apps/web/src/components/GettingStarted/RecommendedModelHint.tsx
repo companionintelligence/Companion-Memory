@@ -13,9 +13,10 @@ import {
 } from '@/lib/recommendedModel';
 
 /**
- * How often Memory Desktop is asked again while the line is on screen or a download is under way. A download started
- * in Settings ends the offer, but this page hears nothing of it: Settings opens over the page without leaving it. A
- * download that fails or ends while Memory is stopped never reloads the model list either.
+ * How often Memory Desktop is asked again while the line is on screen or Memory Desktop cannot yet say what the
+ * person's Ollama has. A download started in Settings ends the offer, but this page hears nothing of it: Settings opens
+ * over the page without leaving it. A download that fails or ends while Memory is stopped never reloads the model list
+ * either.
  */
 const RECHECK_MS = 15_000;
 
@@ -53,8 +54,7 @@ function AdminHint({
   useEffect(() => {
     let cancelled = false;
 
-    // A failed ask keeps what the last answer said, as in useRecheck. Taken as an answer it would end the asking: no
-    // offer and no download to follow.
+    // A failed ask keeps what the last answer said, as in useRecheck. Taken as an answer it would end the asking.
     void getDesktopRecommendedModel().then((next) => {
       if (!cancelled && next) {
         setStatus(next);
@@ -68,15 +68,11 @@ function AdminHint({
 
   const offer = recommendedModelOffer(status);
 
-  // A download takes the line away: Memory Desktop does not ask the Ollama while one runs or waits for Memory to
-  // start. Asked again until it ends, so the line comes back after a failed one.
-  const download = status?.download;
-  const inFlight =
-    status?.ownOllama === true &&
-    (download?.state === 'downloading' ||
-      download?.state === 'switching' ||
-      (download?.state === 'done' && download.waitsForStart));
-  useRecheck(inFlight, setStatus);
+  // Memory Desktop could not say what the person's Ollama has: a download runs or waits for Memory to start (it does
+  // not ask the Ollama then), or the Ollama did not answer. Asked again until it can, so the line comes back after a
+  // failed download, an Ollama stopped during one included.
+  const unsettled = status?.ownOllama === true && status.missing == null;
+  useRecheck(unsettled, setStatus);
 
   // The endpoint is asked for only once there is an offer, so a browser or a phone never fetches it for this line.
   return offer ? <OfferLine offer={offer} target={target} onAnswer={setStatus} /> : null;
