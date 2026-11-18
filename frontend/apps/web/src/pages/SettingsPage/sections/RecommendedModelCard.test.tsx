@@ -2,7 +2,9 @@ import type { DesktopModelDownload, DesktopRecommendedModel } from '@ci/common';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { RecommendedModelCard, recommendedModelOffer, usesDesktopOllama } from './RecommendedModelCard';
+import { recommendedModelOffer, usesDesktopOllama } from '@/lib/recommendedModel';
+
+import { RecommendedModelCard } from './RecommendedModelCard';
 
 const GB = 1024 * 1024 * 1024;
 

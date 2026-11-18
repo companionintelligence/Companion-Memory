@@ -18,7 +18,11 @@ const EMPTY: MemoryTotals = {
 };
 
 const h = vi.hoisted(() => ({
-  user: { id: 'u1', onboarded: true, isAdmin: true } as { id: string; onboarded: boolean; isAdmin: boolean } | null,
+  user: { id: 'u1', onboarded: true, isAdmin: true } as {
+    id: string;
+    onboarded: boolean;
+    isAdmin: boolean;
+  } | null,
   isMobile: false as boolean | undefined,
   models: [{ model: 'llama3' }] as Array<{ model: string }>,
   modelsLoading: false,
@@ -339,6 +343,51 @@ describe('GettingStartedBanner', () => {
 
         // Still asking: the next answer is heard.
         vi.advanceTimersByTime(15_000);
+        expect(invoke).toHaveBeenCalledTimes(3);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('keeps following a download when the ask after a model list reload fails', async () => {
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+
+      try {
+        markGettingStartedActive('u1');
+        const invoke = installDesktop({
+          missing: null,
+          download: { state: 'downloading', model: 'gemma4:e4b', completedBytes: 1, totalBytes: 2 },
+        });
+        const { rerender } = renderBanner();
+
+        await waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+
+        invoke.mockRejectedValueOnce(new Error('Task join error'));
+        h.models = [{ model: 'qwen3.5:122b' }, { model: 'llama3' }];
+        rerender(
+          <MemoryRouter>
+            <GettingStartedBanner />
+          </MemoryRouter>,
+        );
+        await waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+
+        // The download fails in Settings. The line comes back on the next ask.
+        invoke.mockResolvedValue({
+          ownOllama: true,
+          recommended: 'gemma4:e4b',
+          chatModel: 'qwen3.5:122b',
+          missing: ['gemma4:e4b'],
+          download: { state: 'failed', message: 'Your Ollama stopped answering.' },
+        });
+        vi.advanceTimersByTime(15_000);
+
+        expect(await screen.findByTestId('recommended-model-hint')).toBeInTheDocument();
         expect(invoke).toHaveBeenCalledTimes(3);
       } finally {
         vi.useRealTimers();

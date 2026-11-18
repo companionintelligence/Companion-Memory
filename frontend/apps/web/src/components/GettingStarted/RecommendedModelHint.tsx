@@ -10,7 +10,7 @@ import {
   recommendedModelOffer,
   usesDesktopOllama,
   type RecommendedModelOffer,
-} from '@/pages/SettingsPage/sections/RecommendedModelCard';
+} from '@/lib/recommendedModel';
 
 /**
  * How often Memory Desktop is asked again while the line is on screen or a download is under way. A download started
@@ -53,8 +53,10 @@ function AdminHint({
   useEffect(() => {
     let cancelled = false;
 
+    // A failed ask keeps what the last answer said, as in useRecheck. Taken as an answer it would end the asking: no
+    // offer and no download to follow.
     void getDesktopRecommendedModel().then((next) => {
-      if (!cancelled) {
+      if (!cancelled && next) {
         setStatus(next);
       }
     });

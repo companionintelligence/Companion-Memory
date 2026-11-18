@@ -10,15 +10,13 @@ import { Button, Card, Progress } from '@ci/shadcn';
 import { Download } from '@ci/shadcn/icons';
 
 import type { LlmEndpointConfig } from '@/hooks/useLlmEndpoint';
+import { listOf, recommendedModelOffer, usesDesktopOllama } from '@/lib/recommendedModel';
 
 /** How often a running download is asked how far it has got. */
 const POLL_MS = 1000;
 
 /** How often a download that ended while Memory was stopped is asked whether Memory has started since. */
 const START_POLL_MS = 3000;
-
-/** Where Ollama listens unless told otherwise, and where Memory Desktop looks for a person's own Ollama. */
-const OLLAMA_PORT = 11434;
 
 /**
  * Whether the model list has been reloaded for the download that ended last. Settings > Model mounts the card afresh
@@ -29,43 +27,6 @@ let reloadedForLastDone = false;
 
 function percent(completed: number, total: number): number {
   return total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0;
-}
-
-export function listOf(models: string[]): string {
-  return models.length > 1 ? `${models.slice(0, -1).join(', ')} and ${models[models.length - 1]}` : models[0];
-}
-
-/** What the card offers to download or switch to while no download is running. */
-export interface RecommendedModelOffer {
-  /** The recommended chat model, offered when the person's Ollama lacks it or Memory runs on another. */
-  chatModel: string | null;
-  /** The other recommended models the person's Ollama lacks: the embedding model search needs. */
-  others: string[];
-}
-
-/**
- * What the card offers, or null when it offers nothing: not the person's own Ollama, an Ollama that did not answer,
- * a download running, or nothing missing with Memory on the recommended model. The home screen's chat model step
- * points at the card with it.
- */
-export function recommendedModelOffer(status: DesktopRecommendedModel | null): RecommendedModelOffer | null {
-  if (!status?.ownOllama || status.missing == null) {
-    return null;
-  }
-
-  const runsOnOther = status.chatModel != null && status.chatModel !== status.recommended;
-  const chatModel = status.missing.includes(status.recommended) || runsOnOther ? status.recommended : null;
-  const others = status.missing.filter((model) => model !== status.recommended);
-
-  return chatModel != null || others.length > 0 ? { chatModel, others } : null;
-}
-
-/**
- * Settings points Memory at the Ollama Memory Desktop downloads into. With Memory pointed anywhere else that Ollama
- * serves nothing. The restart would also name a model the other server may not have.
- */
-export function usesDesktopOllama(endpoint: Pick<LlmEndpointConfig, 'backend' | 'port'> | null): boolean {
-  return endpoint?.backend === 'ollama' && endpoint.port === OLLAMA_PORT;
 }
 
 /** Whether there is anything to say: a model to download, a switch to make, or a download to report on. */

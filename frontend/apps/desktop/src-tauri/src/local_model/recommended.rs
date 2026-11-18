@@ -134,7 +134,7 @@ pub fn status(paths: &StackPaths, backend: Option<ChatBackend>, downloader: &Dow
     let download = downloader.current_after_start(
         || stack_manager::is_user_stopped(paths),
         // One try, no waiting.
-        || stack_manager::wait_until_healthy(Duration::ZERO),
+        || stack_manager::wait_until_healthy(Duration::ZERO, || false),
     );
     // Not asked while a download runs or waits for Memory to start. What is
     // missing cannot change until then, yet the page polls this all the while.
@@ -297,7 +297,9 @@ fn switch_chat_model(paths: &StackPaths) -> Result<bool, String> {
     stack_manager::set_env_chat_model(paths, DEFAULT_CHAT_MODEL)?;
 
     let restarted = stack_manager::apply_env_change(paths)?;
-    if restarted && !stack_manager::wait_until_healthy(RESTART_TIMEOUT) {
+    // A stop from the tray ends the wait at once. Otherwise the page would say
+    // Memory is restarting for the rest of RESTART_TIMEOUT.
+    if restarted && !stack_manager::wait_until_healthy(RESTART_TIMEOUT, || stack_manager::is_user_stopped(paths)) {
         if stack_manager::is_user_stopped(paths) {
             log::info!("Download recommended model: Memory was stopped from the tray during the restart");
             return Ok(false);
