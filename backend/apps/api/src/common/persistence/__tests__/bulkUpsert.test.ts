@@ -754,6 +754,12 @@ describe('conflictUpdateSetClause', () => {
     );
   });
 
+  it("takes a derived column as the same producer sent it (null included) and only fills another producer's gap", () => {
+    expect(conflictUpdateSetClause('t', ['preview'], { preview: 'derived' })).toBe(
+      `"preview" = CASE WHEN ${same} THEN EXCLUDED."preview" ELSE COALESCE("t"."preview", EXCLUDED."preview") END`,
+    );
+  });
+
   // The preference arm: between "same producer" and "other producer", a more
   // trusted arriving producer takes the same-producer treatment.
   const rank = (ref: string) =>
@@ -788,6 +794,20 @@ describe('conflictUpdateSetClause', () => {
       ),
     ).toBe(
       `"properties" = CASE WHEN ${same} THEN ${incomingWins} ${outranks} THEN ${incomingWins} ELSE ${currentWins} END`,
+    );
+  });
+
+  it('gives a preferred producer the same-producer side of a derived column', () => {
+    expect(
+      conflictUpdateSetClause(
+        't',
+        ['preview'],
+        { preview: 'derived' },
+        { preview: ['ci-import-tools', 'capture'] },
+      ),
+    ).toBe(
+      `"preview" = CASE WHEN ${same} THEN EXCLUDED."preview" ${outranks} THEN EXCLUDED."preview" ` +
+        `ELSE COALESCE("t"."preview", EXCLUDED."preview") END`,
     );
   });
 

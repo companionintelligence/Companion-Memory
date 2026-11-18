@@ -34,8 +34,10 @@ describe('INGEST_REFRESH_COLUMNS', () => {
     // refreshes (null-guarded), another producer fills gaps — see the map's
     // doc and INGEST_MERGE_KINDS below. Version 6 added the producer
     // preference (INGEST_PRODUCER_PREFERENCE), again without touching a list.
+    // Version 7 made communication.preview a 'derived' merge kind: the same
+    // producer's null now clears a preview of text it no longer sends.
     expect({ version: INGEST_SCHEMA_VERSION, columns: INGEST_REFRESH_COLUMNS }).toEqual({
-      version: 6,
+      version: 7,
       columns: {
         // CommunicationService.createMany self-heal UPDATE binds its VALUES
         // parameters in this order — keep it in lockstep with the service.
@@ -151,7 +153,7 @@ describe('INGEST_REFRESH_COLUMNS', () => {
 describe('INGEST_MERGE_KINDS', () => {
   it('matches the versioned snapshot', () => {
     expect(INGEST_MERGE_KINDS).toEqual({
-      communication: { participants_metadata: 'json', metadata: 'json' },
+      communication: { participants_metadata: 'json', metadata: 'json', preview: 'derived' },
       event: {},
       item: {},
       content: {},
