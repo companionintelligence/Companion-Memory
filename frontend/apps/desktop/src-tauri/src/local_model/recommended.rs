@@ -30,6 +30,10 @@ use crate::stack_manager::{self, StackPaths};
 /// for the new chat model.
 const RESTART_TIMEOUT: Duration = Duration::from_secs(180);
 
+/// How long a restart that failed waits for a Stop Stack that may have broken
+/// it to finish (see `stopped_during_restart`).
+const STOP_GRACE: Duration = Duration::from_secs(15);
+
 /// Where a download started from Settings > Model has got. Kept after it ends,
 /// so the page can say how it went.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -296,7 +300,14 @@ fn run(paths: &StackPaths, missing: &[String], download: &Mutex<Download>, switc
 fn switch_chat_model(paths: &StackPaths) -> Result<bool, String> {
     stack_manager::set_env_chat_model(paths, DEFAULT_CHAT_MODEL)?;
 
-    let restarted = stack_manager::apply_env_change(paths)?;
+    let restarted = match stack_manager::apply_env_change(paths) {
+        Ok(restarted) => restarted,
+        Err(e) if stopped_during_restart(STOP_GRACE, || stack_manager::is_user_stopped(paths)) => {
+            log::info!("Download recommended model: Memory was stopped from the tray during the restart ({e})");
+            return Ok(false);
+        }
+        Err(e) => return Err(e),
+    };
     // A stop from the tray ends the wait at once. Otherwise the page would say
     // Memory is restarting for the rest of RESTART_TIMEOUT.
     if restarted && !stack_manager::wait_until_healthy(RESTART_TIMEOUT, || stack_manager::is_user_stopped(paths)) {
@@ -308,6 +319,26 @@ fn switch_chat_model(paths: &StackPaths) -> Result<bool, String> {
     }
 
     Ok(restarted)
+}
+
+/// Whether a restart failed because the person pressed Stop Stack while its
+/// `docker compose up` ran: the stop takes the containers the `up` waits on
+/// away. The stack is then stopped and its next start reads the new `.env`, as
+/// for one stopped before the download ended. `compose stop` marks the stack
+/// stopped only once it is done, which can be just after the `up` it broke has
+/// failed, so the mark gets `grace` to appear.
+fn stopped_during_restart(grace: Duration, stopped: impl Fn() -> bool) -> bool {
+    let deadline = std::time::Instant::now() + grace;
+
+    loop {
+        if stopped() {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
 }
 
 #[cfg(test)]
@@ -485,6 +516,24 @@ mod tests {
             downloader.current_after_start(|| panic!("asked"), || panic!("asked")),
             ran
         );
+    }
+
+    /// Stop Stack during the restart's `up` makes it fail. That is a stopped
+    /// stack, not a failed switch, once the stop has marked it, even if the mark
+    /// comes a moment after the failure. A failure with no stop stays one.
+    #[test]
+    fn a_restart_broken_by_stop_stack_counts_as_stopped() {
+        assert!(stopped_during_restart(Duration::ZERO, || true));
+
+        let asked = std::cell::Cell::new(0);
+        assert!(stopped_during_restart(Duration::from_secs(5), || {
+            asked.set(asked.get() + 1);
+            asked.get() >= 3
+        }));
+
+        let started = std::time::Instant::now();
+        assert!(!stopped_during_restart(Duration::from_millis(600), || false));
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 
     /// Another download ended while the health check ran, with Memory stopped
