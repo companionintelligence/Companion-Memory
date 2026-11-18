@@ -1,4 +1,6 @@
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { gzipSync } from 'node:zlib';
@@ -20,6 +22,16 @@ import {
   readFileFromDeb,
   versionStatus,
 } from './release/release-check.mjs';
+
+const ROOT = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
+
+function installerPatterns(prefix: string): string[] {
+  const row = DESKTOP_INSTALLERS.find(([label]) => label.startsWith(prefix));
+  assert.ok(row, `no desktop installer row starts with "${prefix}"`);
+  const [, patterns] = row;
+
+  return patterns;
+}
 
 test('normalizeVersion strips the tag prefixes', () => {
   assert.equal(normalizeVersion('v2026.11.17'), '2026.11.17');
@@ -51,9 +63,7 @@ test('maxVersion skips per-arch and named tags', () => {
 });
 
 test('the image list comes from publish.sh', () => {
-  const images = imagesInPublishScript(
-    readFileSync(new URL('./publish/publish.sh', import.meta.url), 'utf8'),
-  );
+  const images = imagesInPublishScript(readFileSync(join(ROOT, 'scripts/publish/publish.sh'), 'utf8'));
   assert.ok(images.includes('companion/api'));
   assert.ok(images.includes('companion/hbpe-service'));
   assert.ok(images.every((name) => /^companion\/[a-z0-9-]+$/.test(name)));
@@ -61,10 +71,10 @@ test('the image list comes from publish.sh', () => {
 
 test('desktop installer names use the version Tauri built with', () => {
   const assets = ['Companion.Memory_2026.11.17_universal.dmg', 'Companion.Memory_2026.11.17_amd64.deb'];
-  const [, mac] = DESKTOP_INSTALLERS.find(([label]) => label.startsWith('macOS'));
-  const [, linux] = DESKTOP_INSTALLERS.find(([label]) => label.startsWith('Linux'));
-  assert.deepEqual(missingFiles(assets, mac, '2026.11.17'), []);
-  assert.deepEqual(missingFiles(assets, linux, '2026.11.17'), ['-2026.11.17-1.x86_64.rpm']);
+  assert.deepEqual(missingFiles(assets, installerPatterns('macOS'), '2026.11.17'), []);
+  assert.deepEqual(missingFiles(assets, installerPatterns('Linux'), '2026.11.17'), [
+    '-2026.11.17-1.x86_64.rpm',
+  ]);
 });
 
 test('parseCaskVersion', () => {
