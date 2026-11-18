@@ -6,6 +6,7 @@ import { ProviderKeyService } from '../services/ProviderKeyService';
 import { type CallbackRequestOrigin, exchangeRedirectUri, oauthCallbackUrl } from '../utils/callbackUrls';
 
 import { BaseClient } from './BaseClient';
+import { providerApiUrl } from './providerApiUrl';
 import type { TokenExchange, TokenResponse } from './types';
 
 /** Renders an OAuth token-endpoint error body into a message safe to append to an Error. */
@@ -102,11 +103,8 @@ export abstract class BaseOAuth2Client extends BaseClient {
       throw new Error('Connection not authenticated');
     }
 
-    const endpointSplitOnProtocol = /^(https:\/\/[^/]+)(\/.*)?$/.exec(endpoint);
-    const baseUrl = endpointSplitOnProtocol ? endpointSplitOnProtocol[1] : this.baseUrl;
-    const path = endpointSplitOnProtocol ? endpointSplitOnProtocol[2] || '' : endpoint;
-
-    return fetch(`${baseUrl}${path}`, {
+    // Only the provider's own API gets the token (see `providerApiUrl`).
+    return fetch(providerApiUrl(this.baseUrl, endpoint), {
       ...options,
       headers: {
         ...options?.headers,
