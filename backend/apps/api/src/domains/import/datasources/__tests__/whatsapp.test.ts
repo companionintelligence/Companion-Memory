@@ -1149,6 +1149,21 @@ describe('12-hour times written outside the US and day-first iPhone dates', () =
     ]);
   });
 
+  it('gives a 24-hour line pasted into a lowercase iPhone chat an id that reads no zone', async () => {
+    // Read as a header, as such a line is in any iPhone chat.
+    const { items } = await importChat('Lee Park', [
+      '[14/11/26, 10:02:13 am] Lee Park: look what Sam sent',
+      '14/11/2026, 09:05 - Sam Ortiz: pasted from an Android chat',
+      '[15/11/26, 8:10:05 pm] Lee Park: Thanks!',
+    ]);
+
+    expect(ids(items)).toEqual([
+      'whatsapp:Lee Park:14-11-26T10:02:13:0',
+      'whatsapp:Lee Park:14-11-2026T09:05:1',
+      'whatsapp:Lee Park:15-11-26T20:10:05:2',
+    ]);
+  });
+
   it('keeps the ids of a chat in these shapes when a newer export settles its date order', async () => {
     // Every date of the first export is 12 or under, so its order is a guess.
     // The newer export's 13/11/26 settles it day first.
@@ -1238,6 +1253,27 @@ describe('12-hour times written outside the US and day-first iPhone dates', () =
     );
 
     expect(times(items)).toEqual(['2026-01-03T09:00:00.000Z', 'undated', '2026-01-13T09:00:00.000Z']);
+  });
+
+  it('keeps a day-first iPhone export day first when a US header was pasted in', async () => {
+    // The pasted 11/20/26 can't be day first, but the chat's own two dates
+    // can't be month first. The ids stay the old month-first reading.
+    const { items } = await importChat(
+      'Morgan Lane',
+      [
+        '[14/11/2026, 10:02:13] Morgan Lane: hi, are we still on for lunch?',
+        '[11/20/26, 9:00:00 AM] Sam: pasted from a US chat',
+        '[15/11/2026, 08:10:05] Morgan Lane: Thanks for lunch!',
+      ],
+      'UTC',
+    );
+
+    expect(times(items)).toEqual(['2026-11-14T10:02:13.000Z', 'undated', '2026-11-15T08:10:05.000Z']);
+    expect(ids(items)).toEqual([
+      'whatsapp:Morgan Lane:noTs:0',
+      `whatsapp:Morgan Lane:${new Date('11/20/26 9:00:00 AM').toISOString()}:1`,
+      'whatsapp:Morgan Lane:noTs:2',
+    ]);
   });
 
   it('keeps a lowercase line pasted into a chat it already read inside its message', async () => {

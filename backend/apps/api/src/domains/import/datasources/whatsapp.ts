@@ -334,9 +334,12 @@ function androidDay(first: number, second: number, year: number, dayFirst: boole
  * read month first, the US order.
  *
  * An iPhone export in the strict shapes was always read month first. It is
- * read day first only when a date in it can't be month first and none can't
- * be day first, so a day-first header pasted into a US chat doesn't turn the
- * chat's own dates around. One that never settles it is read month first.
+ * read day first only when more of its dates can't be month first than can't
+ * be day first. A header pasted into a chat is one line against the chat's
+ * own, so a day-first one pasted into a US chat doesn't turn the chat's dates
+ * around, and a US one pasted into a day-first chat doesn't either. A chat
+ * with as many of each, or none, is read month first. Such a file is read to
+ * the end.
  *
  * Reading stops at the header that settles the order, or at a 24-hour Android
  * header that comes first.
@@ -388,8 +391,10 @@ class FormatScan {
 
   private spanDayFirst = 0;
 
-  /** A strict iPhone date that can only be day first, which a later month-first one overrules. */
-  private dayFirstSeen = false;
+  /** Strict iPhone dates that can only be day first, and those that can only be month first. */
+  private dayFirstOnly = 0;
+
+  private monthFirstOnly = 0;
 
   /** The format, once a line has settled it. */
   settled: ChatFormat | undefined;
@@ -431,6 +436,17 @@ class FormatScan {
       return;
     }
 
+    if (this.kind === 'ios' && !anyMarker) {
+      // Counted to the last line ({@link chatFormat}).
+      if (date[1] > 12 && date[0] <= 12) {
+        this.monthFirstOnly++;
+      } else if (date[0] > 12 && date[1] <= 12) {
+        this.dayFirstOnly++;
+      }
+
+      return;
+    }
+
     if (date[1] > 12) {
       this.settled = { kind: this.kind, dayFirst: false, anyMarker };
 
@@ -438,12 +454,6 @@ class FormatScan {
     }
 
     if (date[0] > 12) {
-      if (this.kind === 'ios' && !anyMarker) {
-        this.dayFirstSeen = true;
-
-        return;
-      }
-
       this.settled = { kind: this.kind, dayFirst: true, anyMarker };
 
       return;
@@ -465,7 +475,9 @@ class FormatScan {
 
     const { anyMarker } = this.shapes;
     const dayFirst =
-      this.kind === 'ios' && !anyMarker ? this.dayFirstSeen : this.spanDayFirst < this.spanMonthFirst;
+      this.kind === 'ios' && !anyMarker
+        ? this.dayFirstOnly > this.monthFirstOnly
+        : this.spanDayFirst < this.spanMonthFirst;
 
     return { kind: this.kind, dayFirst, anyMarker };
   }
@@ -697,6 +709,9 @@ function parseWALine(line: string, accountZone: string | undefined, format: Chat
 
     wall = androidWallClock(android[1], android[2]);
     idTime = dated(new Date(`${year}-${month}-${day}T${android[2]}:00`));
+    // A 24-hour line pasted into an iPhone chat read with the new patterns:
+    // its id carries the time as written too, or it would follow the server's zone.
+    idKey = format.anyMarker ? writtenIdTime(android[1], android[2]) : undefined;
     serverTime = idTime;
     rest = android[3];
     firstColon = firstColonSplit(rest);
