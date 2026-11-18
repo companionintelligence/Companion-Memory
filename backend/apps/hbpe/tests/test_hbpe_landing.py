@@ -391,6 +391,15 @@ def test_starter_prior_is_b2_still_learning_only_without_history(
     # One class for every slot: there is nothing to tell the slots apart by.
     assert len({bucket["predicted_l0"] for bucket in buckets}) == 1
 
+    # The web app reads the payload, not the engine: the pair has to reach it,
+    # and the starter prior is not promoted to READY the way b1 is.
+    from ci.hbpe.pipeline.histogram_api import build_histogram
+
+    payload = build_histogram(engine, user_id=None, system_status="COLD_START")
+    assert payload["model_version"] == MODEL_B2
+    assert payload["still_learning"] is True
+    assert payload["system_status"] == "COLD_START"
+
     rows = []
     for i in range(n_days):
         day = as_of - datetime.timedelta(days=i + 1)

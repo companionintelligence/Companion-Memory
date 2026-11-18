@@ -125,4 +125,40 @@ describe('ForecastPage — off vs unreachable', () => {
     expect(screen.getByText('Top-1 match: 82%')).toBeInTheDocument();
     expect(screen.getByText('Where it was wrong')).toBeInTheDocument();
   });
+
+  // Until the account has history the service serves its starter prior, one
+  // class for every slot. The heatmap drew it as tomorrow's row on a new account.
+  it('leaves the starter prior out of the divergence heatmap', () => {
+    h.forecast = {
+      data: {
+        generatedAt: '2026-10-20T08:00:00Z',
+        systemStatus: 'BOOTSTRAP:label',
+        stillLearning: true,
+        modelVersion: 'b2',
+        pipelineEtaSeconds: null,
+        pipelineDetail: null,
+        buckets: [
+          {
+            bucketIndex: 0,
+            startTime: '2026-10-20T00:00:00Z',
+            predictedL0: 'WORK',
+            l0Probs: [{ label: 'WORK', probability: 0.125 }],
+            l1Probs: [],
+            l2Probs: null,
+            q10: 0,
+            q50: 0,
+            q90: 0,
+          },
+        ],
+      },
+      loading: false,
+      error: undefined,
+      stalled: false,
+    };
+
+    renderWithProviders(<ForecastPage />);
+
+    expect(screen.getByText('Tomorrow’s Forecast')).toBeInTheDocument();
+    expect(screen.queryByText('Where it was wrong')).not.toBeInTheDocument();
+  });
 });
