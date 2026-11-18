@@ -68,24 +68,16 @@ function monthFirst(date: string): string {
  * message the same id. Undefined when the time doesn't read.
  */
 function writtenIdTime(date: string, time: string): string | undefined {
-  const t = /^(\d{1,2}):(\d{2})(?::(\d{2}))?(?: ([AP])M)?$/.exec(normalisedTime(time));
+  const t = IOS_TIME_RE.exec(normalisedTime(time).trim());
 
   if (t == null) {
     return undefined;
   }
 
-  let hour = Number(t[1]);
-
-  if (t[4] === 'P' && hour < 12) {
-    hour += 12;
-  } else if (t[4] === 'A' && hour === 12) {
-    hour = 0;
-  }
-
   const two = (n: number | string) => String(n).padStart(2, '0');
   const [first, second, year] = date.split('/');
 
-  return `${two(first)}-${two(second)}-${year}T${two(hour)}:${t[2]}${t[3] ? `:${t[3]}` : ''}`;
+  return `${two(first)}-${two(second)}-${year}T${two(hour24(Number(t[1]), t[4]))}:${t[2]}${t[3] ? `:${t[3]}` : ''}`;
 }
 
 /**
@@ -327,22 +319,34 @@ function androidDay(first: number, second: number, year: number, dayFirst: boole
  *
  * A 12-hour Android or an iPhone date doesn't say whether the day or the month
  * comes first: `05/11/26, 9:31 PM` is May 11 on a US phone and November 5 on
- * many others. The first date with a number above 12 settles it. Until one
- * does, the dates are read both ways and the way that keeps them closer
- * together wins: a chat from 05/11/26 to 07/11/26 spans two days read day
- * first and two months read month first. A file that never changes date is
- * read month first, the US order.
+ * many others. Two things say which. One is the count of dates that read only
+ * one way: 14/11/26 can't be month first. The other is the closeness of the
+ * dates that read both ways: a chat from 05/11/26 to 07/11/26 spans two days
+ * read day first and two months read month first.
+ *
+ * A header pasted into a chat is one line against the chat's own, so the count
+ * decides when one side has at least two more dates than the other. A smaller
+ * lead can be one pasted line: a US chat from 1/3/26 to 1/10/26 with
+ * `[25/12/25 …]` pasted in counts one day-first date against none, but its
+ * own dates sit a week apart read month first and seven months apart read day
+ * first. So then the closeness decides. The lead of one decides only when the
+ * closeness says nothing. The closeness alone is wrong for a chat whose
+ * messages fall on the same day of each month: 03/01/25, 03/02/25 and
+ * 03/03/25 written day first sit a day apart read month first. That is why a
+ * clear count comes first.
  *
  * An iPhone export in the strict shapes was always read month first. It is
- * read day first only when more of its dates can't be month first than can't
- * be day first. A header pasted into a chat is one line against the chat's
- * own, so a day-first one pasted into a US chat doesn't turn the chat's dates
- * around, and a US one pasted into a day-first chat doesn't either. A chat
- * with as many of each, or none, is read month first. Such a file is read to
- * the end.
+ * read day first only when the count says so: by two or more, or by one with
+ * the closeness not against it. The closeness alone doesn't turn it around.
  *
- * Reading stops at the header that settles the order, or at a 24-hour Android
- * header that comes first.
+ * A 12-hour Android export in the strict shapes keeps the rule its ids were
+ * saved with ({@link ParsedLine.idTime} reads its order). The first date with
+ * a number above 12 settles it. Until one does, the closeness decides. A file
+ * in which nothing decides is read month first, the US order.
+ *
+ * Reading stops at the header that settles a strict 12-hour Android file, or
+ * at a 24-hour Android header that comes first. Every other file is read to
+ * the end.
  */
 async function chatFormat(chatPath: string): Promise<ChatFormat> {
   const input = fs.createReadStream(chatPath, { encoding: 'utf8' });
@@ -385,15 +389,18 @@ async function chatFormat(chatPath: string): Promise<ChatFormat> {
 class FormatScan {
   private kind: 'ios' | 'android12h' | undefined;
 
+  /** The last date that reads both ways. */
   private previous: [number, number, number] | undefined;
 
+  /** Days between one date that reads both ways and the next, added up read month first and read day first. */
   private spanMonthFirst = 0;
 
   private spanDayFirst = 0;
 
-  /** Strict iPhone dates that can only be day first, and those that can only be month first. */
+  /** Dates that can only be day first. */
   private dayFirstOnly = 0;
 
+  /** Dates that can only be month first. */
   private monthFirstOnly = 0;
 
   /** The format, once a line has settled it. */
@@ -436,25 +443,26 @@ class FormatScan {
       return;
     }
 
-    if (this.kind === 'ios' && !anyMarker) {
-      // Counted to the last line ({@link chatFormat}).
-      if (date[1] > 12 && date[0] <= 12) {
-        this.monthFirstOnly++;
-      } else if (date[0] > 12 && date[1] <= 12) {
-        this.dayFirstOnly++;
+    if (this.kind === 'android12h' && !anyMarker) {
+      // Its ids read the order, so the first date past the 12th settles it, as it always did.
+      if (date[1] > 12) {
+        this.settled = { kind: this.kind, dayFirst: false, anyMarker };
+
+        return;
       }
 
-      return;
-    }
+      if (date[0] > 12) {
+        this.settled = { kind: this.kind, dayFirst: true, anyMarker };
 
-    if (date[1] > 12) {
-      this.settled = { kind: this.kind, dayFirst: false, anyMarker };
-
-      return;
-    }
-
-    if (date[0] > 12) {
-      this.settled = { kind: this.kind, dayFirst: true, anyMarker };
+        return;
+      }
+    } else if (date[0] > 12 || date[1] > 12) {
+      // Counted to the last line ({@link chatFormat}). A date past 12 both ways counts for neither.
+      if (date[1] <= 12) {
+        this.dayFirstOnly++;
+      } else if (date[0] <= 12) {
+        this.monthFirstOnly++;
+      }
 
       return;
     }
@@ -474,10 +482,16 @@ class FormatScan {
     }
 
     const { anyMarker } = this.shapes;
+    // Each is day first (true), month first (false), or undefined when it doesn't say.
+    const lead = this.dayFirstOnly - this.monthFirstOnly;
+    const byCount = lead === 0 ? undefined : lead > 0;
+    const byClearCount = Math.abs(lead) >= 2 ? byCount : undefined;
+    const bySpan =
+      this.spanDayFirst === this.spanMonthFirst ? undefined : this.spanDayFirst < this.spanMonthFirst;
     const dayFirst =
       this.kind === 'ios' && !anyMarker
-        ? this.dayFirstOnly > this.monthFirstOnly
-        : this.spanDayFirst < this.spanMonthFirst;
+        ? (byClearCount ?? (byCount === true && bySpan !== false))
+        : (byClearCount ?? bySpan ?? byCount ?? false);
 
     return { kind: this.kind, dayFirst, anyMarker };
   }
@@ -618,6 +632,19 @@ function validWallClock(w: WallClock): WallClock | undefined {
 
 const IOS_TIME_RE = /^(\d{1,2}):(\d{2})(?::(\d{2}))?\s?([AP]M)?$/;
 
+/** A 12-hour clock's hour on 24 hours: 12 AM is 0 and 1 PM is 13. Without a marker it stays. */
+function hour24(hour: number, marker: string | undefined): number {
+  if (marker === 'PM' && hour < 12) {
+    return hour + 12;
+  }
+
+  if (marker === 'AM' && hour === 12) {
+    return 0;
+  }
+
+  return hour;
+}
+
 /** iOS `M/D/YY` (or `M/D/YYYY`) and `H:MM[:SS][ AM|PM]`. */
 function iosWallClock(date: string, time: string): WallClock | undefined {
   const [month, day, rawYear] = date.split('/').map(Number);
@@ -627,19 +654,11 @@ function iosWallClock(date: string, time: string): WallClock | undefined {
     return undefined;
   }
 
-  let hour = Number(t[1]);
-
-  if (t[4] === 'PM' && hour < 12) {
-    hour += 12;
-  } else if (t[4] === 'AM' && hour === 12) {
-    hour = 0;
-  }
-
   return validWallClock({
     year: fullYear(rawYear),
     month,
     day,
-    hour,
+    hour: hour24(Number(t[1]), t[4]),
     minute: Number(t[2]),
     second: Number(t[3] ?? 0),
   });
@@ -723,13 +742,14 @@ function parseWALine(line: string, accountZone: string | undefined, format: Chat
     said = format.kind === 'android' ? androidSender(rest, firstColon) : firstColon;
   } else if (android12h) {
     // As M/D/YY, the order the iPhone's dates are read in.
-    const [first, second, year, written] = android12h.slice(1, 5);
-    const date = format.dayFirst ? `${second}/${first}/${year}` : `${first}/${second}/${year}`;
-    const time = format.anyMarker ? normalisedTime(written) : written;
+    const [first, second, year, writtenTime] = android12h.slice(1, 5);
+    const written = `${first}/${second}/${year}`;
+    const date = format.dayFirst ? monthFirst(written) : written;
+    const time = format.anyMarker ? normalisedTime(writtenTime) : writtenTime;
 
     wall = iosWallClock(date, time);
     idTime = dated(new Date(`${date} ${time}`));
-    idKey = format.anyMarker ? writtenIdTime(`${first}/${second}/${year}`, written) : undefined;
+    idKey = format.anyMarker ? writtenIdTime(written, writtenTime) : undefined;
     serverTime = idTime;
     rest = android12h[5];
     said = androidSender(rest, firstColonSplit(rest));

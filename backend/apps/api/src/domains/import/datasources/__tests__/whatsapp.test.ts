@@ -1255,6 +1255,83 @@ describe('12-hour times written outside the US and day-first iPhone dates', () =
     expect(times(items)).toEqual(['2026-01-03T09:00:00.000Z', 'undated', '2026-01-13T09:00:00.000Z']);
   });
 
+  it('keeps a US iPhone export that never passes the 12th month first when a day-first header was pasted in', async () => {
+    // The chat's own dates all read both ways, so the pasted 25/12/25 is the
+    // only date that reads one way. The chat's own dates sit a week apart read
+    // month first and seven months apart read day first.
+    const { items } = await importChat(
+      'Morgan Lane',
+      [
+        '[1/3/26, 9:00:00 AM] Morgan Lane: look what Sam sent',
+        '[25/12/25, 10:00:00 AM] Sam: Merry Christmas',
+        '[1/10/26, 9:00:00 AM] Morgan Lane: later',
+      ],
+      'UTC',
+    );
+
+    expect(times(items)).toEqual(['2026-01-03T09:00:00.000Z', 'undated', '2026-01-10T09:00:00.000Z']);
+  });
+
+  it('keeps a lowercase day-first chat day first when a US header was pasted in before the 13th', async () => {
+    const ios = await importChat(
+      'Lee Park',
+      [
+        '[5/11/26, 9:00:00 am] Lee Park: early in the month',
+        '[11/20/26, 9:00:00 AM] Sam: pasted from a US chat',
+        '[14/11/26, 9:00:00 am] Lee Park: hi',
+        '[15/11/26, 9:00:00 am] Lee Park: bye',
+      ],
+      'UTC',
+    );
+    const android = await importChat(
+      'Book club',
+      [
+        '05/11/26, 9:00 am - Dana Brooks: early in the month',
+        '11/20/26, 9:00 AM - Sam: pasted from a US chat',
+        '14/11/26, 9:00 am - Dana Brooks: hi',
+        '15/11/26, 9:00 am - Dana Brooks: bye',
+      ],
+      'UTC',
+    );
+
+    for (const { items } of [ios, android]) {
+      expect(times(items)).toEqual([
+        '2026-11-05T09:00:00.000Z',
+        'undated',
+        '2026-11-14T09:00:00.000Z',
+        '2026-11-15T09:00:00.000Z',
+      ]);
+    }
+  });
+
+  it('reads a chat on the same day of each month by its dates past the 12th', async () => {
+    // Read both ways, the 3rds sit a day apart month first and a month apart
+    // day first. The three dates past the 12th settle it the other way.
+    const monthly = ['03/01/25', '03/02/25', '03/03/25', '03/04/25', '20/04/25', '21/04/25', '22/04/25'];
+    const ios = await importChat(
+      'Morgan Lane',
+      monthly.map((date, i) => `[${date}, 09:00:00] Morgan Lane: rent ${i}`),
+      'UTC',
+    );
+    const android = await importChat(
+      'Book club',
+      monthly.map((date, i) => `${date}, 9:00 am - Dana Brooks: rent ${i}`),
+      'UTC',
+    );
+    const sent = [
+      '2025-01-03T09:00:00.000Z',
+      '2025-02-03T09:00:00.000Z',
+      '2025-03-03T09:00:00.000Z',
+      '2025-04-03T09:00:00.000Z',
+      '2025-04-20T09:00:00.000Z',
+      '2025-04-21T09:00:00.000Z',
+      '2025-04-22T09:00:00.000Z',
+    ];
+
+    expect(times(ios.items)).toEqual(sent);
+    expect(times(android.items)).toEqual(sent);
+  });
+
   it('keeps a day-first iPhone export day first when a US header was pasted in', async () => {
     // The pasted 11/20/26 can't be day first, but the chat's own two dates
     // can't be month first. The ids stay the old month-first reading.
