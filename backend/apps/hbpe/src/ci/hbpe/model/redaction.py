@@ -1260,7 +1260,9 @@ _UNSPACED_RANGES = (
 )
 
 
-_UNSPACED_CLASS = "".join(f"\\U{low:08x}-\\U{high:08x}" for low, high in _UNSPACED_RANGES)
+_UNSPACED_CLASS = "".join(
+    f"\\U{low:08x}-\\U{high:08x}" for low, high in _UNSPACED_RANGES
+)
 
 
 def _is_unspaced(name: str) -> bool:
@@ -1283,7 +1285,11 @@ def _name_pattern(names: tuple[str, ...]) -> re.Pattern[str] | None:
     alternatives: list[str] = []
     if spaced:
         alternatives.append(
-            r"(?<!(?![" + _UNSPACED_CLASS + r"])\w)(?<!\w[.@])(?:" + _alternation(spaced) + r")"
+            r"(?<!(?!["
+            + _UNSPACED_CLASS
+            + r"])\w)(?<!\w[.@])(?:"
+            + _alternation(spaced)
+            + r")"
             r"(?!(?![" + _UNSPACED_CLASS + r"])\w)(?!@[\w-]+\.)(?!\.(?-i:[a-z0-9]))"
         )
     if unspaced:

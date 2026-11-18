@@ -53,6 +53,7 @@ const FIREFOX_ADDON_SLUG = 'companion-intelligence';
 
 // One row per platform. A release that lacks any file in a row has not shipped that platform.
 // `{v}` is the version Tauri builds with, so a leftover file from an older build doesn't count.
+/** @type {Array<[label: string, patterns: string[]]>} */
 export const DESKTOP_INSTALLERS = [
   ['macOS (universal)', ['_{v}_universal.dmg']],
   ['Windows x64', ['_{v}_x64_en-US.msi', '_{v}_x64-setup.exe']],

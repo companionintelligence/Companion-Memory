@@ -53,7 +53,13 @@ const logger = {
 class ScratchLiveChangesService extends LiveChangesService {
   constructor(
     dataSource: DataSource,
-    private readonly scratchOptions: { host: string; port: number; database: string; user: string; password: string },
+    private readonly scratchOptions: {
+      host: string;
+      port: number;
+      database: string;
+      user: string;
+      password: string;
+    },
   ) {
     super(dataSource, logger);
   }
@@ -81,172 +87,179 @@ function nextRevoke(service: LiveChangesService, userId: string): Promise<void> 
   });
 }
 
-describeWithDatabase(`Live-update stream revoke check, against real Postgres (${availability.target})`, () => {
-  let scratch: ScratchDatabase;
-  let dataSource: DataSource;
-  let liveChanges: ScratchLiveChangesService;
-  let authService: AuthService;
-  let apiKeyService: ApiKeyService;
-  let userService: UserService;
-  let owner: string;
-  let other: string;
+describeWithDatabase(
+  `Live-update stream revoke check, against real Postgres (${availability.target})`,
+  () => {
+    let scratch: ScratchDatabase;
+    let dataSource: DataSource;
+    let liveChanges: ScratchLiveChangesService;
+    let authService: AuthService;
+    let apiKeyService: ApiKeyService;
+    let userService: UserService;
+    let owner: string;
+    let other: string;
 
-  beforeAll(async () => {
-    scratch = await ScratchDatabase.create({ createdBy: 'auth/LiveChangesRevoke.integration.spec' });
-    await scratch.assertOwn();
+    beforeAll(async () => {
+      scratch = await ScratchDatabase.create({ createdBy: 'auth/LiveChangesRevoke.integration.spec' });
+      await scratch.assertOwn();
 
-    const options = scratch.dataSource.options as DataSourceOptions & {
-      host: string;
-      port: number;
-      database: string;
-      username: string;
-      password: string;
-    };
+      const options = scratch.dataSource.options as DataSourceOptions & {
+        host: string;
+        port: number;
+        database: string;
+        username: string;
+        password: string;
+      };
 
-    dataSource = new DataSource({
-      ...options,
-      entities: [UserEntity, SessionEntity, ApiKeyEntity],
-    } as DataSourceOptions);
-    await dataSource.initialize();
+      dataSource = new DataSource({
+        ...options,
+        entities: [UserEntity, SessionEntity, ApiKeyEntity],
+      } as DataSourceOptions);
+      await dataSource.initialize();
 
-    liveChanges = new ScratchLiveChangesService(dataSource, {
-      host: options.host,
-      port: options.port,
-      database: options.database,
-      user: options.username,
-      password: options.password,
+      liveChanges = new ScratchLiveChangesService(dataSource, {
+        host: options.host,
+        port: options.port,
+        database: options.database,
+        user: options.username,
+        password: options.password,
+      });
+      await liveChanges.onModuleInit();
+
+      authService = new AuthService(new JwtService({}), dataSource.getRepository(SessionEntity), liveChanges);
+      apiKeyService = new ApiKeyService(dataSource.getRepository(ApiKeyEntity), logger, liveChanges);
+
+      // Nothing observing UserCreated is under test. No listener may run against this database.
+      userService = new UserService(dataSource.getRepository(UserEntity), { send: async () => [] } as never);
+      owner = (
+        await userService.create(
+          { userId: SYSTEM_USER },
+          { name: 'owner', email: 'owner@example.com', password: 'irrelevant-1' },
+        )
+      ).id;
+      other = (
+        await userService.create(
+          { userId: SYSTEM_USER },
+          { name: 'other', email: 'other@example.com', password: 'irrelevant-2' },
+        )
+      ).id;
     });
-    await liveChanges.onModuleInit();
 
-    authService = new AuthService(new JwtService({}), dataSource.getRepository(SessionEntity), liveChanges);
-    apiKeyService = new ApiKeyService(dataSource.getRepository(ApiKeyEntity), logger, liveChanges);
+    afterEach(async () => {
+      // The guard first: this empties ci.sessions and ci.api_keys, only ever acceptable in a database this run made.
+      await scratch.assertOwn();
+      await dataSource.query('DELETE FROM ci.sessions');
+      await dataSource.query('DELETE FROM ci.api_keys');
+      await dataSource.query('UPDATE ci.users SET deleted_at = NULL');
+    });
 
-    // Nothing observing UserCreated is under test. No listener may run against this database.
-    userService = new UserService(dataSource.getRepository(UserEntity), { send: async () => [] } as never);
-    owner = (
-      await userService.create(
-        { userId: SYSTEM_USER },
-        { name: 'owner', email: 'owner@example.com', password: 'irrelevant-1' },
-      )
-    ).id;
-    other = (
-      await userService.create(
-        { userId: SYSTEM_USER },
-        { name: 'other', email: 'other@example.com', password: 'irrelevant-2' },
-      )
-    ).id;
-  });
+    afterAll(async () => {
+      await liveChanges?.onModuleDestroy();
 
-  afterEach(async () => {
-    // The guard first: this empties ci.sessions and ci.api_keys, only ever acceptable in a database this run made.
-    await scratch.assertOwn();
-    await dataSource.query('DELETE FROM ci.sessions');
-    await dataSource.query('DELETE FROM ci.api_keys');
-    await dataSource.query('UPDATE ci.users SET deleted_at = NULL');
-  });
+      if (dataSource?.isInitialized) {
+        await dataSource.destroy();
+      }
 
-  afterAll(async () => {
-    await liveChanges?.onModuleDestroy();
+      await scratch?.drop();
+    });
 
-    if (dataSource?.isInitialized) {
-      await dataSource.destroy();
-    }
+    it('holds a key until it is revoked and sends the notice for it', async () => {
+      const key = await apiKeyService.create({ userId: owner }, { name: 'stream key' });
+      const credential = { kind: 'apiKey', keyId: key.id } as const;
 
-    await scratch?.drop();
-  });
+      expect(await liveChanges.isCredentialLive(owner, credential)).toBe(true);
+      // A key is only ever checked against its own owner.
+      expect(await liveChanges.isCredentialLive(other, credential)).toBe(false);
 
-  it('holds a key until it is revoked and sends the notice for it', async () => {
-    const key = await apiKeyService.create({ userId: owner }, { name: 'stream key' });
-    const credential = { kind: 'apiKey', keyId: key.id } as const;
-
-    expect(await liveChanges.isCredentialLive(owner, credential)).toBe(true);
-    // A key is only ever checked against its own owner.
-    expect(await liveChanges.isCredentialLive(other, credential)).toBe(false);
-
-    const heard = nextRevoke(liveChanges, owner);
-    await apiKeyService.remove({ userId: owner }, key.id);
-    await heard;
-
-    expect(await liveChanges.isCredentialLive(owner, credential)).toBe(false);
-  });
-
-  it('drops a key past its expiry', async () => {
-    const key = await apiKeyService.create(
-      { userId: owner },
-      { name: 'short key', expires_at: new Date(Date.now() + 60_000).toISOString() },
-    );
-    const credential = { kind: 'apiKey', keyId: key.id } as const;
-
-    expect(await liveChanges.isCredentialLive(owner, credential)).toBe(true);
-
-    await dataSource.query(`UPDATE ci.api_keys SET expires_at = now() - interval '1 second' WHERE id = $1`, [
-      key.id,
-    ]);
-
-    expect(await liveChanges.isCredentialLive(owner, credential)).toBe(false);
-  });
-
-  it('holds a session until it signs out and sends the notice for it', async () => {
-    const { sessionToken, sessionId } = await authService.issueSessionToken(owner, META);
-    const credential = { kind: 'session', sessionId } as const;
-
-    expect(await liveChanges.isCredentialLive(owner, credential)).toBe(true);
-    expect(await liveChanges.isCredentialLive(other, credential)).toBe(false);
-
-    const heard = nextRevoke(liveChanges, owner);
-    await authService.invalidateSession(owner, sessionToken);
-    await heard;
-
-    expect(await liveChanges.isCredentialLive(owner, credential)).toBe(false);
-  });
-
-  it('keeps the session that pressed Sign out everywhere and drops the others', async () => {
-    const kept = await authService.issueSessionToken(owner, META);
-    const ended = await authService.issueSessionToken(owner, META);
-
-    const heard = nextRevoke(liveChanges, owner);
-    await authService.invalidateOtherSessions(owner, kept.sessionToken);
-    await heard;
-
-    expect(await liveChanges.isCredentialLive(owner, { kind: 'session', sessionId: kept.sessionId })).toBe(true);
-    expect(await liveChanges.isCredentialLive(owner, { kind: 'session', sessionId: ended.sessionId })).toBe(
-      false,
-    );
-  });
-
-  it('drops a session past its expiry', async () => {
-    const { sessionId } = await authService.issueSessionToken(owner, META);
-
-    await dataSource.query(`UPDATE ci.sessions SET expires_at = now() - interval '1 second' WHERE id = $1`, [
-      sessionId,
-    ]);
-
-    expect(await liveChanges.isCredentialLive(owner, { kind: 'session', sessionId })).toBe(false);
-  });
-
-  it("drops a deleted account's key and session, which stay in place until the purge", async () => {
-    const key = await apiKeyService.create({ userId: owner }, { name: 'stream key' });
-    const { sessionId } = await authService.issueSessionToken(owner, META);
-
-    await dataSource.query('UPDATE ci.users SET deleted_at = now() WHERE id = $1', [owner]);
-
-    expect(await liveChanges.isCredentialLive(owner, { kind: 'apiKey', keyId: key.id })).toBe(false);
-    expect(await liveChanges.isCredentialLive(owner, { kind: 'session', sessionId })).toBe(false);
-  });
-
-  it("does not wake another user's streams", async () => {
-    const key = await apiKeyService.create({ userId: owner }, { name: 'stream key' });
-    const otherHeard = jest.fn();
-    const unsubscribe = liveChanges.subscribeRevocations(other, otherHeard);
-
-    try {
       const heard = nextRevoke(liveChanges, owner);
       await apiKeyService.remove({ userId: owner }, key.id);
       await heard;
 
-      expect(otherHeard).not.toHaveBeenCalled();
-    } finally {
-      unsubscribe();
-    }
-  });
-});
+      expect(await liveChanges.isCredentialLive(owner, credential)).toBe(false);
+    });
+
+    it('drops a key past its expiry', async () => {
+      const key = await apiKeyService.create(
+        { userId: owner },
+        { name: 'short key', expires_at: new Date(Date.now() + 60_000).toISOString() },
+      );
+      const credential = { kind: 'apiKey', keyId: key.id } as const;
+
+      expect(await liveChanges.isCredentialLive(owner, credential)).toBe(true);
+
+      await dataSource.query(
+        `UPDATE ci.api_keys SET expires_at = now() - interval '1 second' WHERE id = $1`,
+        [key.id],
+      );
+
+      expect(await liveChanges.isCredentialLive(owner, credential)).toBe(false);
+    });
+
+    it('holds a session until it signs out and sends the notice for it', async () => {
+      const { sessionToken, sessionId } = await authService.issueSessionToken(owner, META);
+      const credential = { kind: 'session', sessionId } as const;
+
+      expect(await liveChanges.isCredentialLive(owner, credential)).toBe(true);
+      expect(await liveChanges.isCredentialLive(other, credential)).toBe(false);
+
+      const heard = nextRevoke(liveChanges, owner);
+      await authService.invalidateSession(owner, sessionToken);
+      await heard;
+
+      expect(await liveChanges.isCredentialLive(owner, credential)).toBe(false);
+    });
+
+    it('keeps the session that pressed Sign out everywhere and drops the others', async () => {
+      const kept = await authService.issueSessionToken(owner, META);
+      const ended = await authService.issueSessionToken(owner, META);
+
+      const heard = nextRevoke(liveChanges, owner);
+      await authService.invalidateOtherSessions(owner, kept.sessionToken);
+      await heard;
+
+      expect(await liveChanges.isCredentialLive(owner, { kind: 'session', sessionId: kept.sessionId })).toBe(
+        true,
+      );
+      expect(await liveChanges.isCredentialLive(owner, { kind: 'session', sessionId: ended.sessionId })).toBe(
+        false,
+      );
+    });
+
+    it('drops a session past its expiry', async () => {
+      const { sessionId } = await authService.issueSessionToken(owner, META);
+
+      await dataSource.query(
+        `UPDATE ci.sessions SET expires_at = now() - interval '1 second' WHERE id = $1`,
+        [sessionId],
+      );
+
+      expect(await liveChanges.isCredentialLive(owner, { kind: 'session', sessionId })).toBe(false);
+    });
+
+    it("drops a deleted account's key and session, which stay in place until the purge", async () => {
+      const key = await apiKeyService.create({ userId: owner }, { name: 'stream key' });
+      const { sessionId } = await authService.issueSessionToken(owner, META);
+
+      await dataSource.query('UPDATE ci.users SET deleted_at = now() WHERE id = $1', [owner]);
+
+      expect(await liveChanges.isCredentialLive(owner, { kind: 'apiKey', keyId: key.id })).toBe(false);
+      expect(await liveChanges.isCredentialLive(owner, { kind: 'session', sessionId })).toBe(false);
+    });
+
+    it("does not wake another user's streams", async () => {
+      const key = await apiKeyService.create({ userId: owner }, { name: 'stream key' });
+      const otherHeard = jest.fn();
+      const unsubscribe = liveChanges.subscribeRevocations(other, otherHeard);
+
+      try {
+        const heard = nextRevoke(liveChanges, owner);
+        await apiKeyService.remove({ userId: owner }, key.id);
+        await heard;
+
+        expect(otherHeard).not.toHaveBeenCalled();
+      } finally {
+        unsubscribe();
+      }
+    });
+  },
+);
