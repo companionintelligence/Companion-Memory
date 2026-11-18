@@ -199,6 +199,53 @@ describe('FileService.create — hash dedup', () => {
   });
 });
 
+// An upload's direct eventId pinned the file to any existing event, another account's included.
+describe("FileService.create — a direct eventId must be one of the caller's own events", () => {
+  const EVENT_ID = '0190f1e2-3c4d-7e5f-8a9b-0c1d2e3f4a5b';
+
+  function withEvents(owned: boolean) {
+    const repo = {
+      ...makeRepo(),
+      manager: { query: jest.fn().mockResolvedValue(owned ? [{ '?column?': 1 }] : []) },
+    };
+    repo.findOne.mockResolvedValue(null);
+    const { service, s3Send } = makeService(repo);
+
+    return { service, repo, s3Send };
+  }
+
+  it("stores the link to an event of the caller's, after asking ci.events for that owner", async () => {
+    const { service, repo } = withEvents(true);
+
+    await service.create(ownerCtx, { buffer: Buffer.from('bytes'), filename: 'a.png', eventId: EVENT_ID });
+
+    expect(repo.manager.query).toHaveBeenCalledWith(expect.stringContaining('FROM ci.events'), [
+      EVENT_ID,
+      'owner-1',
+    ]);
+    expect((repo.save.mock.calls[0][0] as Record<string, unknown>).eventId).toBe(EVENT_ID);
+  });
+
+  it("refuses another account's event, or one that does not exist, and stores nothing", async () => {
+    const { service, repo, s3Send } = withEvents(false);
+
+    await expect(
+      service.create(ownerCtx, { buffer: Buffer.from('bytes'), eventId: EVENT_ID }),
+    ).rejects.toThrow('eventId names no event of yours');
+    expect(repo.save).not.toHaveBeenCalled();
+    expect(s3Send).not.toHaveBeenCalled();
+  });
+
+  it('refuses a value that is not an event id with a 400, not a database error', async () => {
+    const { service, repo } = withEvents(true);
+
+    await expect(
+      service.create(ownerCtx, { buffer: Buffer.from('bytes'), eventId: 'not-a-uuid' }),
+    ).rejects.toThrow('eventId must be an event id');
+    expect(repo.manager.query).not.toHaveBeenCalled();
+  });
+});
+
 describe('FileService.create — a write a unique index refuses', () => {
   // At most one live PLAYBACK per original (files_one_playback_per_parent_uniq).
   // The bytes are PUT before the row, so a refused insert strands them unless

@@ -17,7 +17,7 @@ import {
   type CompletedPart,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, IsNull, type FindOptionsWhere, type SelectQueryBuilder } from 'typeorm';
 import { v4 as uuidv4, v7 as uuidv7 } from 'uuid';
@@ -38,6 +38,9 @@ import { type FileKind, fileKindsPredicate } from '../fileKinds';
 import { FileVariant, type CreateFileDto, type UpdateFileDto, type UploadFileDto } from '../types';
 
 import { downloadResponseOverrides } from './downloadResponse';
+
+/** A uuid's shape, any version: what `ci.events.event_id` holds. */
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const BUCKET_REGION = config.staticfiles.bucket ?? 'us-east-1';
 const SIGNATURE_URL = config.staticfiles.auth.signatureUrl ?? config.staticfiles.storageUrl;
@@ -332,7 +335,34 @@ export class FileService implements OnModuleInit {
     }
   }
 
+  /**
+   * Refuses an upload's direct `eventId` unless it is one of the caller's own events.
+   *
+   * It used to be stored as given. The column is a uuid with a foreign key to `ci.events`, so any
+   * existing event id passed, another account's included, and pinned this file to it; anything else
+   * failed in the database as a 500. Read straight from `ci.events` (`event_id`, `user_id`) so the
+   * files domain still imports nothing from the memory domain.
+   */
+  private async assertOwnEvent(context: UserServiceContext, eventId: string): Promise<void> {
+    if (!UUID_SHAPE.test(eventId)) {
+      throw new BadRequestException('eventId must be an event id');
+    }
+
+    const rows: unknown[] = await this.fileRepository.manager.query(
+      'SELECT 1 FROM ci.events WHERE event_id = $1 AND user_id = $2 LIMIT 1',
+      [eventId, context.userId],
+    );
+
+    if (rows.length === 0) {
+      throw new BadRequestException('eventId names no event of yours');
+    }
+  }
+
   async create(context: UserServiceContext, file: CreateFileDto): Promise<SignedFile> {
+    if (file.eventId) {
+      await this.assertOwnEvent(context, file.eventId);
+    }
+
     if (file.externalId) {
       const existing = await this.findByExternalId(context, file.externalId);
 
@@ -400,10 +430,9 @@ export class FileService implements OnModuleInit {
       userId: context.userId,
       externalCreatedAt: file.externalCreatedAt,
       externalUpdatedAt: file.externalUpdatedAt,
-      // A direct eventId is stored as-is (trusting the caller — this domain
-      // cannot itself validate it belongs to the caller's user without
-      // importing the memory domain, which it must never do; see the note on
-      // `event_id`/`linkEvent` above). captureTickId's resolution to an
+      // A direct eventId was checked to be one of the caller's own events
+      // (`assertOwnEvent`, a read of `ci.events` that imports nothing from the
+      // memory domain). captureTickId's resolution to an
       // eventId, when no direct id is given, happens asynchronously from the
       // memory domain instead — see `linkEvent` below.
       eventId: file.eventId ?? null,
