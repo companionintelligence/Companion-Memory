@@ -2,7 +2,7 @@ import type { DesktopModelDownload, DesktopRecommendedModel } from '@ci/common';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { RecommendedModelCard } from './RecommendedModelCard';
+import { RecommendedModelCard, recommendedModelOffer, usesDesktopOllama } from './RecommendedModelCard';
 
 const GB = 1024 * 1024 * 1024;
 
@@ -82,7 +82,7 @@ describe('RecommendedModelCard', () => {
     const timeline: DesktopModelDownload[] = [
       { state: 'downloading', model: 'gemma4:e4b', completedBytes: 1 * GB, totalBytes: 4 * GB },
       { state: 'switching', model: 'gemma4:e4b' },
-      { state: 'done', downloaded: ['gemma4:e4b'], chatModel: 'gemma4:e4b' },
+      { state: 'done', downloaded: ['gemma4:e4b'], chatModel: 'gemma4:e4b', waitsForStart: false },
     ];
     let step = -1;
     // Before the button: the offer. After it, every look moves one step along the timeline.
@@ -114,6 +114,84 @@ describe('RecommendedModelCard', () => {
     expect(
       await screen.findByText('Downloaded gemma4:e4b. Memory now runs on gemma4:e4b.', {}, { timeout: 4000 }),
     ).toBeInTheDocument();
+    expect(onSwitched).toHaveBeenCalledTimes(1);
+  });
+
+  it('says Memory uses the model from its next start when it was stopped from the tray, until it runs', async () => {
+    const download = (waitsForStart: boolean): DesktopModelDownload => ({
+      state: 'done',
+      downloaded: ['gemma4:e4b'],
+      chatModel: 'gemma4:e4b',
+      waitsForStart,
+    });
+    let answer: DesktopRecommendedModel = status({
+      download: { state: 'switching', model: 'gemma4:e4b' },
+      missing: null,
+    });
+    const invoke = installDesktop(async () => answer);
+    const onSwitched = vi.fn();
+
+    render(<RecommendedModelCard endpoint={OLLAMA} canDownload onSwitched={onSwitched} />);
+    expect(await screen.findByText(/Restarting Memory on gemma4:e4b/)).toBeInTheDocument();
+
+    // The switch lands while the stack is stopped: `.env` changed, nothing runs on it yet.
+    answer = status({ chatModel: 'gemma4:e4b', missing: null, download: download(true) });
+    expect(
+      await screen.findByText(
+        'Downloaded gemma4:e4b. Memory will use gemma4:e4b the next time it starts.',
+        {},
+        { timeout: 4000 },
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/now runs on/)).not.toBeInTheDocument();
+    // Nothing answers while Memory is stopped, so the model list is not reloaded yet.
+    expect(onSwitched).not.toHaveBeenCalled();
+
+    // Start Stack in the tray: Memory answers on the new model.
+    const looks = invoke.mock.calls.length;
+    answer = status({ chatModel: 'gemma4:e4b', missing: [], download: download(false) });
+    expect(
+      await screen.findByText('Downloaded gemma4:e4b. Memory now runs on gemma4:e4b.', {}, { timeout: 5000 }),
+    ).toBeInTheDocument();
+    expect(invoke.mock.calls.length).toBeGreaterThan(looks);
+    expect(onSwitched).toHaveBeenCalledTimes(1);
+  });
+
+  it('reloads the model list when it opens on a switch that ended while Settings was closed', async () => {
+    const done = (waitsForStart: boolean): DesktopRecommendedModel =>
+      status({
+        chatModel: 'gemma4:e4b',
+        missing: null,
+        download: { state: 'done', downloaded: ['gemma4:e4b'], chatModel: 'gemma4:e4b', waitsForStart },
+      });
+    const onSwitched = vi.fn();
+
+    installDesktop(async () => done(true));
+    const { unmount } = render(
+      <RecommendedModelCard endpoint={OLLAMA} canDownload onSwitched={onSwitched} />,
+    );
+
+    expect(await screen.findByText(/Memory will use gemma4:e4b the next time it starts/)).toBeInTheDocument();
+    expect(onSwitched).not.toHaveBeenCalled();
+    unmount();
+
+    installDesktop(async () => done(false));
+    const second = render(<RecommendedModelCard endpoint={OLLAMA} canDownload onSwitched={onSwitched} />);
+
+    expect(
+      await screen.findByText('Downloaded gemma4:e4b. Memory now runs on gemma4:e4b.'),
+    ).toBeInTheDocument();
+    expect(onSwitched).toHaveBeenCalledTimes(1);
+    second.unmount();
+
+    // Memory Desktop reports the same download as done until it quits. Opening Settings again reloads nothing.
+    const invoke = installDesktop(async () => done(false));
+    render(<RecommendedModelCard endpoint={OLLAMA} canDownload onSwitched={onSwitched} />);
+
+    expect(
+      await screen.findByText('Downloaded gemma4:e4b. Memory now runs on gemma4:e4b.'),
+    ).toBeInTheDocument();
+    expect(invoke).toHaveBeenCalledWith('get_recommended_model_command', undefined);
     expect(onSwitched).toHaveBeenCalledTimes(1);
   });
 
@@ -246,5 +324,34 @@ describe('RecommendedModelCard', () => {
       await screen.findByText('An administrator of this Companion can switch to it here.'),
     ).toBeInTheDocument();
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
+  });
+});
+
+describe('recommendedModelOffer', () => {
+  it('offers the recommended chat model when the Ollama lacks it or Memory runs on another', () => {
+    expect(recommendedModelOffer(status())).toEqual({ chatModel: 'gemma4:e4b', others: [] });
+    expect(recommendedModelOffer(status({ missing: [] }))).toEqual({ chatModel: 'gemma4:e4b', others: [] });
+    expect(recommendedModelOffer(status({ chatModel: 'gemma4:e4b' }))).toEqual({
+      chatModel: 'gemma4:e4b',
+      others: [],
+    });
+    expect(recommendedModelOffer(status({ chatModel: 'gemma4:e4b', missing: ['nomic-embed-text'] }))).toEqual(
+      { chatModel: null, others: ['nomic-embed-text'] },
+    );
+  });
+
+  it('offers nothing it cannot stand behind', () => {
+    expect(recommendedModelOffer(null)).toBeNull();
+    expect(recommendedModelOffer(status({ ownOllama: false }))).toBeNull();
+    // Not asked (a download runs) or not answering.
+    expect(recommendedModelOffer(status({ missing: null }))).toBeNull();
+    expect(recommendedModelOffer(status({ chatModel: 'gemma4:e4b', missing: [] }))).toBeNull();
+  });
+
+  it('counts only the Ollama on port 11434 as the one Memory Desktop downloads into', () => {
+    expect(usesDesktopOllama(OLLAMA)).toBe(true);
+    expect(usesDesktopOllama({ backend: 'ollama', port: 11435 })).toBe(false);
+    expect(usesDesktopOllama({ backend: 'openai_compatible', port: 11434 })).toBe(false);
+    expect(usesDesktopOllama(null)).toBe(false);
   });
 });

@@ -14,6 +14,7 @@ import { dismissGettingStarted, isGettingStartedActive } from '@/lib/gettingStar
 import { useActiveImports, useImportApi } from '@/pages/ImportPage/useImportApi';
 
 import { deriveChecklist, type ChecklistStep, type StepStatus } from './firstSync';
+import { RecommendedModelHint } from './RecommendedModelHint';
 import { useFirstSyncStatus } from './useFirstSyncStatus';
 
 /**
@@ -230,6 +231,10 @@ function GettingStartedBannerBody({ onDismiss }: { onDismiss: () => void }) {
                     {step.title}
                   </p>
                   {step.detail ? <p className="text-xs text-muted-foreground">{step.detail}</p> : null}
+                  {/* Any model that answers ticks this step. Memory Desktop may still recommend another. */}
+                  {step.id === 'model' && step.status === 'done' ? (
+                    <RecommendedModelHint target={modelTarget} recheck={activeModels} />
+                  ) : null}
                 </div>
                 {stepAction ? <div className="shrink-0">{stepAction}</div> : null}
               </li>

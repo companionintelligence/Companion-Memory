@@ -1267,7 +1267,7 @@ fn user_stopped_marker(paths: &StackPaths) -> PathBuf {
     paths.data_dir.join(".user-stopped")
 }
 
-fn mark_user_stopped(paths: &StackPaths) {
+pub fn mark_user_stopped(paths: &StackPaths) {
     let _ = fs::write(user_stopped_marker(paths), b"");
 }
 
@@ -1275,7 +1275,8 @@ fn clear_user_stopped(paths: &StackPaths) {
     let _ = fs::remove_file(user_stopped_marker(paths));
 }
 
-fn is_user_stopped(paths: &StackPaths) -> bool {
+/// The person stopped Memory from the tray and has not started it since.
+pub fn is_user_stopped(paths: &StackPaths) -> bool {
     user_stopped_marker(paths).exists()
 }
 
