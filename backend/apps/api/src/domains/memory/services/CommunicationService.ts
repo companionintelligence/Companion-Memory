@@ -636,6 +636,28 @@ export class CommunicationService {
     return ids.map((id) => map.get(id) ?? null);
   }
 
+  /**
+   * Whether `id` holds a preview of text other than `content`. A save or a
+   * re-sync that hands back the stored text keeps the preview it has.
+   */
+  private async previewOutlivesContent(
+    context: ServiceContext,
+    id: string,
+    content: string,
+  ): Promise<boolean> {
+    const current = await this.communicationRepository.findOne({
+      select: { id: true, content: true, preview: true },
+      where: {
+        id,
+        ...(context.userId !== SYSTEM_USER && {
+          userId: context.userId,
+        }),
+      },
+    });
+
+    return current != null && current.preview != null && current.content !== content;
+  }
+
   async update(
     context: ServiceContext,
     id: string,
@@ -737,6 +759,14 @@ export class CommunicationService {
     // true — the guard never guarded.)
     if (data.preview !== undefined) {
       updateData.preview = data.preview;
+    } else if (data.content && (await this.previewOutlivesContent(context, id, data.content))) {
+      // New text and no preview to go with it: the stored one is the clip (or
+      // a connection's snippet) of the OLD text. The message list and the
+      // message's name would keep showing it. Readers derive it from the new
+      // text instead, as they do for an imported message that came without
+      // one. A message edited in the app takes this path, as does a Reddit
+      // comment or a Facebook post whose re-sync changed the text.
+      updateData.preview = null;
     }
 
     await this.refuseForeignUpdateLinks(context, id, {

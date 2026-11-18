@@ -208,4 +208,32 @@ describeWithDb(`A re-imported message's preview, in Postgres (${availability.tar
 
     expect(await read()).toMatchObject({ preview: null, shown: 'See you at the pier' });
   });
+
+  // The other way a message's text changes: an edit in the app, or a
+  // connection that re-syncs through `update` (Reddit, Facebook posts).
+  it('drops the old preview when the text is edited and no preview comes with it', async () => {
+    const { entity } = await send(IMPORTER, LONG_TEXT, LONG_CLIP);
+
+    await communications.update(owner, entity.id, { content: SHORT_TEXT });
+
+    expect(await read()).toMatchObject({
+      content: SHORT_TEXT,
+      preview: null,
+      name: SHORT_TEXT,
+      shown: SHORT_TEXT,
+    });
+  });
+
+  it('keeps the preview when an edit hands back the same text, or brings its own preview', async () => {
+    const { entity } = await send(CONNECTION, LONG_TEXT, 'A snippet from the connection');
+
+    await communications.update(owner, entity.id, { content: LONG_TEXT, subject: '' });
+    expect(await read()).toMatchObject({ preview: 'A snippet from the connection' });
+
+    await communications.update(owner, entity.id, {
+      content: `${LONG_TEXT}\n- matches`,
+      preview: 'A new snippet',
+    });
+    expect(await read()).toMatchObject({ preview: 'A new snippet', name: 'A new snippet' });
+  });
 });
