@@ -16,6 +16,7 @@ import { UserModule } from '@ci/domains/user';
 
 import { PeerAskController } from './controllers/PeerAskController';
 import { PeerAskCorrelationEntity } from './entities/PeerAskCorrelationEntity';
+import { PeerIdentityKeyEntity } from './entities/PeerIdentityKeyEntity';
 import { PeerLinkEntity } from './entities/PeerLinkEntity';
 import { LocalPubDiscoveryService } from './services/LocalPubDiscoveryService';
 import { OutboundAskService } from './services/OutboundAskService';
@@ -23,6 +24,7 @@ import { PeerAskClient } from './services/PeerAskClient';
 import { PeerAskCorrelationService } from './services/PeerAskCorrelationService';
 import { PeerAskService } from './services/PeerAskService';
 import { PeerDirectoryService } from './services/PeerDirectoryService';
+import { PeerIdentityService } from './services/PeerIdentityService';
 import { PeerLinkService } from './services/PeerLinkService';
 import { PeerRateLimitService } from './services/PeerRateLimitService';
 import { PeerSignatureService } from './services/PeerSignatureService';
@@ -33,12 +35,17 @@ import { PeerSignatureService } from './services/PeerSignatureService';
     // transaction and drive its own ask to `answered`: an outbound ask carries
     // a null responder, so `AskService.complete` — `responderOwned` by
     // construction — can never see it.
-    TypeOrmModule.forFeature([PeerLinkEntity, PeerAskCorrelationEntity, EventEntity, AskEntity]),
+    TypeOrmModule.forFeature([
+      PeerLinkEntity,
+      PeerAskCorrelationEntity,
+      PeerIdentityKeyEntity,
+      EventEntity,
+      AskEntity,
+    ]),
     AsksModule,
     AuthModule,
     MemoryModule,
-    // `OutboundAskService` reads the caller's role: only the box's administrator
-    // may send an ask signed with the box key alone.
+    // `OutboundAskService` reads the sender's name for `askerHandle`.
     UserModule,
   ],
   controllers: [PeerAskController],
@@ -51,6 +58,7 @@ import { PeerSignatureService } from './services/PeerSignatureService';
     PeerAskService,
     PeerRateLimitService,
     PeerSignatureService,
+    PeerIdentityService,
     OutboundAskService,
   ],
   exports: [
@@ -62,12 +70,15 @@ import { PeerSignatureService } from './services/PeerSignatureService';
     PeerAskService,
     PeerRateLimitService,
     PeerSignatureService,
+    PeerIdentityService,
     OutboundAskService,
   ],
 })
 export class PeersModule {}
 
-export { PeerLinkEntity, PeerAskCorrelationEntity };
+export { PeerLinkEntity, PeerAskCorrelationEntity, PeerIdentityKeyEntity };
+export { PeerIdentityService } from './services/PeerIdentityService';
+export type { PeerIdentity, PeerSigner } from './services/PeerIdentityService';
 export { PeerRateLimitService } from './services/PeerRateLimitService';
 export { PeerSignatureService } from './services/PeerSignatureService';
 export type { SignatureFailure, VerificationResult } from './services/PeerSignatureService';
