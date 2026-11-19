@@ -9,6 +9,7 @@ import {
   MY_PEER_INVITES,
   REVOKE_PEER_INVITE,
 } from './asksOperations';
+import { SafetyCode } from './PeerManager';
 
 interface Props {
   /** Called after a link was made, so the page re-reads its roster. */
@@ -177,7 +178,7 @@ function AcceptInvite({ onLinked }: Props) {
   const [acceptInvite, accepting] = useMutation(ACCEPT_PEER_INVITE);
   const [code, setCode] = useState('');
   const [displayName, setDisplayName] = useState('');
-  const [linked, setLinked] = useState<string | null>(null);
+  const [linked, setLinked] = useState<{ name: string; safetyCode: string | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const accept = async () => {
@@ -191,7 +192,7 @@ function AcceptInvite({ onLinked }: Props) {
       const link = result.data?.acceptPeerInvite?.peerLink;
 
       if (link) {
-        setLinked(link.displayName || link.peerHandle);
+        setLinked({ name: link.displayName || link.peerHandle, safetyCode: link.safetyCode ?? null });
         setCode('');
         setDisplayName('');
         onLinked();
@@ -235,9 +236,12 @@ function AcceptInvite({ onLinked }: Props) {
       </div>
 
       {linked ? (
-        <p className="text-sm" role="status">
-          Linked with {linked}, as Stranger. You can ask them from “Ask someone” now.
-        </p>
+        <div className="flex flex-col gap-2" role="status">
+          <p className="text-sm">
+            Linked with {linked.name}, as Stranger. You can ask them from “Ask someone” now.
+          </p>
+          {linked.safetyCode ? <SafetyCode code={linked.safetyCode} name={linked.name} /> : null}
+        </div>
       ) : null}
       {error ? <p className="text-destructive text-sm">{error}</p> : null}
     </Card>

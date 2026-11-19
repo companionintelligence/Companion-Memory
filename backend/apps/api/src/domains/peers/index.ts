@@ -135,4 +135,5 @@ export type {
   PeerDescriptor,
   BusyInterval,
 } from './protocol';
-export { isSelfCertifyingIssuer } from './selfCertifyingKeyId';
+export { DID_KEY_ISSUER, isSelfCertifyingIssuer } from './selfCertifyingKeyId';
+export { safetyCodeFor } from './safetyCode';

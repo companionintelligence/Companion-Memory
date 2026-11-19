@@ -4,7 +4,7 @@ import { Args, ID, Mutation, Query, Resolver } from '@nestjs/graphql';
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { FeatureService } from '@ci/common/feature';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
-import { PeerInviteService } from '@ci/domains/peers';
+import { PeerIdentityService, PeerInviteService } from '@ci/domains/peers';
 
 import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { GlobalUID } from '../types/GlobalUID';
@@ -29,6 +29,7 @@ export class PeerInviteResolver {
   constructor(
     private readonly inviteService: PeerInviteService,
     @Optional() private readonly featureService?: FeatureService,
+    @Optional() private readonly identityService?: PeerIdentityService,
   ) {}
 
   private async enabled(): Promise<boolean> {
@@ -97,6 +98,11 @@ export class PeerInviteResolver {
       myName: input.myName,
     });
 
-    return { success: true, peerLink: PeerLinkType.toType(link) };
+    // With its safety code: right after linking is when the two people are most
+    // likely to compare it.
+    const ownerDidKey =
+      (await this.identityService?.existingDidKeyFor(toServiceContext(context).userId)) ?? null;
+
+    return { success: true, peerLink: PeerLinkType.toType(link, ownerDidKey) };
   }
 }

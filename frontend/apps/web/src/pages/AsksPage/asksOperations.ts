@@ -477,6 +477,7 @@ export const MY_PEER_LINKS = gql(`
       revokedAt
       createdAt
       linkedByKey
+      safetyCode
     }
   }
 `);
@@ -692,6 +693,7 @@ export const ACCEPT_PEER_INVITE = gql(`
         displayName
         trustTier
         linkedByKey
+        safetyCode
       }
     }
   }

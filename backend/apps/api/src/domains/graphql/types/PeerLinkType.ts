@@ -1,6 +1,13 @@
 import { Field, GraphQLISODateTime, ID, InputType, ObjectType, registerEnumType } from '@nestjs/graphql';
 
-import { PEER_TRUST_TIERS, isSelfCertifyingIssuer, type PeerLink, type PeerLinkStatus } from '@ci/domains/peers';
+import {
+  DID_KEY_ISSUER,
+  PEER_TRUST_TIERS,
+  isSelfCertifyingIssuer,
+  safetyCodeFor,
+  type PeerLink,
+  type PeerLinkStatus,
+} from '@ci/domains/peers';
 
 import { GlobalUID } from './GlobalUID';
 
@@ -116,6 +123,15 @@ export class PeerLinkType {
   linkedByKey!: boolean;
 
   /**
+   * Twelve digits the owner and the peer can read to each other to check this
+   * link (see `safetyCode.ts`): both sides compute the same number from their
+   * own links, and a swapped invite gives different ones. Null for a link that
+   * does not name the peer by `did:key`, or before the owner has a key.
+   */
+  @Field(() => String, { nullable: true })
+  safetyCode?: string | null;
+
+  /**
    * `peerIssuer` and `peerSubject` are NOT exposed, and this stayed true when
    * they became WRITABLE (see `CreatePeerLinkInput` below).
    *
@@ -131,7 +147,9 @@ export class PeerLinkType {
    * `PeerLinkResolver.test.ts` pins this: a projected link has neither property
    * and its JSON never contains the subject.
    */
-  static toType(link: PeerLink): PeerLinkType {
+  static toType(link: PeerLink, ownerDidKey?: string | null): PeerLinkType {
+    const byDidKey = link.peerIssuer === DID_KEY_ISSUER && link.peerSubject != null;
+
     return {
       id: GlobalUID.encode('peer-link', link.id),
       peerHandle: link.peerHandle,
@@ -144,6 +162,7 @@ export class PeerLinkType {
       updatedAt: link.updatedAt,
       revokedAt: link.revokedAt,
       linkedByKey: isSelfCertifyingIssuer(link.peerIssuer) && link.peerSubject != null,
+      safetyCode: byDidKey && ownerDidKey ? safetyCodeFor(ownerDidKey, link.peerSubject as string) : null,
     };
   }
 }

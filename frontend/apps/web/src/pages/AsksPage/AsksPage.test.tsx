@@ -93,6 +93,7 @@ function peerRow(overrides: Record<string, unknown> = {}) {
     revokedAt: null,
     createdAt: '2026-08-01T00:00:00.000Z',
     linkedByKey: false,
+    safetyCode: null,
     ...overrides,
   };
 }

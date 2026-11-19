@@ -2538,6 +2538,7 @@ type PeerLinkType {
   peerHandle: String!
   personEntityId: ID
   revokedAt: DateTime
+  safetyCode: String
   status: PeerLinkStatus!
   trustTier: PeerTrustTier!
   updatedAt: DateTime!

@@ -89,6 +89,7 @@ describe('PeerInvites', () => {
                 displayName: 'Alice',
                 trustTier: 'stranger',
                 linkedByKey: true,
+                safetyCode: '1234 5678 9012',
               },
             },
           },
@@ -100,6 +101,8 @@ describe('PeerInvites', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Link' }));
 
     expect(await screen.findByText(/Linked with Alice, as Stranger/)).toBeInTheDocument();
+    expect(screen.getByText('1234 5678 9012')).toBeInTheDocument();
+    expect(screen.getByText(/compare these numbers with them on a call or in person/)).toBeInTheDocument();
     await waitFor(() => expect(onLinked).toHaveBeenCalledTimes(1));
   });
 

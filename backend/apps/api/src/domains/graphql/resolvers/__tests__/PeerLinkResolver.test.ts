@@ -1,7 +1,7 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
 
 import type { Person } from '@ci/domains/memory';
-import type { PeerLink } from '@ci/domains/peers';
+import { safetyCodeFor, type PeerLink } from '@ci/domains/peers';
 
 import { GlobalUID } from '../../types/GlobalUID';
 import { PeerLinkType, PeerTrustTierEnum } from '../../types/PeerLinkType';
@@ -82,6 +82,47 @@ function build(
 
   return { resolver, service, personLoader, featureService, context };
 }
+
+describe('PeerLinkResolver — safety codes', () => {
+  const MINE = 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK';
+  const THEIRS = 'did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH';
+
+  function withKeys(link: PeerLink, ownerDidKey: string | null) {
+    const service = { findAll: jest.fn().mockResolvedValue([link]) };
+    const identityService = { existingDidKeyFor: jest.fn().mockResolvedValue(ownerDidKey) };
+    const resolver = new PeerLinkResolver(
+      service as never,
+      { load: jest.fn() } as never,
+      undefined,
+      identityService as never,
+    );
+
+    return { resolver, identityService };
+  }
+
+  it('gives a did:key link the code both sides compute, without exposing either key', async () => {
+    const { resolver } = withKeys(makeLink({ peerIssuer: 'did:key', peerSubject: THEIRS }), MINE);
+
+    const [projected] = await resolver.myPeerLinks({ userId: OWNER } as never);
+
+    expect(projected.safetyCode).toBe(safetyCodeFor(THEIRS, MINE));
+    expect(projected.linkedByKey).toBe(true);
+    expect(JSON.stringify(projected)).not.toContain('did:key');
+  });
+
+  it('gives none to a Portal link, or before the owner has a key', async () => {
+    expect(
+      (await withKeys(makeLink(), MINE).resolver.myPeerLinks({ userId: OWNER } as never))[0].safetyCode,
+    ).toBeNull();
+    expect(
+      (
+        await withKeys(makeLink({ peerIssuer: 'did:key', peerSubject: THEIRS }), null).resolver.myPeerLinks({
+          userId: OWNER,
+        } as never)
+      )[0].safetyCode,
+    ).toBeNull();
+  });
+});
 
 describe('PeerLinkResolver', () => {
   describe('scoping', () => {
