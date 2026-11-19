@@ -3,28 +3,38 @@ import { z } from 'zod/v3';
 
 import { toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { PlannedBlockService, type PlaceOutcome } from '@ci/domains/planning/task.module';
+import {
+  PlannedBlockService,
+  PlanningTimeService,
+  type PlaceOutcome,
+} from '@ci/domains/planning/task.module';
 
 import { BaseTool } from '../core/BaseTool';
 import type { IntentDefinition, ToolExecutionContext } from '../core/types';
 
-function isValidIsoInstant(value: string): boolean {
-  return !Number.isNaN(Date.parse(value));
-}
+import {
+  LOCAL_TIME_FORM,
+  localTime,
+  resolveLocalTime,
+  timeZoneInput,
+  timeZoneParameter,
+} from './ownerLocalTime';
 
 const PlanningScheduleTaskInputSchema = z
   .object({
     taskId: z.string().uuid(),
     // Explicit instant — a calendar drop. Mutually exclusive with `date`.
-    startAt: z.string().refine(isValidIsoInstant, 'startAt must be a valid ISO 8601 date/time').optional(),
+    startAt: localTime('startAt').optional(),
     // Only meaningful alongside `startAt`; defaults to the task's estimate otherwise.
-    endAt: z.string().refine(isValidIsoInstant, 'endAt must be a valid ISO 8601 date/time').optional(),
+    endAt: localTime('endAt').optional(),
     // Owner-local `YYYY-MM-DD` preferred day for the auto-placer. Mutually exclusive with `startAt`.
     date: z
       .string()
       .regex(/^\d{4}-\d{2}-\d{2}$/, 'date must be YYYY-MM-DD')
       .optional(),
     estimatedMinutes: z.number().int().min(1).optional(),
+    // IANA zone a zoneless startAt / endAt is read in, instead of the owner's saved one.
+    timeZone: timeZoneInput,
   })
   .refine((data) => !(data.startAt && data.date), {
     message: 'Provide either startAt (an explicit instant) or date (a preferred day), not both',
@@ -32,8 +42,9 @@ const PlanningScheduleTaskInputSchema = z
   .refine((data) => !(data.endAt && !data.startAt), {
     message: 'endAt requires startAt',
   })
-  .refine((data) => !(data.startAt && data.endAt && Date.parse(data.endAt) <= Date.parse(data.startAt)), {
-    message: 'endAt must be after startAt',
+  .refine((data) => !(data.timeZone && !data.startAt), {
+    // Auto-placement plans within working hours, which are kept in the owner's saved zone.
+    message: 'timeZone only applies with startAt',
   });
 
 export type PlanningScheduleTaskInput = z.infer<typeof PlanningScheduleTaskInputSchema>;
@@ -70,12 +81,12 @@ export class PlanningScheduleTaskTool extends BaseTool<PlanningScheduleTaskInput
     name: 'planning.scheduleTask',
     local: {
       description:
-        'Put a task on the calendar: at startAt (ISO 8601 instant), or in the next free slot, preferring date (YYYY-MM-DD).',
+        'Put a task on the calendar: at startAt (your local YYYY-MM-DDTHH:MM), or in the next free slot, preferring date (YYYY-MM-DD).',
       parameters: {
         type: 'object',
         properties: {
           taskId: { type: 'string', format: 'uuid' },
-          startAt: { type: 'string', description: 'ISO 8601 instant to place it at.' },
+          startAt: { type: 'string', description: 'Local date and time, YYYY-MM-DDTHH:MM, no offset.' },
           date: { type: 'string', description: 'YYYY-MM-DD to prefer when auto-placing.' },
         },
         required: ['taskId'],
@@ -86,10 +97,12 @@ export class PlanningScheduleTaskTool extends BaseTool<PlanningScheduleTaskInput
     title: 'Schedule a task',
     description:
       'Place a task on the calendar. With no startAt, auto-places into the next open gap within ' +
-      'working hours (optionally preferring date, an owner-local YYYY-MM-DD). With startAt (an ' +
-      'ISO 8601 instant), places — or moves an already-placed task — at that exact instant, ' +
-      'optionally through endAt. Does not resolve a relative time like "tomorrow afternoon"; the ' +
-      'caller must give a concrete date or instant.',
+      'working hours (optionally preferring date, an owner-local YYYY-MM-DD). With startAt, places — ' +
+      'or moves an already-placed task — at that exact time, optionally through endAt. Give startAt ' +
+      "and endAt as the owner's local wall-clock time with no offset (2026-11-16T18:00 for 6 PM): " +
+      'their time zone, daylight saving included, is applied here, so never convert to UTC yourself. ' +
+      'Does not resolve a relative time like "tomorrow afternoon"; the caller must give a concrete ' +
+      'date or time.',
     privacy: { access: 'write', sensitivity: 'personal', destructive: false, external: false },
     localCapable: true,
     produces: ['task', 'event'],
@@ -100,17 +113,19 @@ export class PlanningScheduleTaskTool extends BaseTool<PlanningScheduleTaskInput
         taskId: { type: 'string', format: 'uuid', description: 'The task id to schedule.' },
         startAt: {
           type: 'string',
-          description: 'ISO 8601 instant to place this task at exactly. Omit to auto-place instead.',
+          description: `When to place this task exactly: ${LOCAL_TIME_FORM}. Omit to auto-place instead.`,
         },
         endAt: {
           type: 'string',
-          description: 'ISO 8601 instant this block ends. Only valid with startAt; defaults to the estimate.',
+          description:
+            'Local date and time this block ends, same form as startAt. Only valid with startAt; defaults to the estimate.',
         },
         date: {
           type: 'string',
           description: 'Owner-local calendar date (YYYY-MM-DD) to prefer for auto-placement.',
         },
         estimatedMinutes: { type: 'integer', minimum: 1, description: 'Estimated effort in minutes.' },
+        timeZone: timeZoneParameter('startAt and endAt'),
       },
       required: ['taskId'],
       additionalProperties: false,
@@ -126,6 +141,7 @@ export class PlanningScheduleTaskTool extends BaseTool<PlanningScheduleTaskInput
 
   constructor(
     private readonly plannedBlockService: PlannedBlockService,
+    private readonly planningTime: PlanningTimeService,
     protected readonly logger: LoggerService,
   ) {
     super();
@@ -143,11 +159,20 @@ export class PlanningScheduleTaskTool extends BaseTool<PlanningScheduleTaskInput
     const serviceContext = toServiceContext(context);
 
     if (input.startAt) {
+      const resolve = (value: string) =>
+        resolveLocalTime(this.planningTime, serviceContext, value, input.timeZone);
+      const startAt = await resolve(input.startAt);
+      const endAt = input.endAt ? await resolve(input.endAt) : undefined;
+
+      if (endAt && endAt.getTime() <= startAt.getTime()) {
+        throw new Error('endAt must be after startAt');
+      }
+
       return this.plannedBlockService.scheduleTaskAt(
         serviceContext,
         input.taskId,
-        new Date(input.startAt),
-        input.endAt ? new Date(input.endAt) : undefined,
+        startAt,
+        endAt,
         input.estimatedMinutes,
       );
     }
