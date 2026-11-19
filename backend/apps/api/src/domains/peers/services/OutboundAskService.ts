@@ -20,6 +20,7 @@ import { UserService } from '@ci/domains/user';
 
 import { type PeerLink } from '../entities/PeerLinkEntity';
 import type { AskerVisiblePeerReply, PeerAskBody, PeerAskRequest } from '../protocol';
+import { DID_KEY_ISSUER } from '../selfCertifyingKeyId';
 
 import { PeerAskClient } from './PeerAskClient';
 import { PeerAskCorrelationService, requestDigest } from './PeerAskCorrelationService';
@@ -122,7 +123,7 @@ export class OutboundAskService {
       },
     });
 
-    const body = this.toBody(dto, askerHandle);
+    const body = this.toBody(link, dto, askerHandle);
 
     // Recorded BEFORE the request leaves. The correlation id is minted here and
     // returned to nobody, so without this row a send that comes back
@@ -354,8 +355,14 @@ export class OutboundAskService {
     return name || 'companion';
   }
 
-  private toBody(dto: SendAskDto, askerHandle: string): PeerAskBody {
+  private toBody(link: PeerLink, dto: SendAskDto, askerHandle: string): PeerAskBody {
+    // The person the ask is for, by the did:key this box's link records for them,
+    // so a box where two people linked this sender answers as the right one.
+    const recipient =
+      link.peerIssuer === DID_KEY_ISSUER && link.peerSubject != null ? link.peerSubject : undefined;
+
     return {
+      ...(recipient ? { recipient } : {}),
       // A fresh correlation id per send — never the local row id, which would
       // leak this box's identifiers to the peer.
       askId: uuidv7(),

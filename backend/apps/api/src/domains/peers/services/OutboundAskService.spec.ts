@@ -121,13 +121,11 @@ function makeService(
   };
   const logger = { setContext: jest.fn(), warn: jest.fn() };
   const userService = {
-    findById: jest
-      .fn()
-      .mockResolvedValue({
-        id: CTX.userId,
-        role: overrides.role ?? 'admin',
-        name: overrides.name ?? 'Alice',
-      }),
+    findById: jest.fn().mockResolvedValue({
+      id: CTX.userId,
+      role: overrides.role ?? 'admin',
+      name: overrides.name ?? 'Alice',
+    }),
   };
 
   const service = new OutboundAskService(
@@ -620,6 +618,29 @@ describe('OutboundAskService.collectOpenAnswers', () => {
     poll.mockRejectedValueOnce(new Error('boom'));
 
     await expect(service.collectOpenAnswers()).resolves.toEqual({ checked: 2, answered: 1 });
+  });
+});
+
+describe('OutboundAskService — naming the person asked', () => {
+  it('names the recipient by the did:key the link records', async () => {
+    const theirs = 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK';
+    const { service, client } = makeService({
+      link: link({ peerIssuer: 'did:key', peerSubject: theirs } as never),
+    });
+
+    await service.send(CTX, DTO, 'portal-token');
+
+    expect(client.send.mock.calls[0][1].recipient).toBe(theirs);
+  });
+
+  it('names no one on a link made by a Portal identity', async () => {
+    const { service, client } = makeService({
+      link: link({ peerIssuer: 'https://hub.ci.computer', peerSubject: 'sub-1' } as never),
+    });
+
+    await service.send(CTX, DTO, 'portal-token');
+
+    expect(client.send.mock.calls[0][1]).not.toHaveProperty('recipient');
   });
 });
 

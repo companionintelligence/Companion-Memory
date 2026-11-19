@@ -35,6 +35,7 @@ import {
   type FreeBusy,
 } from '../availability';
 import { PeerAskCorrelationEntity } from '../entities/PeerAskCorrelationEntity';
+import { PeerIdentityKeyEntity } from '../entities/PeerIdentityKeyEntity';
 import { type PeerLink } from '../entities/PeerLinkEntity';
 import { type BusyInterval, type PeerAskBody, type PeerAskResponse, peerAskPending } from '../protocol';
 
@@ -88,7 +89,7 @@ export class PeerAskService {
      */
     channel: AskChannelProvenance | null = null,
   ): Promise<PeerAskResponse> {
-    const link = await this.resolveLink(peerIdentity);
+    const link = await this.resolveLink(peerIdentity, body.recipient);
     const context: UserServiceContext = { userId: link.ownerUserId };
 
     // ═══ THE IDEMPOTENCY KEY, FINALLY READ ═══
@@ -272,16 +273,28 @@ export class PeerAskService {
     peerIdentity: { issuer: string; subject: string },
     correlationId: string,
   ): Promise<PeerAskResponse> {
-    const link = await this.resolveLink(peerIdentity);
-    // Scoped by peer link, so one peer can never collect another's answer even
-    // if it guesses the correlation id.
-    const existing = await findCorrelation(this.correlations, link.id, correlationId);
+    const links = await this.peerLinkService.findActiveByPeerIdentity(
+      peerIdentity.issuer,
+      peerIdentity.subject,
+    );
 
-    if (existing == null) {
-      return peerAskPending(correlationId);
+    if (links.length === 0) {
+      throw new ForbiddenException('No peer link');
     }
 
-    return this.replay(link, correlationId, existing.askId);
+    // Scoped by peer link, so one peer can never collect another's answer even
+    // if it guesses the correlation id. With two people here linked to the same
+    // asker, the correlation itself says which link the ask came in on: it was
+    // recorded against exactly one, so collecting needs no recipient.
+    for (const link of links) {
+      const existing = await findCorrelation(this.correlations, link.id, correlationId);
+
+      if (existing != null) {
+        return this.replay(link, correlationId, existing.askId);
+      }
+    }
+
+    return peerAskPending(correlationId);
   }
 
   /**
@@ -347,22 +360,46 @@ export class PeerAskService {
    * identical — a stranger must not be able to distinguish "no such user on
    * this box" from "you are not linked to them".
    */
-  private async resolveLink(peerIdentity: { issuer: string; subject: string }): Promise<PeerLink> {
-    const links = await this.peerLinkService.findActiveByPeerIdentity(
+  private async resolveLink(
+    peerIdentity: { issuer: string; subject: string },
+    recipient?: string,
+  ): Promise<PeerLink> {
+    const found = await this.peerLinkService.findActiveByPeerIdentity(
       peerIdentity.issuer,
       peerIdentity.subject,
     );
+
+    // A named recipient narrows the candidates to that person's own link, and
+    // only that: an ask addressed to someone here who is NOT linked to the
+    // asker gets the same refusal as an unlinked asker, never another member's
+    // link. A recipient who is not a live key on this box matches nothing.
+    const links = recipient == null ? found : await this.linksOfRecipient(found, recipient);
 
     if (links.length === 0) {
       throw new ForbiddenException('No peer link');
     }
 
-    // Multi-user household: refuse rather than answer as an arbitrary member.
+    // Multi-user household with no recipient named: refuse rather than answer
+    // as an arbitrary member.
     if (links.length > 1) {
       throw new ForbiddenException('Ambiguous peer link');
     }
 
     return links[0];
+  }
+
+  /** The links in `links` owned by the person whose live `did:key` is `recipient`. */
+  private async linksOfRecipient(links: PeerLink[], recipient: string): Promise<PeerLink[]> {
+    if (links.length === 0) {
+      return links;
+    }
+
+    // Through the manager, for the reason given on `correlations`.
+    const key = await this.eventRepository.manager
+      .getRepository(PeerIdentityKeyEntity)
+      .findOne({ where: { didKey: recipient, status: 'active' } });
+
+    return key == null ? [] : links.filter((link) => link.ownerUserId === key.userId);
   }
 
   /**
