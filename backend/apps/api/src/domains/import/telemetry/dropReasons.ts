@@ -282,6 +282,10 @@ export const DROP_SLUG_REASONS: Readonly<Record<string, DropReason>> = {
   malformed_entry: 'unreadable_source',
   // kindle.ts: a clipping block that did not match the export's own format.
   malformed_clip: 'unreadable_source',
+  // whatsapp.ts: a chat file in which no line reads as a message header, one
+  // per file. Every message in it is lost, so it is a read failure, not an
+  // empty chat.
+  whatsapp_no_header: 'unreadable_source',
   // applecontacts.ts: the AddressBook SQLite query threw partway through, so
   // every contact after the failure point was never read.
   query_failed: 'unreadable_source',

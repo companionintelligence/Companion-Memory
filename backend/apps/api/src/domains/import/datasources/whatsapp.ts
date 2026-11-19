@@ -24,6 +24,62 @@ import { textContent, timeframeContains } from './timeline';
 // starting its own — the source of the cross-sender content merging.
 const IOS_RE =
   /^\[(\d{1,2}\/\d{1,2}\/\d{2,4}), (\d{1,2}:\d{2}(?::\d{2})?(?:\s?[AP]M)?)\] ([^:]+):[ ]?([\s\S]*)$/;
+
+/**
+ * The AM or PM of a 12-hour header as phones outside the US write it too:
+ * lowercase (`10:02 am`, English in India or Australia), with dots (`a.m.`,
+ * `p. m.`) and after a narrow or ordinary no-break space, which `\s` matches.
+ * {@link IOS_RE} and {@link ANDROID_12H_RE} take only `AM` and `PM`.
+ */
+const ANY_MARKER = String.raw`[AaPp]\.?\s?[Mm]\.?`;
+
+/** {@link IOS_RE} with {@link ANY_MARKER}. */
+const IOS_ANY_MARKER_RE = new RegExp(
+  String.raw`^\[(\d{1,2}\/\d{1,2}\/\d{2,4}), (\d{1,2}:\d{2}(?::\d{2})?(?:\s?${ANY_MARKER})?)\] ([^:]+):[ ]?([\s\S]*)$`,
+);
+
+/** A header's time with {@link ANY_MARKER}, split into the clock and the marker's first letter. */
+const ANY_MARKER_TIME_RE = new RegExp(String.raw`^(\d{1,2}:\d{2}(?::\d{2})?)\s?(?:([AaPp])\.?\s?[Mm]\.?)?$`);
+
+/** A time written with {@link ANY_MARKER} as `H:MM[:SS] AM`, the shape `new Date` and {@link iosWallClock} read. */
+function normalisedTime(time: string): string {
+  const m = ANY_MARKER_TIME_RE.exec(time.trim());
+
+  if (m == null) {
+    return time;
+  }
+
+  return m[2] ? `${m[1]} ${m[2].toUpperCase()}M` : m[1];
+}
+
+/** A day-first `D/M/Y` date as `M/D/Y`, the order `new Date` and {@link iosWallClock} read. */
+function monthFirst(date: string): string {
+  const [day, month, year] = date.split('/');
+
+  return `${month}/${day}/${year}`;
+}
+
+/**
+ * The time in the ids of a file read with {@link ANY_MARKER_SHAPES}: the date's
+ * numbers as written and the clock on 24 hours, as `14-11-26T19:15`. No such
+ * file was saved before, so its ids need no old reading. These read neither
+ * the date order nor a zone: a newer export of the chat whose dates settle the
+ * order the other way, or an import on a server in another zone, gives every
+ * message the same id. Undefined when the time doesn't read.
+ */
+function writtenIdTime(date: string, time: string): string | undefined {
+  const t = IOS_TIME_RE.exec(normalisedTime(time).trim());
+
+  if (t == null) {
+    return undefined;
+  }
+
+  const two = (n: number | string) => String(n).padStart(2, '0');
+  const [first, second, year] = date.split('/');
+
+  return `${two(first)}-${two(second)}-${year}T${two(hour24(Number(t[1]), t[4]))}:${t[2]}${t[3] ? `:${t[3]}` : ''}`;
+}
+
 /**
  * The chat's name, from the only place an export records it: the directory.
  *
@@ -197,10 +253,44 @@ const ANDROID_RE = /^(\d{2}\/\d{2}\/\d{4}), (\d{2}:\d{2}) - ([\s\S]*)$/;
 // `\s` matches. Some phones write the day first; see {@link chatFormat}.
 const ANDROID_12H_RE = /^(\d{1,2})\/(\d{1,2})\/(\d{2}), (\d{1,2}:\d{2}\s[AP]M) - ([\s\S]*)$/;
 
-/** The kind of header a chat's file is written in, plus the order of its dates for 12-hour Android. */
+/** {@link ANDROID_12H_RE} with {@link ANY_MARKER} and a four-digit year as well: `14/11/2026, 7:15 pm - `. */
+const ANDROID_12H_ANY_MARKER_RE = new RegExp(
+  String.raw`^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4}), (\d{1,2}:\d{2}\s?${ANY_MARKER}) - ([\s\S]*)$`,
+);
+
+/** The header patterns a chat's file is read with. */
+interface HeaderShapes {
+  ios: RegExp;
+  android12h: RegExp;
+  anyMarker: boolean;
+}
+
+/**
+ * The patterns every saved message id comes from. A file whose first header is
+ * in one of these shapes is read with them, so it keeps the ids it was saved
+ * with.
+ */
+const STRICT_SHAPES: HeaderShapes = { ios: IOS_RE, android12h: ANDROID_12H_RE, anyMarker: false };
+
+/**
+ * For a file whose first header is in a shape only these read. Such a file
+ * imported nothing, or only from a line pasted into it, so no saved id is
+ * worth keeping its reading for. Inside a strict file a line in one of these
+ * shapes is text someone pasted into a message, as it always was.
+ */
+const ANY_MARKER_SHAPES: HeaderShapes = {
+  ios: IOS_ANY_MARKER_RE,
+  android12h: ANDROID_12H_ANY_MARKER_RE,
+  anyMarker: true,
+};
+
+/** The kind of header a chat's file is written in, plus the order of its dates. */
 interface ChatFormat {
   kind: 'ios' | 'android' | 'android12h' | undefined;
+  /** For a 12-hour Android or an iPhone export: its dates are written day first. */
   dayFirst: boolean;
+  /** Read with {@link ANY_MARKER_SHAPES}. */
+  anyMarker: boolean;
 }
 
 /** A two-digit year as `new Date` reads it: 00-49 are 20xx, 50-99 are 19xx. */
@@ -221,64 +311,190 @@ function androidDay(first: number, second: number, year: number, dayFirst: boole
  * new Android shapes is text someone pasted into a message. It is read the
  * way it always was ({@link parseWALine}).
  *
- * A 12-hour Android line doesn't say whether the day or the month comes first:
- * `05/11/26, 9:31 PM` is May 11 on a US phone and November 5 on many others.
- * The first date with a number above 12 settles it. Until one does, the dates
- * are read both ways and the way that keeps them closer together wins: a
- * chat from 05/11/26 to 07/11/26 spans two days read day first and two months
- * read month first. A file that never changes date is read month first, the
- * US order.
+ * The first header also picks the patterns. A file that starts in the strict
+ * shapes ({@link STRICT_SHAPES}) is read with them, as it always was, so a
+ * lowercase line pasted into it stays text. One that starts in a shape only
+ * {@link ANY_MARKER_SHAPES} reads is read with those, so a line pasted into it
+ * in the strict shapes doesn't decide how the whole chat is read.
  *
- * Reading stops at the first iPhone or 24-hour header, or at the date that
- * settles the order.
+ * A 12-hour Android or an iPhone date doesn't say whether the day or the month
+ * comes first: `05/11/26, 9:31 PM` is May 11 on a US phone and November 5 on
+ * many others. Two things say which. One is the count of dates that read only
+ * one way: 14/11/26 can't be month first. The other is the closeness of the
+ * dates that read both ways: a chat from 05/11/26 to 07/11/26 spans two days
+ * read day first and two months read month first.
+ *
+ * A header pasted into a chat is one line against the chat's own, so the count
+ * decides when one side has at least two more dates than the other. A smaller
+ * lead can be one pasted line: a US chat from 1/3/26 to 1/10/26 with
+ * `[25/12/25 …]` pasted in counts one day-first date against none, but its
+ * own dates sit a week apart read month first and seven months apart read day
+ * first. So then the closeness decides. The lead of one decides only when the
+ * closeness says nothing. The closeness alone is wrong for a chat whose
+ * messages fall on the same day of each month: 03/01/25, 03/02/25 and
+ * 03/03/25 written day first sit a day apart read month first. That is why a
+ * clear count comes first.
+ *
+ * An iPhone export in the strict shapes was always read month first. It is
+ * read day first only when the count says so: by two or more, or by one with
+ * the closeness not against it. The closeness alone doesn't turn it around.
+ *
+ * A 12-hour Android export in the strict shapes keeps the rule its ids were
+ * saved with ({@link ParsedLine.idTime} reads its order). The first date with
+ * a number above 12 settles it. Until one does, the closeness decides. A file
+ * in which nothing decides is read month first, the US order.
+ *
+ * Reading stops at the header that settles a strict 12-hour Android file, or
+ * at a 24-hour Android header that comes first. Every other file is read to
+ * the end.
  */
 async function chatFormat(chatPath: string): Promise<ChatFormat> {
   const input = fs.createReadStream(chatPath, { encoding: 'utf8' });
   const rl = readline.createInterface({ input, crlfDelay: Infinity });
-  let previous: [number, number, number] | undefined;
-  let spanMonthFirst = 0;
-  let spanDayFirst = 0;
+  let scan: FormatScan | undefined;
 
   try {
     for await (const line of rl) {
       const cleaned = stripLeadingInvisible(line);
-      const m = ANDROID_12H_RE.exec(cleaned);
 
-      if (m == null) {
-        if (previous == null && IOS_RE.test(cleaned)) {
-          return { kind: 'ios', dayFirst: false };
+      if (scan == null) {
+        if (
+          STRICT_SHAPES.ios.test(cleaned) ||
+          STRICT_SHAPES.android12h.test(cleaned) ||
+          ANDROID_RE.test(cleaned)
+        ) {
+          scan = new FormatScan(STRICT_SHAPES);
+        } else if (ANY_MARKER_SHAPES.ios.test(cleaned) || ANY_MARKER_SHAPES.android12h.test(cleaned)) {
+          scan = new FormatScan(ANY_MARKER_SHAPES);
+        } else {
+          continue;
         }
-
-        if (previous == null && ANDROID_RE.test(cleaned)) {
-          return { kind: 'android', dayFirst: false };
-        }
-
-        continue;
       }
 
-      const date: [number, number, number] = [Number(m[1]), Number(m[2]), Number(m[3])];
+      scan.read(cleaned);
 
-      if (date[1] > 12) {
-        return { kind: 'android12h', dayFirst: false };
+      if (scan.settled) {
+        return scan.settled;
       }
-
-      if (date[0] > 12) {
-        return { kind: 'android12h', dayFirst: true };
-      }
-
-      if (previous) {
-        spanMonthFirst += Math.abs(androidDay(...date, false) - androidDay(...previous, false));
-        spanDayFirst += Math.abs(androidDay(...date, true) - androidDay(...previous, true));
-      }
-
-      previous = date;
     }
   } finally {
     rl.close();
     input.destroy();
   }
 
-  return { kind: previous ? 'android12h' : undefined, dayFirst: spanDayFirst < spanMonthFirst };
+  return scan?.result() ?? { kind: undefined, dayFirst: false, anyMarker: false };
+}
+
+/** {@link chatFormat} for one set of patterns, fed one line at a time. */
+class FormatScan {
+  private kind: 'ios' | 'android12h' | undefined;
+
+  /** The last date that reads both ways. */
+  private previous: [number, number, number] | undefined;
+
+  /** Days between one date that reads both ways and the next, added up read month first and read day first. */
+  private spanMonthFirst = 0;
+
+  private spanDayFirst = 0;
+
+  /** Dates that can only be day first. */
+  private dayFirstOnly = 0;
+
+  /** Dates that can only be month first. */
+  private monthFirstOnly = 0;
+
+  /** The format, once a line has settled it. */
+  settled: ChatFormat | undefined;
+
+  constructor(private readonly shapes: HeaderShapes) {}
+
+  /** Reads one line, its leading marks already stripped. */
+  read(cleaned: string): void {
+    if (this.settled) {
+      return;
+    }
+
+    const { anyMarker } = this.shapes;
+    let date: [number, number, number] | undefined;
+
+    if (this.kind !== 'ios') {
+      const m = this.shapes.android12h.exec(cleaned);
+
+      if (m) {
+        this.kind = 'android12h';
+        date = [Number(m[1]), Number(m[2]), Number(m[3])];
+      }
+    }
+
+    if (date == null && this.kind !== 'android12h') {
+      const m = this.shapes.ios.exec(cleaned);
+
+      if (m) {
+        this.kind = 'ios';
+        date = m[1].split('/').map(Number) as [number, number, number];
+      } else if (this.kind == null && ANDROID_RE.test(cleaned)) {
+        this.settled = { kind: 'android', dayFirst: false, anyMarker };
+
+        return;
+      }
+    }
+
+    if (date == null) {
+      return;
+    }
+
+    if (this.kind === 'android12h' && !anyMarker) {
+      // Its ids read the order, so the first date past the 12th settles it, as it always did.
+      if (date[1] > 12) {
+        this.settled = { kind: this.kind, dayFirst: false, anyMarker };
+
+        return;
+      }
+
+      if (date[0] > 12) {
+        this.settled = { kind: this.kind, dayFirst: true, anyMarker };
+
+        return;
+      }
+    } else if (date[0] > 12 || date[1] > 12) {
+      // Counted to the last line ({@link chatFormat}). A date past 12 both ways counts for neither.
+      if (date[1] <= 12) {
+        this.dayFirstOnly++;
+      } else if (date[0] <= 12) {
+        this.monthFirstOnly++;
+      }
+
+      return;
+    }
+
+    if (this.previous) {
+      this.spanMonthFirst += Math.abs(androidDay(...date, false) - androidDay(...this.previous, false));
+      this.spanDayFirst += Math.abs(androidDay(...date, true) - androidDay(...this.previous, true));
+    }
+
+    this.previous = date;
+  }
+
+  /** The format after the last line, or undefined when no line had a header in these patterns. */
+  result(): ChatFormat | undefined {
+    if (this.settled || this.kind == null) {
+      return this.settled;
+    }
+
+    const { anyMarker } = this.shapes;
+    // Each is day first (true), month first (false), or undefined when it doesn't say.
+    const lead = this.dayFirstOnly - this.monthFirstOnly;
+    const byCount = lead === 0 ? undefined : lead > 0;
+    const byClearCount = Math.abs(lead) >= 2 ? byCount : undefined;
+    const bySpan =
+      this.spanDayFirst === this.spanMonthFirst ? undefined : this.spanDayFirst < this.spanMonthFirst;
+    const dayFirst =
+      this.kind === 'ios' && !anyMarker
+        ? (byClearCount ?? (byCount === true && bySpan !== false))
+        : (byClearCount ?? bySpan ?? byCount ?? false);
+
+    return { kind: this.kind, dayFirst, anyMarker };
+  }
 }
 
 /** `Sender: message`, split at the first colon: how Android lines were always read. */
@@ -357,8 +573,19 @@ interface ParsedLine {
    * `:/etc/localtime`) reports no zone, which `serverTimezone()` turns into UTC
    * while `Date` still reads the host's clock. The repeated fall-back hour east
    * of UTC also resolves the other way, so those ids would fork too.
+   *
+   * For the same reason a strict iPhone export written day first keeps the
+   * month first reading here, which is all the old code had: a date past the
+   * 12th leaves the id at `noTs`. Only {@link ParsedLine.ts} reads the file's
+   * own order.
    */
   idTime: Date | undefined;
+  /**
+   * For a file read with {@link ANY_MARKER_SHAPES}, the time its message ids
+   * carry instead of {@link ParsedLine.idTime}: the date as written and the
+   * clock on 24 hours ({@link writtenIdTime}).
+   */
+  idKey?: string;
   sender: string;
   text: string;
   /**
@@ -405,6 +632,19 @@ function validWallClock(w: WallClock): WallClock | undefined {
 
 const IOS_TIME_RE = /^(\d{1,2}):(\d{2})(?::(\d{2}))?\s?([AP]M)?$/;
 
+/** A 12-hour clock's hour on 24 hours: 12 AM is 0 and 1 PM is 13. Without a marker it stays. */
+function hour24(hour: number, marker: string | undefined): number {
+  if (marker === 'PM' && hour < 12) {
+    return hour + 12;
+  }
+
+  if (marker === 'AM' && hour === 12) {
+    return 0;
+  }
+
+  return hour;
+}
+
 /** iOS `M/D/YY` (or `M/D/YYYY`) and `H:MM[:SS][ AM|PM]`. */
 function iosWallClock(date: string, time: string): WallClock | undefined {
   const [month, day, rawYear] = date.split('/').map(Number);
@@ -414,19 +654,11 @@ function iosWallClock(date: string, time: string): WallClock | undefined {
     return undefined;
   }
 
-  let hour = Number(t[1]);
-
-  if (t[4] === 'PM' && hour < 12) {
-    hour += 12;
-  } else if (t[4] === 'AM' && hour === 12) {
-    hour = 0;
-  }
-
   return validWallClock({
     year: fullYear(rawYear),
     month,
     day,
-    hour,
+    hour: hour24(Number(t[1]), t[4]),
     minute: Number(t[2]),
     second: Number(t[3] ?? 0),
   });
@@ -449,7 +681,9 @@ function androidWallClock(date: string, time: string): WallClock | undefined {
  * machines. In a UTC container a Pacific account's midnight New Year messages
  * sat at 4 PM on Dec 31. The importer is told the account's zone
  * (`ImportParams.timeZone`) and stores them there. Without one, the stored
- * time stays the server's reading, the same instant the id carries.
+ * time stays the server's reading, the same instant the id carries. A
+ * day-first iPhone date is the exception: the id keeps the old month-first
+ * reading ({@link ParsedLine.idTime}).
  *
  * `format` is the file's own ({@link chatFormat}). A 12-hour header, or an
  * Android header with no sender, is a header only in an Android export of its
@@ -463,17 +697,30 @@ function parseWALine(line: string, accountZone: string | undefined, format: Chat
   const cleaned = stripLeadingInvisible(line);
   let wall: WallClock | undefined;
   let idTime: Date | undefined;
+  let idKey: string | undefined;
+  // What `new Date` makes of the header read in the file's own date order. The
+  // stored time when the account has no zone.
+  let serverTime: Date | undefined;
   let said: Said | null;
   let rest = '';
   let firstColon: Said | null = null;
+  const shapes = format.anyMarker ? ANY_MARKER_SHAPES : STRICT_SHAPES;
   const twelveHour = format.kind === 'android12h';
-  const ios = twelveHour ? null : IOS_RE.exec(cleaned);
+  const ios = twelveHour ? null : shapes.ios.exec(cleaned);
   const android = twelveHour || ios ? null : ANDROID_RE.exec(cleaned);
-  const android12h = twelveHour ? ANDROID_12H_RE.exec(cleaned) : null;
+  const android12h = twelveHour ? shapes.android12h.exec(cleaned) : null;
 
   if (ios) {
-    wall = iosWallClock(ios[1], ios[2]);
+    const date = format.kind === 'ios' && format.dayFirst ? monthFirst(ios[1]) : ios[1];
+    const time = format.anyMarker ? normalisedTime(ios[2]) : ios[2];
+
+    wall = iosWallClock(date, time);
+    serverTime = dated(new Date(`${date} ${time}`));
+    // The ids of a strict file read every date month first, as the old code
+    // did, so a day-first date past the 12th still gives `noTs`. Importing a
+    // newer export of a chat saved back then must find the same ids.
     idTime = dated(new Date(`${ios[1]} ${ios[2]}`));
+    idKey = format.anyMarker ? writtenIdTime(ios[1], ios[2]) : undefined;
     said = { sender: ios[3], text: ios[4] };
   } else if (android) {
     // DD/MM/YYYY as an ISO local date-time, exactly as the old code built it.
@@ -481,6 +728,10 @@ function parseWALine(line: string, accountZone: string | undefined, format: Chat
 
     wall = androidWallClock(android[1], android[2]);
     idTime = dated(new Date(`${year}-${month}-${day}T${android[2]}:00`));
+    // A 24-hour line pasted into an iPhone chat read with the new patterns:
+    // its id carries the time as written too, or it would follow the server's zone.
+    idKey = format.anyMarker ? writtenIdTime(android[1], android[2]) : undefined;
+    serverTime = idTime;
     rest = android[3];
     firstColon = firstColonSplit(rest);
 
@@ -491,28 +742,32 @@ function parseWALine(line: string, accountZone: string | undefined, format: Chat
     said = format.kind === 'android' ? androidSender(rest, firstColon) : firstColon;
   } else if (android12h) {
     // As M/D/YY, the order the iPhone's dates are read in.
-    const [first, second, year, time] = android12h.slice(1, 5);
-    const date = format.dayFirst ? `${second}/${first}/${year}` : `${first}/${second}/${year}`;
+    const [first, second, year, writtenTime] = android12h.slice(1, 5);
+    const written = `${first}/${second}/${year}`;
+    const date = format.dayFirst ? monthFirst(written) : written;
+    const time = format.anyMarker ? normalisedTime(writtenTime) : writtenTime;
 
     wall = iosWallClock(date, time);
     idTime = dated(new Date(`${date} ${time}`));
+    idKey = format.anyMarker ? writtenIdTime(written, writtenTime) : undefined;
+    serverTime = idTime;
     rest = android12h[5];
     said = androidSender(rest, firstColonSplit(rest));
   } else {
     return null;
   }
 
-  const ts = accountZone == null ? idTime : wall && wallClockToUTC(wall, accountZone);
+  const ts = accountZone == null ? serverTime : wall && wallClockToUTC(wall, accountZone);
 
   if (said == null) {
     // The old pattern read only day-first lines and split them at the first
     // colon, so one of those with a colon was a message.
     const savedBefore = android != null && firstColon != null;
 
-    return { ts, idTime, sender: '', text: rest, system: true, savedBefore };
+    return { ts, idTime, idKey, sender: '', text: rest, system: true, savedBefore };
   }
 
-  return { ts, idTime, sender: said.sender.trim(), text: said.text };
+  return { ts, idTime, idKey, sender: said.sender.trim(), text: said.text };
 }
 
 const SYSTEM_VERB_RE =
@@ -804,7 +1059,7 @@ export class WhatsAppFileImporter implements FileImporter {
 
       params.pipeline.push({
         item: {
-          id: `whatsapp:${conversationName}:${p.idTime ? p.idTime.toISOString() : 'noTs'}:${seq++}`,
+          id: `whatsapp:${conversationName}:${p.idKey ?? (p.idTime ? p.idTime.toISOString() : 'noTs')}:${seq++}`,
           classification: loc ? 'location' : 'message',
           timestamp: p.ts,
           ...(loc && { location: loc }),
@@ -829,6 +1084,8 @@ export class WhatsAppFileImporter implements FileImporter {
       });
     };
 
+    let unread = false;
+
     for await (const line of rl) {
       const parsed = parseWALine(line, params.timeZone, format);
       if (parsed) {
@@ -839,11 +1096,19 @@ export class WhatsAppFileImporter implements FileImporter {
         current = parsed;
       } else if (current) {
         current.text += '\n' + line;
+      } else if (line.trim()) {
+        unread = true;
       }
     }
 
     if (current) {
       flush(current);
+    } else if (unread) {
+      // Not one line read as a header: the file is in a shape this parser
+      // doesn't know. Counted, so the run says so instead of finishing as a
+      // clean import of nothing.
+      total++;
+      params.pipeline.drop?.('whatsapp_no_header', path.basename(chatPath));
     }
 
     params.pipeline.consumed?.(total);
