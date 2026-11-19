@@ -95,16 +95,16 @@ tolerated failure into a hard abort, or hides a real one.
 ## Tests
 
 ```bash
-yarn test                                          # tsx --test "scripts/xtask/**/*.test.ts"
+yarn test                                          # every root node:test suite, xtask's included
 yarn tsx --test scripts/xtask/lib/gpu.test.ts      # one file
 ```
 
 Node's own test runner, no vitest. The root `package.json` declares `test` and
 `typecheck`, so `test` is also reached by `make test` (via `yarn workspaces foreach`)
-and `typecheck` by `make typecheck` — the same command, run locally; nothing in CI
-runs it automatically since `pr-gate.yml`, whose `Type check packages` lane covered
-this, was deleted 2026-09-17. `build.test.ts` deliberately uses
-*this checkout* as its fixture — it calls `computeBuildPlan` against the real root, so
+and `typecheck` by `make typecheck`. In CI they are `ci.yml`'s `Run root tests` and
+`Type check root` lanes, which run only when someone dispatches that workflow.
+
+`build.test.ts` deliberately uses *this checkout* as its fixture — it calls `computeBuildPlan` against the real root, so
 it fails if someone drops one of the Makefile pins below or renames a Dockerfile.
 
 ## What deliberately stayed in the Makefile

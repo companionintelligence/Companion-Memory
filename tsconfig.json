@@ -25,6 +25,12 @@
     "allowJs": true,
     "checkJs": false
   },
-  "include": ["playwright.config.ts", "tests/**/*.ts", "scripts/**/*.ts"],
+  "include": [
+    "playwright.config.ts",
+    "playwright.e2e.config.ts",
+    "playwright.desktop.config.ts",
+    "tests/**/*.ts",
+    "scripts/**/*.ts"
+  ],
   "exclude": ["node_modules", "dist", "dev-dist", ".yarn", "backend", "frontend"]
 }

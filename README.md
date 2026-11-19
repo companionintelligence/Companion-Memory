@@ -768,16 +768,19 @@ The `make` targets cover **both stacks** — the TypeScript one and the Python o
 | `make test` | `yarn workspace <name> run test` for every workspace that declares one, then the desktop `node --test` pass, `uv run pytest` and the two `sh` suites. Every step runs even if an earlier one fails, and a summary table says which did not pass |
 | `make test-db` | The database-backed `be-api` jest suites, against a throwaway Postgres container (Docker only; never your `.env` database). Fails on any unexplained skip or any database crash. `ARGS=` selects jest paths/flags, `KEEP=1` leaves the container up (`KEEP_FOR=12h` sets how long later runs leave it alone; default 24h), `NO_RETRY=1` skips the serial re-run of failed files — see [`docs/CI.md`](docs/CI.md#running-the-database-backed-suites-locally-make-test-db) |
 
-The repo root now declares `test` and `typecheck` scripts of its own: `yarn test`
-runs the xtask unit suite (`tsx --test "scripts/xtask/**/*.test.ts"`), and
-`yarn typecheck` runs `tsc --noEmit` over what the root `tsconfig.json` includes —
-`scripts/**`, `tests/**` and the Playwright config, which nothing ran before.
-Neither needs naming anywhere else: `foreach --all` stopped excluding the root
+The repo root now declares `test` and `typecheck` scripts of its own. `yarn test`
+runs the `node:test` suites under `scripts/`: the top-level `scripts/*.test.ts`
+files plus everything under `scripts/xtask`, `scripts/dev-stack` and
+`scripts/publish`. `yarn typecheck` runs `tsc --noEmit` over what the root
+`tsconfig.json` includes: `scripts/**`, `tests/**` and the three root
+`playwright*.config.ts` files.
+Neither needs naming in the Makefile: `foreach --all` stopped excluding the root
 workspace the moment those scripts existed, so `make test` runs the suite and
 `make typecheck` (`yarn workspaces foreach --all run typecheck`) runs the
-type-check — locally only now; the CI lane that used to run this on every PR
-(`pr-gate.yml`'s `Type check packages`) was deleted along with the rest of
-that file, and it had no twin in `ci.yml`.
+type-check. In CI, `ci.yml` runs the root pair as lanes of their own,
+`Type check root` and `Run root tests`, when someone dispatches it.
+`Run root tests` fails if any test skips. The nine `frontend/packages/*`
+type-checks that `make typecheck` also runs have no lane there.
 
 The underlying Yarn scripts are still there if you only want the JS half:
 

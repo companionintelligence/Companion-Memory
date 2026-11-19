@@ -460,6 +460,85 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+  # The root `yarn test`: the node:test suites under scripts/ (xtask, the
+  # release and publish scripts, the dev stack helpers). No other lane runs
+  # them.
+  test-root:
+    name: Run root tests
+    needs: install
+    runs-on: ubuntu-latest
+    # A job ceiling as well as the step's, so a stuck apt mirror or install
+    # cannot hold the run for GitHub's 360-minute default.
+    timeout-minutes: 20
+    container:
+      image: node:22
+      # The runner keeps a job container alive with `tail -f /dev/null` as
+      # PID 1, which never reaps orphans. Four group-kill tests in
+      # scripts/xtask/lib/exec.test.ts wait for a killed grandchild to be gone,
+      # and an unreaped zombie still counts as alive, so they time out.
+      # `--init` runs Docker's init as PID 1, which reaps them.
+      options: --init
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Restore node modules
+        uses: actions/cache@v6
+        with:
+          path: |
+            **/node_modules
+            .yarn/cache
+          key: ${{ runner.os }}-modules-${{ hashFiles('**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-modules-
+
+      - name: Install dependencies
+        run: yarn install --immutable
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Tests skip without these. The publish retry tests need jq. The four
+      # compose render tests in scripts/dev-stack/composeExposure.test.ts need
+      # `docker compose`, and Debian 12 packages only the old v1
+      # `docker-compose`, so the CLI and the compose plugin come from Docker's
+      # apt repository (about 18 MB). `docker compose config` needs no daemon.
+      # The image already has git, bash and curl.
+      - name: Install jq and Docker Compose
+        run: |
+          install -m 0755 -d /etc/apt/keyrings
+          curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
+          . /etc/os-release
+          echo "deb [signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian ${VERSION_CODENAME} stable" \
+            > /etc/apt/sources.list.d/docker.list
+          apt-get update
+          apt-get install -y --no-install-recommends jq docker-ce-cli docker-compose-plugin
+          jq --version
+          docker compose version
+
+      # Six of the files call git (rev-parse, ls-files, grep). The checkout
+      # belongs to the runner's user and the container runs as root, so git
+      # refuses it as "dubious ownership" until it is marked safe.
+      #
+      # Every test in the suite can run here, so a skip means something went
+      # missing, and the step fails on it (a skip is not a pass:
+      # docs/architecture/test-strategy.md). Output to a pipe is TAP, which
+      # ends with a `# skipped <n>` line. `shell: bash` runs with pipefail, so
+      # a failing `yarn test` still fails the step through the `tee`.
+      - name: Run root tests
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          yarn test | tee "$RUNNER_TEMP/root-tests.tap"
+          if ! grep -qx '# skipped 0' "$RUNNER_TEMP/root-tests.tap"; then
+            grep -E '^ *ok .* # SKIP' "$RUNNER_TEMP/root-tests.tap" || true
+            echo "::error::Root tests skipped (listed above), or the output had no '# skipped 0' line. Install what the skipped tests need in this job."
+            exit 1
+          fi
+
   typecheck:
     name: Type check ${{ matrix.name }}
     needs: install
@@ -508,6 +587,10 @@ jobs:
           # merge too is a separate, deliberate branch-protection change.
           - name: cli
             command: yarn workspace @ci/cli typecheck
+          # The root tsconfig.json: scripts/**, tests/** and the three
+          # playwright*.config.ts files. No workspace lane above reads them.
+          - name: root
+            command: yarn typecheck
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
