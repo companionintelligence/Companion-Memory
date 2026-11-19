@@ -115,3 +115,16 @@ export class AcceptPeerInvitePayload {
   @Field(() => PeerLinkType, { nullable: true })
   peerLink?: PeerLinkType | null;
 }
+
+/** What a key rotation reached: the owner's names for the people told, and for those not reachable. */
+@ObjectType()
+export class PeerKeyRotationPayload {
+  @Field(() => Boolean)
+  success!: boolean;
+
+  @Field(() => [String])
+  notified!: string[];
+
+  @Field(() => [String])
+  unreachable!: string[];
+}

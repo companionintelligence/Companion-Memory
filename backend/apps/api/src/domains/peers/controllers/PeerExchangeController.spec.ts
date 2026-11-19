@@ -11,6 +11,7 @@ import { InMemoryConsumptionStore } from '@ci/domains/consumption';
 
 import { didKeyIdFor } from '../didKeyId';
 import { newIdentityChallenge, verifyIdentityProof } from '../identityProof';
+import { rotationNotice } from '../keyNotices';
 import { PeerSignatureService } from '../services/PeerSignatureService';
 
 import { PeerExchangeController } from './PeerExchangeController';
@@ -52,6 +53,7 @@ function makeController(
   inviteService: Record<string, jest.Mock> = {
     receive: jest.fn().mockResolvedValue({ v: 1, didKey: 'x', name: 'A' }),
   },
+  noticeService: Record<string, jest.Mock> = { applyRotation: jest.fn(), applyUnlink: jest.fn() },
 ) {
   const identityService = {
     findActiveByDidKey: jest.fn(
@@ -65,13 +67,14 @@ function makeController(
   const controller = new PeerExchangeController(
     identityService as never,
     inviteService as never,
+    noticeService as never,
     signatureService,
     rateLimitService as never,
     featureService as never,
     logger as never,
   );
 
-  return { controller, identityService, rateLimitService, inviteService };
+  return { controller, identityService, rateLimitService, inviteService, noticeService };
 }
 
 beforeEach(() => {
@@ -231,5 +234,83 @@ describe('POST /agent/v1/invites/accept', () => {
 
     await controller.acceptInvite(request);
     await expect(controller.acceptInvite(request)).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+});
+
+describe('POST /agent/v1/key-rotation and /agent/v1/unlink', () => {
+  it('moves a link only on a notice signed by the old key, carrying a proof by the new one', async () => {
+    const oldKey = person();
+    const newKey = person();
+    const recipient = person();
+    const { controller, noticeService } = makeController();
+    const notice = rotationNotice({
+      oldDidKey: oldKey.didKey,
+      newDidKey: newKey.didKey,
+      newKey: newKey.signer.key,
+      recipient: recipient.didKey,
+    });
+
+    await expect(controller.keyRotation(signedRequest(oldKey, '/key-rotation', notice))).resolves.toEqual({
+      ok: true,
+    });
+    expect(noticeService.applyRotation).toHaveBeenCalledWith(oldKey.didKey, newKey.didKey, recipient.didKey);
+  });
+
+  it('refuses a rotation notice signed by anyone but the old key', async () => {
+    const oldKey = person();
+    const mallory = person();
+    const { controller, noticeService } = makeController();
+    const notice = rotationNotice({
+      oldDidKey: oldKey.didKey,
+      newDidKey: mallory.didKey,
+      newKey: mallory.signer.key,
+      recipient: person().didKey,
+    });
+
+    await expect(
+      controller.keyRotation(signedRequest(mallory, '/key-rotation', notice)),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(noticeService.applyRotation).not.toHaveBeenCalled();
+  });
+
+  it('refuses a rotation whose proof was not made by the new key', async () => {
+    const oldKey = person();
+    const { controller, noticeService } = makeController();
+    const notice = rotationNotice({
+      oldDidKey: oldKey.didKey,
+      newDidKey: person().didKey,
+      newKey: person().signer.key,
+      recipient: person().didKey,
+    });
+
+    await expect(
+      controller.keyRotation(signedRequest(oldKey, '/key-rotation', notice)),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(noticeService.applyRotation).not.toHaveBeenCalled();
+  });
+
+  it('ends the recipient’s link to whoever signed the unlink', async () => {
+    const sender = person();
+    const recipient = person();
+    const { controller, noticeService } = makeController();
+
+    await expect(
+      controller.unlink(signedRequest(sender, '/unlink', { v: 1, recipient: recipient.didKey })),
+    ).resolves.toEqual({ ok: true });
+    expect(noticeService.applyUnlink).toHaveBeenCalledWith(sender.didKey, recipient.didKey);
+  });
+
+  it('refuses an unsigned unlink', async () => {
+    const { controller, noticeService } = makeController();
+
+    await expect(
+      controller.unlink({
+        method: 'POST',
+        url: '/agent/v1/unlink',
+        headers: {},
+        rawBody: '{"v":1}',
+      } as never),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(noticeService.applyUnlink).not.toHaveBeenCalled();
   });
 });

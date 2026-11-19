@@ -590,3 +590,52 @@ describe('PeerLinkResolver', () => {
     });
   });
 });
+
+describe('PeerLinkResolver — ending a link tells the other side', () => {
+  it('ends the link first, then reports whether their box was told', async () => {
+    const ended = makeLink({ status: 'revoked', revokedAt: new Date() });
+    const service = {
+      findById: jest.fn().mockResolvedValue(makeLink()),
+      revoke: jest.fn().mockResolvedValue(ended),
+    };
+    const noticeService = { announceUnlink: jest.fn().mockResolvedValue(true) };
+    const resolver = new PeerLinkResolver(
+      service as never,
+      { load: jest.fn() } as never,
+      undefined,
+      undefined,
+      noticeService as never,
+    );
+
+    const payload = await resolver.revokePeerLink(
+      { userId: OWNER } as never,
+      GlobalUID.encode('peer-link', 'link-1'),
+    );
+
+    expect(payload).toMatchObject({ success: true, peerNotified: true });
+    expect(noticeService.announceUnlink).toHaveBeenCalledWith({ userId: OWNER }, ended);
+    expect(service.revoke.mock.invocationCallOrder[0]).toBeLessThan(
+      noticeService.announceUnlink.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('still ends the link when telling them fails', async () => {
+    const service = {
+      findById: jest.fn().mockResolvedValue(makeLink()),
+      revoke: jest.fn().mockResolvedValue(makeLink({ status: 'revoked', revokedAt: new Date() })),
+    };
+    const noticeService = { announceUnlink: jest.fn().mockRejectedValue(new Error('down')) };
+    const resolver = new PeerLinkResolver(
+      service as never,
+      { load: jest.fn() } as never,
+      undefined,
+      undefined,
+      noticeService as never,
+    );
+
+    await expect(
+      resolver.revokePeerLink({ userId: OWNER } as never, GlobalUID.encode('peer-link', 'link-1')),
+    ).resolves.toMatchObject({ success: true, peerNotified: false });
+    expect(service.revoke).toHaveBeenCalledTimes(1);
+  });
+});

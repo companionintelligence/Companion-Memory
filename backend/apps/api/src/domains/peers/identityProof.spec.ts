@@ -20,7 +20,11 @@ describe('identity proofs', () => {
 
     return {
       challenge,
-      doc: signIdentityProof(alice.key, { didKey: alice.didKey, endpoint: overrides.endpoint ?? ENDPOINT, challenge }),
+      doc: signIdentityProof(alice.key, {
+        didKey: alice.didKey,
+        endpoint: overrides.endpoint ?? ENDPOINT,
+        challenge,
+      }),
     };
   }
 
@@ -39,9 +43,13 @@ describe('identity proofs', () => {
   it('refuses a proof for another challenge: a replayed answer', () => {
     const { doc } = proof();
 
-    expect(verifyIdentityProof(doc, { didKey: alice.didKey, endpoint: ENDPOINT, challenge: newIdentityChallenge() })).toBe(
-      false,
-    );
+    expect(
+      verifyIdentityProof(doc, {
+        didKey: alice.didKey,
+        endpoint: ENDPOINT,
+        challenge: newIdentityChallenge(),
+      }),
+    ).toBe(false);
   });
 
   it('refuses a proof naming another endpoint: someone else’s address paired with this key', () => {
@@ -63,13 +71,21 @@ describe('identity proofs', () => {
     const edited = { ...doc, endpoint: 'https://alice.example.com/other/agent/v1' };
 
     expect(
-      verifyIdentityProof(edited, { didKey: alice.didKey, endpoint: 'https://alice.example.com/other/agent/v1', challenge }),
+      verifyIdentityProof(edited, {
+        didKey: alice.didKey,
+        endpoint: 'https://alice.example.com/other/agent/v1',
+        challenge,
+      }),
     ).toBe(false);
   });
 
   it.each([null, 'x', {}, { v: 2 }])('refuses %j', (raw) => {
-    expect(verifyIdentityProof(raw, { didKey: alice.didKey, endpoint: ENDPOINT, challenge: newIdentityChallenge() })).toBe(
-      false,
-    );
+    expect(
+      verifyIdentityProof(raw, {
+        didKey: alice.didKey,
+        endpoint: ENDPOINT,
+        challenge: newIdentityChallenge(),
+      }),
+    ).toBe(false);
   });
 });

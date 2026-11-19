@@ -19,9 +19,11 @@ import config from '@ci/configuration';
 
 import { didKeyPublicJwk, isDidKeyId } from '../didKeyId';
 import { IDENTITY_CHALLENGE_PATTERN, type IdentityProofDocument, signIdentityProof } from '../identityProof';
+import { readRotationNotice, readUnlinkNotice } from '../keyNotices';
 import { claimedKeyId, header, parseRawJson, publishedBase, signedTargetUri } from '../peerRequest';
 import { PeerIdentityService } from '../services/PeerIdentityService';
 import { type InviteAcceptance, PeerInviteService } from '../services/PeerInviteService';
+import { PeerNoticeService } from '../services/PeerNoticeService';
 import { PeerRateLimitService } from '../services/PeerRateLimitService';
 import { PeerSignatureService } from '../services/PeerSignatureService';
 
@@ -42,6 +44,7 @@ export class PeerExchangeController {
   constructor(
     private readonly identityService: PeerIdentityService,
     private readonly inviteService: PeerInviteService,
+    private readonly noticeService: PeerNoticeService,
     private readonly signatureService: PeerSignatureService,
     private readonly rateLimitService: PeerRateLimitService,
     private readonly featureService: FeatureService,
@@ -91,6 +94,44 @@ export class PeerExchangeController {
     const sender = await this.signedBy(request, endpoint, 'invite');
 
     return this.inviteService.receive(sender, parseRawJson(request.rawBody));
+  }
+
+  /**
+   * "I have a new key": signed by the key the recipient's link names, carrying
+   * a proof made with the new one. The answer is the same whether or not a
+   * link matched, so it tells the caller nothing about who is linked here.
+   */
+  @Post('key-rotation')
+  @HttpCode(200)
+  async keyRotation(@Req() request: RawBodyRequest): Promise<{ ok: true }> {
+    const endpoint = await this.openEndpoint();
+    const sender = await this.signedBy(request, endpoint, 'rotation');
+    const notice = readRotationNotice(parseRawJson(request.rawBody));
+
+    if (notice == null || notice.oldDidKey !== sender) {
+      throw new BadRequestException('Malformed key rotation');
+    }
+
+    await this.noticeService.applyRotation(notice.oldDidKey, notice.newDidKey, notice.recipient);
+
+    return { ok: true };
+  }
+
+  /** "I ended our link": signed by the sender's key; ends the recipient's link to them. Same answer either way. */
+  @Post('unlink')
+  @HttpCode(200)
+  async unlink(@Req() request: RawBodyRequest): Promise<{ ok: true }> {
+    const endpoint = await this.openEndpoint();
+    const sender = await this.signedBy(request, endpoint, 'unlink');
+    const notice = readUnlinkNotice(parseRawJson(request.rawBody));
+
+    if (notice == null) {
+      throw new BadRequestException('Malformed unlink');
+    }
+
+    await this.noticeService.applyUnlink(sender, notice.recipient);
+
+    return { ok: true };
   }
 
   /**

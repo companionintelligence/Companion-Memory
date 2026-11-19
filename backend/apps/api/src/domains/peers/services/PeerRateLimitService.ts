@@ -75,7 +75,10 @@ export class PeerRateLimitService {
    * asked about, or the identity a notice claims. Apart from the ask budget, so
    * linking someone never spends the budget that protects a review inbox.
    */
-  async consumeExchange(identity: { issuer: string; subject: string }, now: number = Date.now()): Promise<void> {
+  async consumeExchange(
+    identity: { issuer: string; subject: string },
+    now: number = Date.now(),
+  ): Promise<void> {
     await this.take('exchange', identity, MAX_EXCHANGES_PER_WINDOW, now);
   }
 

@@ -40,7 +40,11 @@ export function newIdentityChallenge(): string {
   return randomBytes(24).toString('base64url');
 }
 
-export function identityProofMessage(fields: { didKey: string; endpoint: string; challenge: string }): string {
+export function identityProofMessage(fields: {
+  didKey: string;
+  endpoint: string;
+  challenge: string;
+}): string {
   return `${PROOF_PREFIX}${fields.didKey}\n${fields.endpoint}\n${fields.challenge}`;
 }
 
@@ -88,7 +92,11 @@ export function verifyIdentityProof(
 
   try {
     const publicKey = createPublicKey({ key: jwk as never, format: 'jwk' });
-    const message = identityProofMessage({ didKey: expected.didKey, endpoint: doc.endpoint, challenge: doc.challenge });
+    const message = identityProofMessage({
+      didKey: expected.didKey,
+      endpoint: doc.endpoint,
+      challenge: doc.challenge,
+    });
 
     return verify(null, Buffer.from(message, 'utf8'), publicKey, Buffer.from(doc.signature, 'base64url'));
   } catch {

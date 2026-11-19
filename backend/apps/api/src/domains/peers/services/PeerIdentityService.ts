@@ -91,6 +91,46 @@ export class PeerIdentityService {
     return row == null ? null : toIdentity(row);
   }
 
+  /**
+   * Retire this person's key and give them a new one. Returns the key retired
+   * (null if they had none) and the new one, so the caller can tell their
+   * peers, signing with the key those peers know.
+   *
+   * One transaction, the old row locked: two rotations at once cannot both
+   * retire the same key and leave two new ones.
+   */
+  async rotate(
+    userId: string,
+    now: Date = new Date(),
+  ): Promise<{ previous: PeerIdentity | null; current: PeerIdentity }> {
+    return this.repository.manager.transaction(async (manager) => {
+      const keys = manager.getRepository(PeerIdentityKeyEntity);
+      const active = await keys.findOne({
+        where: { userId, status: 'active' },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (active != null) {
+        await keys.update({ id: active.id }, { status: 'retired', retiredAt: now });
+      }
+
+      const fresh = await keys.save(newKeyRow(userId));
+      this.logger.log(`peer key rotated for ${userId}`);
+
+      return { previous: active == null ? null : toIdentity(active), current: toIdentity(fresh) };
+    });
+  }
+
+  /** The key this person retired most recently, for re-sending a rotation notice signed by it. */
+  async latestRetiredFor(userId: string): Promise<PeerIdentity | null> {
+    const row = await this.repository.findOne({
+      where: { userId, status: 'retired' },
+      order: { retiredAt: 'DESC' },
+    });
+
+    return row == null ? null : toIdentity(row);
+  }
+
   /** This person's live `did:key`, or null when they have never needed one. Makes nothing. */
   async existingDidKeyFor(userId: string): Promise<string | null> {
     const row = await this.repository.findOne({ where: { userId, status: 'active' } });
@@ -134,7 +174,11 @@ export function toIdentity(row: PeerIdentityKeyEntity): PeerIdentity {
 }
 
 function constraintOf(error: unknown): unknown {
-  const candidate = error as { code?: unknown; constraint?: unknown; driverError?: { code?: unknown; constraint?: unknown } };
+  const candidate = error as {
+    code?: unknown;
+    constraint?: unknown;
+    driverError?: { code?: unknown; constraint?: unknown };
+  };
 
   if ((candidate?.driverError?.code ?? candidate?.code) !== '23505') {
     return null;

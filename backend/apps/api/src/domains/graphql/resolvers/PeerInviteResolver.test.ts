@@ -19,7 +19,13 @@ const VIEW = {
   status: 'pending',
 };
 
-function make(enabled = true) {
+function make(
+  enabled = true,
+  noticeService: Record<string, jest.Mock> = {
+    rotateKey: jest.fn().mockResolvedValue({ notified: ['bob'], unreachable: ['carol'] }),
+    resendRotation: jest.fn().mockResolvedValue({ notified: ['carol'], unreachable: [] }),
+  },
+) {
   const inviteService = {
     create: jest.fn().mockResolvedValue({ invite: VIEW, code: 'cmi1.abc' }),
     list: jest.fn().mockResolvedValue([VIEW]),
@@ -41,7 +47,16 @@ function make(enabled = true) {
   };
   const featureService = { isFeatureEnabled: jest.fn().mockResolvedValue(enabled) };
 
-  return { resolver: new PeerInviteResolver(inviteService as never, featureService as never), inviteService };
+  return {
+    resolver: new PeerInviteResolver(
+      inviteService as never,
+      featureService as never,
+      undefined,
+      noticeService as never,
+    ),
+    inviteService,
+    noticeService,
+  };
 }
 
 describe('PeerInviteResolver', () => {
@@ -82,5 +97,26 @@ describe('PeerInviteResolver', () => {
     await expect(resolver.acceptPeerInvite(CTX, { code: 'x' })).resolves.toEqual({ success: false });
     await expect(resolver.myPeerInvites(CTX)).resolves.toEqual([]);
     expect(inviteService.create).not.toHaveBeenCalled();
+  });
+
+  it('rotates the key and reports who was and was not told', async () => {
+    const { resolver, noticeService } = make();
+
+    await expect(resolver.rotatePeerKey(CTX)).resolves.toEqual({
+      success: true,
+      notified: ['bob'],
+      unreachable: ['carol'],
+    });
+    expect(noticeService.rotateKey).toHaveBeenCalledWith({ userId: 'user-1' });
+  });
+
+  it('re-sends the last rotation on request', async () => {
+    const { resolver } = make();
+
+    await expect(resolver.resendPeerKeyRotation(CTX)).resolves.toEqual({
+      success: true,
+      notified: ['carol'],
+      unreachable: [],
+    });
   });
 });

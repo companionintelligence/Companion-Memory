@@ -366,4 +366,3 @@ export class PeerAskController {
 
 /** The ONE refusal a signature failure ever produces. See {@link PeerAskController.assertSignature}. */
 export const SIGNATURE_REFUSED = 'Invalid token';
-

@@ -2233,6 +2233,7 @@ type Mutation {
   Move an event to a new time, keeping its duration. Externally-sourced events are moved locally only and marked pending — the change is not pushed to the source calendar.
   """
   rescheduleEvent(endTime: DateTime, id: ID!, startTime: DateTime!): EventType
+  resendPeerKeyRotation: PeerKeyRotationPayload!
   restoreEvent(input: RestoreByIdInput!): EventType
 
   """Return a placed event to the slate, deleting the event it minted"""
@@ -2240,6 +2241,7 @@ type Mutation {
   revokeAskGrant(id: ID!): AskGrantPayload!
   revokePeerInvite(id: ID!): PeerInvitePayload!
   revokePeerLink(id: ID!): PeerLinkPayload!
+  rotatePeerKey: PeerKeyRotationPayload!
   runAsk(disclosureForm: AnswerForm, id: ID!, redactItemIds: [String!]): RunAskPayload!
 
   """
@@ -2517,8 +2519,15 @@ enum PeerInviteStatus {
   used
 }
 
+type PeerKeyRotationPayload {
+  notified: [String!]!
+  success: Boolean!
+  unreachable: [String!]!
+}
+
 type PeerLinkPayload {
   peerLink: PeerLinkType
+  peerNotified: Boolean
   success: Boolean!
 }
 

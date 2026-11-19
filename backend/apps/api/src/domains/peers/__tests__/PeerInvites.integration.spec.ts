@@ -13,10 +13,12 @@ import { PeerIdentityKeyEntity } from '../entities/PeerIdentityKeyEntity';
 import { PeerInviteEntity } from '../entities/PeerInviteEntity';
 import { PeerLinkEntity } from '../entities/PeerLinkEntity';
 import { parseInviteCode } from '../inviteCode';
+import { KEY_ROTATION_PATH, UNLINK_PATH, readRotationNotice, readUnlinkNotice } from '../keyNotices';
 import type { ExchangeResult } from '../services/PeerExchangeClient';
 import { PeerIdentityService, type PeerSigner } from '../services/PeerIdentityService';
 import { INVITE_ACCEPT_PATH, PeerInviteService } from '../services/PeerInviteService';
 import { PeerLinkService } from '../services/PeerLinkService';
+import { PeerNoticeService } from '../services/PeerNoticeService';
 
 /**
  * Two people linking by invite, end to end against real Postgres.
@@ -53,6 +55,7 @@ describeWithDatabase(`linking by invite — against real Postgres (${availabilit
   let identities: PeerIdentityService;
   let links: PeerLinkService;
   let invites: PeerInviteService;
+  let notices: PeerNoticeService;
   /** Did:keys whose identity check the fake should fail, as a box that cannot prove its key would. */
   const unprovable = new Set<string>();
   const users: string[] = [];
@@ -123,8 +126,32 @@ describeWithDatabase(`linking by invite — against real Postgres (${availabilit
         body: unknown,
         signer: PeerSigner,
       ): Promise<ExchangeResult<unknown>> => {
-        expect(path).toBe(INVITE_ACCEPT_PATH);
         try {
+          // What PeerExchangeController does once it has verified the request was signed by `signer`.
+          if (path === KEY_ROTATION_PATH) {
+            const notice = readRotationNotice(body);
+            if (notice == null || notice.oldDidKey !== signer.keyid) {
+              return { ok: false, reason: 'refused', status: 400 };
+            }
+
+            await notices.applyRotation(notice.oldDidKey, notice.newDidKey, notice.recipient);
+
+            return { ok: true, value: { ok: true } };
+          }
+
+          if (path === UNLINK_PATH) {
+            const notice = readUnlinkNotice(body);
+            if (notice == null) {
+              return { ok: false, reason: 'refused', status: 400 };
+            }
+
+            await notices.applyUnlink(signer.keyid, notice.recipient);
+
+            return { ok: true, value: { ok: true } };
+          }
+
+          expect(path).toBe(INVITE_ACCEPT_PATH);
+
           return { ok: true, value: await invites.receive(signer.keyid, body) };
         } catch (error) {
           if (error instanceof HttpException) {
@@ -149,6 +176,7 @@ describeWithDatabase(`linking by invite — against real Postgres (${availabilit
       userService as never,
       noopLogger,
     );
+    notices = new PeerNoticeService(identities, links, exchange as never, noopLogger);
   });
 
   afterAll(async () => {
@@ -296,5 +324,74 @@ describeWithDatabase(`linking by invite — against real Postgres (${availabilit
     const bob = await user('Bob Garbage');
 
     await expect(invites.accept({ userId: bob }, 'cmi1.not-json')).rejects.toThrow(/not an invite code/);
+  });
+
+  it('moves the other side’s link to a new key, keeping its tier and name', async () => {
+    const alice = await user('Alice Rotates');
+    const bob = await user('Bob Stays');
+    await invites.accept({ userId: bob }, (await invites.create({ userId: alice })).code);
+
+    const before = await identities.existingDidKeyFor(alice);
+    const bobsLink = await links.findActiveByIssuerSubject(bob, 'did:key', before as string);
+    await links.upsert(
+      { userId: bob },
+      {
+        peerHandle: bobsLink?.peerHandle as string,
+        memoryEndpoint: ENDPOINT,
+        trustTier: 'trusted',
+        expectedLinkId: bobsLink?.id,
+      },
+    );
+
+    const outcome = await notices.rotateKey({ userId: alice });
+
+    const after = await identities.existingDidKeyFor(alice);
+    expect(after).not.toBe(before);
+    expect(outcome).toEqual({ notified: ['bob-stays'], unreachable: [] });
+    expect(await links.findActiveByIssuerSubject(bob, 'did:key', before as string)).toBeNull();
+    expect(await links.findActiveByIssuerSubject(bob, 'did:key', after as string)).toMatchObject({
+      id: bobsLink?.id,
+      trustTier: 'trusted',
+      displayName: 'Alice Rotates',
+    });
+    // The retired key no longer proves anything here.
+    expect(await identities.findActiveByDidKey(before as string)).toBeNull();
+  });
+
+  it('re-sending a rotation changes nothing for a peer that already moved', async () => {
+    const alice = await user('Alice Resends');
+    const bob = await user('Bob Moved');
+    await invites.accept({ userId: bob }, (await invites.create({ userId: alice })).code);
+    await notices.rotateKey({ userId: alice });
+
+    await expect(notices.resendRotation({ userId: alice })).resolves.toEqual({
+      notified: ['bob-moved'],
+      unreachable: [],
+    });
+    expect(
+      await links.findActiveByIssuerSubject(
+        bob,
+        'did:key',
+        (await identities.existingDidKeyFor(alice)) as string,
+      ),
+    ).not.toBeNull();
+  });
+
+  it('ends the other side’s link when one side ends theirs, and only that person’s', async () => {
+    const alice = await user('Alice Ends');
+    const bob = await user('Bob Ended');
+    const carol = await user('Carol Unaffected');
+    await invites.accept({ userId: bob }, (await invites.create({ userId: alice })).code);
+    await invites.accept({ userId: carol }, (await invites.create({ userId: alice })).code);
+
+    const aliceKey = (await identities.existingDidKeyFor(alice)) as string;
+    const bobKey = (await identities.existingDidKeyFor(bob)) as string;
+    const alicesLinkToBob = await links.findActiveByIssuerSubject(alice, 'did:key', bobKey);
+    const ended = await links.revoke({ userId: alice }, alicesLinkToBob?.peerHandle as string);
+
+    await expect(notices.announceUnlink({ userId: alice }, ended)).resolves.toBe(true);
+
+    expect(await links.findActiveByIssuerSubject(bob, 'did:key', aliceKey)).toBeNull();
+    expect(await links.findActiveByIssuerSubject(carol, 'did:key', aliceKey)).not.toBeNull();
   });
 });

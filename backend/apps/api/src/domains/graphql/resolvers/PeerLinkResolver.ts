@@ -4,7 +4,7 @@ import { Args, ID, Mutation, Parent, Query, ResolveField, Resolver } from '@nest
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { FeatureService } from '@ci/common/feature';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
-import { PeerIdentityService, PeerLinkService } from '@ci/domains/peers';
+import { PeerIdentityService, PeerLinkService, PeerNoticeService } from '@ci/domains/peers';
 
 import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { PersonLoader } from '../loaders/PersonLoader';
@@ -76,6 +76,7 @@ export class PeerLinkResolver {
     private readonly personLoader: PersonLoader,
     @Optional() private readonly featureService?: FeatureService,
     @Optional() private readonly identityService?: PeerIdentityService,
+    @Optional() private readonly noticeService?: PeerNoticeService,
   ) {}
 
   /** The caller's own did:key, for the safety codes on their links. Makes no key. */
@@ -251,7 +252,16 @@ export class PeerLinkResolver {
 
     const link = await this.peerLinkService.revoke(serviceContext, existing.peerHandle);
 
-    return { success: true, peerLink: PeerLinkType.toType(link, await this.ownerDidKey(context)) };
+    // Ended here first, whatever happens next: telling their box is a courtesy
+    // that keeps both lists honest, never a condition for ending it.
+    const peerNotified =
+      (await this.noticeService?.announceUnlink(serviceContext, link).catch(() => false)) ?? false;
+
+    return {
+      success: true,
+      peerLink: PeerLinkType.toType(link, await this.ownerDidKey(context)),
+      peerNotified,
+    };
   }
 
   /**

@@ -275,6 +275,14 @@ export class PeerLinkPayload {
 
   @Field(() => PeerLinkType, { nullable: true })
   peerLink?: PeerLinkType | null;
+
+  /**
+   * On `revokePeerLink`: whether the peer's box was told and ended its link
+   * too. False for a link made by address (there is no key to sign a notice
+   * the other side would recognise) or a box that could not be reached.
+   */
+  @Field(() => Boolean, { nullable: true })
+  peerNotified?: boolean | null;
 }
 
 /**

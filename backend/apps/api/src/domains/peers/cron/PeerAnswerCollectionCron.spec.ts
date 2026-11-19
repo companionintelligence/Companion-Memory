@@ -5,7 +5,10 @@ function make(enabled: boolean) {
   const features = { isFeatureEnabled: jest.fn().mockResolvedValue(enabled) };
   const logger = { setContext: jest.fn(), log: jest.fn() };
 
-  return { cron: new PeerAnswerCollectionCron(outbound as never, features as never, logger as never), outbound };
+  return {
+    cron: new PeerAnswerCollectionCron(outbound as never, features as never, logger as never),
+    outbound,
+  };
 }
 
 describe('PeerAnswerCollectionCron', () => {

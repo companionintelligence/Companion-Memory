@@ -125,3 +125,33 @@ describe('PeerInvites', () => {
     expect(onLinked).not.toHaveBeenCalled();
   });
 });
+
+describe('PeerInvites — your key', () => {
+  it('asks before making a new key, then says who could not be told and offers to try again', async () => {
+    const { ROTATE_PEER_KEY } = await import('./asksOperations');
+    const onRotated = renderInvites([
+      ...repeated(invitesOk([])),
+      {
+        request: { query: ROTATE_PEER_KEY },
+        result: {
+          data: {
+            rotatePeerKey: {
+              __typename: 'PeerKeyRotationPayload',
+              success: true,
+              notified: ['bob'],
+              unreachable: ['carol'],
+            },
+          },
+        },
+      },
+    ]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Make a new key' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Yes, make a new key' }));
+
+    expect(await screen.findByText('Told 1 of 2.')).toBeInTheDocument();
+    expect(screen.getByText(/Could not reach carol/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Tell them again' })).toBeInTheDocument();
+    await waitFor(() => expect(onRotated).toHaveBeenCalled());
+  });
+});

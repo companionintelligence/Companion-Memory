@@ -31,6 +31,7 @@ import { PeerExchangeClient } from './services/PeerExchangeClient';
 import { PeerIdentityService } from './services/PeerIdentityService';
 import { PeerInviteService } from './services/PeerInviteService';
 import { PeerLinkService } from './services/PeerLinkService';
+import { PeerNoticeService } from './services/PeerNoticeService';
 import { PeerRateLimitService } from './services/PeerRateLimitService';
 import { PeerSignatureService } from './services/PeerSignatureService';
 
@@ -67,6 +68,7 @@ import { PeerSignatureService } from './services/PeerSignatureService';
     PeerSignatureService,
     PeerIdentityService,
     PeerInviteService,
+    PeerNoticeService,
     OutboundAskService,
     PeerAnswerCollectionCron,
   ],
@@ -81,6 +83,7 @@ import { PeerSignatureService } from './services/PeerSignatureService';
     PeerSignatureService,
     PeerIdentityService,
     PeerInviteService,
+    PeerNoticeService,
     OutboundAskService,
   ],
 })
@@ -90,6 +93,8 @@ export { PeerLinkEntity, PeerAskCorrelationEntity, PeerIdentityKeyEntity };
 export { PeerIdentityService } from './services/PeerIdentityService';
 export { PeerInviteService } from './services/PeerInviteService';
 export type { PeerInviteView } from './services/PeerInviteService';
+export { PeerNoticeService } from './services/PeerNoticeService';
+export type { NoticeOutcome } from './services/PeerNoticeService';
 export type { PeerIdentity, PeerSigner } from './services/PeerIdentityService';
 export { PeerRateLimitService } from './services/PeerRateLimitService';
 export { PeerSignatureService } from './services/PeerSignatureService';

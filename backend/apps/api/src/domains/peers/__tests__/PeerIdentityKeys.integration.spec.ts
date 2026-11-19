@@ -156,7 +156,9 @@ describeWithDatabase(`per-person peer keys — against real Postgres (${availabi
   });
 
   it('answers nothing for a did:key nobody here holds, or a non-did:key', async () => {
-    expect(await service.findActiveByDidKey('did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK')).toBeNull();
+    expect(
+      await service.findActiveByDidKey('did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK'),
+    ).toBeNull();
     expect(await service.findActiveByDidKey('https://example.test')).toBeNull();
   });
 });

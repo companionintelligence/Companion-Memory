@@ -59,7 +59,10 @@ describe('PeerExchangeClient.verifyIdentity', () => {
     const alice = person();
     answerAs(alice);
 
-    await expect(client().verifyIdentity(ENDPOINT, alice.didKey)).resolves.toEqual({ ok: true, value: undefined });
+    await expect(client().verifyIdentity(ENDPOINT, alice.didKey)).resolves.toEqual({
+      ok: true,
+      value: undefined,
+    });
 
     const [url, init] = mockFetch.mock.calls[0];
     expect(url).toMatch(new RegExp(`^${ENDPOINT}/identity/${encodeURIComponent(alice.didKey)}\\?challenge=`));
@@ -72,17 +75,26 @@ describe('PeerExchangeClient.verifyIdentity', () => {
     mockFetch.mockImplementation(async (url: string) => {
       const challenge = new URL(url).searchParams.get('challenge') as string;
 
-      return respond(200, signIdentityProof(mallory.key, { didKey: alice.didKey, endpoint: ENDPOINT, challenge }));
+      return respond(
+        200,
+        signIdentityProof(mallory.key, { didKey: alice.didKey, endpoint: ENDPOINT, challenge }),
+      );
     });
 
-    await expect(client().verifyIdentity(ENDPOINT, alice.didKey)).resolves.toEqual({ ok: false, reason: 'bad-proof' });
+    await expect(client().verifyIdentity(ENDPOINT, alice.didKey)).resolves.toEqual({
+      ok: false,
+      reason: 'bad-proof',
+    });
   });
 
   it('refuses a box that says it lives at another address', async () => {
     const alice = person();
     answerAs(alice, 'https://elsewhere.example.com/api/agent/v1');
 
-    await expect(client().verifyIdentity(ENDPOINT, alice.didKey)).resolves.toEqual({ ok: false, reason: 'bad-proof' });
+    await expect(client().verifyIdentity(ENDPOINT, alice.didKey)).resolves.toEqual({
+      ok: false,
+      reason: 'bad-proof',
+    });
   });
 
   it('reports a 404 as refused', async () => {

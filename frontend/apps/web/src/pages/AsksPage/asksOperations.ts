@@ -698,3 +698,25 @@ export const ACCEPT_PEER_INVITE = gql(`
     }
   }
 `);
+
+/** Retire the owner's peer key and make a new one; everyone linked by key is told. */
+export const ROTATE_PEER_KEY = gql(`
+  mutation RotatePeerKey {
+    rotatePeerKey {
+      success
+      notified
+      unreachable
+    }
+  }
+`);
+
+/** Tell everyone about the last key change again, for those who could not be reached. */
+export const RESEND_PEER_KEY_ROTATION = gql(`
+  mutation ResendPeerKeyRotation {
+    resendPeerKeyRotation {
+      success
+      notified
+      unreachable
+    }
+  }
+`);

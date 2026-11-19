@@ -123,7 +123,11 @@ function makeService(
   const userService = {
     findById: jest
       .fn()
-      .mockResolvedValue({ id: CTX.userId, role: overrides.role ?? 'admin', name: overrides.name ?? 'Alice' }),
+      .mockResolvedValue({
+        id: CTX.userId,
+        role: overrides.role ?? 'admin',
+        name: overrides.name ?? 'Alice',
+      }),
   };
 
   const service = new OutboundAskService(
@@ -245,7 +249,12 @@ describe('OutboundAskService.send', () => {
 
     await service.send(CTX as never, DTO, '');
 
-    expect(client.send).toHaveBeenCalledWith(link(), expect.objectContaining({ prompt: DTO.prompt }), '', undefined);
+    expect(client.send).toHaveBeenCalledWith(
+      link(),
+      expect.objectContaining({ prompt: DTO.prompt }),
+      '',
+      undefined,
+    );
   });
 
   it('still sends an ask that carries the account’s own Portal token', async () => {
@@ -406,7 +415,12 @@ describe('OutboundAskService.pollForAnswer', () => {
     // channel, so an approved answer stayed on the responder's box forever.
     const result = await service.pollForAnswer(CTX as never, 'ask-1', 'token');
 
-    expect(client.poll).toHaveBeenCalledWith(expect.objectContaining({ id: 'link-1' }), 'corr-1', 'token', undefined);
+    expect(client.poll).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'link-1' }),
+      'corr-1',
+      'token',
+      undefined,
+    );
     expect(result.response.status).toBe('answered');
     expect(answerService.create).toHaveBeenCalled();
     expect(persisted.status).toBe('answered');
@@ -473,7 +487,12 @@ describe('OutboundAskService.pollForAnswer', () => {
 
     await owner.service.pollForAnswer(CTX as never, 'ask-1', '');
 
-    expect(owner.client.poll).toHaveBeenCalledWith(expect.objectContaining({ id: 'link-1' }), 'corr-1', '', undefined);
+    expect(owner.client.poll).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'link-1' }),
+      'corr-1',
+      '',
+      undefined,
+    );
   });
 
   it.each(['keri', 'KERI', 'keri x'])(
@@ -490,7 +509,12 @@ describe('OutboundAskService.pollForAnswer', () => {
 
       await owner.service.pollForAnswer(CTX as never, 'ask-1', token);
 
-      expect(owner.client.poll).toHaveBeenCalledWith(expect.objectContaining({ id: 'link-1' }), 'corr-1', '', undefined);
+      expect(owner.client.poll).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'link-1' }),
+        'corr-1',
+        '',
+        undefined,
+      );
     },
   );
 });
@@ -499,7 +523,9 @@ describe('OutboundAskService — every person signs as themselves', () => {
   const SIGNER = { key: {} as never, keyid: 'did:key:z6MkSender' };
 
   function identityService() {
-    return { identityFor: jest.fn().mockResolvedValue({ userId: CTX.userId, didKey: SIGNER.keyid, signer: SIGNER }) };
+    return {
+      identityFor: jest.fn().mockResolvedValue({ userId: CTX.userId, didKey: SIGNER.keyid, signer: SIGNER }),
+    };
   }
 
   it('lets an account that is not the administrator send with no token, signed with its own key', async () => {
@@ -521,7 +547,11 @@ describe('OutboundAskService — every person signs as themselves', () => {
   });
 
   it('collects with the same key', async () => {
-    const { service, client } = makeService({ role: 'user', identityService: identityService(), poll: ANSWERED });
+    const { service, client } = makeService({
+      role: 'user',
+      identityService: identityService(),
+      poll: ANSWERED,
+    });
 
     await service.pollForAnswer(CTX, 'ask-1');
 
@@ -547,12 +577,10 @@ describe('OutboundAskService.collectOpenAnswers', () => {
     const made = makeService();
     const find = jest.fn().mockResolvedValue(asks);
     (made.service as unknown as { askRepository: unknown }).askRepository = { find };
-    const poll = jest
-      .spyOn(made.service, 'pollForAnswer')
-      .mockImplementation(async (_ctx, askId) => ({
-        ask: {} as never,
-        response: { askId, status: askId.endsWith('answered') ? 'answered' : 'delivered' },
-      }));
+    const poll = jest.spyOn(made.service, 'pollForAnswer').mockImplementation(async (_ctx, askId) => ({
+      ask: {} as never,
+      response: { askId, status: askId.endsWith('answered') ? 'answered' : 'delivered' },
+    }));
 
     return { ...made, find, poll };
   }

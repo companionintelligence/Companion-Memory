@@ -13,7 +13,8 @@ import { PeerSignatureService } from './PeerSignatureService';
 /** Why a call to another box did not give a usable answer, in words this box chose. */
 export type ExchangeFailure = 'not-permitted' | 'unreachable' | 'refused' | 'bad-proof';
 
-export type ExchangeResult<T> = { ok: true; value: T } | { ok: false; reason: ExchangeFailure; status?: number };
+export type ExchangeResult<T> =
+  { ok: true; value: T } | { ok: false; reason: ExchangeFailure; status?: number };
 
 /**
  * The calls one box makes to another to LINK people: fetch an identity proof,
@@ -79,7 +80,10 @@ export class PeerExchangeClient {
 
     const url = `${base}${path}`;
     const raw = JSON.stringify(body);
-    const signature = this.signatureService.signOutbound({ method: 'POST', targetUri: url, body: raw }, signer);
+    const signature = this.signatureService.signOutbound(
+      { method: 'POST', targetUri: url, body: raw },
+      signer,
+    );
 
     return this.request(url, {
       method: 'POST',

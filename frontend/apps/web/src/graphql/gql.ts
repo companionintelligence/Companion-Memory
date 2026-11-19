@@ -129,6 +129,8 @@ type Documents = {
     "\n  mutation CreatePeerInvite($input: CreatePeerInviteInput) {\n    createPeerInvite(input: $input) {\n      success\n      code\n      invite {\n        id\n        label\n        inviterName\n        status\n        createdAt\n        expiresAt\n        usedAt\n      }\n    }\n  }\n": typeof types.CreatePeerInviteDocument,
     "\n  mutation RevokePeerInvite($id: ID!) {\n    revokePeerInvite(id: $id) {\n      success\n      invite {\n        id\n        status\n      }\n    }\n  }\n": typeof types.RevokePeerInviteDocument,
     "\n  mutation AcceptPeerInvite($input: AcceptPeerInviteInput!) {\n    acceptPeerInvite(input: $input) {\n      success\n      peerLink {\n        id\n        peerHandle\n        displayName\n        trustTier\n        linkedByKey\n        safetyCode\n      }\n    }\n  }\n": typeof types.AcceptPeerInviteDocument,
+    "\n  mutation RotatePeerKey {\n    rotatePeerKey {\n      success\n      notified\n      unreachable\n    }\n  }\n": typeof types.RotatePeerKeyDocument,
+    "\n  mutation ResendPeerKeyRotation {\n    resendPeerKeyRotation {\n      success\n      notified\n      unreachable\n    }\n  }\n": typeof types.ResendPeerKeyRotationDocument,
     "\n  query GetCommunication($id: ID!) {\n    communication(id: $id) {\n      id\n      type\n      subject\n      preview\n      content\n\n      # When it was sent, and which way it went. The page used to select\n      # neither, so /communications/:id could not answer \"when was this?\".\n      time\n      direction\n\n      from {\n        id\n        name\n      }\n\n      to {\n        edges {\n          node {\n            id\n            name\n          }\n        }\n      }\n\n      tags {\n        id\n        label\n      }\n    }\n  }\n": typeof types.GetCommunicationDocument,
     "\n  mutation UpdateCommunicationPageFields($input: UpdateCommunicationInput!) {\n    updateCommunication(input: $input) {\n      id\n      subject\n      content\n    }\n  }\n": typeof types.UpdateCommunicationPageFieldsDocument,
     "\n  query GetConcept($id: ID!) {\n    concept(id: $id) {\n      id\n      name\n      description\n      tags {\n        id\n        label\n      }\n    }\n  }\n": typeof types.GetConceptDocument,
@@ -406,6 +408,8 @@ const documents: Documents = {
     "\n  mutation CreatePeerInvite($input: CreatePeerInviteInput) {\n    createPeerInvite(input: $input) {\n      success\n      code\n      invite {\n        id\n        label\n        inviterName\n        status\n        createdAt\n        expiresAt\n        usedAt\n      }\n    }\n  }\n": types.CreatePeerInviteDocument,
     "\n  mutation RevokePeerInvite($id: ID!) {\n    revokePeerInvite(id: $id) {\n      success\n      invite {\n        id\n        status\n      }\n    }\n  }\n": types.RevokePeerInviteDocument,
     "\n  mutation AcceptPeerInvite($input: AcceptPeerInviteInput!) {\n    acceptPeerInvite(input: $input) {\n      success\n      peerLink {\n        id\n        peerHandle\n        displayName\n        trustTier\n        linkedByKey\n        safetyCode\n      }\n    }\n  }\n": types.AcceptPeerInviteDocument,
+    "\n  mutation RotatePeerKey {\n    rotatePeerKey {\n      success\n      notified\n      unreachable\n    }\n  }\n": types.RotatePeerKeyDocument,
+    "\n  mutation ResendPeerKeyRotation {\n    resendPeerKeyRotation {\n      success\n      notified\n      unreachable\n    }\n  }\n": types.ResendPeerKeyRotationDocument,
     "\n  query GetCommunication($id: ID!) {\n    communication(id: $id) {\n      id\n      type\n      subject\n      preview\n      content\n\n      # When it was sent, and which way it went. The page used to select\n      # neither, so /communications/:id could not answer \"when was this?\".\n      time\n      direction\n\n      from {\n        id\n        name\n      }\n\n      to {\n        edges {\n          node {\n            id\n            name\n          }\n        }\n      }\n\n      tags {\n        id\n        label\n      }\n    }\n  }\n": types.GetCommunicationDocument,
     "\n  mutation UpdateCommunicationPageFields($input: UpdateCommunicationInput!) {\n    updateCommunication(input: $input) {\n      id\n      subject\n      content\n    }\n  }\n": types.UpdateCommunicationPageFieldsDocument,
     "\n  query GetConcept($id: ID!) {\n    concept(id: $id) {\n      id\n      name\n      description\n      tags {\n        id\n        label\n      }\n    }\n  }\n": types.GetConceptDocument,
@@ -1030,6 +1034,14 @@ export function gql(source: "\n  mutation RevokePeerInvite($id: ID!) {\n    revo
  * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function gql(source: "\n  mutation AcceptPeerInvite($input: AcceptPeerInviteInput!) {\n    acceptPeerInvite(input: $input) {\n      success\n      peerLink {\n        id\n        peerHandle\n        displayName\n        trustTier\n        linkedByKey\n        safetyCode\n      }\n    }\n  }\n"): (typeof documents)["\n  mutation AcceptPeerInvite($input: AcceptPeerInviteInput!) {\n    acceptPeerInvite(input: $input) {\n      success\n      peerLink {\n        id\n        peerHandle\n        displayName\n        trustTier\n        linkedByKey\n        safetyCode\n      }\n    }\n  }\n"];
+/**
+ * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function gql(source: "\n  mutation RotatePeerKey {\n    rotatePeerKey {\n      success\n      notified\n      unreachable\n    }\n  }\n"): (typeof documents)["\n  mutation RotatePeerKey {\n    rotatePeerKey {\n      success\n      notified\n      unreachable\n    }\n  }\n"];
+/**
+ * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function gql(source: "\n  mutation ResendPeerKeyRotation {\n    resendPeerKeyRotation {\n      success\n      notified\n      unreachable\n    }\n  }\n"): (typeof documents)["\n  mutation ResendPeerKeyRotation {\n    resendPeerKeyRotation {\n      success\n      notified\n      unreachable\n    }\n  }\n"];
 /**
  * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

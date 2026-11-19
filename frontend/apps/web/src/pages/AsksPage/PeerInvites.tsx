@@ -7,7 +7,9 @@ import {
   ACCEPT_PEER_INVITE,
   CREATE_PEER_INVITE,
   MY_PEER_INVITES,
+  RESEND_PEER_KEY_ROTATION,
   REVOKE_PEER_INVITE,
+  ROTATE_PEER_KEY,
 } from './asksOperations';
 import { SafetyCode } from './PeerManager';
 
@@ -42,6 +44,7 @@ export function PeerInvites({ onLinked }: Props) {
     <div className="flex flex-col gap-3">
       <InviteSomeone />
       <AcceptInvite onLinked={onLinked} />
+      <YourKey onRotated={onLinked} />
     </div>
   );
 }
@@ -243,6 +246,97 @@ function AcceptInvite({ onLinked }: Props) {
           {linked.safetyCode ? <SafetyCode code={linked.safetyCode} name={linked.name} /> : null}
         </div>
       ) : null}
+      {error ? <p className="text-destructive text-sm">{error}</p> : null}
+    </Card>
+  );
+}
+
+/**
+ * The owner's own key: the thing every link to them names. Replacing it is for
+ * a key they think may have leaked (a lost device, a stolen backup). Everyone
+ * linked by key is told, signed by the old key, and their links move to the new
+ * one. Anyone who could not be reached keeps the old key until told again,
+ * which is what "Tell them again" is for.
+ */
+function YourKey({ onRotated }: { onRotated: () => void }) {
+  const [rotate, rotating] = useMutation(ROTATE_PEER_KEY);
+  const [resend, resending] = useMutation(RESEND_PEER_KEY_ROTATION);
+  const [confirming, setConfirming] = useState(false);
+  const [outcome, setOutcome] = useState<{ notified: string[]; unreachable: string[] } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const busy = rotating.loading || resending.loading;
+
+  const run = async (action: 'rotate' | 'resend') => {
+    setError(null);
+    setConfirming(false);
+
+    try {
+      const result =
+        action === 'rotate'
+          ? (await rotate()).data?.rotatePeerKey
+          : (await resend()).data?.resendPeerKeyRotation;
+
+      if (result?.success) {
+        setOutcome({ notified: result.notified, unreachable: result.unreachable });
+        onRotated();
+      } else {
+        setError('Linking is turned off on this Companion.');
+      }
+    } catch (err) {
+      setError(messageOf(err, 'Could not change your key.'));
+    }
+  };
+
+  return (
+    <Card className="flex flex-col gap-2 p-4">
+      <p className="font-medium">Your key</p>
+      <p className="text-muted-foreground text-xs">
+        Everyone you link with knows you by a key your Companion made for you. If you think it may have
+        leaked, make a new one: everyone you are linked to is told, and their links move to it. Invites still
+        waiting stop working.
+      </p>
+
+      {confirming ? (
+        <div className="flex flex-wrap items-center gap-2" role="alertdialog" aria-label="Confirm new key">
+          <span className="text-sm">Make a new key and tell everyone?</span>
+          <Button size="sm" disabled={busy} onClick={() => void run('rotate')}>
+            Yes, make a new key
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setConfirming(false)}>
+            Cancel
+          </Button>
+        </div>
+      ) : (
+        <div>
+          <Button size="sm" variant="outline" disabled={busy} onClick={() => setConfirming(true)}>
+            Make a new key
+          </Button>
+        </div>
+      )}
+
+      {outcome ? (
+        <div className="flex flex-col gap-1 text-sm" role="status">
+          <p>
+            {outcome.notified.length || outcome.unreachable.length
+              ? `Told ${outcome.notified.length} of ${outcome.notified.length + outcome.unreachable.length}.`
+              : 'Done. You were not linked to anyone by key yet.'}
+          </p>
+          {outcome.unreachable.length ? (
+            <>
+              <p className="text-muted-foreground text-xs">
+                Could not reach {outcome.unreachable.join(', ')}. Their Companion will not recognise your asks
+                until it is told.
+              </p>
+              <div>
+                <Button size="sm" variant="outline" disabled={busy} onClick={() => void run('resend')}>
+                  Tell them again
+                </Button>
+              </div>
+            </>
+          ) : null}
+        </div>
+      ) : null}
+
       {error ? <p className="text-destructive text-sm">{error}</p> : null}
     </Card>
   );

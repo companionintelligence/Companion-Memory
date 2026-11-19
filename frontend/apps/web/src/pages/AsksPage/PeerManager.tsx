@@ -159,10 +159,15 @@ export function PeerManager({ peers, busy = false, onChangeTier, onRevoke, onAdd
                   </Card>
                 ) : null}
 
-                <div>
+                <div className="flex flex-wrap items-center gap-2">
                   <Button size="sm" variant="ghost" disabled={busy} onClick={() => onRevoke(peer.id)}>
                     End this link
                   </Button>
+                  {peer.safetyCode ? (
+                    <span className="text-muted-foreground text-xs">
+                      Their Companion is told, and ends its link too.
+                    </span>
+                  ) : null}
                 </div>
               </>
             )}
