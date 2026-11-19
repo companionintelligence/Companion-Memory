@@ -24,6 +24,18 @@ export type Scalars = {
   JSONObject: { input: any; output: any; }
 };
 
+export type AcceptPeerInviteInput = {
+  code: Scalars['String']['input'];
+  displayName?: InputMaybe<Scalars['String']['input']>;
+  myName?: InputMaybe<Scalars['String']['input']>;
+};
+
+export type AcceptPeerInvitePayload = {
+  __typename?: 'AcceptPeerInvitePayload';
+  peerLink?: Maybe<PeerLinkType>;
+  success: Scalars['Boolean']['output'];
+};
+
 export type ActionConnection = Connection & {
   __typename?: 'ActionConnection';
   edges: Array<ActionEdge>;
@@ -924,6 +936,18 @@ export type CreateNoteInput = {
 export type CreateNotePayload = {
   __typename?: 'CreateNotePayload';
   note?: Maybe<NoteType>;
+  success: Scalars['Boolean']['output'];
+};
+
+export type CreatePeerInviteInput = {
+  label?: InputMaybe<Scalars['String']['input']>;
+  name?: InputMaybe<Scalars['String']['input']>;
+};
+
+export type CreatePeerInvitePayload = {
+  __typename?: 'CreatePeerInvitePayload';
+  code?: Maybe<Scalars['String']['output']>;
+  invite?: Maybe<PeerInvite>;
   success: Scalars['Boolean']['output'];
 };
 
@@ -2023,6 +2047,7 @@ export type Mutation = {
   __typename?: 'Mutation';
   /** Accept a candidate at a chosen time, minting a real event */
   acceptCandidate: EventType;
+  acceptPeerInvite: AcceptPeerInvitePayload;
   /** Accept a proposed task into the open backlog. Keeps any preferred date as a hint; does not place a calendar block. */
   acceptProposedTask?: Maybe<TaskType>;
   /** Apply a pending automation change (mutate / complete / event revise). */
@@ -2058,6 +2083,7 @@ export type Mutation = {
   createItem: CreateItemPayload;
   createNote: CreateNotePayload;
   createNotes: Array<NoteType>;
+  createPeerInvite: CreatePeerInvitePayload;
   createPeerLink: PeerLinkPayload;
   createPeople: Array<PersonType>;
   createPerson: CreatePersonPayload;
@@ -2145,6 +2171,7 @@ export type Mutation = {
   /** Return a placed event to the slate, deleting the event it minted */
   returnEventToSlate: ScheduleCandidateType;
   revokeAskGrant: AskGrantPayload;
+  revokePeerInvite: PeerInvitePayload;
   revokePeerLink: PeerLinkPayload;
   runAsk: RunAskPayload;
   /** Place an open task into the next free workday gap as a planned calendar block. The click is consent — trust dial does not re-ask. */
@@ -2203,6 +2230,11 @@ export type MutationAcceptCandidateArgs = {
   endTime?: InputMaybe<Scalars['DateTime']['input']>;
   id: Scalars['ID']['input'];
   startTime: Scalars['DateTime']['input'];
+};
+
+
+export type MutationAcceptPeerInviteArgs = {
+  input: AcceptPeerInviteInput;
 };
 
 
@@ -2356,6 +2388,11 @@ export type MutationCreateNoteArgs = {
 
 export type MutationCreateNotesArgs = {
   input: Array<CreateNoteInput>;
+};
+
+
+export type MutationCreatePeerInviteArgs = {
+  input?: InputMaybe<CreatePeerInviteInput>;
 };
 
 
@@ -2670,6 +2707,11 @@ export type MutationReturnEventToSlateArgs = {
 
 
 export type MutationRevokeAskGrantArgs = {
+  id: Scalars['ID']['input'];
+};
+
+
+export type MutationRevokePeerInviteArgs = {
   id: Scalars['ID']['input'];
 };
 
@@ -3042,6 +3084,29 @@ export type PageInfo = {
   hasPreviousPage: Scalars['Boolean']['output'];
   startCursor?: Maybe<Scalars['String']['output']>;
 };
+
+export type PeerInvite = {
+  __typename?: 'PeerInvite';
+  createdAt: Scalars['DateTime']['output'];
+  expiresAt: Scalars['DateTime']['output'];
+  id: Scalars['ID']['output'];
+  inviterName: Scalars['String']['output'];
+  label?: Maybe<Scalars['String']['output']>;
+  status: PeerInviteStatus;
+  usedAt?: Maybe<Scalars['DateTime']['output']>;
+};
+
+export type PeerInvitePayload = {
+  __typename?: 'PeerInvitePayload';
+  invite?: Maybe<PeerInvite>;
+  success: Scalars['Boolean']['output'];
+};
+
+export type PeerInviteStatus =
+  | 'expired'
+  | 'pending'
+  | 'revoked'
+  | 'used';
 
 export type PeerLinkPayload = {
   __typename?: 'PeerLinkPayload';
@@ -3575,6 +3640,7 @@ export type Query = {
   myAskGrantHistory: Array<AskGrantType>;
   myAskGrants: Array<AskGrantType>;
   myHouseholdTiers: Array<HouseholdTierType>;
+  myPeerInvites: Array<PeerInvite>;
   myPeerLinks: Array<PeerLinkType>;
   node?: Maybe<Node>;
   note?: Maybe<NoteType>;
@@ -6018,6 +6084,32 @@ export type CollectPeerAnswerMutationVariables = Exact<{
 
 export type CollectPeerAnswerMutation = { __typename?: 'Mutation', collectPeerAnswer: { __typename?: 'SendPeerAskPayload', success: boolean, status?: string | null, reason?: string | null, ask?: { __typename?: 'AskType', id: string, status: AskStatus } | null } };
 
+export type MyPeerInvitesQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type MyPeerInvitesQuery = { __typename?: 'Query', myPeerInvites: Array<{ __typename?: 'PeerInvite', id: string, label?: string | null, inviterName: string, status: PeerInviteStatus, createdAt: any, expiresAt: any, usedAt?: any | null }> };
+
+export type CreatePeerInviteMutationVariables = Exact<{
+  input?: InputMaybe<CreatePeerInviteInput>;
+}>;
+
+
+export type CreatePeerInviteMutation = { __typename?: 'Mutation', createPeerInvite: { __typename?: 'CreatePeerInvitePayload', success: boolean, code?: string | null, invite?: { __typename?: 'PeerInvite', id: string, label?: string | null, inviterName: string, status: PeerInviteStatus, createdAt: any, expiresAt: any, usedAt?: any | null } | null } };
+
+export type RevokePeerInviteMutationVariables = Exact<{
+  id: Scalars['ID']['input'];
+}>;
+
+
+export type RevokePeerInviteMutation = { __typename?: 'Mutation', revokePeerInvite: { __typename?: 'PeerInvitePayload', success: boolean, invite?: { __typename?: 'PeerInvite', id: string, status: PeerInviteStatus } | null } };
+
+export type AcceptPeerInviteMutationVariables = Exact<{
+  input: AcceptPeerInviteInput;
+}>;
+
+
+export type AcceptPeerInviteMutation = { __typename?: 'Mutation', acceptPeerInvite: { __typename?: 'AcceptPeerInvitePayload', success: boolean, peerLink?: { __typename?: 'PeerLinkType', id: string, peerHandle: string, displayName?: string | null, trustTier: PeerTrustTier, linkedByKey: boolean } | null } };
+
 export type GetCommunicationQueryVariables = Exact<{
   id: Scalars['ID']['input'];
 }>;
@@ -7582,6 +7674,10 @@ export const MyHouseholdTiersDocument = {"kind":"Document","definitions":[{"kind
 export const AskAuditReceiptDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"AskAuditReceipt"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"id"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"askAuditReceipt"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"id"},"value":{"kind":"Variable","name":{"kind":"Name","value":"id"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"auditId"}},{"kind":"Field","name":{"kind":"Name","value":"askId"}},{"kind":"Field","name":{"kind":"Name","value":"auditSaid"}},{"kind":"Field","name":{"kind":"Name","value":"receipt"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"d"}},{"kind":"Field","name":{"kind":"Name","value":"schemaVersion"}},{"kind":"Field","name":{"kind":"Name","value":"recordId"}},{"kind":"Field","name":{"kind":"Name","value":"piiPrincipalId"}},{"kind":"Field","name":{"kind":"Name","value":"recipient"}},{"kind":"Field","name":{"kind":"Name","value":"legalBasis"}},{"kind":"Field","name":{"kind":"Name","value":"purposes"}},{"kind":"Field","name":{"kind":"Name","value":"processing"}},{"kind":"Field","name":{"kind":"Name","value":"consentBasis"}},{"kind":"Field","name":{"kind":"Name","value":"outcome"}},{"kind":"Field","name":{"kind":"Name","value":"disclosedCount"}},{"kind":"Field","name":{"kind":"Name","value":"issuedAt"}}]}}]}}]}}]} as unknown as DocumentNode<AskAuditReceiptQuery, AskAuditReceiptQueryVariables>;
 export const SendPeerAskDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"SendPeerAsk"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"input"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"SendPeerAskInput"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"sendPeerAsk"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"input"},"value":{"kind":"Variable","name":{"kind":"Name","value":"input"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"success"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"reason"}},{"kind":"Field","name":{"kind":"Name","value":"ask"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"status"}}]}}]}}]}}]} as unknown as DocumentNode<SendPeerAskMutation, SendPeerAskMutationVariables>;
 export const CollectPeerAnswerDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"CollectPeerAnswer"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"askId"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"collectPeerAnswer"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"askId"},"value":{"kind":"Variable","name":{"kind":"Name","value":"askId"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"success"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"reason"}},{"kind":"Field","name":{"kind":"Name","value":"ask"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"status"}}]}}]}}]}}]} as unknown as DocumentNode<CollectPeerAnswerMutation, CollectPeerAnswerMutationVariables>;
+export const MyPeerInvitesDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"MyPeerInvites"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"myPeerInvites"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"label"}},{"kind":"Field","name":{"kind":"Name","value":"inviterName"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"createdAt"}},{"kind":"Field","name":{"kind":"Name","value":"expiresAt"}},{"kind":"Field","name":{"kind":"Name","value":"usedAt"}}]}}]}}]} as unknown as DocumentNode<MyPeerInvitesQuery, MyPeerInvitesQueryVariables>;
+export const CreatePeerInviteDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"CreatePeerInvite"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"input"}},"type":{"kind":"NamedType","name":{"kind":"Name","value":"CreatePeerInviteInput"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"createPeerInvite"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"input"},"value":{"kind":"Variable","name":{"kind":"Name","value":"input"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"success"}},{"kind":"Field","name":{"kind":"Name","value":"code"}},{"kind":"Field","name":{"kind":"Name","value":"invite"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"label"}},{"kind":"Field","name":{"kind":"Name","value":"inviterName"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"createdAt"}},{"kind":"Field","name":{"kind":"Name","value":"expiresAt"}},{"kind":"Field","name":{"kind":"Name","value":"usedAt"}}]}}]}}]}}]} as unknown as DocumentNode<CreatePeerInviteMutation, CreatePeerInviteMutationVariables>;
+export const RevokePeerInviteDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"RevokePeerInvite"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"id"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"revokePeerInvite"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"id"},"value":{"kind":"Variable","name":{"kind":"Name","value":"id"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"success"}},{"kind":"Field","name":{"kind":"Name","value":"invite"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"status"}}]}}]}}]}}]} as unknown as DocumentNode<RevokePeerInviteMutation, RevokePeerInviteMutationVariables>;
+export const AcceptPeerInviteDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"AcceptPeerInvite"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"input"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"AcceptPeerInviteInput"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"acceptPeerInvite"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"input"},"value":{"kind":"Variable","name":{"kind":"Name","value":"input"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"success"}},{"kind":"Field","name":{"kind":"Name","value":"peerLink"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"peerHandle"}},{"kind":"Field","name":{"kind":"Name","value":"displayName"}},{"kind":"Field","name":{"kind":"Name","value":"trustTier"}},{"kind":"Field","name":{"kind":"Name","value":"linkedByKey"}}]}}]}}]}}]} as unknown as DocumentNode<AcceptPeerInviteMutation, AcceptPeerInviteMutationVariables>;
 export const GetCommunicationDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"GetCommunication"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"id"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"communication"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"id"},"value":{"kind":"Variable","name":{"kind":"Name","value":"id"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"type"}},{"kind":"Field","name":{"kind":"Name","value":"subject"}},{"kind":"Field","name":{"kind":"Name","value":"preview"}},{"kind":"Field","name":{"kind":"Name","value":"content"}},{"kind":"Field","name":{"kind":"Name","value":"time"}},{"kind":"Field","name":{"kind":"Name","value":"direction"}},{"kind":"Field","name":{"kind":"Name","value":"from"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}}]}},{"kind":"Field","name":{"kind":"Name","value":"to"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"edges"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"node"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}}]}}]}}]}},{"kind":"Field","name":{"kind":"Name","value":"tags"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"label"}}]}}]}}]}}]} as unknown as DocumentNode<GetCommunicationQuery, GetCommunicationQueryVariables>;
 export const UpdateCommunicationPageFieldsDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"UpdateCommunicationPageFields"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"input"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"UpdateCommunicationInput"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"updateCommunication"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"input"},"value":{"kind":"Variable","name":{"kind":"Name","value":"input"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"subject"}},{"kind":"Field","name":{"kind":"Name","value":"content"}}]}}]}}]} as unknown as DocumentNode<UpdateCommunicationPageFieldsMutation, UpdateCommunicationPageFieldsMutationVariables>;
 export const GetConceptDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"GetConcept"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"id"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"concept"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"id"},"value":{"kind":"Variable","name":{"kind":"Name","value":"id"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"name"}},{"kind":"Field","name":{"kind":"Name","value":"description"}},{"kind":"Field","name":{"kind":"Name","value":"tags"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"label"}}]}}]}}]}}]} as unknown as DocumentNode<GetConceptQuery, GetConceptQueryVariables>;

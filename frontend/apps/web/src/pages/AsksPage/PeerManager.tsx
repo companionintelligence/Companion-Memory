@@ -193,7 +193,11 @@ function AddPeerForm({ busy, onAdd }: { busy: boolean; onAdd: Props['onAdd'] }) 
 
   return (
     <Card className="flex flex-col gap-2 p-4">
-      <p className="font-medium">Link someone new</p>
+      <p className="font-medium">Link by address instead</p>
+      <p className="text-muted-foreground text-xs">
+        For a Companion that cannot use invites. A link entered by hand names no key, so you cannot ask them
+        from here; an invite links you both properly.
+      </p>
 
       <label className="flex flex-col gap-1">
         <span className="text-sm">Their handle</span>

@@ -19,6 +19,7 @@ import { PeerExchangeController } from './controllers/PeerExchangeController';
 import { PeerAnswerCollectionCron } from './cron/PeerAnswerCollectionCron';
 import { PeerAskCorrelationEntity } from './entities/PeerAskCorrelationEntity';
 import { PeerIdentityKeyEntity } from './entities/PeerIdentityKeyEntity';
+import { PeerInviteEntity } from './entities/PeerInviteEntity';
 import { PeerLinkEntity } from './entities/PeerLinkEntity';
 import { LocalPubDiscoveryService } from './services/LocalPubDiscoveryService';
 import { OutboundAskService } from './services/OutboundAskService';
@@ -28,6 +29,7 @@ import { PeerAskService } from './services/PeerAskService';
 import { PeerDirectoryService } from './services/PeerDirectoryService';
 import { PeerExchangeClient } from './services/PeerExchangeClient';
 import { PeerIdentityService } from './services/PeerIdentityService';
+import { PeerInviteService } from './services/PeerInviteService';
 import { PeerLinkService } from './services/PeerLinkService';
 import { PeerRateLimitService } from './services/PeerRateLimitService';
 import { PeerSignatureService } from './services/PeerSignatureService';
@@ -42,6 +44,7 @@ import { PeerSignatureService } from './services/PeerSignatureService';
       PeerLinkEntity,
       PeerAskCorrelationEntity,
       PeerIdentityKeyEntity,
+      PeerInviteEntity,
       EventEntity,
       AskEntity,
     ]),
@@ -63,6 +66,7 @@ import { PeerSignatureService } from './services/PeerSignatureService';
     PeerRateLimitService,
     PeerSignatureService,
     PeerIdentityService,
+    PeerInviteService,
     OutboundAskService,
     PeerAnswerCollectionCron,
   ],
@@ -76,6 +80,7 @@ import { PeerSignatureService } from './services/PeerSignatureService';
     PeerRateLimitService,
     PeerSignatureService,
     PeerIdentityService,
+    PeerInviteService,
     OutboundAskService,
   ],
 })
@@ -83,6 +88,8 @@ export class PeersModule {}
 
 export { PeerLinkEntity, PeerAskCorrelationEntity, PeerIdentityKeyEntity };
 export { PeerIdentityService } from './services/PeerIdentityService';
+export { PeerInviteService } from './services/PeerInviteService';
+export type { PeerInviteView } from './services/PeerInviteService';
 export type { PeerIdentity, PeerSigner } from './services/PeerIdentityService';
 export { PeerRateLimitService } from './services/PeerRateLimitService';
 export { PeerSignatureService } from './services/PeerSignatureService';

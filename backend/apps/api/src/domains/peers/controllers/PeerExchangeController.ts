@@ -2,21 +2,31 @@ import {
   BadRequestException,
   Controller,
   Get,
+  HttpCode,
   NotFoundException,
   Param,
+  Post,
   Query,
+  Req,
   ServiceUnavailableException,
+  UnauthorizedException,
 } from '@nestjs/common';
 
 import { FeatureService } from '@ci/common/feature';
 import { LoggerService } from '@ci/common/logging';
+import { type RawBodyRequest, transportHasBody } from '@ci/common/middleware/BodyParserMiddleware';
 import config from '@ci/configuration';
 
-import { isDidKeyId } from '../didKeyId';
+import { didKeyPublicJwk, isDidKeyId } from '../didKeyId';
 import { IDENTITY_CHALLENGE_PATTERN, type IdentityProofDocument, signIdentityProof } from '../identityProof';
-import { publishedBase } from '../peerRequest';
+import { claimedKeyId, header, parseRawJson, publishedBase, signedTargetUri } from '../peerRequest';
 import { PeerIdentityService } from '../services/PeerIdentityService';
+import { type InviteAcceptance, PeerInviteService } from '../services/PeerInviteService';
 import { PeerRateLimitService } from '../services/PeerRateLimitService';
+import { PeerSignatureService } from '../services/PeerSignatureService';
+
+/** The one refusal any signature failure on these routes produces; the reason is logged, not returned. */
+const SIGNATURE_REFUSED = 'Invalid signature';
 
 /**
  * `/agent/v1` routes for LINKING people, beside the ask routes in
@@ -31,6 +41,8 @@ import { PeerRateLimitService } from '../services/PeerRateLimitService';
 export class PeerExchangeController {
   constructor(
     private readonly identityService: PeerIdentityService,
+    private readonly inviteService: PeerInviteService,
+    private readonly signatureService: PeerSignatureService,
     private readonly rateLimitService: PeerRateLimitService,
     private readonly featureService: FeatureService,
     private readonly logger: LoggerService,
@@ -65,6 +77,59 @@ export class PeerExchangeController {
     }
 
     return signIdentityProof(identity.signer.key, { didKey, endpoint, challenge });
+  }
+
+  /**
+   * Another person's box accepting one of this box's invites. The request is
+   * signed by the accepting person's own key, and its body names that same key;
+   * see {@link PeerInviteService.receive} for what is checked after that.
+   */
+  @Post('invites/accept')
+  @HttpCode(200)
+  async acceptInvite(@Req() request: RawBodyRequest): Promise<InviteAcceptance> {
+    const endpoint = await this.openEndpoint();
+    const sender = await this.signedBy(request, endpoint, 'invite');
+
+    return this.inviteService.receive(sender, parseRawJson(request.rawBody));
+  }
+
+  /**
+   * The `did:key` that signed `request`, once the signature has been verified
+   * against the key that identifier spells out. These routes are reached before
+   * any link exists (an invite) or about a link the sender names, so the key is
+   * the identifier itself, never a key looked up on a link.
+   */
+  private async signedBy(request: RawBodyRequest, endpoint: string, bucket: string): Promise<string> {
+    const keyid = claimedKeyId(request);
+    if (keyid == null || !isDidKeyId(keyid)) {
+      throw new UnauthorizedException(SIGNATURE_REFUSED);
+    }
+
+    await this.rateLimitService.consumeExchange({ issuer: bucket, subject: keyid });
+
+    const targetUri = signedTargetUri(endpoint, request.originalUrl ?? request.url);
+    const publicJwk = didKeyPublicJwk(keyid);
+    if (targetUri == null || publicJwk == null) {
+      throw new UnauthorizedException(SIGNATURE_REFUSED);
+    }
+
+    const verification = await this.signatureService.verifyInbound({
+      method: request.method,
+      targetUri,
+      signatureInput: header(request, 'signature-input'),
+      signature: header(request, 'signature'),
+      contentDigestHeader: header(request, 'content-digest'),
+      transportHasBody: transportHasBody(request.headers),
+      rawBody: request.rawBody,
+      peerPublicJwk: publicJwk,
+    });
+
+    if (!verification.ok) {
+      this.logger.warn(`peer ${bucket} refused: signature ${verification.reason}`);
+      throw new UnauthorizedException(SIGNATURE_REFUSED);
+    }
+
+    return keyid;
   }
 
   /** This box's published `/agent/v1` base, or the same 503 the ask surface gives when it is closed. */

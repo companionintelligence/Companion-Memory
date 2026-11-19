@@ -636,3 +636,63 @@ export const COLLECT_PEER_ANSWER = gql(`
     }
   }
 `);
+
+/** The owner's invites. The codes themselves are not here: each is shown once, when made. */
+export const MY_PEER_INVITES = gql(`
+  query MyPeerInvites {
+    myPeerInvites {
+      id
+      label
+      inviterName
+      status
+      createdAt
+      expiresAt
+      usedAt
+    }
+  }
+`);
+
+export const CREATE_PEER_INVITE = gql(`
+  mutation CreatePeerInvite($input: CreatePeerInviteInput) {
+    createPeerInvite(input: $input) {
+      success
+      code
+      invite {
+        id
+        label
+        inviterName
+        status
+        createdAt
+        expiresAt
+        usedAt
+      }
+    }
+  }
+`);
+
+export const REVOKE_PEER_INVITE = gql(`
+  mutation RevokePeerInvite($id: ID!) {
+    revokePeerInvite(id: $id) {
+      success
+      invite {
+        id
+        status
+      }
+    }
+  }
+`);
+
+export const ACCEPT_PEER_INVITE = gql(`
+  mutation AcceptPeerInvite($input: AcceptPeerInviteInput!) {
+    acceptPeerInvite(input: $input) {
+      success
+      peerLink {
+        id
+        peerHandle
+        displayName
+        trustTier
+        linkedByKey
+      }
+    }
+  }
+`);

@@ -2,6 +2,17 @@
 # THIS FILE WAS AUTOMATICALLY GENERATED (DO NOT MODIFY)
 # ------------------------------------------------------
 
+input AcceptPeerInviteInput {
+  code: String!
+  displayName: String
+  myName: String
+}
+
+type AcceptPeerInvitePayload {
+  peerLink: PeerLinkType
+  success: Boolean!
+}
+
 type ActionConnection implements Connection {
   edges: [ActionEdge!]!
   pageInfo: PageInfo!
@@ -886,6 +897,17 @@ input CreateNoteInput {
 
 type CreateNotePayload {
   note: NoteType
+  success: Boolean!
+}
+
+input CreatePeerInviteInput {
+  label: String
+  name: String
+}
+
+type CreatePeerInvitePayload {
+  code: String
+  invite: PeerInvite
   success: Boolean!
 }
 
@@ -2030,6 +2052,7 @@ type MetricSuggestionType {
 type Mutation {
   """Accept a candidate at a chosen time, minting a real event"""
   acceptCandidate(endTime: DateTime, id: ID!, startTime: DateTime!): EventType!
+  acceptPeerInvite(input: AcceptPeerInviteInput!): AcceptPeerInvitePayload!
 
   """
   Accept a proposed task into the open backlog. Keeps any preferred date as a hint; does not place a calendar block.
@@ -2084,6 +2107,7 @@ type Mutation {
   createItem(input: CreateItemInput!): CreateItemPayload!
   createNote(input: CreateNoteInput!): CreateNotePayload!
   createNotes(input: [CreateNoteInput!]!): [NoteType!]!
+  createPeerInvite(input: CreatePeerInviteInput): CreatePeerInvitePayload!
   createPeerLink(input: CreatePeerLinkInput!): PeerLinkPayload!
   createPeople(input: [CreatePersonInput!]!): [PersonType!]!
   createPerson(input: CreatePersonInput!): CreatePersonPayload!
@@ -2214,6 +2238,7 @@ type Mutation {
   """Return a placed event to the slate, deleting the event it minted"""
   returnEventToSlate(eventId: ID!): ScheduleCandidateType!
   revokeAskGrant(id: ID!): AskGrantPayload!
+  revokePeerInvite(id: ID!): PeerInvitePayload!
   revokePeerLink(id: ID!): PeerLinkPayload!
   runAsk(disclosureForm: AnswerForm, id: ID!, redactItemIds: [String!]): RunAskPayload!
 
@@ -2468,6 +2493,28 @@ type PageInfo {
   hasNextPage: Boolean!
   hasPreviousPage: Boolean!
   startCursor: String
+}
+
+type PeerInvite {
+  createdAt: DateTime!
+  expiresAt: DateTime!
+  id: ID!
+  inviterName: String!
+  label: String
+  status: PeerInviteStatus!
+  usedAt: DateTime
+}
+
+type PeerInvitePayload {
+  invite: PeerInvite
+  success: Boolean!
+}
+
+enum PeerInviteStatus {
+  expired
+  pending
+  revoked
+  used
 }
 
 type PeerLinkPayload {
@@ -3075,6 +3122,7 @@ type Query {
   myAskGrantHistory: [AskGrantType!]!
   myAskGrants: [AskGrantType!]!
   myHouseholdTiers: [HouseholdTierType!]!
+  myPeerInvites: [PeerInvite!]!
   myPeerLinks: [PeerLinkType!]!
   node(id: ID!): Node
   note(id: ID!): NoteType

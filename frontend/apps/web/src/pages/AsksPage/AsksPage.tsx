@@ -60,6 +60,7 @@ import { DisclosureHistory } from './DisclosureHistory';
 import { DisclosureRelationships } from './DisclosureRelationships';
 import { GrantManager, type GranteeGroup } from './GrantManager';
 import { NewGrantForm } from './NewGrantForm';
+import { PeerInvites } from './PeerInvites';
 import { PeerManager } from './PeerManager';
 import type { RelationshipSummary } from './relationshipPresentation';
 import { type HiddenCharacterRow, useHiddenCharacterFlags } from './useHiddenCharacterFlags';
@@ -394,7 +395,8 @@ export function AsksPage() {
               </p>
               {sentNote ? (
                 <p className="text-muted-foreground text-sm">
-                  Their Companion did not take it yet ({sentNote}). Answers are checked for again on their own.
+                  Their Companion did not take it yet ({sentNote}). Answers are checked for again on their
+                  own.
                 </p>
               ) : null}
             </Card>
@@ -558,30 +560,33 @@ export function AsksPage() {
       content = <LoadingPage />;
     } else {
       content = (
-        <PeerManager
-          peers={peers.data?.myPeerLinks ?? []}
-          busy={peerBusy}
-          onChangeTier={(id, trustTier) =>
-            runAction(updatePeerLink({ variables: { input: { id, trustTier } } }))
-          }
-          onRevoke={(id) => runAction(revokePeerLink({ variables: { id } }))}
-          onAdd={(input) =>
-            runAction(
-              createPeerLink({
-                variables: {
-                  // No `trustTier`. The resolver defaults an omitted tier to
-                  // `stranger`, and that default is the safety property — see
-                  // CREATE_PEER_LINK.
-                  input: {
-                    peerHandle: input.peerHandle,
-                    memoryEndpoint: input.memoryEndpoint,
-                    displayName: input.displayName,
+        <div className="flex flex-col gap-3">
+          <PeerInvites onLinked={() => void peers.refetch()} />
+          <PeerManager
+            peers={peers.data?.myPeerLinks ?? []}
+            busy={peerBusy}
+            onChangeTier={(id, trustTier) =>
+              runAction(updatePeerLink({ variables: { input: { id, trustTier } } }))
+            }
+            onRevoke={(id) => runAction(revokePeerLink({ variables: { id } }))}
+            onAdd={(input) =>
+              runAction(
+                createPeerLink({
+                  variables: {
+                    // No `trustTier`. The resolver defaults an omitted tier to
+                    // `stranger`, and that default is the safety property — see
+                    // CREATE_PEER_LINK.
+                    input: {
+                      peerHandle: input.peerHandle,
+                      memoryEndpoint: input.memoryEndpoint,
+                      displayName: input.displayName,
+                    },
                   },
-                },
-              }),
-            )
-          }
-        />
+                }),
+              )
+            }
+          />
+        </div>
       );
     }
   } else if (tab === 'history' && openRelationship != null) {
