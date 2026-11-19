@@ -86,8 +86,9 @@ jobs:
     name: Plan the release
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # contents: write for the desktop tag (last step).
     permissions:
-      contents: read
+      contents: write
       actions: read
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -155,6 +156,19 @@ jobs:
           node scripts/release/release-plan.mjs phones "${GITHUB_REF_NAME}" "${MODE}" | tee -a "$GITHUB_OUTPUT"
           echo "### Phone apps" >> "$GITHUB_STEP_SUMMARY"
           grep '^reason=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2- >> "$GITHUB_STEP_SUMMARY"
+
+      # The desktop Release's tag is made here, at the start of the run, while
+      # main is most likely still at the tagged commit. GitHub refuses the
+      # workflow token a new tag at this commit once main's workflow files
+      # differ from it, and main can move during the hour the images and
+      # installers build. desktop-v2026.11.19 failed that way twice.
+      - name: Create the desktop tag
+        if: inputs.desktop
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: bash scripts/release/ensure-tag.sh "desktop-v${VERSION}" "${GITHUB_SHA}"
 
   publish:
     name: Server images
@@ -330,18 +344,30 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout the release scripts
+        uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts/release
+
+      # This tag can only be made once the phones are uploaded, so main may
+      # have moved past the commit by now. If GitHub refuses the workflow token
+      # (exit 3, see scripts/release/ensure-tag.sh) the release still stands;
+      # only the next phones=auto run would rebuild the phones, unless someone
+      # pushes the tag with the command the script prints.
       - name: Tag this commit mobile-v${{ needs.plan.outputs.version }}
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           TAG: mobile-v${{ needs.plan.outputs.version }}
         run: |
-          set -euo pipefail
-          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" >/dev/null 2>&1; then
-            echo "${TAG} already exists."
+          set +e
+          bash scripts/release/ensure-tag.sh "${TAG}" "${GITHUB_SHA}"
+          status=$?
+          if [[ "${status}" == "3" ]]; then
+            echo "::warning::${TAG} isn't pushed, so the next phones=auto run will rebuild the phone apps. Push it with the command above to record this phone release."
             exit 0
           fi
-          gh api "repos/${GITHUB_REPOSITORY}/git/refs" -f ref="refs/tags/${TAG}" -f sha="${GITHUB_SHA}" >/dev/null
-          echo "Tagged ${GITHUB_SHA} as ${TAG}."
+          exit "${status}"
 
   check:
     name: Check every platform
