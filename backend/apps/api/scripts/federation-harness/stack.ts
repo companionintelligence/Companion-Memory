@@ -113,6 +113,17 @@ export function apiEnv(
 
     ENABLE_ASK: 'true',
 
+    // ── the token path, on purpose ──────────────────────────────────────────
+    // `peers.requireHttpSignature` ships on, and this harness drives
+    // `POST /agent/v1/ask` itself with a Portal token and no signature: it is
+    // here to exercise the consent path behind the token check, not signing
+    // (which has its own suites). The setting has no environment variable, so
+    // it goes through NODE_CONFIG, merged over anything the caller set there.
+    NODE_CONFIG: JSON.stringify({
+      ...parseNodeConfig(process.env.NODE_CONFIG),
+      peers: { ...(parseNodeConfig(process.env.NODE_CONFIG).peers as object | undefined), requireHttpSignature: false },
+    }),
+
     // ── the data-safety pin ────────────────────────────────────────────────
     // The ONLY directory this appliance may resolve an import path into. The
     // owner's 308GB archive is deliberately not on this list: `import-real-data`
@@ -434,4 +445,15 @@ export function stopApi(pid: number | undefined): void {
 
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** The caller's NODE_CONFIG as an object, or an empty one when unset or not JSON. */
+function parseNodeConfig(raw: string | undefined): Record<string, unknown> {
+  try {
+    const parsed: unknown = raw ? JSON.parse(raw) : {};
+
+    return typeof parsed === 'object' && parsed != null ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
 }
