@@ -35,10 +35,12 @@
 # requirement, this one is expected to gain it too.
 #
 # ── Version ─────────────────────────────────────────────────────────────
-# release.yml calls this workflow (workflow_call) with version_name and
-# server_image_tag both set to the server release, so the app carries the
-# server's version: Memory Desktop 2026.11.17 runs server 2026.11.17 and its
-# Release is tagged desktop-v2026.11.17. The `version` job
+# release.yml dispatches this workflow on the server tag, as a run of its own,
+# with version_name and server_image_tag both set to the server release, so the
+# app carries the server's version: Memory Desktop 2026.11.17 runs server
+# 2026.11.17 and its Release is tagged desktop-v2026.11.17. It isn't a called
+# workflow (workflow_call) because the Windows lane needs the `production`
+# Environment's Azure secrets, which a called workflow's jobs did not receive. The `version` job
 # turns version_name into what each installer accepts, through
 # scripts/release/release-plan.mjs: Tauri gets at most three numbers
 # (2026.11.17.1 builds as 2026.11.17), and the Windows MSI, which caps the
@@ -121,49 +123,6 @@ name: Desktop Release
 #         type: string
 #         default: ''
 #         required: false
-#   workflow_call:
-#     inputs:
-#       version_name:
-#         type: string
-#         required: false
-#       server_image_tag:
-#         type: string
-#         required: false
-#       skip_test_gate:
-#         type: boolean
-#         default: false
-#         required: false
-#       bypass_reason:
-#         type: string
-#         default: ''
-#         required: false
-#     # Repository secrets a caller hands over. The AZURE_* values are declared
-#     # but never passed: the jobs that read them run in the production
-#     # Environment, and GitHub gives a called job with `environment:` that
-#     # Environment's secrets.
-#     secrets:
-#       APPLE_CERTIFICATE:
-#         required: false
-#       APPLE_CERTIFICATE_PASSWORD:
-#         required: false
-#       APPLE_ID:
-#         required: false
-#       APPLE_PASSWORD:
-#         required: false
-#       APPLE_TEAM_ID:
-#         required: false
-#       AZURE_TENANT_ID:
-#         required: false
-#       AZURE_CLIENT_ID:
-#         required: false
-#       AZURE_SUBSCRIPTION_ID:
-#         required: false
-#       AZURE_SIGNING_ENDPOINT:
-#         required: false
-#       AZURE_SIGNING_ACCOUNT:
-#         required: false
-#       AZURE_CERTIFICATE_PROFILE:
-#         required: false
 # <<< ci-local:gated
 on:
   workflow_dispatch:
@@ -210,52 +169,6 @@ on:
           expires.
         type: string
         default: ''
-        required: false
-  # release.yml calls this after publishing the server images. A called workflow
-  # runs on the caller's ref (the server tag), so the test gate below still finds
-  # the desktop-build.yml run dispatched on that commit before it was tagged.
-  workflow_call:
-    inputs:
-      version_name:
-        type: string
-        required: false
-      server_image_tag:
-        type: string
-        required: false
-      skip_test_gate:
-        type: boolean
-        default: false
-        required: false
-      bypass_reason:
-        type: string
-        default: ''
-        required: false
-    # Repository secrets a caller hands over. The AZURE_* values are declared
-    # but never passed: the jobs that read them run in the production
-    # Environment, and GitHub gives a called job with `environment:` that
-    # Environment's secrets.
-    secrets:
-      APPLE_CERTIFICATE:
-        required: false
-      APPLE_CERTIFICATE_PASSWORD:
-        required: false
-      APPLE_ID:
-        required: false
-      APPLE_PASSWORD:
-        required: false
-      APPLE_TEAM_ID:
-        required: false
-      AZURE_TENANT_ID:
-        required: false
-      AZURE_CLIENT_ID:
-        required: false
-      AZURE_SUBSCRIPTION_ID:
-        required: false
-      AZURE_SIGNING_ENDPOINT:
-        required: false
-      AZURE_SIGNING_ACCOUNT:
-        required: false
-      AZURE_CERTIFICATE_PROFILE:
         required: false
 
 # Read-only by default. Only `release` writes (it creates the tag and the
@@ -1054,7 +967,7 @@ jobs:
         uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           tag_name: ${{ needs.version.outputs.tag }}
-          # Called from release.yml, the tag doesn't exist yet. Without this the
+          # Started by release.yml, the tag doesn't exist yet. Without this the
           # action would create it on the default branch's head, not on the
           # commit these installers were built from.
           target_commitish: ${{ github.sha }}
