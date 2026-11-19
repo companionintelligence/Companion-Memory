@@ -772,15 +772,15 @@ The repo root now declares `test` and `typecheck` scripts of its own. `yarn test
 runs the `node:test` suites under `scripts/`: the top-level `scripts/*.test.ts`
 files plus everything under `scripts/xtask`, `scripts/dev-stack` and
 `scripts/publish`. `yarn typecheck` runs `tsc --noEmit` over what the root
-`tsconfig.json` includes (`scripts/**`, `tests/**` and
-`playwright.config.ts`), which nothing ran before.
-Neither needs naming anywhere else: `foreach --all` stopped excluding the root
+`tsconfig.json` includes: `scripts/**`, `tests/**` and the three root
+`playwright*.config.ts` files.
+Neither needs naming in the Makefile: `foreach --all` stopped excluding the root
 workspace the moment those scripts existed, so `make test` runs the suite and
 `make typecheck` (`yarn workspaces foreach --all run typecheck`) runs the
 type-check. In CI, `ci.yml` runs the root pair as lanes of their own,
-`Type check root` and `Run root tests`, when someone dispatches it. The nine
-`frontend/packages/*` type-checks that `make typecheck` also runs have no lane
-there.
+`Type check root` and `Run root tests`, when someone dispatches it.
+`Run root tests` fails if any test skips. The nine `frontend/packages/*`
+type-checks that `make typecheck` also runs have no lane there.
 
 The underlying Yarn scripts are still there if you only want the JS half:
 
