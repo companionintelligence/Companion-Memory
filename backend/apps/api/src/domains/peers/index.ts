@@ -16,6 +16,7 @@ import { UserModule } from '@ci/domains/user';
 
 import { PeerAskController } from './controllers/PeerAskController';
 import { PeerExchangeController } from './controllers/PeerExchangeController';
+import { PeerAnswerCollectionCron } from './cron/PeerAnswerCollectionCron';
 import { PeerAskCorrelationEntity } from './entities/PeerAskCorrelationEntity';
 import { PeerIdentityKeyEntity } from './entities/PeerIdentityKeyEntity';
 import { PeerLinkEntity } from './entities/PeerLinkEntity';
@@ -63,6 +64,7 @@ import { PeerSignatureService } from './services/PeerSignatureService';
     PeerSignatureService,
     PeerIdentityService,
     OutboundAskService,
+    PeerAnswerCollectionCron,
   ],
   exports: [
     PeerLinkService,
@@ -126,3 +128,4 @@ export type {
   PeerDescriptor,
   BusyInterval,
 } from './protocol';
+export { isSelfCertifyingIssuer } from './selfCertifyingKeyId';

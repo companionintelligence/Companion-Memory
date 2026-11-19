@@ -476,6 +476,7 @@ export const MY_PEER_LINKS = gql(`
       status
       revokedAt
       createdAt
+      linkedByKey
     }
   }
 `);
@@ -598,6 +599,39 @@ export const ASK_AUDIT_RECEIPT = gql(`
         outcome
         disclosedCount
         issuedAt
+      }
+    }
+  }
+`);
+
+/**
+ * Ask a person on another Companion. Sent with no Portal token: the server
+ * signs it with the sender's own key, which is what the other side checks.
+ */
+export const SEND_PEER_ASK = gql(`
+  mutation SendPeerAsk($input: SendPeerAskInput!) {
+    sendPeerAsk(input: $input) {
+      success
+      status
+      reason
+      ask {
+        id
+        status
+      }
+    }
+  }
+`);
+
+/** Fetch the answer to one of the owner's sent asks now, instead of waiting for the next automatic check. */
+export const COLLECT_PEER_ANSWER = gql(`
+  mutation CollectPeerAnswer($askId: ID!) {
+    collectPeerAnswer(askId: $askId) {
+      success
+      status
+      reason
+      ask {
+        id
+        status
       }
     }
   }

@@ -38,6 +38,7 @@ import {
   ASK_INBOX,
   ASK_INBOX_HIDDEN_CHARACTERS,
   ASK_OUTBOX,
+  COLLECT_PEER_ANSWER,
   CREATE_ASK,
   CREATE_ASK_GRANT,
   CREATE_PEER_LINK,
@@ -50,10 +51,11 @@ import {
   SET_HOUSEHOLD_TIER,
   REVOKE_PEER_LINK,
   RUN_ASK,
+  SEND_PEER_ASK,
   UPDATE_ASK_GRANT,
   UPDATE_PEER_LINK,
 } from './asksOperations';
-import { COMPOSER_SHAPES, composeRecipients, unreachablePeers } from './composeRecipients';
+import { COMPOSER_SHAPES, composeRecipients, peerRecipients, unreachablePeers } from './composeRecipients';
 import { DisclosureHistory } from './DisclosureHistory';
 import { DisclosureRelationships } from './DisclosureRelationships';
 import { GrantManager, type GranteeGroup } from './GrantManager';
@@ -151,6 +153,7 @@ export function AsksPage() {
   const myAddress = useQuery(MY_ASK_ADDRESS).data?.me?.id ?? null;
   const [openAnswerId, setOpenAnswerId] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
+  const [sentNote, setSentNote] = useState<string | null>(null);
 
   const inbox = useQuery(ASK_INBOX);
   const outbox = useQuery(ASK_OUTBOX);
@@ -212,6 +215,8 @@ export function AsksPage() {
       void inbox.refetch();
     },
   });
+  const [sendPeerAsk, sendingPeer] = useMutation(SEND_PEER_ASK, { onCompleted: refetchAll });
+  const [collectPeerAnswer, collecting] = useMutation(COLLECT_PEER_ANSWER, { onCompleted: refetchAll });
   const [createAsk, creating] = useMutation(CREATE_ASK, {
     onCompleted: () => void outbox.refetch(),
   });
@@ -387,17 +392,25 @@ export function AsksPage() {
                 It is in “Sent” now. You will not be told whether a person reads it or a standing rule answers
                 it — only whether an answer arrives.
               </p>
+              {sentNote ? (
+                <p className="text-muted-foreground text-sm">
+                  Their Companion did not take it yet ({sentNote}). Answers are checked for again on their own.
+                </p>
+              ) : null}
             </Card>
           ) : null}
           <AskComposer
-            recipients={composeRecipients({
-              grants: grants.data?.myAskGrants ?? [],
-              inbox: inbox.data?.askInbox ?? [],
-              outbox: outbox.data?.askOutbox ?? [],
-            })}
+            recipients={[
+              ...composeRecipients({
+                grants: grants.data?.myAskGrants ?? [],
+                inbox: inbox.data?.askInbox ?? [],
+                outbox: outbox.data?.askOutbox ?? [],
+              }),
+              ...peerRecipients(peers.data?.myPeerLinks ?? []),
+            ]}
             unreachable={unreachablePeers(peers.data?.myPeerLinks ?? [])}
             shapes={COMPOSER_SHAPES}
-            busy={creating.loading}
+            busy={creating.loading || sendingPeer.loading}
             onSend={(ask) => {
               // Cleared UP FRONT, before the request goes out, and that ordering
               // is the whole control. A green "Sent." belongs to one specific
@@ -408,6 +421,32 @@ export function AsksPage() {
               // send that had not landed yet, which is the same reassuring-lie
               // shape as an error rendered as an empty state.
               setSent(false);
+              setSentNote(null);
+
+              if (ask.peerHandle) {
+                runAction(
+                  sendPeerAsk({
+                    variables: {
+                      input: {
+                        handle: ask.peerHandle,
+                        archetype: ask.queryType,
+                        subject: ask.prompt,
+                        dataClass: ask.dataClass,
+                        prompt: ask.prompt,
+                      },
+                    },
+                  }).then((result) => {
+                    setSent(true);
+                    // Only this box's own words ever arrive here (`PeerAskClient`
+                    // drops whatever the peer said), so it is safe to show.
+                    setSentNote(result.data?.sendPeerAsk?.reason ?? null);
+                  }),
+                  () => undefined,
+                );
+
+                return;
+              }
+
               runAction(
                 createAsk({
                   variables: {
@@ -631,6 +670,18 @@ export function AsksPage() {
                   {ask.query.prompt}
                 </span>
                 <Badge variant="secondary">{askStatusLabel(ask.status as AskStatus)}</Badge>
+                {!answered && ask.peerHandle != null && ask.status === 'delivered' ? (
+                  // Answers from another Companion are collected on their own
+                  // every ten minutes; this is for not waiting.
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={collecting.loading}
+                    onClick={() => runAction(collectPeerAnswer({ variables: { askId: ask.id } }))}
+                  >
+                    Check for an answer
+                  </Button>
+                ) : null}
                 {answered ? (
                   <Button
                     size="sm"

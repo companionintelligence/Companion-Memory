@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { EntityManager, Repository } from 'typeorm';
+import { EntityManager, IsNull, MoreThan, Not, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { type UserServiceContext } from '@ci/common/context';
@@ -69,6 +69,12 @@ export interface SendAskResult {
  * persists an answer whenever one arrives, and {@link pollForAnswer} goes and
  * gets one that arrived later.
  */
+/** Most open outbound asks one collection run checks. */
+const COLLECT_BATCH = 200;
+
+/** Most asks one run collects from one peer link; see {@link OutboundAskService.collectOpenAnswers}. */
+const COLLECT_PER_LINK = 10;
+
 @Injectable()
 export class OutboundAskService {
   constructor(
@@ -212,6 +218,61 @@ export class OutboundAskService {
     await this.absorb(ask, link, response);
 
     return { ask, response };
+  }
+
+  /**
+   * Collect, for every person on the box, the answers to outbound asks still
+   * waiting, so an ask the peer's owner approved later lands here on its own.
+   *
+   * Driven by `PeerAnswerCollectionCron`. Bounded twice: at most
+   * {@link COLLECT_BATCH} asks per run, oldest first, and at most
+   * {@link COLLECT_PER_LINK} per peer link, which keeps one run well inside the
+   * peer's collect budget (30 a minute per identity) however many asks are
+   * open to it. Whatever a run leaves is picked up by the next.
+   *
+   * One ask's failure never stops the others: a peer that is down is reported
+   * by {@link pollForAnswer} as `delivered`, and anything that throws is logged
+   * and skipped.
+   */
+  async collectOpenAnswers(now: Date = new Date()): Promise<{ checked: number; answered: number }> {
+    const open = await this.askRepository.find({
+      where: {
+        direction: 'outbound',
+        status: 'delivered',
+        peerLinkId: Not(IsNull()),
+        expiresAt: MoreThan(now),
+      },
+      order: { createdAt: 'ASC' },
+      take: COLLECT_BATCH,
+    });
+
+    const perLink = new Map<string, number>();
+    let checked = 0;
+    let answered = 0;
+
+    for (const ask of open) {
+      const linkId = ask.peerLinkId as string;
+      const count = perLink.get(linkId) ?? 0;
+      if (count >= COLLECT_PER_LINK || ask.askerUserId == null) {
+        continue;
+      }
+
+      perLink.set(linkId, count + 1);
+      checked += 1;
+
+      try {
+        const { response } = await this.pollForAnswer({ userId: ask.askerUserId }, ask.id);
+        if (response.status === 'answered') {
+          answered += 1;
+        }
+      } catch (error) {
+        this.logger.warn(
+          `collecting outbound ask ${ask.id} failed: ${error instanceof Error ? error.message : 'error'}`,
+        );
+      }
+    }
+
+    return { checked, answered };
   }
 
   private async activeLink(context: UserServiceContext, handle: string): Promise<PeerLink> {

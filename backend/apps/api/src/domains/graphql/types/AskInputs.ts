@@ -317,11 +317,11 @@ export class SendPeerAskInput {
   purpose?: string;
 
   /**
-   * Portal-issued access token whose audience is the PEER box. Supplied by the
-   * caller until Portal token exchange lands; this box never mints or stores it.
-   * An empty string sends the ask signed with this box's key alone
-   * (`peers.signingKeyJwk`), which only the box's administrator may do.
+   * Optional Portal-issued access token whose audience is the PEER box; this
+   * box never mints or stores one. Every ask is signed with the sender's own
+   * key whether or not one is given, and with none the signature alone
+   * authenticates it, through the link the peer made for the sender's did:key.
    */
-  @Field(() => String)
-  peerAccessToken!: string;
+  @Field(() => String, { nullable: true })
+  peerAccessToken?: string;
 }

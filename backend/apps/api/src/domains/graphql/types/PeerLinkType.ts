@@ -1,6 +1,6 @@
 import { Field, GraphQLISODateTime, ID, InputType, ObjectType, registerEnumType } from '@nestjs/graphql';
 
-import { PEER_TRUST_TIERS, type PeerLink, type PeerLinkStatus } from '@ci/domains/peers';
+import { PEER_TRUST_TIERS, isSelfCertifyingIssuer, type PeerLink, type PeerLinkStatus } from '@ci/domains/peers';
 
 import { GlobalUID } from './GlobalUID';
 
@@ -104,6 +104,18 @@ export class PeerLinkType {
   avatarUrl?: string | null;
 
   /**
+   * Whether this link names the peer by their own key (`did:key`, or
+   * `did:keri:D<x>`), as an invite makes it. Only such a peer can be asked
+   * from this box today: every ask is signed with the sender's key, and the
+   * other side answers it only through a link made for the sender's key.
+   *
+   * A yes/no about the KIND of identity, not the identity: the identifier
+   * itself stays off the wire for the reason given on {@link toType}.
+   */
+  @Field(() => Boolean)
+  linkedByKey!: boolean;
+
+  /**
    * `peerIssuer` and `peerSubject` are NOT exposed, and this stayed true when
    * they became WRITABLE (see `CreatePeerLinkInput` below).
    *
@@ -131,6 +143,7 @@ export class PeerLinkType {
       createdAt: link.createdAt,
       updatedAt: link.updatedAt,
       revokedAt: link.revokedAt,
+      linkedByKey: isSelfCertifyingIssuer(link.peerIssuer) && link.peerSubject != null,
     };
   }
 }

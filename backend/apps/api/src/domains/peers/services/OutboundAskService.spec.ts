@@ -538,6 +538,63 @@ describe('OutboundAskService — every person signs as themselves', () => {
   });
 });
 
+describe('OutboundAskService.collectOpenAnswers', () => {
+  function openAsk(id: string, peerLinkId: string, askerUserId: string | null = 'user-1') {
+    return { id, peerLinkId, askerUserId, direction: 'outbound', status: 'delivered' };
+  }
+
+  function withOpen(asks: unknown[]) {
+    const made = makeService();
+    const find = jest.fn().mockResolvedValue(asks);
+    (made.service as unknown as { askRepository: unknown }).askRepository = { find };
+    const poll = jest
+      .spyOn(made.service, 'pollForAnswer')
+      .mockImplementation(async (_ctx, askId) => ({
+        ask: {} as never,
+        response: { askId, status: askId.endsWith('answered') ? 'answered' : 'delivered' },
+      }));
+
+    return { ...made, find, poll };
+  }
+
+  it('asks only for open, unexpired outbound asks, oldest first, in a bounded batch', async () => {
+    const { service, find } = withOpen([]);
+    const now = new Date('2026-11-19T12:00:00Z');
+
+    await service.collectOpenAnswers(now);
+
+    const [{ where, order, take }] = find.mock.calls[0];
+    expect(where.direction).toBe('outbound');
+    expect(where.status).toBe('delivered');
+    expect(order).toEqual({ createdAt: 'ASC' });
+    expect(take).toBe(200);
+  });
+
+  it('collects each as the person who asked it, and counts the answers', async () => {
+    const { service, poll } = withOpen([openAsk('a-answered', 'l1', 'alice'), openAsk('b', 'l2', 'carol')]);
+
+    await expect(service.collectOpenAnswers()).resolves.toEqual({ checked: 2, answered: 1 });
+    expect(poll).toHaveBeenCalledWith({ userId: 'alice' }, 'a-answered');
+    expect(poll).toHaveBeenCalledWith({ userId: 'carol' }, 'b');
+  });
+
+  it('collects at most ten from one peer link per run, inside the peer’s collect budget', async () => {
+    const asks = Array.from({ length: 15 }, (_, i) => openAsk(`a${i}`, 'same-link'));
+    const { service, poll } = withOpen([...asks, openAsk('other', 'l2')]);
+
+    await expect(service.collectOpenAnswers()).resolves.toEqual({ checked: 11, answered: 0 });
+    expect(poll).toHaveBeenCalledTimes(11);
+    expect(poll).toHaveBeenCalledWith({ userId: 'user-1' }, 'other');
+  });
+
+  it('keeps going when one ask fails', async () => {
+    const { service, poll } = withOpen([openAsk('bad', 'l1'), openAsk('good-answered', 'l2')]);
+    poll.mockRejectedValueOnce(new Error('boom'));
+
+    await expect(service.collectOpenAnswers()).resolves.toEqual({ checked: 2, answered: 1 });
+  });
+});
+
 describe('toStoredAnswer', () => {
   it('maps the WIRE availability form onto the `attribute` storage form', () => {
     // `ci.ask_answers` CHECKs the five LOCAL forms; `availability` is a wire

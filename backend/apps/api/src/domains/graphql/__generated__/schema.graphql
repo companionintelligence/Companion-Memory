@@ -2051,6 +2051,7 @@ type Mutation {
 
   """Soft-cancel a reminder. The row survives."""
   cancelReminder(id: ID!): ReminderType
+  collectPeerAnswer(askId: ID!): SendPeerAskPayload!
 
   """
   Mark a task done. Idempotent — the original completion instant is preserved.
@@ -2485,6 +2486,7 @@ type PeerLinkType {
   createdAt: DateTime!
   displayName: String
   id: ID!
+  linkedByKey: Boolean!
   memoryEndpoint: String!
   peerHandle: String!
   personEntityId: ID
@@ -3569,7 +3571,7 @@ input SendPeerAskInput {
   from: String
   handle: String!
   minMinutes: Int
-  peerAccessToken: String!
+  peerAccessToken: String
   prompt: String!
   purpose: String
   subject: String
