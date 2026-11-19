@@ -48,7 +48,7 @@ const BODY = {
 };
 
 /** A peer link as the controller reads it: OIDC identity plus the recorded key. */
-function link(publicJwk: Record<string, unknown>, overrides: Record<string, unknown> = {}) {
+function link(publicJwk: Record<string, unknown> | null, overrides: Record<string, unknown> = {}) {
   return {
     peerHandle: 'them',
     peerIssuer: IDENTITY.issuer,
@@ -174,7 +174,13 @@ function makeController(
     handle: jest.fn().mockResolvedValue({ askId: 'abc12345', status: 'pending' }),
     result: jest.fn().mockResolvedValue({ askId: 'abc12345', status: 'pending' }),
   };
-  const peerLinkService = { findActiveByKeyThumbprint };
+  // Answers the way `PeerLinkService.findActiveByPeerIdentity` does: the links naming that issuer and subject.
+  const findActiveByPeerIdentity = jest.fn(async (issuer: string, subject: string) =>
+    (links as Array<Record<string, unknown>>).filter(
+      (candidate) => candidate.peerIssuer === issuer && candidate.peerSubject === subject,
+    ),
+  );
+  const peerLinkService = { findActiveByKeyThumbprint, findActiveByPeerIdentity };
   const rateLimitService = { consume: jest.fn(), consumePoll: jest.fn() };
   const featureService = { isFeatureEnabled: jest.fn().mockResolvedValue(askEnabled) };
   const signatureService = new PeerSignatureService(new InMemoryConsumptionStore(), logger() as never);
@@ -250,6 +256,64 @@ describe('PeerAskController — signatures not required', () => {
       didKey.controller.ask(undefined, request(didKeyPeer.sign(JSON.stringify(BODY)), undefined)),
     ).rejects.toBeInstanceOf(UnauthorizedException);
     expect(didKey.peerAskService.handle).not.toHaveBeenCalled();
+  });
+
+  it("refuses an unsigned request from a peer whose link records a key, on both routes", async () => {
+    // That peer's box signs every call, so an unsigned request naming it is a token without the key: a
+    // leaked or replayed token. It is refused even with the box-wide switch off.
+    const peer = signAs(JSON.stringify(BODY), 'POST', `${ENDPOINT}/ask`);
+    const { controller, peerAskService } = makeController([link(peer.publicJwk)]);
+
+    await expect(controller.ask('Bearer t', request({}, JSON.stringify(BODY)))).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
+    await expect(
+      controller.result('Bearer t', request({}, undefined, '/agent/v1/ask/abc12345', 'GET'), 'abc12345'),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(peerAskService.handle).not.toHaveBeenCalled();
+    expect(peerAskService.result).not.toHaveBeenCalled();
+  });
+
+  it('still accepts a signed request from that peer', async () => {
+    const raw = JSON.stringify(BODY);
+    const peer = signAs(raw, 'POST', `${ENDPOINT}/ask`);
+    const { controller, peerAskService } = makeController([link(peer.publicJwk)]);
+
+    await controller.ask('Bearer t', request(peer.headers, raw));
+
+    expect(peerAskService.handle).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts an unsigned request from a peer whose link records no key', async () => {
+    const { controller, peerAskService } = makeController([link(null)]);
+
+    await controller.ask('Bearer t', request({}, JSON.stringify(BODY)));
+
+    expect(peerAskService.handle).toHaveBeenCalledTimes(1);
+  });
+
+  it("is not tripped by another peer's key: only links naming the token's identity count", async () => {
+    const other = signAs(undefined, 'GET', `${ENDPOINT}/ask/x`);
+    const { controller, peerAskService } = makeController([
+      link(null),
+      link(other.publicJwk, { peerHandle: 'someone-else', peerSubject: 'peer-sub-2' }),
+    ]);
+
+    await controller.ask('Bearer t', request({}, JSON.stringify(BODY)));
+
+    expect(peerAskService.handle).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses when any of several household links for that peer records a key', async () => {
+    const peer = signAs(undefined, 'GET', `${ENDPOINT}/ask/x`);
+    const { controller } = makeController([
+      link(null),
+      link(peer.publicJwk, { peerHandle: 'them-for-another-member' }),
+    ]);
+
+    await expect(controller.ask('Bearer t', request({}, JSON.stringify(BODY)))).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
   });
 
   it('answers Malformed ask to an unsigned request whose body is not JSON', async () => {
