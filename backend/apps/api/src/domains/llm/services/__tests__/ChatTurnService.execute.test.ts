@@ -1,4 +1,5 @@
 import { Channel } from '@ci/common/rpc';
+import { LiveChangesService } from '@ci/domains/live-changes';
 
 import { LlmFirstResponseTimeoutError } from '../../firstResponseDeadline';
 import { ChatGenerationBroker } from '../ChatGenerationBroker';
@@ -47,6 +48,7 @@ function streamFrom(
 function buildService(
   chatStream: jest.Mock,
   messageService = { findByThreadId: jest.fn(), update: jest.fn() },
+  liveChanges?: LiveChangesService,
 ) {
   const broker = new ChatGenerationBroker();
   const threadService = {
@@ -68,8 +70,9 @@ function buildService(
     chatStream,
   };
 
+  const eventService = { send: jest.fn(async () => ['title-job']) };
   const service = new ChatTurnService(
-    { send: jest.fn(async () => ['title-job']) } as never,
+    eventService as never,
     { findByThreadId: jest.fn(async () => null) } as never,
     messageService as never,
     ollamaService as never,
@@ -83,9 +86,12 @@ function buildService(
     broker,
     { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() } as never,
     { isFeatureEnabled: jest.fn(async () => false) } as never,
+    undefined,
+    undefined,
+    liveChanges,
   );
 
-  return { service, broker, messageService, ollamaService, threadService };
+  return { service, broker, messageService, ollamaService, threadService, eventService };
 }
 
 describe('persistedAssistantContent', () => {
@@ -565,5 +571,180 @@ describe('ChatTurnService.execute on a finished tool turn', () => {
       expect.anything(),
       expect.objectContaining({ role: 'assistant', content: 'Nothing about coffee.', canceled: false }),
     );
+  });
+});
+
+/**
+ * A reply streaming when the key or session that asked for it is revoked (deleted, Sign out, Sign out everywhere, a
+ * password change) used to run to its end. It now stops the way Stop stops it.
+ */
+describe('ChatTurnService.execute when the key or session that asked for it is revoked', () => {
+  const asked = { ...payload, credential: { kind: 'session', sessionId: 'sess-1' } as const };
+  const signedIn = [{ '?column?': 1 }];
+
+  /**
+   * A real LiveChangesService on a fake database, whose lookups answer `rows`. `revoke()` empties them and sends
+   * the notice, then waits for the lookup it starts.
+   */
+  function build(makeStream: (revoke: () => Promise<void>) => jest.Mock, rows: unknown[] = signedIn) {
+    const dataSource = { query: jest.fn(async () => rows) };
+    const liveChanges = new LiveChangesService(
+      dataSource as never,
+      { setContext: jest.fn(), log: jest.fn(), warn: jest.fn() } as never,
+    );
+    const revoke = async () => {
+      dataSource.query.mockResolvedValue([]);
+      liveChanges.dispatch(JSON.stringify({ userId: asked.ownerId, revoked: true }));
+      await new Promise(setImmediate);
+    };
+
+    const chatStream = makeStream(revoke);
+    const messageService = {
+      findByThreadId: jest.fn(),
+      findById: jest.fn(async () => ({ id: 'assistant-msg', role: 'assistant', content: '' })),
+      update: jest.fn(),
+      create: jest.fn(async () => ({})),
+    };
+
+    return { ...buildService(chatStream, messageService, liveChanges), chatStream, dataSource, liveChanges };
+  }
+
+  /** Streams `first`, has the session signed out, then streams `rest` unless its signal was aborted by then. */
+  function revokedPartWay(revoke: () => Promise<void>, first: string, rest: string) {
+    return jest.fn(async (_context: unknown, _messages: unknown, { signal }: { signal: AbortSignal }) => {
+      const generator = (async function* () {
+        yield { message: { content: first } };
+        await revoke();
+
+        // OllamaService.chatStream ends once its signal aborts.
+        if (!signal.aborted) {
+          yield { message: { content: rest } };
+        }
+      })();
+
+      Object.defineProperty(generator, 'messages', { get: () => [] });
+      Object.defineProperty(generator, 'error', { get: () => undefined });
+
+      return generator;
+    });
+  }
+
+  const finished = () =>
+    jest.fn(async () =>
+      streamFrom([{ message: { content: 'All of it' } }], [{ role: 'assistant', content: 'All of it' }]),
+    );
+
+  it('aborts the model call, ends the reply for whoever watches it and keeps what streamed, like Stop', async () => {
+    const { service, broker, chatStream, messageService, threadService, eventService } = build((revoke) =>
+      revokedPartWay(revoke, 'The first half', ' and the rest'),
+    );
+    const viewer = {
+      writeHead: jest.fn(),
+      write: jest.fn(),
+      end: jest.fn(),
+      on: jest.fn(),
+      writableEnded: false,
+    };
+    broker.pipeToResponse(viewer as never, payload.threadId);
+
+    await service.execute(asked);
+
+    const [, , options] = chatStream.mock.calls[0] as unknown as [unknown, unknown, { signal: AbortSignal }];
+
+    expect(options.signal.aborted).toBe(true);
+    expect(viewer.end).toHaveBeenCalled();
+    expect(messageService.update).toHaveBeenLastCalledWith(
+      expect.anything(),
+      'assistant-msg',
+      expect.objectContaining({ content: 'The first half', canceled: false }),
+    );
+    expect(threadService.update).toHaveBeenLastCalledWith(expect.anything(), 'thread-1', {
+      generationStatus: 'idle',
+    });
+    // No title for a first turn cut off part way, as for one the person stopped.
+    expect(eventService.send).not.toHaveBeenCalled();
+  });
+
+  it('stops a turn whose session was signed out just after the queue check, with no notice heard', async () => {
+    const { service, chatStream, dataSource } = build(() =>
+      jest.fn(async (_context: unknown, _messages: unknown, { signal }: { signal: AbortSignal }) => {
+        const generator = (async function* () {
+          yield { message: { content: 'The first half' } };
+          await new Promise(setImmediate);
+
+          if (!signal.aborted) {
+            yield { message: { content: ' and the rest' } };
+          }
+        })();
+
+        Object.defineProperty(generator, 'messages', { get: () => [] });
+        Object.defineProperty(generator, 'error', { get: () => undefined });
+
+        return generator;
+      }),
+    );
+    // The queue check reads the session as signed in; the sign-out lands right after it, its notice unheard.
+    dataSource.query.mockResolvedValueOnce(signedIn).mockResolvedValue([]);
+
+    await service.execute(asked);
+
+    const [, , options] = chatStream.mock.calls[0] as unknown as [unknown, unknown, { signal: AbortSignal }];
+
+    expect(options.signal.aborted).toBe(true);
+  });
+
+  it('does not run a turn whose key was deleted while it waited in the queue', async () => {
+    const { service, chatStream, messageService, threadService } = build(() => jest.fn(), []);
+
+    await service.execute({ ...payload, credential: { kind: 'apiKey', keyId: 'key-1' } });
+
+    expect(chatStream).not.toHaveBeenCalled();
+    expect(messageService.update).toHaveBeenCalledWith(expect.anything(), 'assistant-msg', {
+      canceled: true,
+    });
+    expect(threadService.update).toHaveBeenLastCalledWith(expect.anything(), 'thread-1', {
+      generationStatus: 'idle',
+    });
+  });
+
+  it('runs to the end while the session stays signed in, then stops listening', async () => {
+    const { service, messageService, dataSource, liveChanges } = build(finished);
+
+    await service.execute(asked);
+
+    expect(messageService.update).toHaveBeenLastCalledWith(
+      expect.anything(),
+      'assistant-msg',
+      expect.objectContaining({ content: 'All of it', canceled: false }),
+    );
+
+    const lookups = dataSource.query.mock.calls.length;
+    liveChanges.dispatch(JSON.stringify({ userId: asked.ownerId, revoked: true }));
+    await new Promise(setImmediate);
+
+    expect(dataSource.query).toHaveBeenCalledTimes(lookups);
+  });
+
+  it('runs the turn when the lookup fails', async () => {
+    const { service, chatStream, messageService, dataSource } = build(finished);
+    dataSource.query.mockRejectedValue(new Error('connection reset'));
+
+    await service.execute(asked);
+
+    expect(chatStream).toHaveBeenCalled();
+    expect(messageService.update).toHaveBeenLastCalledWith(
+      expect.anything(),
+      'assistant-msg',
+      expect.objectContaining({ content: 'All of it', canceled: false }),
+    );
+  });
+
+  it('leaves a job queued before the credential was recorded alone', async () => {
+    const { service, chatStream, dataSource } = build(finished, []);
+
+    await service.execute(payload);
+
+    expect(chatStream).toHaveBeenCalled();
+    expect(dataSource.query).not.toHaveBeenCalled();
   });
 });

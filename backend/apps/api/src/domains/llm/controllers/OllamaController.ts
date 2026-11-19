@@ -7,11 +7,13 @@ import {
   HttpCode,
   Inject,
   NotFoundException,
+  Optional,
   Param,
   Post,
   Query,
   Req,
   Res,
+  UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
 import type { Response } from 'express';
@@ -19,11 +21,18 @@ import { z } from 'zod/v3';
 
 import { Context, type RequestContext, toServiceContext, type UserServiceContext } from '@ci/common/context';
 import { READ_CAPABILITY, RequireCapability } from '@ci/common/decorators';
-import { JwtOrApiKeyAuthGuard, type ApiKeyScopedRequest, apiKeyCapabilityOf } from '@ci/common/guards';
+import { JwtOrApiKeyAuthGuard, apiKeyCapabilityOf } from '@ci/common/guards';
+import type { GuardedRequest } from '@ci/common/guards/guardRequest';
 import { LoggerService } from '@ci/common/logging';
 import { ValidationPipe } from '@ci/common/pipes';
 import { MessageService, ThreadService, type Thread } from '@ci/domains/conversations';
 import { ActionService } from '@ci/domains/intelligence';
+import {
+  CREDENTIAL_RECHECK_MS,
+  LiveChangesService,
+  streamCredentialOf,
+  type LiveChangesCredential,
+} from '@ci/domains/live-changes';
 
 import { isActiveGenerationStatus } from '../constants';
 import { ChatGenerationBroker } from '../services/ChatGenerationBroker';
@@ -58,6 +67,7 @@ export class OllamaController {
     // Same forwardRef as ChatTurnService: intelligence and llm import each other.
     @Inject(forwardRef(() => ActionService))
     private readonly actionService?: ActionService,
+    @Optional() private readonly liveChanges?: LiveChangesService,
   ) {
     this.logger.setContext(OllamaController.name);
   }
@@ -117,10 +127,13 @@ export class OllamaController {
     @Context() context: RequestContext,
     @Body(new ValidationPipe(promptSchema)) input: PromptInput,
     @Res() res: Response,
-    @Req() req: ApiKeyScopedRequest,
+    @Req() req: GuardedRequest,
   ) {
     const serviceContext = toServiceContext(context);
     const ownerId = serviceContext.userId;
+    const { credential } = streamCredentialOf(req);
+
+    await this.refuseSignedOutSession(ownerId, credential);
 
     // The first call that needs the model. When Memory Desktop is closed and took the model with it, the
     // answer says that instead of a bare 500.
@@ -178,9 +191,14 @@ export class OllamaController {
       enableTools: input.enableTools ?? true,
       enableThinking: input.enableThinking ?? true,
       capability: apiKeyCapabilityOf(req),
+      credential,
     });
 
     this.broker.pipeToResponse(res, thread.id);
+    // The key or session that asked is revoked: the turn stops the way Stop stops it, which ends this
+    // response with the part that streamed. The worker watches the same credential for as long as the
+    // turn runs, open response or not (ChatTurnService.execute); this covers a turn still in the queue.
+    this.watchResponse(res, ownerId, credential, () => this.broker.abort(thread.id));
   }
 
   @UseGuards(JwtOrApiKeyAuthGuard)
@@ -189,8 +207,13 @@ export class OllamaController {
     @Context() context: RequestContext,
     @Param('threadId') threadId: string,
     @Res() res: Response,
+    @Req() req: GuardedRequest,
   ) {
     const serviceContext = toServiceContext(context);
+    const { credential } = streamCredentialOf(req);
+
+    await this.refuseSignedOutSession(serviceContext.userId, credential);
+
     const thread = await this.threadService.findById(serviceContext, threadId);
 
     if (thread == null) {
@@ -205,6 +228,9 @@ export class OllamaController {
 
     this.broker.ensure(threadId);
     this.broker.pipeToResponse(res, threadId);
+    // Only this viewer: someone may watch a turn another of their devices asked for. That turn
+    // answers to the credential that asked for it.
+    this.watchResponse(res, serviceContext.userId, credential, () => res.end());
   }
 
   @UseGuards(JwtOrApiKeyAuthGuard)
@@ -225,6 +251,60 @@ export class OllamaController {
     if (isActiveGenerationStatus(thread.generationStatus)) {
       await this.chatTurnService.setGenerationStatus(serviceContext, threadId, 'idle');
     }
+  }
+
+  /**
+   * 401 for a bearer whose session was signed out. The guard checked the token's signature and expiry,
+   * not the session behind it, so a tab signed out elsewhere could start or watch a reply until its
+   * token ran out. The live-update stream refuses it the same way.
+   */
+  private async refuseSignedOutSession(userId: string, credential: LiveChangesCredential): Promise<void> {
+    if (credential.kind !== 'session' || !this.liveChanges) {
+      return;
+    }
+
+    if (!(await this.liveChanges.isCredentialLive(userId, credential))) {
+      throw new UnauthorizedException();
+    }
+  }
+
+  /**
+   * Run `onRevoked` once the key or session this response was asked with stops letting its user in
+   * (deleted, signed out, the account deleted), for as long as the response is open. A revoke notice
+   * checks at once; the timer covers what sends none.
+   *
+   * A client that left during the awaits before this has had its `close` already. Listeners added
+   * now hear neither `close` nor `finish`, so a watch on it ran its timer and its lookups until the
+   * credential went, or for good on a key. The generate one then aborted whatever turn held the
+   * thread by that time. A token with no session has nothing to look up.
+   *
+   * The watch stops on `finish`, which waits for a slow client to drain what was written. Between
+   * `end()` and then, the thread may already hold a turn someone else asked for, so a response that
+   * has ended does nothing.
+   */
+  private watchResponse(
+    res: Response,
+    userId: string,
+    credential: LiveChangesCredential,
+    onRevoked: () => void,
+  ): void {
+    if (!this.liveChanges || credential.kind === 'token' || res.writableEnded || res.destroyed) {
+      return;
+    }
+
+    const watch = this.liveChanges.watchCredential(
+      userId,
+      credential,
+      () => {
+        if (!res.writableEnded) {
+          onRevoked();
+        }
+      },
+      CREDENTIAL_RECHECK_MS,
+    );
+
+    res.on('close', watch.stop);
+    res.on('finish', watch.stop);
   }
 
   /**

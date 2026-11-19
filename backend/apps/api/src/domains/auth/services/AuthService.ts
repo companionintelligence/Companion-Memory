@@ -381,9 +381,10 @@ export class AuthService {
   }
 
   /**
-   * `sessionId` is the session the token is minted for, carried as `sid`. Only
-   * the live-update stream reads it, to end when that session is signed out;
-   * every other request takes the token as it is until it expires.
+   * `sessionId` is the session the token is minted for, carried as `sid`. The
+   * live-update stream and chat (generate, re-attach and the turn it queues)
+   * read it, to refuse or end when that session is signed out; every other
+   * request takes the token as it is until it expires.
    */
   issueAccessToken(userId: string, sessionId?: string): string {
     const payload = {

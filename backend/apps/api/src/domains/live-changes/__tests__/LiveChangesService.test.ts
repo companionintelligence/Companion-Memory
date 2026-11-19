@@ -226,6 +226,141 @@ describe('LiveChangesService', () => {
     });
   });
 
+  describe('watchCredential', () => {
+    const key = { kind: 'apiKey', keyId: 'key-1' } as const;
+    const notice = (userId: string) => JSON.stringify({ userId, revoked: true });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('calls back once when a revoke notice finds the key gone, then stops listening', async () => {
+      const { service, dataSource } = makeService();
+      const onRevoked = jest.fn();
+      dataSource.query.mockResolvedValue([{ '?column?': 1 }] as never);
+      service.watchCredential('alice', key, onRevoked);
+
+      service.dispatch(notice('bob'));
+      service.dispatch(notice('alice'));
+      await new Promise(setImmediate);
+      expect(dataSource.query).toHaveBeenCalledTimes(1);
+      expect(onRevoked).not.toHaveBeenCalled();
+
+      dataSource.query.mockResolvedValue([] as never);
+      service.dispatch(notice('alice'));
+      await new Promise(setImmediate);
+      service.dispatch(notice('alice'));
+      await new Promise(setImmediate);
+
+      expect(onRevoked).toHaveBeenCalledTimes(1);
+      expect(dataSource.query).toHaveBeenCalledTimes(2);
+    });
+
+    it('looks again on its own timer, for what sends no notice', async () => {
+      jest.useFakeTimers();
+      const { service, dataSource } = makeService();
+      const onRevoked = jest.fn();
+      dataSource.query.mockResolvedValue([{ '?column?': 1 }] as never);
+      service.watchCredential('alice', key, onRevoked, 25_000);
+
+      await jest.advanceTimersByTimeAsync(25_000);
+      expect(dataSource.query).toHaveBeenCalledTimes(1);
+
+      dataSource.query.mockResolvedValue([] as never);
+      await jest.advanceTimersByTimeAsync(25_000);
+      expect(onRevoked).toHaveBeenCalledTimes(1);
+
+      await jest.advanceTimersByTimeAsync(75_000);
+      expect(dataSource.query).toHaveBeenCalledTimes(2);
+    });
+
+    it('asks again when a notice lands while a lookup is out and settles after both', async () => {
+      const { service, dataSource } = makeService();
+      const onRevoked = jest.fn();
+      let answer: (rows: unknown[]) => void = () => undefined;
+      dataSource.query.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            answer = resolve;
+          }) as never,
+      );
+      const watch = service.watchCredential('alice', key, onRevoked);
+
+      const first = watch.check();
+      dataSource.query.mockResolvedValue([] as never);
+      service.dispatch(notice('alice'));
+      answer([{ '?column?': 1 }]);
+      await first;
+
+      expect(dataSource.query).toHaveBeenCalledTimes(2);
+      expect(onRevoked).toHaveBeenCalledTimes(1);
+    });
+
+    it('logs a revoke handler that throws instead of dropping it', async () => {
+      const { service, dataSource, logger } = makeService();
+      dataSource.query.mockResolvedValue([] as never);
+      const watch = service.watchCredential('alice', key, () => {
+        throw new Error('socket gone');
+      });
+
+      await watch.check();
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        'Credential revoke handler threw',
+        expect.objectContaining({ userId: 'alice', error: 'socket gone' }),
+      );
+    });
+
+    it('still asks again for a notice that landed while a lookup was out and failed', async () => {
+      const { service, dataSource } = makeService();
+      const onRevoked = jest.fn();
+      let fail: (error: Error) => void = () => undefined;
+      dataSource.query.mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            fail = reject;
+          }) as never,
+      );
+      const watch = service.watchCredential('alice', key, onRevoked);
+
+      const first = watch.check();
+      dataSource.query.mockResolvedValue([] as never);
+      service.dispatch(notice('alice'));
+      fail(new Error('connection reset'));
+      await first;
+
+      expect(dataSource.query).toHaveBeenCalledTimes(2);
+      expect(onRevoked).toHaveBeenCalledTimes(1);
+    });
+
+    it('takes a failed lookup for no answer, not a revoke', async () => {
+      const { service, dataSource } = makeService();
+      const onRevoked = jest.fn();
+      dataSource.query.mockRejectedValue(new Error('connection reset'));
+      const watch = service.watchCredential('alice', key, onRevoked);
+
+      await watch.check();
+
+      expect(onRevoked).not.toHaveBeenCalled();
+    });
+
+    it('looks nothing up once stopped', async () => {
+      jest.useFakeTimers();
+      const { service, dataSource } = makeService();
+      const onRevoked = jest.fn();
+      const watch = service.watchCredential('alice', key, onRevoked, 25_000);
+
+      watch.stop();
+      watch.stop();
+      service.dispatch(notice('alice'));
+      await watch.check();
+      await jest.advanceTimersByTimeAsync(100_000);
+
+      expect(dataSource.query).not.toHaveBeenCalled();
+      expect(onRevoked).not.toHaveBeenCalled();
+    });
+  });
+
   describe('the listening connection', () => {
     beforeEach(() => {
       jest.useFakeTimers();

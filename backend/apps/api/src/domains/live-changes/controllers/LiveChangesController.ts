@@ -159,49 +159,15 @@ export class LiveChangesController {
       pending.set(topic, timer);
     });
 
-    let checking = false;
-    let askedAgain = false;
-
-    // Ends the stream if what opened it no longer lets it in. A notice that
-    // lands while a check is out asks again once that check is back: the check
-    // may have read before the revoke was written. A failed lookup keeps the
-    // stream (the service logs it). The next keep-alive asks again.
-    const recheck = async () => {
-      if (res.writableEnded) {
-        return;
-      }
-
-      if (checking) {
-        askedAgain = true;
-
-        return;
-      }
-
-      checking = true;
-
-      try {
-        do {
-          askedAgain = false;
-
-          if (!(await this.liveChanges.isCredentialLive(userId, credential))) {
-            close();
-
-            return;
-          }
-        } while (askedAgain && !res.writableEnded);
-      } catch {
-        // A database hiccup is not a revoke.
-      } finally {
-        checking = false;
-      }
-    };
-
-    const unsubscribeRevocations = this.liveChanges.subscribeRevocations(userId, () => void recheck());
+    // Ends the stream if what opened it no longer lets it in: at once on a
+    // revoke notice and on each keep-alive. A failed lookup keeps the stream
+    // (the service logs it). The next keep-alive asks again.
+    const watch = this.liveChanges.watchCredential(userId, credential, () => close());
 
     const heartbeat = setInterval(() => {
       if (!res.writableEnded) {
         res.write(': ping\n\n');
-        void recheck();
+        void watch.check();
       }
     }, HEARTBEAT_MS);
 
@@ -223,7 +189,7 @@ export class LiveChangesController {
 
       pending.clear();
       unsubscribe();
-      unsubscribeRevocations();
+      watch.stop();
 
       if (!res.writableEnded) {
         res.end();
