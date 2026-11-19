@@ -1239,9 +1239,10 @@ pub async fn is_healthy() -> bool {
     }
 }
 
-/// Blocks until Memory answers its health check through the gateway, or
-/// `timeout` passes. For a caller already off the async runtime.
-pub fn wait_until_healthy(timeout: Duration) -> bool {
+/// Blocks until Memory answers its health check through the gateway, `timeout`
+/// passes or `give_up` says to stop waiting (asked between tries). For a caller
+/// already off the async runtime.
+pub fn wait_until_healthy(timeout: Duration, give_up: impl Fn() -> bool) -> bool {
     let url = health_url();
     let Ok(client) = reqwest::blocking::Client::builder()
         .timeout(Duration::from_millis(2500))
@@ -1256,7 +1257,7 @@ pub fn wait_until_healthy(timeout: Duration) -> bool {
         if client.get(&url).send().is_ok_and(|response| response.status().is_success()) {
             return true;
         }
-        if std::time::Instant::now() >= deadline {
+        if std::time::Instant::now() >= deadline || give_up() {
             return false;
         }
         std::thread::sleep(Duration::from_secs(2));
@@ -1267,7 +1268,7 @@ fn user_stopped_marker(paths: &StackPaths) -> PathBuf {
     paths.data_dir.join(".user-stopped")
 }
 
-fn mark_user_stopped(paths: &StackPaths) {
+pub fn mark_user_stopped(paths: &StackPaths) {
     let _ = fs::write(user_stopped_marker(paths), b"");
 }
 
@@ -1275,7 +1276,8 @@ fn clear_user_stopped(paths: &StackPaths) {
     let _ = fs::remove_file(user_stopped_marker(paths));
 }
 
-fn is_user_stopped(paths: &StackPaths) -> bool {
+/// The person stopped Memory from the tray and has not started it since.
+pub fn is_user_stopped(paths: &StackPaths) -> bool {
     user_stopped_marker(paths).exists()
 }
 
@@ -2185,5 +2187,16 @@ mod tests {
         assert!(is_user_stopped(&paths));
         clear_user_stopped(&paths);
         assert!(!is_user_stopped(&paths));
+    }
+
+    /// Giving up at once means one try. A Memory that does not answer is not
+    /// asked again, and one running on this machine answers that first try.
+    #[test]
+    fn giving_up_ends_the_wait_for_memory_at_once() {
+        let started = std::time::Instant::now();
+
+        wait_until_healthy(std::time::Duration::from_secs(60), || true);
+
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "waited {:?}", started.elapsed());
     }
 }

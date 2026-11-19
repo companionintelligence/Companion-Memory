@@ -30,6 +30,10 @@ use crate::stack_manager::{self, StackPaths};
 /// for the new chat model.
 const RESTART_TIMEOUT: Duration = Duration::from_secs(180);
 
+/// How long a restart that failed waits for a Stop Stack that may have broken
+/// it to finish (see `stopped_during_restart`).
+const STOP_GRACE: Duration = Duration::from_secs(15);
+
 /// Where a download started from Settings > Model has got. Kept after it ends,
 /// so the page can say how it went.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -47,6 +51,10 @@ pub enum Download {
     Done {
         downloaded: Vec<String>,
         chat_model: String,
+        /// Memory was stopped from the tray when the download ended. `.env`
+        /// names `chat_model`, but nothing runs on it until Memory is started
+        /// again. Cleared once it answers after that start (see `status`).
+        waits_for_start: bool,
     },
     /// `message` is written for the person, not the log.
     Failed { message: String },
@@ -55,6 +63,10 @@ pub enum Download {
 impl Download {
     fn is_running(&self) -> bool {
         matches!(self, Download::Downloading { .. } | Download::Switching { .. })
+    }
+
+    fn waits_for_start(&self) -> bool {
+        matches!(self, Download::Done { waits_for_start: true, .. })
     }
 }
 
@@ -71,8 +83,9 @@ pub struct RecommendedModelStatus {
     /// what chat and background work run on for anyone who has not picked one.
     pub chat_model: Option<String>,
     /// The recommended models the person's Ollama does not have. None when it
-    /// was not asked (not the person's own Ollama, or a download is running)
-    /// or did not answer: the page must not read that as "nothing missing".
+    /// was not asked (not the person's own Ollama, a download is running or
+    /// one waits for Memory to start) or did not answer: the page must not read
+    /// that as "nothing missing".
     pub missing: Option<Vec<String>>,
     pub download: Download,
 }
@@ -91,6 +104,27 @@ impl Downloader {
     fn current(&self) -> Download {
         self.download.lock().unwrap_or_else(|p| p.into_inner()).clone()
     }
+
+    /// The current state, where a download that ended while Memory was stopped
+    /// counts as done for good once Memory has been started again and answers.
+    /// `stopped` and `answers` are only asked while one is waiting.
+    fn current_after_start(&self, stopped: impl FnOnce() -> bool, answers: impl FnOnce() -> bool) -> Download {
+        let current = self.current();
+        // Asked without the lock: the health check can take seconds.
+        if !current.waits_for_start() || stopped() || !answers() {
+            return current;
+        }
+
+        let mut download = self.download.lock().unwrap_or_else(|p| p.into_inner());
+        // Only the download asked about. Another may have started and ended
+        // while the health check ran. Its own wait is still owed.
+        if *download == current {
+            if let Download::Done { waits_for_start, .. } = &mut *download {
+                *waits_for_start = false;
+            }
+        }
+        download.clone()
+    }
 }
 
 /// Sets the shared state. A free function so the download thread can hold the
@@ -101,10 +135,14 @@ fn set(download: &Mutex<Download>, next: Download) {
 
 pub fn status(paths: &StackPaths, backend: Option<ChatBackend>, downloader: &Downloader) -> RecommendedModelStatus {
     let own_ollama = backend == Some(ChatBackend::HostOllama);
-    let download = downloader.current();
-    // Not asked while a download runs. What is missing cannot change until it
-    // ends, yet the page polls this every second.
-    let missing = if own_ollama && !download.is_running() {
+    let download = downloader.current_after_start(
+        || stack_manager::is_user_stopped(paths),
+        // One try, no waiting.
+        || stack_manager::wait_until_healthy(Duration::ZERO, || false),
+    );
+    // Not asked while a download runs or waits for Memory to start. What is
+    // missing cannot change until then, yet the page polls this all the while.
+    let missing = if own_ollama && !download.is_running() && !download.waits_for_start() {
         ollama_sidecar::host_ollama_missing_models(OLLAMA_PORT)
             .map_err(|e| log::warn!("Could not ask your Ollama which recommended models it has: {e}"))
             .ok()
@@ -205,16 +243,18 @@ fn run(paths: &StackPaths, missing: &[String], download: &Mutex<Download>, switc
         log::info!("Download recommended model: {model} is in your Ollama");
     }
 
-    let done = Download::Done {
+    let done = |waits_for_start| Download::Done {
         downloaded: missing.to_vec(),
         chat_model: DEFAULT_CHAT_MODEL.to_string(),
+        waits_for_start,
     };
 
     // Memory already asks for it: an Ollama that had no chat model at launch,
-    // or only the embedding model was missing.
+    // or only the embedding model was missing. Nothing to restart, but a stack
+    // stopped from the tray runs on it only from its next start.
     let asks_for_it = stack_manager::env_chat_model(paths).as_deref() == Some(DEFAULT_CHAT_MODEL);
     if asks_for_it && !switch_owed.load(Ordering::SeqCst) {
-        set(download, done);
+        set(download, done(stack_manager::is_user_stopped(paths)));
         return;
     }
 
@@ -227,10 +267,14 @@ fn run(paths: &StackPaths, missing: &[String], download: &Mutex<Download>, switc
     log::info!("Download recommended model: restarting Memory on {DEFAULT_CHAT_MODEL}");
 
     match switch_chat_model(paths) {
-        Ok(()) => {
-            log::info!("Download recommended model: Memory runs on {DEFAULT_CHAT_MODEL}");
+        Ok(restarted) => {
+            if restarted {
+                log::info!("Download recommended model: Memory runs on {DEFAULT_CHAT_MODEL}");
+            } else {
+                log::info!("Download recommended model: Memory is stopped and runs on {DEFAULT_CHAT_MODEL} from its next start");
+            }
             switch_owed.store(false, Ordering::SeqCst);
-            set(download, done);
+            set(download, done(!restarted));
         }
         Err(e) => {
             log::error!("Download recommended model: switching to {DEFAULT_CHAT_MODEL} failed: {e}");
@@ -250,16 +294,51 @@ fn run(paths: &StackPaths, missing: &[String], download: &Mutex<Download>, switc
 
 /// What the next launch would do with the recommended model on disk: `.env`
 /// names it and the containers that read it are recreated. Waits until Memory
-/// answers again, so the page can reload onto the new model.
-fn switch_chat_model(paths: &StackPaths) -> Result<(), String> {
+/// answers again, so the page can reload onto the new model. Returns whether
+/// Memory runs on it now. A stack stopped from the tray stays stopped and its
+/// next start reads the new `.env`, as does one stopped during the restart.
+fn switch_chat_model(paths: &StackPaths) -> Result<bool, String> {
     stack_manager::set_env_chat_model(paths, DEFAULT_CHAT_MODEL)?;
 
-    let restarted = stack_manager::apply_env_change(paths)?;
-    if restarted && !stack_manager::wait_until_healthy(RESTART_TIMEOUT) {
+    let restarted = match stack_manager::apply_env_change(paths) {
+        Ok(restarted) => restarted,
+        Err(e) if stopped_during_restart(STOP_GRACE, || stack_manager::is_user_stopped(paths)) => {
+            log::info!("Download recommended model: Memory was stopped from the tray during the restart ({e})");
+            return Ok(false);
+        }
+        Err(e) => return Err(e),
+    };
+    // A stop from the tray ends the wait at once. Otherwise the page would say
+    // Memory is restarting for the rest of RESTART_TIMEOUT.
+    if restarted && !stack_manager::wait_until_healthy(RESTART_TIMEOUT, || stack_manager::is_user_stopped(paths)) {
+        if stack_manager::is_user_stopped(paths) {
+            log::info!("Download recommended model: Memory was stopped from the tray during the restart");
+            return Ok(false);
+        }
         return Err(format!("Memory did not answer within {}s of the restart", RESTART_TIMEOUT.as_secs()));
     }
 
-    Ok(())
+    Ok(restarted)
+}
+
+/// Whether a restart failed because the person pressed Stop Stack while its
+/// `docker compose up` ran: the stop takes the containers the `up` waits on
+/// away. The stack is then stopped and its next start reads the new `.env`, as
+/// for one stopped before the download ended. `compose stop` marks the stack
+/// stopped only once it is done, which can be just after the `up` it broke has
+/// failed, so the mark gets `grace` to appear.
+fn stopped_during_restart(grace: Duration, stopped: impl Fn() -> bool) -> bool {
+    let deadline = std::time::Instant::now() + grace;
+
+    loop {
+        if stopped() {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
 }
 
 #[cfg(test)]
@@ -300,9 +379,15 @@ mod tests {
             serde_json::to_value(Download::Done {
                 downloaded: vec![DEFAULT_CHAT_MODEL.to_string()],
                 chat_model: DEFAULT_CHAT_MODEL.to_string(),
+                waits_for_start: true,
             })
             .unwrap(),
-            serde_json::json!({ "state": "done", "downloaded": [DEFAULT_CHAT_MODEL], "chatModel": DEFAULT_CHAT_MODEL })
+            serde_json::json!({
+                "state": "done",
+                "downloaded": [DEFAULT_CHAT_MODEL],
+                "chatModel": DEFAULT_CHAT_MODEL,
+                "waitsForStart": true,
+            })
         );
         assert_eq!(
             serde_json::to_value(Download::Failed { message: "x".to_string() }).unwrap(),
@@ -315,12 +400,7 @@ mod tests {
     #[test]
     fn only_a_persons_own_ollama_is_offered_a_download() {
         let dir = tempfile::tempdir().unwrap();
-        let paths = StackPaths {
-            data_dir: dir.path().to_path_buf(),
-            compose_dir: dir.path().to_path_buf(),
-            logs_dir: dir.path().to_path_buf(),
-            import_work_dir: dir.path().to_path_buf(),
-        };
+        let paths = scratch_paths(&dir);
         let downloader = Downloader::default();
 
         for backend in [None, Some(ChatBackend::BundledOllama), Some(ChatBackend::AppleOnDevice)] {
@@ -350,8 +430,140 @@ mod tests {
         assert!(!Download::Failed { message: String::new() }.is_running());
         assert!(!Download::Done {
             downloaded: Vec::new(),
-            chat_model: DEFAULT_CHAT_MODEL.to_string()
+            chat_model: DEFAULT_CHAT_MODEL.to_string(),
+            waits_for_start: false,
         }
         .is_running());
+    }
+
+    fn scratch_paths(dir: &tempfile::TempDir) -> StackPaths {
+        StackPaths {
+            data_dir: dir.path().to_path_buf(),
+            compose_dir: dir.path().to_path_buf(),
+            logs_dir: dir.path().to_path_buf(),
+            import_work_dir: dir.path().to_path_buf(),
+        }
+    }
+
+    fn run_switch(paths: &StackPaths) -> Download {
+        let downloader = Downloader::default();
+        run(paths, &[], &downloader.download, &downloader.switch_owed);
+        downloader.current()
+    }
+
+    /// The person stopped Memory from the tray before the download ended.
+    /// `.env` switches and the stack stays stopped, so the page must not say
+    /// Memory runs on the new model yet.
+    #[test]
+    fn a_switch_while_memory_is_stopped_waits_for_its_next_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = scratch_paths(&dir);
+        std::fs::write(dir.path().join(".env"), "LLM_DEFAULT_CHAT_MODEL=qwen3.5:122b\n").unwrap();
+        stack_manager::mark_user_stopped(&paths);
+
+        assert_eq!(
+            run_switch(&paths),
+            Download::Done {
+                downloaded: Vec::new(),
+                chat_model: DEFAULT_CHAT_MODEL.to_string(),
+                waits_for_start: true,
+            }
+        );
+        assert_eq!(stack_manager::env_chat_model(&paths).as_deref(), Some(DEFAULT_CHAT_MODEL));
+        assert!(stack_manager::is_user_stopped(&paths));
+    }
+
+    /// `.env` already named the recommended model, so nothing is restarted. A
+    /// stack stopped from the tray still runs on it only from its next start.
+    #[test]
+    fn nothing_to_switch_still_waits_for_a_stopped_stack() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = scratch_paths(&dir);
+        std::fs::write(dir.path().join(".env"), format!("LLM_DEFAULT_CHAT_MODEL={DEFAULT_CHAT_MODEL}\n")).unwrap();
+
+        assert!(!run_switch(&paths).waits_for_start());
+
+        stack_manager::mark_user_stopped(&paths);
+        assert!(run_switch(&paths).waits_for_start());
+    }
+
+    /// The page says "Memory now runs on it" once Memory answers after Start
+    /// Stack and not before: while it is still stopped, or started but not
+    /// answering yet.
+    #[test]
+    fn a_waiting_switch_counts_as_done_once_memory_answers() {
+        let downloader = Downloader::default();
+        let waiting = Download::Done {
+            downloaded: vec![DEFAULT_CHAT_MODEL.to_string()],
+            chat_model: DEFAULT_CHAT_MODEL.to_string(),
+            waits_for_start: true,
+        };
+        set(&downloader.download, waiting.clone());
+
+        assert_eq!(downloader.current_after_start(|| true, || panic!("asked while stopped")), waiting);
+        assert_eq!(downloader.current_after_start(|| false, || false), waiting);
+
+        let ran = Download::Done {
+            downloaded: vec![DEFAULT_CHAT_MODEL.to_string()],
+            chat_model: DEFAULT_CHAT_MODEL.to_string(),
+            waits_for_start: false,
+        };
+        assert_eq!(downloader.current_after_start(|| false, || true), ran);
+        assert_eq!(downloader.current(), ran);
+
+        // Nothing waits: neither question is asked.
+        assert_eq!(
+            downloader.current_after_start(|| panic!("asked"), || panic!("asked")),
+            ran
+        );
+    }
+
+    /// Stop Stack during the restart's `up` makes it fail. That is a stopped
+    /// stack, not a failed switch, once the stop has marked it, even if the mark
+    /// comes a moment after the failure. A failure with no stop stays one.
+    #[test]
+    fn a_restart_broken_by_stop_stack_counts_as_stopped() {
+        assert!(stopped_during_restart(Duration::ZERO, || true));
+
+        let asked = std::cell::Cell::new(0);
+        assert!(stopped_during_restart(Duration::from_secs(5), || {
+            asked.set(asked.get() + 1);
+            asked.get() >= 3
+        }));
+
+        let started = std::time::Instant::now();
+        assert!(!stopped_during_restart(Duration::from_millis(600), || false));
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    /// Another download ended while the health check ran, with Memory stopped
+    /// again. The answer was about the earlier one, so the new one still waits.
+    #[test]
+    fn a_health_check_does_not_clear_a_wait_it_was_not_asked_about() {
+        let downloader = Downloader::default();
+        set(
+            &downloader.download,
+            Download::Done {
+                downloaded: vec![DEFAULT_CHAT_MODEL.to_string()],
+                chat_model: DEFAULT_CHAT_MODEL.to_string(),
+                waits_for_start: true,
+            },
+        );
+        let newer = Download::Done {
+            downloaded: Vec::new(),
+            chat_model: DEFAULT_CHAT_MODEL.to_string(),
+            waits_for_start: true,
+        };
+
+        let seen = downloader.current_after_start(
+            || false,
+            || {
+                set(&downloader.download, newer.clone());
+                true
+            },
+        );
+
+        assert_eq!(seen, newer);
+        assert_eq!(downloader.current(), newer);
     }
 }

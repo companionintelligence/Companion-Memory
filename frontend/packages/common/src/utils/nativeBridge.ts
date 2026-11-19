@@ -1265,7 +1265,13 @@ export type DesktopModelDownload =
   | { state: 'idle' }
   | { state: 'downloading'; model: string; completedBytes: number; totalBytes: number }
   | { state: 'switching'; model: string }
-  | { state: 'done'; downloaded: string[]; chatModel: string }
+  | {
+      state: 'done';
+      downloaded: string[];
+      chatModel: string;
+      /** Memory was stopped from the tray when it ended, so it runs on `chatModel` only from its next start. */
+      waitsForStart: boolean;
+    }
   | { state: 'failed'; message: string };
 
 /**
@@ -1281,7 +1287,8 @@ export interface DesktopRecommendedModel {
   chatModel: string | null;
   /**
    * Recommended models the person's Ollama does not have, the embedding model included. Null when it was not asked
-   * (not the person's own Ollama, or a download is running) or did not answer, which says nothing about what it has.
+   * (not the person's own Ollama, a download is running or one waits for Memory to start) or did not answer, which
+   * says nothing about what it has.
    */
   missing: string[] | null;
   download: DesktopModelDownload;

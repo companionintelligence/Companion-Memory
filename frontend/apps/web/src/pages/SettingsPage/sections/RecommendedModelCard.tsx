@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import {
   downloadDesktopRecommendedModel,
@@ -10,19 +10,23 @@ import { Button, Card, Progress } from '@ci/shadcn';
 import { Download } from '@ci/shadcn/icons';
 
 import type { LlmEndpointConfig } from '@/hooks/useLlmEndpoint';
+import { listOf, recommendedModelOffer, usesDesktopOllama } from '@/lib/recommendedModel';
 
 /** How often a running download is asked how far it has got. */
 const POLL_MS = 1000;
 
-/** Where Ollama listens unless told otherwise, and where Memory Desktop looks for a person's own Ollama. */
-const OLLAMA_PORT = 11434;
+/** How often a download that ended while Memory was stopped is asked whether Memory has started since. */
+const START_POLL_MS = 3000;
+
+/**
+ * Whether the model list has been reloaded for the download that ended last. Settings > Model mounts the card afresh
+ * each time it opens and Memory Desktop reports that download as done until it quits, so without this every later
+ * open would empty and reload the list again. Kept for as long as the page is loaded.
+ */
+let reloadedForLastDone = false;
 
 function percent(completed: number, total: number): number {
   return total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0;
-}
-
-function listOf(models: string[]): string {
-  return models.length > 1 ? `${models.slice(0, -1).join(', ')} and ${models[models.length - 1]}` : models[0];
 }
 
 /** Whether there is anything to say: a model to download, a switch to make, or a download to report on. */
@@ -35,11 +39,7 @@ function hasSomethingToSay(status: DesktopRecommendedModel): boolean {
     return true;
   }
 
-  if (status.missing == null) {
-    return false;
-  }
-
-  return status.missing.length > 0 || (status.chatModel != null && status.chatModel !== status.recommended);
+  return recommendedModelOffer(status) != null;
 }
 
 /**
@@ -70,7 +70,6 @@ export function RecommendedModelCard({
   const [status, setStatus] = useState<DesktopRecommendedModel | null>(null);
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
-  const lastState = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -88,31 +87,44 @@ export function RecommendedModelCard({
 
   const state = status?.download.state;
   const running = state === 'downloading' || state === 'switching';
+  // Memory was stopped from the tray when the download ended: it runs on the new model once it is started again.
+  const waitsForStart = status?.download.state === 'done' && status.download.waitsForStart;
+  const phase = waitsForStart ? 'waiting' : (state ?? null);
 
   useEffect(() => {
-    if (!running) {
+    if (!running && !waitsForStart) {
       return;
     }
 
-    const timer = window.setInterval(() => {
-      void getDesktopRecommendedModel().then((next) => {
-        if (next) {
-          setStatus(next);
-        }
-      });
-    }, POLL_MS);
+    const timer = window.setInterval(
+      () => {
+        void getDesktopRecommendedModel().then((next) => {
+          if (next) {
+            setStatus(next);
+          }
+        });
+      },
+      running ? POLL_MS : START_POLL_MS,
+    );
 
     return () => window.clearInterval(timer);
-  }, [running]);
+  }, [running, waitsForStart]);
 
-  // Only a download this page saw running: one that finished before the page loaded changed nothing it shows.
+  // The model list is reloaded once per download, when Memory runs on the new model. That is when a download this card
+  // followed ends or when Memory answers again after one that ended while it was stopped. It is also when the card
+  // opens on one that ended while Settings was closed, which left the list on the old model. After a page reload that
+  // one reload is redundant but harmless.
   useEffect(() => {
-    if (state === 'done' && (lastState.current === 'downloading' || lastState.current === 'switching')) {
-      onSwitched();
+    if (phase === 'done') {
+      if (!reloadedForLastDone) {
+        reloadedForLastDone = true;
+        onSwitched();
+      }
+    } else if (phase != null && phase !== 'idle') {
+      // Running, waiting for Memory to start or failed: the done that follows belongs to a new download.
+      reloadedForLastDone = false;
     }
-
-    lastState.current = state ?? null;
-  }, [state, onSwitched]);
+  }, [phase, onSwitched]);
 
   const start = useCallback(async () => {
     setStarting(true);
@@ -129,12 +141,7 @@ export function RecommendedModelCard({
     }
   }, []);
 
-  if (
-    !status ||
-    !hasSomethingToSay(status) ||
-    endpoint?.backend !== 'ollama' ||
-    endpoint.port !== OLLAMA_PORT
-  ) {
+  if (!status || !hasSomethingToSay(status) || !usesDesktopOllama(endpoint)) {
     return null;
   }
 
@@ -176,7 +183,9 @@ export function RecommendedModelCard({
     body = (
       <p className="text-sm text-teal-700 dark:text-teal-300" role="status">
         {download.downloaded.length > 0 ? `Downloaded ${listOf(download.downloaded)}. ` : ''}
-        Memory now runs on {download.chatModel}.
+        {download.waitsForStart
+          ? `Memory will use ${download.chatModel} the next time it starts.`
+          : `Memory now runs on ${download.chatModel}.`}
       </p>
     );
   } else {
