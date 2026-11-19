@@ -460,6 +460,61 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+  # The root `yarn test`: the node:test suites under scripts/ (xtask, the
+  # release and publish scripts, the dev stack helpers). No other lane runs
+  # them.
+  test-root:
+    name: Run root tests
+    needs: install
+    runs-on: ubuntu-latest
+    # A job ceiling as well as the step's, so a stuck apt mirror or install
+    # cannot hold the run for GitHub's 360-minute default.
+    timeout-minutes: 20
+    container:
+      image: node:22
+      # The runner keeps a job container alive with `tail -f /dev/null` as
+      # PID 1, which never reaps orphans. Four group-kill tests in
+      # scripts/xtask/lib/exec.test.ts wait for a killed grandchild to be gone,
+      # and an unreaped zombie still counts as alive, so they time out.
+      # `--init` runs Docker's init as PID 1, which reaps them.
+      options: --init
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Restore node modules
+        uses: actions/cache@v6
+        with:
+          path: |
+            **/node_modules
+            .yarn/cache
+          key: ${{ runner.os }}-modules-${{ hashFiles('**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-modules-
+
+      - name: Install dependencies
+        run: yarn install --immutable
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # The publish retry tests skip without jq. The image already has git and
+      # bash. It has no `docker compose`, so the four compose render tests in
+      # scripts/dev-stack/composeExposure.test.ts skip here.
+      - name: Install jq
+        run: apt-get update && apt-get install -y --no-install-recommends jq
+
+      # Six of the files call git (rev-parse, ls-files, grep). The checkout
+      # belongs to the runner's user and the container runs as root, so git
+      # refuses it as "dubious ownership" until it is marked safe.
+      - name: Run root tests
+        timeout-minutes: 10
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          yarn test
+
   typecheck:
     name: Type check ${{ matrix.name }}
     needs: install
@@ -508,6 +563,10 @@ jobs:
           # merge too is a separate, deliberate branch-protection change.
           - name: cli
             command: yarn workspace @ci/cli typecheck
+          # The root tsconfig.json: scripts/**, tests/** and
+          # playwright.config.ts. No workspace lane above reads those files.
+          - name: root
+            command: yarn typecheck
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
