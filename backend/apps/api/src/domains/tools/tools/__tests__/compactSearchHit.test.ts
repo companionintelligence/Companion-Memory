@@ -1,4 +1,11 @@
-import { boundSearchPage, compactSearchHit, PAGE_CHARACTER_BUDGET, stringCapFor } from '../compactSearchHit';
+import {
+  boundSearchPage,
+  compactSearchHit,
+  ENTRY_WINDOW_CHARACTERS,
+  PAGE_CHARACTER_BUDGET,
+  readEntryWindow,
+  stringCapFor,
+} from '../compactSearchHit';
 
 /**
  * The shape of a real `knowledge_search` email hit, as OpenClaw received it over MCP on
@@ -76,7 +83,9 @@ describe('compactSearchHit', () => {
   it('caps a long string and says how much was cut', () => {
     const hit = compactSearchHit({ id: 'n1', type: 'note', text: 'x'.repeat(1_000) }, 300);
 
-    expect(hit.text).toBe(`${'x'.repeat(300)}…[700 more characters; open the link for the rest]`);
+    expect(hit.text).toBe(
+      `${'x'.repeat(300)}…[700 more characters; call knowledge_get with this id for the rest]`,
+    );
   });
 
   it('bounds an array and says how many it left out', () => {
@@ -163,5 +172,71 @@ describe('boundSearchPage', () => {
 
     expect(items.map((item) => item.id)).toEqual(['n1']);
     expect(omitted).toBe(1);
+  });
+});
+
+describe('compactSearchHit padding', () => {
+  it('drops the invisible preheader padding marketing email carries', () => {
+    const padding = '\u034f \u200c \ufeff '.repeat(60);
+    const hit = compactSearchHit(
+      { id: 'c1', type: 'communication', preview: `An update to your account ${padding}` },
+      300,
+    );
+
+    expect(hit.preview).toBe('An update to your account');
+  });
+});
+
+describe('readEntryWindow', () => {
+  const longEmail = {
+    ...emailHit,
+    content: Array.from({ length: 250 }, (_, i) => `Line ${i}: use code SAVE${i} by Friday.`).join('\n'),
+  };
+
+  it('returns the longest text whole from offset, and every other string capped', () => {
+    const window = readEntryWindow(longEmail);
+
+    expect(window.textField).toBe('content');
+    expect(window.offset).toBe(0);
+    expect(window.textLength).toBeGreaterThan(ENTRY_WINDOW_CHARACTERS);
+    expect(window.content).toHaveLength(ENTRY_WINDOW_CHARACTERS);
+    expect(window.nextOffset).toBe(ENTRY_WINDOW_CHARACTERS);
+    expect(window.subject).toBe(emailHit.subject);
+    // `preview` repeats the head of the text, and the row's bookkeeping goes as on a search hit.
+    expect(window).not.toHaveProperty('preview');
+    expect(window).not.toHaveProperty('userId');
+    expect(Object.keys(window).slice(0, 3)).toEqual(['id', 'type', 'link']);
+  });
+
+  it('reads the next window from nextOffset, and the last one has no nextOffset', () => {
+    const first = readEntryWindow(longEmail);
+    const second = readEntryWindow(longEmail, first.nextOffset);
+
+    expect(second.offset).toBe(ENTRY_WINDOW_CHARACTERS);
+    expect(second.nextOffset).toBeUndefined();
+    expect(`${first.content}${second.content}`).toHaveLength(first.textLength!);
+    expect(second.content).toContain('SAVE249');
+  });
+
+  it('returns a short entry whole', () => {
+    const window = readEntryWindow({ id: 'n1', type: 'note', title: 'Groceries', content: 'milk, eggs' });
+
+    expect(window).toMatchObject({ textField: 'content', textLength: 10, offset: 0, content: 'milk, eggs' });
+    expect(window.nextOffset).toBeUndefined();
+  });
+
+  it('clamps an offset past the end to an empty last window', () => {
+    const window = readEntryWindow({ id: 'n1', type: 'note', content: 'milk, eggs' }, 999);
+
+    expect(window).toMatchObject({ offset: 10, content: '' });
+    expect(window.nextOffset).toBeUndefined();
+  });
+
+  it('leaves an entry with no text as a compact hit', () => {
+    expect(readEntryWindow({ id: 't1', type: 'task', priority: 0 })).toEqual({
+      id: 't1',
+      type: 'task',
+      priority: 0,
+    });
   });
 });

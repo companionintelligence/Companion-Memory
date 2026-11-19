@@ -4,6 +4,8 @@ import type { Task, TaskService } from '@ci/domains/planning/task.module';
 
 import { PlanningCreateTaskTool } from '../PlanningCreateTaskTool';
 
+import { losAngelesPlanningTime } from './losAngelesPlanningTime';
+
 const CONTEXT = { userId: '00000000-0000-0000-0000-0000000000aa' } as RequestContext;
 const PARENT_ID = '22222222-2222-2222-2222-222222222222';
 
@@ -18,10 +20,41 @@ function logger(): LoggerService {
 }
 
 function makeTool(create: jest.Mock) {
-  return new PlanningCreateTaskTool({ create } as unknown as TaskService, logger());
+  return new PlanningCreateTaskTool({ create } as unknown as TaskService, losAngelesPlanningTime(), logger());
 }
 
 describe('PlanningCreateTaskTool', () => {
+  it("reads a zoneless dueAt as the owner's local time, or in the timeZone given", async () => {
+    const create = jest.fn().mockResolvedValue({ id: 't1' } as unknown as Task);
+    const tool = makeTool(create);
+
+    await tool.execute(CONTEXT, { title: 'Pay rent', dueAt: '2026-12-01T17:00' });
+    await tool.execute(CONTEXT, {
+      title: 'Pay rent',
+      dueAt: '2026-12-01T17:00',
+      timeZone: 'America/New_York',
+    });
+    await tool.execute(CONTEXT, { title: 'Pay rent', dueAt: '2026-12-01' });
+
+    // 5 PM PST (-8), 5 PM EST (-5), and the start of the day in Los Angeles.
+    expect(create.mock.calls.map(([, dto]) => dto.dueAt)).toEqual([
+      new Date('2026-12-02T01:00:00.000Z'),
+      new Date('2026-12-01T22:00:00.000Z'),
+      new Date('2026-12-01T08:00:00.000Z'),
+    ]);
+  });
+
+  it('rejects a timeZone without dueAt', async () => {
+    const create = jest.fn();
+    const result = await makeTool(create).execute(CONTEXT, {
+      title: 'Pay rent',
+      timeZone: 'America/New_York',
+    });
+
+    expect(result.success).toBe(false);
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it('creates a task through TaskService.create with a resolved UserServiceContext', async () => {
     const created = { id: 'new-task', title: 'Draft the Fenwick contract redline' } as Task;
     const create = jest.fn().mockResolvedValue(created);
