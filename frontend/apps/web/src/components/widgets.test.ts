@@ -103,39 +103,54 @@ describe('native widget snapshot', () => {
     expect(snapshot.insight.prediction).toBe('WORK');
   });
 
-  // The service answers before its first run has finished, with a placeholder
-  // class for every slot. The home-screen widgets and the Widgets card printed
-  // it as a prediction ("Unsorted, 97% likely").
+  // Until the account has history the service answers with its starter prior,
+  // the same class for every slot. The home-screen widgets and the Widgets card
+  // printed it as a prediction ("Work, 12% likely").
   it('carries no prediction until the forecast has been built', () => {
     const now = new Date('2026-11-11T12:00:00.000Z');
-    const forecast = (systemStatus: string, stillLearning: boolean) => ({
-      generatedAt: '2026-11-11T11:00:00Z',
-      systemStatus,
-      stillLearning,
-      buckets: [
-        {
-          startTime: '2026-11-12T12:15:00Z',
-          predictedL0: 'WORK',
-          l0Probs: [{ label: 'WORK', probability: 0.97 }],
+    const insight = (systemStatus: string, modelVersion: string | null | undefined, stillLearning: boolean) =>
+      buildWidgetSnapshot({
+        now,
+        forecast: {
+          generatedAt: '2026-11-11T11:00:00Z',
+          systemStatus,
+          modelVersion,
+          stillLearning,
+          buckets: [
+            {
+              startTime: '2026-11-12T12:15:00Z',
+              predictedL0: 'WORK',
+              l0Probs: [{ label: 'WORK', probability: 0.97 }],
+            },
+          ],
         },
-      ],
-    });
-    const insight = (systemStatus: string, stillLearning: boolean) =>
-      buildWidgetSnapshot({ now, forecast: forecast(systemStatus, stillLearning) }).insight;
+      }).insight;
 
-    // Nothing has run yet, or the first run is still going.
-    for (const status of ['COLD_START', 'BOOTSTRAP:label', 'NIGHTLY:train']) {
-      expect(insight(status, true)).toMatchObject({
+    // The starter prior: nothing has run yet, or the first run is still labeling.
+    for (const status of ['COLD_START', 'BOOTSTRAP:label', 'NIGHTLY:label', 'READY']) {
+      expect(insight(status, 'b2', true)).toMatchObject({
         prediction: null,
         confidence: null,
         systemStatus: status,
       });
     }
 
-    // Built: READY (still learning or not), or a later run over a built model.
-    expect(insight('READY', true)).toMatchObject({ prediction: 'WORK', confidence: 0.97 });
-    expect(insight('READY', false)).toMatchObject({ prediction: 'WORK', confidence: 0.97 });
-    expect(insight('NIGHTLY:label', false)).toMatchObject({ prediction: 'WORK', confidence: 0.97 });
+    // COLD_START says nothing has run, whatever the model.
+    expect(insight('COLD_START', null, false)).toMatchObject({ prediction: null, confidence: null });
+    // A status the service does not send, or none, is not a built forecast.
+    expect(insight('', 'logit', false)).toMatchObject({ prediction: null, systemStatus: 'UNKNOWN' });
+    expect(insight('TRAINING', 'logit', false)).toMatchObject({ prediction: null });
+
+    // Built from the account's history, between runs and during a later run,
+    // still learning or not.
+    for (const status of ['READY', 'NIGHTLY:label', 'BOOTSTRAP:train']) {
+      expect(insight(status, 'b1', true)).toMatchObject({ prediction: 'WORK', confidence: 0.97 });
+      expect(insight(status, 'logit', false)).toMatchObject({ prediction: 'WORK', confidence: 0.97 });
+    }
+
+    expect(insight('NIGHTLY:label', 'hmt', false)).toMatchObject({ prediction: 'WORK' });
+    // A trained account the scores serve the b2 baseline to.
+    expect(insight('READY', 'b2', false)).toMatchObject({ prediction: 'WORK', confidence: 0.97 });
   });
 
   // The native widgets print the likelihood under "No forecast yet", so one

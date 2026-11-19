@@ -1,3 +1,4 @@
+import { forecastBuilt } from '@ci/common';
 import { cn, Tooltip } from '@ci/shadcn';
 import { Link } from 'react-router-dom';
 
@@ -245,17 +246,15 @@ function ForecastSlot({
   minutes,
   isFirst,
   isLast,
-  systemStatus,
+  showClasses,
 }: {
   bucket: ForecastBucket;
   localMin: number;
   minutes: number;
   isFirst: boolean;
   isLast: boolean;
-  systemStatus: string;
+  showClasses: boolean;
 }) {
-  const isReady = systemStatus === 'READY';
-  const showClasses = isReady || systemStatus.includes(':');
   const dominant = displayL0(bucket);
 
   const isEmpty = bucket.l0Probs.length === 0;
@@ -268,9 +267,10 @@ function ForecastSlot({
           className={cn(
             'flex-1 h-8 cursor-default transition-[color,background-color,border-color,box-shadow,opacity,transform] duration-100',
             showClasses && 'hover:scale-y-[1.3] hover:z-10 relative',
-            // Before the engine is READY there is no class to name, so the strip
-            // stays on the theme colour rather than picking a hue at random.
-            // A live Predict/nightly run still has buckets — keep the colours.
+            // Until the forecast has been built there is no class to name, so
+            // the strip stays on the theme colour rather than painting the
+            // starter prior's class into every slot. A run over a built
+            // forecast keeps its colours.
             !showClasses && 'bg-primary/60',
             isFirst && 'rounded-l-full',
             isLast && 'rounded-r-full',
@@ -399,7 +399,7 @@ export function ForecastStrip({
 
   const isReady = systemStatus === 'READY';
   const pipelineRunning = systemStatus.includes(':');
-  const showClasses = isReady || pipelineRunning;
+  const showClasses = forecastBuilt({ systemStatus, modelVersion, stillLearning });
   const baselineName =
     modelVersion && modelVersion !== 'hmt' && !modelVersion.startsWith('hmt') ? modelVersion : null;
   let statusLabel = isReady
@@ -442,7 +442,7 @@ export function ForecastStrip({
             minutes={minutes}
             isFirst={idx === 0}
             isLast={idx === ordered.length - 1}
-            systemStatus={systemStatus}
+            showClasses={showClasses}
           />
         ))}
       </div>

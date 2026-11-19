@@ -1,7 +1,7 @@
-import { EmptyState, ErrorPage, LoadingPage, usePageTitle } from '@ci/common';
+import { EmptyState, ErrorPage, forecastBuilt, LoadingPage, usePageTitle } from '@ci/common';
 import { CloudSun } from '@ci/shadcn/icons';
 
-import { useForecastService, useWeekAheadService } from '@/api';
+import { type ForecastBucket, useForecastService, useWeekAheadService } from '@/api';
 import { useFeatures } from '@/common/feature';
 import { ForecastStrip } from '@/components/ForecastStrip';
 import { PageContent } from '@/components/layout';
@@ -12,6 +12,8 @@ import { NextForecast } from './BranchialTree';
 import { CalibrationPanel, DivergenceHeatmapPanel, NextPlacesPanel } from './ForecastPanels';
 import { OffScript } from './OffScript';
 import { useForecastExtras } from './useForecastExtras';
+
+const NO_BUCKETS: ForecastBucket[] = [];
 
 export function ForecastPage() {
   usePageTitle('Forecast - Companion Memory');
@@ -78,7 +80,12 @@ export function ForecastPage() {
               }}
             >
               <CalibrationPanel calibration={extras.calibration} />
-              <DivergenceHeatmapPanel historyDays={extras.historyDays} buckets={forecast.buckets} />
+              {/* The starter prior names one class for every slot. Like the
+                  strip, the heatmap's forecast row waits for a built forecast. */}
+              <DivergenceHeatmapPanel
+                historyDays={extras.historyDays}
+                buckets={forecastBuilt(forecast) ? forecast.buckets : NO_BUCKETS}
+              />
             </div>
           </div>
         )}

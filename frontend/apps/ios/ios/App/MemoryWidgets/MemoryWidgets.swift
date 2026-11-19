@@ -205,7 +205,9 @@ private struct WidgetCard: View {
                 if let probability = snapshot.insight.confidence {
                     Text("\(Int(max(0, min(1, probability)) * 100))% likely")
                 } else {
-                    Text(snapshot.insight.systemStatus == "READY" ? "Forecast ready" : "Forecast warming up")
+                    // A null prediction means nothing is built yet, whatever the status says.
+                    Text(snapshot.insight.prediction != nil && snapshot.insight.systemStatus == "READY"
+                        ? "Forecast ready" : "Forecast warming up")
                 }
                 if snapshot.insight.stillLearning { Text("· still learning") }
             }

@@ -151,6 +151,7 @@ export {
 } from './src/utils/localHub';
 export {
   buildWidgetSnapshot,
+  forecastBuilt,
   parseWidgetDestination,
   WIDGET_SNAPSHOT_VERSION,
 } from './src/utils/widgetSnapshots';
