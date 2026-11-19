@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { ASK_ARCHETYPES, COMPOSER_SHAPES, composeRecipients, unreachablePeers } from './composeRecipients';
+import {
+  ASK_ARCHETYPES,
+  COMPOSER_SHAPES,
+  composeRecipients,
+  peerRecipients,
+  unreachablePeers,
+} from './composeRecipients';
 
 const EMPTY = { grants: [], inbox: [], outbox: [] };
 
@@ -99,7 +105,11 @@ describe('unreachablePeers', () => {
     const [peer] = unreachablePeers([link()]);
 
     expect(peer).toMatchObject({ name: 'ada', tier: 'Stranger' });
-    expect(peer?.reason).toMatch(/access token/i);
+    expect(peer?.reason).toMatch(/invite/i);
+  });
+
+  it('leaves out a peer linked by key: that one can be asked', () => {
+    expect(unreachablePeers([link({ linkedByKey: true })])).toEqual([]);
   });
 
   it('carries the linked Person’s avatar through, when the link resolved one', () => {
@@ -116,7 +126,39 @@ describe('unreachablePeers', () => {
   });
 });
 
+describe('peerRecipients', () => {
+  const link = (overrides: Record<string, unknown> = {}) => ({
+    id: 'peer-link-1',
+    peerHandle: 'ada',
+    displayName: 'Ada',
+    trustTier: 'stranger',
+    status: 'active',
+    revokedAt: null,
+    linkedByKey: true,
+    ...overrides,
+  });
+
+  it('offers a live peer linked by key, addressed by handle', () => {
+    expect(peerRecipients([link()])).toEqual([
+      expect.objectContaining({ id: 'peer-link-1', name: 'Ada', tier: 'Stranger', peerHandle: 'ada' }),
+    ]);
+  });
+
+  it('does not offer a link entered by hand, or an ended one', () => {
+    expect(peerRecipients([link({ linkedByKey: false })])).toEqual([]);
+    expect(peerRecipients([link({ revokedAt: '2026-08-03T00:00:00.000Z' })])).toEqual([]);
+  });
+});
+
 describe('COMPOSER_SHAPES', () => {
+  it('offers a peer only the archetypes the peer protocol carries without a time window', () => {
+    expect(COMPOSER_SHAPES.filter((shape) => shape.peer).map((shape) => shape.queryType)).toEqual([
+      'relationship',
+      'content',
+      'content',
+    ]);
+  });
+
   // THE assertion on this list. `parseAskQueryType` throws a 400 for anything
   // outside the archetype vocabulary and `createAsk` runs every ask through it,
   // so a shape naming a non-archetype is not a wide ask — it is a Send button

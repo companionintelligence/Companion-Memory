@@ -1,7 +1,7 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
 
 import type { Person } from '@ci/domains/memory';
-import type { PeerLink } from '@ci/domains/peers';
+import { safetyCodeFor, type PeerLink } from '@ci/domains/peers';
 
 import { GlobalUID } from '../../types/GlobalUID';
 import { PeerLinkType, PeerTrustTierEnum } from '../../types/PeerLinkType';
@@ -82,6 +82,47 @@ function build(
 
   return { resolver, service, personLoader, featureService, context };
 }
+
+describe('PeerLinkResolver — safety codes', () => {
+  const MINE = 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK';
+  const THEIRS = 'did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH';
+
+  function withKeys(link: PeerLink, ownerDidKey: string | null) {
+    const service = { findAll: jest.fn().mockResolvedValue([link]) };
+    const identityService = { existingDidKeyFor: jest.fn().mockResolvedValue(ownerDidKey) };
+    const resolver = new PeerLinkResolver(
+      service as never,
+      { load: jest.fn() } as never,
+      undefined,
+      identityService as never,
+    );
+
+    return { resolver, identityService };
+  }
+
+  it('gives a did:key link the code both sides compute, without exposing either key', async () => {
+    const { resolver } = withKeys(makeLink({ peerIssuer: 'did:key', peerSubject: THEIRS }), MINE);
+
+    const [projected] = await resolver.myPeerLinks({ userId: OWNER } as never);
+
+    expect(projected.safetyCode).toBe(safetyCodeFor(THEIRS, MINE));
+    expect(projected.linkedByKey).toBe(true);
+    expect(JSON.stringify(projected)).not.toContain('did:key');
+  });
+
+  it('gives none to a Portal link, or before the owner has a key', async () => {
+    expect(
+      (await withKeys(makeLink(), MINE).resolver.myPeerLinks({ userId: OWNER } as never))[0].safetyCode,
+    ).toBeNull();
+    expect(
+      (
+        await withKeys(makeLink({ peerIssuer: 'did:key', peerSubject: THEIRS }), null).resolver.myPeerLinks({
+          userId: OWNER,
+        } as never)
+      )[0].safetyCode,
+    ).toBeNull();
+  });
+});
 
 describe('PeerLinkResolver', () => {
   describe('scoping', () => {
@@ -547,5 +588,54 @@ describe('PeerLinkResolver', () => {
       expect(service.upsert).not.toHaveBeenCalled();
       expect(service.revoke).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('PeerLinkResolver — ending a link tells the other side', () => {
+  it('ends the link first, then reports whether their box was told', async () => {
+    const ended = makeLink({ status: 'revoked', revokedAt: new Date() });
+    const service = {
+      findById: jest.fn().mockResolvedValue(makeLink()),
+      revoke: jest.fn().mockResolvedValue(ended),
+    };
+    const noticeService = { announceUnlink: jest.fn().mockResolvedValue(true) };
+    const resolver = new PeerLinkResolver(
+      service as never,
+      { load: jest.fn() } as never,
+      undefined,
+      undefined,
+      noticeService as never,
+    );
+
+    const payload = await resolver.revokePeerLink(
+      { userId: OWNER } as never,
+      GlobalUID.encode('peer-link', 'link-1'),
+    );
+
+    expect(payload).toMatchObject({ success: true, peerNotified: true });
+    expect(noticeService.announceUnlink).toHaveBeenCalledWith({ userId: OWNER }, ended);
+    expect(service.revoke.mock.invocationCallOrder[0]).toBeLessThan(
+      noticeService.announceUnlink.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('still ends the link when telling them fails', async () => {
+    const service = {
+      findById: jest.fn().mockResolvedValue(makeLink()),
+      revoke: jest.fn().mockResolvedValue(makeLink({ status: 'revoked', revokedAt: new Date() })),
+    };
+    const noticeService = { announceUnlink: jest.fn().mockRejectedValue(new Error('down')) };
+    const resolver = new PeerLinkResolver(
+      service as never,
+      { load: jest.fn() } as never,
+      undefined,
+      undefined,
+      noticeService as never,
+    );
+
+    await expect(
+      resolver.revokePeerLink({ userId: OWNER } as never, GlobalUID.encode('peer-link', 'link-1')),
+    ).resolves.toMatchObject({ success: true, peerNotified: false });
+    expect(service.revoke).toHaveBeenCalledTimes(1);
   });
 });

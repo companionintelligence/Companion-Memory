@@ -25,8 +25,8 @@ interface Props {
  *
  * ═══ THE COMMON CASE IS NOT A WARNING ═══
  *
- * `peers.requireHttpSignature` ships off and a local ask never crosses a network
- * boundary, so `consented` — real consent, unsigned channel — is the honest
+ * A local ask never crosses a network boundary (and a box may turn
+ * `peers.requireHttpSignature` off), so `consented` — real consent, unsigned channel — is the honest
  * reading of most disclosures. It is rendered as a plain secondary badge, not as
  * a caution. A UI that painted the ordinary case as a problem would teach people
  * to ignore the badge, and then the one time it says something worth reading

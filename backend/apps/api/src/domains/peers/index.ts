@@ -15,7 +15,11 @@ import { MemoryModule, EventEntity } from '@ci/domains/memory';
 import { UserModule } from '@ci/domains/user';
 
 import { PeerAskController } from './controllers/PeerAskController';
+import { PeerExchangeController } from './controllers/PeerExchangeController';
+import { PeerAnswerCollectionCron } from './cron/PeerAnswerCollectionCron';
 import { PeerAskCorrelationEntity } from './entities/PeerAskCorrelationEntity';
+import { PeerIdentityKeyEntity } from './entities/PeerIdentityKeyEntity';
+import { PeerInviteEntity } from './entities/PeerInviteEntity';
 import { PeerLinkEntity } from './entities/PeerLinkEntity';
 import { LocalPubDiscoveryService } from './services/LocalPubDiscoveryService';
 import { OutboundAskService } from './services/OutboundAskService';
@@ -23,7 +27,11 @@ import { PeerAskClient } from './services/PeerAskClient';
 import { PeerAskCorrelationService } from './services/PeerAskCorrelationService';
 import { PeerAskService } from './services/PeerAskService';
 import { PeerDirectoryService } from './services/PeerDirectoryService';
+import { PeerExchangeClient } from './services/PeerExchangeClient';
+import { PeerIdentityService } from './services/PeerIdentityService';
+import { PeerInviteService } from './services/PeerInviteService';
 import { PeerLinkService } from './services/PeerLinkService';
+import { PeerNoticeService } from './services/PeerNoticeService';
 import { PeerRateLimitService } from './services/PeerRateLimitService';
 import { PeerSignatureService } from './services/PeerSignatureService';
 
@@ -33,25 +41,36 @@ import { PeerSignatureService } from './services/PeerSignatureService';
     // transaction and drive its own ask to `answered`: an outbound ask carries
     // a null responder, so `AskService.complete` — `responderOwned` by
     // construction — can never see it.
-    TypeOrmModule.forFeature([PeerLinkEntity, PeerAskCorrelationEntity, EventEntity, AskEntity]),
+    TypeOrmModule.forFeature([
+      PeerLinkEntity,
+      PeerAskCorrelationEntity,
+      PeerIdentityKeyEntity,
+      PeerInviteEntity,
+      EventEntity,
+      AskEntity,
+    ]),
     AsksModule,
     AuthModule,
     MemoryModule,
-    // `OutboundAskService` reads the caller's role: only the box's administrator
-    // may send an ask signed with the box key alone.
+    // `OutboundAskService` reads the sender's name for `askerHandle`.
     UserModule,
   ],
-  controllers: [PeerAskController],
+  controllers: [PeerAskController, PeerExchangeController],
   providers: [
     PeerLinkService,
     PeerDirectoryService,
     LocalPubDiscoveryService,
     PeerAskClient,
+    PeerExchangeClient,
     PeerAskCorrelationService,
     PeerAskService,
     PeerRateLimitService,
     PeerSignatureService,
+    PeerIdentityService,
+    PeerInviteService,
+    PeerNoticeService,
     OutboundAskService,
+    PeerAnswerCollectionCron,
   ],
   exports: [
     PeerLinkService,
@@ -62,12 +81,21 @@ import { PeerSignatureService } from './services/PeerSignatureService';
     PeerAskService,
     PeerRateLimitService,
     PeerSignatureService,
+    PeerIdentityService,
+    PeerInviteService,
+    PeerNoticeService,
     OutboundAskService,
   ],
 })
 export class PeersModule {}
 
-export { PeerLinkEntity, PeerAskCorrelationEntity };
+export { PeerLinkEntity, PeerAskCorrelationEntity, PeerIdentityKeyEntity };
+export { PeerIdentityService } from './services/PeerIdentityService';
+export { PeerInviteService } from './services/PeerInviteService';
+export type { PeerInviteView } from './services/PeerInviteService';
+export { PeerNoticeService } from './services/PeerNoticeService';
+export type { NoticeOutcome } from './services/PeerNoticeService';
+export type { PeerIdentity, PeerSigner } from './services/PeerIdentityService';
 export { PeerRateLimitService } from './services/PeerRateLimitService';
 export { PeerSignatureService } from './services/PeerSignatureService';
 export type { SignatureFailure, VerificationResult } from './services/PeerSignatureService';
@@ -112,3 +140,5 @@ export type {
   PeerDescriptor,
   BusyInterval,
 } from './protocol';
+export { DID_KEY_ISSUER, isSelfCertifyingIssuer } from './selfCertifyingKeyId';
+export { safetyCodeFor } from './safetyCode';

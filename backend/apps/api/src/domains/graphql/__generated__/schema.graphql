@@ -2,6 +2,17 @@
 # THIS FILE WAS AUTOMATICALLY GENERATED (DO NOT MODIFY)
 # ------------------------------------------------------
 
+input AcceptPeerInviteInput {
+  code: String!
+  displayName: String
+  myName: String
+}
+
+type AcceptPeerInvitePayload {
+  peerLink: PeerLinkType
+  success: Boolean!
+}
+
 type ActionConnection implements Connection {
   edges: [ActionEdge!]!
   pageInfo: PageInfo!
@@ -886,6 +897,17 @@ input CreateNoteInput {
 
 type CreateNotePayload {
   note: NoteType
+  success: Boolean!
+}
+
+input CreatePeerInviteInput {
+  label: String
+  name: String
+}
+
+type CreatePeerInvitePayload {
+  code: String
+  invite: PeerInvite
   success: Boolean!
 }
 
@@ -2030,6 +2052,7 @@ type MetricSuggestionType {
 type Mutation {
   """Accept a candidate at a chosen time, minting a real event"""
   acceptCandidate(endTime: DateTime, id: ID!, startTime: DateTime!): EventType!
+  acceptPeerInvite(input: AcceptPeerInviteInput!): AcceptPeerInvitePayload!
 
   """
   Accept a proposed task into the open backlog. Keeps any preferred date as a hint; does not place a calendar block.
@@ -2051,6 +2074,7 @@ type Mutation {
 
   """Soft-cancel a reminder. The row survives."""
   cancelReminder(id: ID!): ReminderType
+  collectPeerAnswer(askId: ID!): SendPeerAskPayload!
 
   """
   Mark a task done. Idempotent — the original completion instant is preserved.
@@ -2083,6 +2107,7 @@ type Mutation {
   createItem(input: CreateItemInput!): CreateItemPayload!
   createNote(input: CreateNoteInput!): CreateNotePayload!
   createNotes(input: [CreateNoteInput!]!): [NoteType!]!
+  createPeerInvite(input: CreatePeerInviteInput): CreatePeerInvitePayload!
   createPeerLink(input: CreatePeerLinkInput!): PeerLinkPayload!
   createPeople(input: [CreatePersonInput!]!): [PersonType!]!
   createPerson(input: CreatePersonInput!): CreatePersonPayload!
@@ -2208,12 +2233,15 @@ type Mutation {
   Move an event to a new time, keeping its duration. Externally-sourced events are moved locally only and marked pending — the change is not pushed to the source calendar.
   """
   rescheduleEvent(endTime: DateTime, id: ID!, startTime: DateTime!): EventType
+  resendPeerKeyRotation: PeerKeyRotationPayload!
   restoreEvent(input: RestoreByIdInput!): EventType
 
   """Return a placed event to the slate, deleting the event it minted"""
   returnEventToSlate(eventId: ID!): ScheduleCandidateType!
   revokeAskGrant(id: ID!): AskGrantPayload!
+  revokePeerInvite(id: ID!): PeerInvitePayload!
   revokePeerLink(id: ID!): PeerLinkPayload!
+  rotatePeerKey: PeerKeyRotationPayload!
   runAsk(disclosureForm: AnswerForm, id: ID!, redactItemIds: [String!]): RunAskPayload!
 
   """
@@ -2469,8 +2497,37 @@ type PageInfo {
   startCursor: String
 }
 
+type PeerInvite {
+  createdAt: DateTime!
+  expiresAt: DateTime!
+  id: ID!
+  inviterName: String!
+  label: String
+  status: PeerInviteStatus!
+  usedAt: DateTime
+}
+
+type PeerInvitePayload {
+  invite: PeerInvite
+  success: Boolean!
+}
+
+enum PeerInviteStatus {
+  expired
+  pending
+  revoked
+  used
+}
+
+type PeerKeyRotationPayload {
+  notified: [String!]!
+  success: Boolean!
+  unreachable: [String!]!
+}
+
 type PeerLinkPayload {
   peerLink: PeerLinkType
+  peerNotified: Boolean
   success: Boolean!
 }
 
@@ -2485,10 +2542,12 @@ type PeerLinkType {
   createdAt: DateTime!
   displayName: String
   id: ID!
+  linkedByKey: Boolean!
   memoryEndpoint: String!
   peerHandle: String!
   personEntityId: ID
   revokedAt: DateTime
+  safetyCode: String
   status: PeerLinkStatus!
   trustTier: PeerTrustTier!
   updatedAt: DateTime!
@@ -3073,6 +3132,7 @@ type Query {
   myAskGrantHistory: [AskGrantType!]!
   myAskGrants: [AskGrantType!]!
   myHouseholdTiers: [HouseholdTierType!]!
+  myPeerInvites: [PeerInvite!]!
   myPeerLinks: [PeerLinkType!]!
   node(id: ID!): Node
   note(id: ID!): NoteType
@@ -3569,7 +3629,7 @@ input SendPeerAskInput {
   from: String
   handle: String!
   minMinutes: Int
-  peerAccessToken: String!
+  peerAccessToken: String
   prompt: String!
   purpose: String
   subject: String
