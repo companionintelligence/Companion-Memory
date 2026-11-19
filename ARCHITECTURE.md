@@ -305,9 +305,10 @@ pinning: the build plan, GPU detection and the HBPE wheel-tag derivation, the
 `package.json` now declares `test` and `typecheck` scripts, so that suite is
 reached by `make test` (the root is a workspace, and `make test` is
 `yarn workspaces foreach --all`) and the code is typechecked by `make
-typecheck` / `yarn typecheck` — locally only; the CI lane that used to run
-this on every PR (`pr-gate.yml`'s `Type check packages`) was deleted along
-with the rest of that file, and it had no twin in `ci.yml`.
+typecheck` / `yarn typecheck`. In CI, `ci.yml` runs both as lanes of their
+own, `Type check root` and `Run root tests`, when someone dispatches it. The
+lane that used to type-check this on every PR (`pr-gate.yml`'s `Type check
+packages`) was deleted along with the rest of that file.
 
 Where the logic lives:
 
