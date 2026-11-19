@@ -143,7 +143,8 @@ generated "Cut a release" block still says `--ref main` — it is wrong; see the
 hand-maintained note in that file.
 
 **A release is one `release.yml` run on the tag.** It calls `publish.yml`, creates the
-GitHub Release, builds Memory Desktop (`desktop-release.yml`) and the phone apps
+GitHub Release, starts Memory Desktop (`desktop-release.yml`, as a run of its own so its
+Windows lane gets the `production` Environment's signing secrets) and the phone apps
 (`mobile-release.yml`, only when something they contain changed), then checks every
 platform with `scripts/release/release-check.mjs`. The desktop and phone apps take the
 server's version number (server 2026.11.17 ships Memory Desktop 2026.11.17). Before

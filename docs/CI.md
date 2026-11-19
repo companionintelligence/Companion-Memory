@@ -83,9 +83,13 @@ that directory to `PATH`.
 images (`publish.yml`), the GitHub Release, Memory Desktop
 (`desktop-release.yml`), the phone apps (`mobile-release.yml` once for iOS and
 once for Android, then `testflight-distribute.yml` for the iOS testers) and,
-last, a check of every platform. It calls the same workflows you can still
+last, a check of every platform. It runs the same workflows you can still
 dispatch one at a time. iOS and Android are separate steps, so an iOS build
-reaches TestFlight testers even when the Play upload fails.
+reaches TestFlight testers even when the Play upload fails. Memory Desktop runs
+as a dispatched run of its own, linked from the release run's summary, which
+waits for it: its Windows lane signs with the `production` Environment's Azure
+secrets, and a called workflow's jobs did not receive them (v2026.11.19 shipped
+Windows from a second run for that reason).
 
 ```bash
 # 1. Test the commit you will tag and wait for these to pass: the gates that

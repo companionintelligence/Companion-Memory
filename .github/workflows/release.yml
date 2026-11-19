@@ -29,9 +29,10 @@
 # commit. The `plan` job checks for them first, so a missing one fails in a
 # minute instead of after the images are out.
 #
-# Each lane gets only the secrets it reads, listed by name; the called workflows
-# declare the same names. Environment secrets (the Azure signing values) come
-# from the `production` Environment of the job that reads them.
+# Each called lane gets only the secrets it reads, listed by name; the called
+# workflows declare the same names. Memory Desktop is the exception: it runs as
+# a dispatched run of its own (see the `desktop` job), because its Windows lane
+# needs the `production` Environment's Azure secrets.
 #
 # A lane that fails can be retried with "Re-run failed jobs"; the lanes that
 # passed are kept. Uploads to TestFlight and Play's internal track go to testers
@@ -210,27 +211,53 @@ jobs:
           fi
           gh release create "${TAG}" "${args[@]}"
 
+  # desktop-release.yml runs as a run of its own, not as a called workflow. Its
+  # Windows lane signs with the Azure values in the `production` Environment,
+  # and a called workflow's jobs did not receive Environment secrets: in the
+  # v2026.11.19 release the Windows lane found none and was skipped. A
+  # dispatched run reads them as it always has. This job starts that run on
+  # the release tag, links it in the summary and waits for it, so the release
+  # still fails when the desktop app does.
   desktop:
     name: Desktop app
     needs: [plan, publish]
     if: inputs.desktop
-    uses: ./.github/workflows/desktop-release.yml
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
     permissions:
-      contents: write
-      packages: read
-      actions: read
-      id-token: write
-    secrets:
-      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-    with:
-      version_name: ${{ needs.plan.outputs.version }}
-      server_image_tag: ${{ needs.plan.outputs.version }}
-      skip_test_gate: ${{ inputs.skip_test_gate }}
-      bypass_reason: ${{ inputs.bypass_reason }}
+      actions: write
+      contents: read
+    steps:
+      - name: Run desktop-release.yml on ${{ github.ref_name }} and wait for it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          SKIP_TEST_GATE: ${{ inputs.skip_test_gate }}
+          BYPASS_REASON: ${{ inputs.bypass_reason }}
+        run: |
+          set -euo pipefail
+          started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          gh workflow run desktop-release.yml --ref "${TAG}" \
+            -f version_name="${VERSION}" -f server_image_tag="${VERSION}" \
+            -f skip_test_gate="${SKIP_TEST_GATE}" -f bypass_reason="${BYPASS_REASON}"
+          run_id=""
+          for _ in $(seq 1 30); do
+            run_id=$(gh run list --workflow desktop-release.yml --event workflow_dispatch --branch "${TAG}" \
+              --limit 5 --json databaseId,createdAt \
+              --jq "[.[] | select(.createdAt >= \"${started}\")] | last | .databaseId // empty")
+            if [[ -n "${run_id}" ]]; then break; fi
+            sleep 10
+          done
+          if [[ -z "${run_id}" ]]; then
+            echo "::error::desktop-release.yml was dispatched on ${TAG} but no run showed up within 5 minutes."
+            exit 1
+          fi
+          url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+          echo "Desktop release run: ${url}"
+          echo "Memory Desktop: [desktop-release.yml run](${url})" >> "$GITHUB_STEP_SUMMARY"
+          gh run watch "${run_id}" --interval 60 --exit-status > /dev/null
 
   # iOS and Android are two calls of mobile-release.yml, so one store failing
   # doesn't hold the other back: an iOS build reaches TestFlight testers even when
