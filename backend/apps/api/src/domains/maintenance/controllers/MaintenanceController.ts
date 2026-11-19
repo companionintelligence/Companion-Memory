@@ -1568,7 +1568,12 @@ export class MaintenanceController {
    * 'file' — run migration 20260818235804) from a dangling-but-plausible id (a
    * file row that was deleted). Pure observability: no writes, counts are
    * GLOBAL, matching /search/coverage.
+   *
+   * Appliance-wide, so the administrator's (ApplianceAdminGuard): its `sample`
+   * lists other accounts' content ids and external ids (Audible / Kindle URIs
+   * among them), which any signed-in account or read key used to receive.
    */
+  @UseGuards(ApplianceAdminGuard)
   @Get('content/external-id-kind')
   @RequireCapability(READ_CAPABILITY)
   async contentExternalIdKindIntegrity(): Promise<ExternalIdKindIntegrityReport> {

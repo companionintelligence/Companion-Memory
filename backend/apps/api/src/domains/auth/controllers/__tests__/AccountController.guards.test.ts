@@ -16,6 +16,7 @@ import { capabilityForApp, scopesForApp } from '../../services/ConnectService';
 import { FederatedIdentityService } from '../../services/FederatedIdentityService';
 import { HubForwardAuthBridgeService } from '../../services/HubForwardAuthBridgeService';
 import { JwtStrategy } from '../../services/JwtStrategy';
+import { LoginThrottleService } from '../../services/LoginThrottleService';
 import { CONNECT_PROVENANCE, type ValidatedApiKey } from '../../types';
 import { AccountController } from '../AccountController';
 
@@ -137,6 +138,14 @@ const mockPortalTokenVerifier = {
     { provide: FederatedIdentityService, useValue: mockFederatedIdentityService },
     { provide: HubForwardAuthBridgeService, useValue: mockHubBridge },
     { provide: ApiKeyService, useValue: mockApiKeyService },
+    {
+      provide: LoginThrottleService,
+      useValue: {
+        check: () => ({ locked: false }),
+        recordFailure: () => undefined,
+        recordSuccess: () => undefined,
+      },
+    },
     { provide: PORTAL_TOKEN_VERIFIER, useValue: mockPortalTokenVerifier },
     // Instantiating these registers the real 'jwt' and 'api-key' passport strategies
     // the guards delegate to, so what is under test is the production authentication

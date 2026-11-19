@@ -208,11 +208,13 @@ export class PeerAskController {
    * same link, over a digest of this exact body, with a nonce that makes a
    * replay detectable.
    *
-   * On the shipped defaults that is optional. `peers.requireHttpSignature` is
-   * off, so a request with no signature headers returns early below and the
-   * Portal token alone authenticates it: a leaked token is enough to ask as
-   * that peer, and a replay is not detected. Only with the flag on does every
-   * request have to carry a valid signature, and an unsigned one is refused.
+   * On the shipped defaults that is optional only for a peer whose link
+   * records NO key. `peers.requireHttpSignature` is off, so an unsigned
+   * request from such a peer returns early below and the Portal token alone
+   * authenticates it: a leaked token is enough to ask as that peer, and a
+   * replay is not detected. An unsigned request from a peer whose link DOES
+   * record a key is refused whatever the flag says. With the flag on, every
+   * request has to carry a valid signature, keyless links included.
    * The boot-time warning in `configuration.ts` reports the default state.
    *
    * Making the KEY the primary identity (and the Portal token an optional
@@ -246,10 +248,22 @@ export class PeerAskController {
   ): Promise<AskChannelProvenance | null> {
     const hasSignatureHeaders = request.headers['signature-input'] != null;
 
-    // Not required and not offered: nothing to check. A box that has not yet
-    // turned the requirement on must keep talking to peers that do not sign.
+    // Not required and not offered: nothing to check, UNLESS the owner has
+    // recorded a key for this peer. A box that has not yet turned the
+    // requirement on must keep talking to peers that cannot sign, but a peer
+    // whose key is on its link can, and `PeerAskClient` signs every call once
+    // a key is configured. An unsigned request naming that peer is therefore
+    // a bearer token without the key behind it: refusing it here is what stops
+    // a leaked or replayed token from asking as a peer that signs, while the
+    // box-wide switch is still off for the peers that do not.
     if (!this.signatureService.required && !hasSignatureHeaders) {
-      return null;
+      const links = await this.peerLinkService.findActiveByPeerIdentity(identity.issuer, identity.subject);
+      if (!links.some((candidate) => candidate.peerKeyJwk != null)) {
+        return null;
+      }
+
+      this.logger.warn(`peer ask refused: unsigned, but the peer's link records a key (${identity.issuer})`);
+      throw new UnauthorizedException(SIGNATURE_REFUSED);
     }
 
     if (!hasSignatureHeaders) {

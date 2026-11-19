@@ -7,6 +7,7 @@ import { type CallbackRequestOrigin, exchangeRedirectUri } from '../utils/callba
 
 import { firstAccountLabel } from './accountLabel';
 import { BaseOAuth2Client, formatTokenExchangeError } from './BaseOAuth2Client';
+import { providerApiUrl } from './providerApiUrl';
 import type { TokenExchange, TokenResponse } from './types';
 
 export const REDDIT_USER_AGENT = 'web:ci-server:1.0 (by /u/cicompanionintelligence)';
@@ -84,11 +85,8 @@ export class RedditClient extends BaseOAuth2Client {
       throw new Error('Connection not authenticated');
     }
 
-    const endpointSplitOnProtocol = /^(https:\/\/[^/]+)(\/.*)?$/.exec(endpoint);
-    const baseUrl = endpointSplitOnProtocol ? endpointSplitOnProtocol[1] : this.baseUrl;
-    const path = endpointSplitOnProtocol ? endpointSplitOnProtocol[2] || '' : endpoint;
-
-    return fetch(`${baseUrl}${path}`, {
+    // Only the provider's own API gets the token (see `providerApiUrl`).
+    return fetch(providerApiUrl(this.baseUrl, endpoint), {
       ...options,
       headers: {
         ...options?.headers,

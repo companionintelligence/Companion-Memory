@@ -33,6 +33,34 @@ export function jobFailure(job: Pick<PgBossJobEntity, 'output' | 'sourceOutput'>
 }
 
 /**
+ * Who is reading a job's failure: the account, and whether it administers this appliance.
+ *
+ * A failure's message and stack name what the job was working on, in that account's data. Every
+ * account may see the job list (the Jobs page is appliance-wide), but only an administrator or the
+ * job's own account sees its failure; anyone else gets the row with `failure: null`. Before this,
+ * any signed-in account or read key read every account's failure messages and stacks.
+ */
+export interface JobFailureViewer {
+  readonly userId: string;
+  readonly admin: boolean;
+}
+
+/** The job's failure if `viewer` may read it, else null. See {@link JobFailureViewer}. */
+export function jobFailureFor(
+  job: Pick<PgBossJobEntity, 'output' | 'sourceOutput' | 'data'>,
+  viewer: JobFailureViewer,
+): JobFailureDto | null {
+  if (!viewer.admin) {
+    const owner = (job.data as Record<string, unknown> | null | undefined)?.['userId'];
+    if (typeof owner !== 'string' || owner !== viewer.userId) {
+      return null;
+    }
+  }
+
+  return jobFailure(job);
+}
+
+/**
  * Lift a failure out of one jsonb output.
  *
  * `output` is an untyped jsonb column: the worker writes
@@ -305,7 +333,10 @@ export class JobMonitorService {
 
   private readonly logger = new Logger(JobMonitorService.name);
 
-  async getDashboard(context: RequestContext): Promise<JobDashboardDto> {
+  async getDashboard(
+    context: RequestContext,
+    viewer: JobFailureViewer = { userId: context.userId ?? '', admin: false },
+  ): Promise<JobDashboardDto> {
     if (!context.userId) {
       throw new UnauthorizedException('A user context is required.');
     }
@@ -354,8 +385,8 @@ export class JobMonitorService {
       activeDistribution,
       queueDistribution,
       smartRotationDistribution,
-      jobs: jobs.map((job) => this.toJobRecord(job)),
-      archive: archive.map((job) => this.toArchivedJobRecord(job)),
+      jobs: jobs.map((job) => this.toJobRecord(job, viewer)),
+      archive: archive.map((job) => this.toArchivedJobRecord(job, viewer)),
       schedules: schedules.map((schedule) => this.toScheduleDto(schedule)),
       queues: queues.map((queue) => this.toQueueDto(queue)),
     } satisfies JobDashboardDto;
@@ -725,7 +756,7 @@ export class JobMonitorService {
       .filter((item) => item.count > 0);
   }
 
-  private toJobRecord(job: PgBossJobEntity): JobRecordDto {
+  private toJobRecord(job: PgBossJobEntity, viewer: JobFailureViewer): JobRecordDto {
     return {
       id: job.id,
       queue: job.name,
@@ -742,7 +773,7 @@ export class JobMonitorService {
       deadLetter: job.deadLetter,
       policy: job.policy,
       ...this.projectPayload(job.data),
-      failure: jobFailure(job),
+      failure: jobFailureFor(job, viewer),
     };
   }
 
@@ -774,9 +805,9 @@ export class JobMonitorService {
     }
   }
 
-  private toArchivedJobRecord(job: PgBossJobEntity): ArchivedJobRecordDto {
+  private toArchivedJobRecord(job: PgBossJobEntity, viewer: JobFailureViewer): ArchivedJobRecordDto {
     return {
-      ...this.toJobRecord(job),
+      ...this.toJobRecord(job, viewer),
       archivedOn: (job.completedOn ?? job.createdOn).toISOString(),
     };
   }

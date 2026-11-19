@@ -1,4 +1,5 @@
 import type { RequestContext } from '@ci/common/context';
+import type { ApplianceAdminGuard } from '@ci/common/guards';
 
 import { expectFixtureShapes } from '../../__tests__/support/cliWireFixtures';
 import { JobsController } from '../controllers/JobsController';
@@ -116,10 +117,13 @@ describe('the ci CLI against /jobs/dashboard', () => {
       { getDashboard: jest.fn(async () => dashboard) } as unknown as JobMonitorService,
       {} as JobQueryService,
       {} as JobControlsService,
+      { admits: jest.fn(async () => true) } as unknown as ApplianceAdminGuard,
     );
 
     expectFixtureShapes('jobs.json', {
-      dashboard: await controller.getDashboard({ userId: OWNER } as RequestContext),
+      dashboard: await controller.getDashboard({ userId: OWNER } as RequestContext, {
+        user: { role: 'admin' },
+      }),
     });
   });
 });
