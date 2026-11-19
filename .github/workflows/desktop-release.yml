@@ -907,11 +907,27 @@ jobs:
       && needs.macos.result != 'failure'
       && needs.windows.result != 'failure'
     runs-on: ubuntu-latest
-    # The only job that writes: softprops/action-gh-release creates the
-    # desktop-v* tag and the Release.
+    # The only job that writes: it makes sure the desktop-v* tag exists and
+    # creates the Release.
     permissions:
       contents: write
     steps:
+      - name: Checkout the release scripts
+        uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts/release
+
+      # release.yml already created the tag in its first job, so this usually
+      # finds it. A standalone dispatch may not have one yet. The workflow token
+      # can't create a tag at this commit once main's workflow files differ from
+      # it (403); the script then prints the command to push the tag by hand.
+      - name: Make sure the desktop tag exists at this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: bash scripts/release/ensure-tag.sh "${TAG}" "${GITHUB_SHA}"
+
       - name: Download artifacts
         uses: actions/download-artifact@v8
         with:
@@ -963,28 +979,48 @@ jobs:
             echo "PLATFORMS_EOF"
           } >> "$GITHUB_OUTPUT"
 
+      # `gh release create --verify-tag`, the way release.yml makes the server
+      # Release: the tag exists by now (step above), so nothing here asks GitHub
+      # to create or move a ref. softprops/action-gh-release, used until
+      # 2026-11-19, was given target_commitish, and for a commit that main had
+      # moved past with workflow changes GitHub answered 403 "Resource not
+      # accessible by integration" (runs 44533423894 and 44541215720), even
+      # with the tag already pushed.
+      #
+      # --latest=false: the desktop app's releases share this repo with the
+      # server's date-tagged releases, and Latest belongs to the server, or
+      # /releases/latest stops pointing at it. The platform inventory goes first
+      # and GitHub's generated notes follow it, from the previous desktop
+      # release. A re-run on a Release that already exists replaces its files.
       - name: Create release
-        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
-        with:
-          tag_name: ${{ needs.version.outputs.tag }}
-          # Started by release.yml, the tag doesn't exist yet. Without this the
-          # action would create it on the default branch's head, not on the
-          # commit these installers were built from.
-          target_commitish: ${{ github.sha }}
-          name: Desktop ${{ needs.version.outputs.version }} (${{ steps.platforms.outputs.names }})
-          # GitHub appends the generated notes AFTER this body, so the platform
-          # inventory stays at the top where it is actually read.
-          body: ${{ steps.platforms.outputs.body }}
-          generate_release_notes: true
-          # The desktop app's releases share this repo with the server's date-tagged
-          # releases (v2026.9.9.1 ...). Without this, each desktop release takes the
-          # "Latest" badge, and /releases/latest stops pointing at the server.
-          make_latest: 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.version.outputs.tag }}
+          TITLE: Desktop ${{ needs.version.outputs.version }} (${{ steps.platforms.outputs.names }})
+          BODY: ${{ steps.platforms.outputs.body }}
+        run: |
+          set -euo pipefail
           # macOS/Windows assets may legitimately be absent if their signing
-          # secrets aren't provisioned yet — see this file's header comment —
-          # which is why the pattern stays a glob. `fail_on_unmatched_files`
-          # still catches the other failure mode: artifacts/**/* matching
-          # NOTHING, i.e. an empty release, which the action would otherwise
-          # publish happily (its default is false).
-          fail_on_unmatched_files: true
-          files: artifacts/**/*
+          # secrets aren't provisioned (see this file's header). No file at all
+          # means an empty release, which is refused.
+          mapfile -t files < <(find artifacts -type f | sort)
+          if (( ${#files[@]} == 0 )); then
+            echo "::error::No release artifacts were downloaded, so there is nothing to publish."
+            exit 1
+          fi
+          printf '%s\n' "${files[@]}"
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "${TAG} already has a Release; replacing its files."
+            gh release upload "${TAG}" "${files[@]}" --clobber
+            exit 0
+          fi
+          previous=$(gh release list --limit 200 --exclude-drafts --exclude-pre-releases \
+            --json tagName --jq '.[].tagName' | grep -E '^desktop-v' | grep -vxF "${TAG}" \
+            | { cat; echo "${TAG}"; } | sort -V | grep -B1 -xF "${TAG}" | grep -vxF "${TAG}" || true)
+          printf '%s\n' "${BODY}" > "${RUNNER_TEMP}/notes.md"
+          args=(--verify-tag --title "${TITLE}" --notes-file "${RUNNER_TEMP}/notes.md" --generate-notes --latest=false)
+          if [[ -n "${previous}" ]]; then
+            args+=(--notes-start-tag "${previous}")
+          fi
+          gh release create "${TAG}" "${args[@]}" "${files[@]}"

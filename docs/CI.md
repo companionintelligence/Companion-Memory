@@ -91,6 +91,17 @@ waits for it: its Windows lane signs with the `production` Environment's Azure
 secrets, and a called workflow's jobs did not receive them (v2026.11.19 shipped
 Windows from a second run for that reason).
 
+**Tags the run makes.** The first job creates `desktop-v<version>` at the
+tagged commit, and the last phone step creates `mobile-v<version>`. GitHub
+refuses the workflow token a new tag at a commit whose workflow files differ
+from `main`'s, answering 403 "Resource not accessible by integration". That is
+why the desktop tag is made first, before `main` can move, and why the desktop
+Release is created with `gh release create --verify-tag` and no target commit.
+If a tag still can't be made, `scripts/release/ensure-tag.sh` stops with the
+command to push it by hand (`git tag <tag> <sha> && git push origin
+refs/tags/<tag>`); push it and re-run the failed job. A missing `mobile-v` tag
+only warns, and the next `phones=auto` run then rebuilds the phones.
+
 ```bash
 # 1. Test the commit you will tag and wait for these to pass: the gates that
 #    publish.yml's GATED_WORKFLOWS marks required (ci.yml and
