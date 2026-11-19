@@ -739,6 +739,25 @@ export class CommunicationService {
       updateData.preview = data.preview;
     }
 
+    // New text and no preview to go with it: the stored one is the clip (or a
+    // connection's snippet) of the OLD text. The message list and the
+    // message's name would keep showing it. Readers derive it from the new
+    // text instead, as they do for an imported message that came without one.
+    // A save or a re-sync that hands back the stored text keeps the preview it
+    // has. A message edited in the app takes this path, as does a Facebook
+    // post whose re-sync changed the text. Decided against the row the
+    // update's own transaction loaded, so it follows what is being replaced.
+    const newContent = data.preview === undefined ? data.content : undefined;
+    const detail = newContent
+      ? (before: CommunicationEntity) => {
+          if (before.preview != null && before.content !== newContent) {
+            updateData.preview = null;
+          }
+
+          return updateData;
+        }
+      : updateData;
+
     await this.refuseForeignUpdateLinks(context, id, {
       device_id: updateData.deviceId,
       from_entity_id: updateData.fromEntityId,
@@ -759,7 +778,7 @@ export class CommunicationService {
       id,
       {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        detail: updateData as any, // TypeORM will handle JSON serialization
+        detail: detail as any, // TypeORM will handle JSON serialization
         // The base patch derives from the PATCHED detail values, so the label
         // reflects what is actually being persisted.
         base: labelSourcesTouched

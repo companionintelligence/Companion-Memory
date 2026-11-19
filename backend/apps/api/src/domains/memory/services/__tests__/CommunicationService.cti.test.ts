@@ -142,6 +142,31 @@ describe('CommunicationService CTI update', () => {
     expect(baseRepo.update).toHaveBeenCalledWith({ id: 'c1' }, { name: 'new text', description: null });
   });
 
+  it('clears a stored preview of the old text when the text changes without one and re-derives the label', async () => {
+    const { service, repository, baseRepo } = makeHarness();
+    (repository.findOne as jest.Mock).mockResolvedValue(
+      Object.assign(new CommunicationEntity(), {
+        id: 'c1',
+        userId: USER,
+        subject: null,
+        preview: 'Shopping list for the cabin: - bread - coffee',
+        content: 'Shopping list for the cabin:\n- bread\n- coffee',
+        summary: null,
+      }),
+    );
+
+    await service.update(CONTEXT as ServiceContext, 'c1', { content: 'Shopping list: bread' });
+
+    expect(repository.update).toHaveBeenCalledWith(
+      { id: 'c1' },
+      expect.objectContaining({ content: 'Shopping list: bread', preview: null }),
+    );
+    expect(baseRepo.update).toHaveBeenCalledWith(
+      { id: 'c1' },
+      { name: 'Shopping list: bread', description: null },
+    );
+  });
+
   it('leaves the base row alone when no label source changed', async () => {
     const { service, repository, baseRepo } = makeHarness();
     (repository.findOne as jest.Mock).mockResolvedValue(

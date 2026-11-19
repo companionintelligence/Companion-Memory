@@ -20,7 +20,7 @@ export type IngestEntityKind =
  * self-heals (the cross-repo handshake itself is out of scope here — nothing
  * reads this over the wire yet).
  */
-export const INGEST_SCHEMA_VERSION = 6;
+export const INGEST_SCHEMA_VERSION = 7;
 
 /**
  * Central, per-entity list of the DB columns a bulk re-ingest of an existing
@@ -220,7 +220,15 @@ export const INGEST_MERGE_KINDS: Record<IngestEntityKind, Readonly<Record<string
   // Both bags are object-valued: participants_metadata is `{ from, to, ... }`
   // (the shared contract shape), metadata the parser's catch-all. Merged so a
   // connection's labels and an archive's headers end up on one row.
-  communication: { participants_metadata: 'json', metadata: 'json' },
+  //
+  // `preview` is the one-line clip of `content`. The importer sends it only
+  // when the clip differs from the text (push/inputs.ts): a short one-line
+  // message arrives with none and readers derive it (previewFromContent). Under
+  // 'value' a re-import that changed a long or multi-line message into one
+  // short line kept the OLD preview, which the message list and the message's
+  // name show, while the content moved on. 'derived' (version 7) lets the same
+  // producer's null clear it.
+  communication: { participants_metadata: 'json', metadata: 'json', preview: 'derived' },
   event: {},
   item: {},
   content: {},
