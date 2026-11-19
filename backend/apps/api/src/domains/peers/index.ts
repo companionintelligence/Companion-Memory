@@ -15,6 +15,7 @@ import { MemoryModule, EventEntity } from '@ci/domains/memory';
 import { UserModule } from '@ci/domains/user';
 
 import { PeerAskController } from './controllers/PeerAskController';
+import { PeerExchangeController } from './controllers/PeerExchangeController';
 import { PeerAskCorrelationEntity } from './entities/PeerAskCorrelationEntity';
 import { PeerIdentityKeyEntity } from './entities/PeerIdentityKeyEntity';
 import { PeerLinkEntity } from './entities/PeerLinkEntity';
@@ -24,6 +25,7 @@ import { PeerAskClient } from './services/PeerAskClient';
 import { PeerAskCorrelationService } from './services/PeerAskCorrelationService';
 import { PeerAskService } from './services/PeerAskService';
 import { PeerDirectoryService } from './services/PeerDirectoryService';
+import { PeerExchangeClient } from './services/PeerExchangeClient';
 import { PeerIdentityService } from './services/PeerIdentityService';
 import { PeerLinkService } from './services/PeerLinkService';
 import { PeerRateLimitService } from './services/PeerRateLimitService';
@@ -48,12 +50,13 @@ import { PeerSignatureService } from './services/PeerSignatureService';
     // `OutboundAskService` reads the sender's name for `askerHandle`.
     UserModule,
   ],
-  controllers: [PeerAskController],
+  controllers: [PeerAskController, PeerExchangeController],
   providers: [
     PeerLinkService,
     PeerDirectoryService,
     LocalPubDiscoveryService,
     PeerAskClient,
+    PeerExchangeClient,
     PeerAskCorrelationService,
     PeerAskService,
     PeerRateLimitService,
