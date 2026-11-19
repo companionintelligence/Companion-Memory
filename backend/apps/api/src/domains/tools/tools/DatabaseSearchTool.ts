@@ -45,7 +45,12 @@ import { BaseTool } from '../core/BaseTool';
 import type { IntentDefinition, ToolExecutionContext } from '../core/types';
 
 import { booleanish } from './booleanish';
-import { boundSearchPage, type CompactSearchHit } from './compactSearchHit';
+import {
+  boundSearchPage,
+  type CompactSearchHit,
+  type EntryWindow,
+  readEntryWindow,
+} from './compactSearchHit';
 
 /**
  * `query` is optional ONLY for a count: "how many photos do I have" has no
@@ -736,6 +741,22 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
   }
 
   /**
+   * One entry by type and id, read whole a window of its text at a time: what `knowledge_get`
+   * returns. `undefined` when it is not the caller's, does not exist, or was forgotten; a type
+   * with no resolver here cannot be read either, the same as it cannot be a search hit.
+   */
+  async readEntry(
+    context: ToolExecutionContext,
+    type: IndexableEntity,
+    id: string,
+    offset?: number,
+  ): Promise<EntryWindow<IndexableEntity> | undefined> {
+    const [hit] = await this.hydrateHits(toServiceContext(context), [{ type, id }]);
+
+    return hit && readEntryWindow(hit, offset);
+  }
+
+  /**
    * The hits, hydrated and trimmed to one page's budget (see boundSearchPage). `omitted` counts
    * the hits that resolved but were left out to keep the page inside it.
    */
@@ -743,6 +764,38 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
     context: UserServiceContext,
     results: EntityIdentifier<IndexableEntity>[],
   ): Promise<{ items: SearchResultItem[]; omitted: number }> {
+    const hydrated = await this.hydrateHits(context, results);
+
+    // Every caller of a search intent (MCP, REST, the in-app chat, the phone) reads this, and
+    // only the in-app chat and the phone bound it on the way in. See compactSearchHit.
+    const { items: orderedResults, omitted } = boundSearchPage(hydrated);
+
+    // A hit the resolvers above cannot hydrate vanishes from the answer, and
+    // the caller cannot tell "nothing matched" from "everything matched was
+    // dropped here" — measured live: a 25-hit browser-activity page returned
+    // [] to the model before that resolver existed. Every indexable type must
+    // have a resolver; this trips when the next one is added without it.
+    if (orderedResults.length === 0 && results.length > 0) {
+      const droppedByType: Record<string, number> = {};
+
+      for (const result of results) {
+        droppedByType[result.type] = (droppedByType[result.type] ?? 0) + 1;
+      }
+
+      this.logger.warn('Search matched entities but every hit was dropped during resolution', {
+        matches: results.length,
+        droppedByType,
+      });
+    }
+
+    return { items: orderedResults, omitted };
+  }
+
+  /** The hits as whole entities, in the order given, each with its `type` and (where one exists) `link`. */
+  private async hydrateHits(
+    context: UserServiceContext,
+    results: EntityIdentifier<IndexableEntity>[],
+  ): Promise<HydratedSearchHit[]> {
     const groupedByType: Map<IndexableEntity, string[]> = results.reduce((acc, result) => {
       if (!acc.has(result.type)) {
         acc.set(result.type, []);
@@ -855,7 +908,7 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
 
     const takenAtOf = await this.photoTakenAt(context, results, resultMap, contentIdsByFile);
 
-    const hydrated = results.flatMap((result): HydratedSearchHit[] => {
+    return results.flatMap((result): HydratedSearchHit[] => {
       const entity = resultMap.get(makeCompositeKey(result.type, result.id));
 
       if (entity == null) {
@@ -874,30 +927,6 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchTool
         },
       ];
     });
-
-    // Every caller of a search intent (MCP, REST, the in-app chat, the phone) reads this, and
-    // only the in-app chat and the phone bound it on the way in. See compactSearchHit.
-    const { items: orderedResults, omitted } = boundSearchPage(hydrated);
-
-    // A hit the resolvers above cannot hydrate vanishes from the answer, and
-    // the caller cannot tell "nothing matched" from "everything matched was
-    // dropped here" — measured live: a 25-hit browser-activity page returned
-    // [] to the model before that resolver existed. Every indexable type must
-    // have a resolver; this trips when the next one is added without it.
-    if (orderedResults.length === 0 && results.length > 0) {
-      const droppedByType: Record<string, number> = {};
-
-      for (const result of results) {
-        droppedByType[result.type] = (droppedByType[result.type] ?? 0) + 1;
-      }
-
-      this.logger.warn('Search matched entities but every hit was dropped during resolution', {
-        matches: results.length,
-        droppedByType,
-      });
-    }
-
-    return { items: orderedResults, omitted };
   }
 }
 
