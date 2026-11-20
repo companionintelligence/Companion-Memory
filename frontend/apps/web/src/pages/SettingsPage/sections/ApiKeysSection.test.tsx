@@ -478,7 +478,7 @@ describe('ApiKeysSection delete confirmation', () => {
     render(<ApiKeysSection />);
     await openDeleteFor('laptop');
 
-    expect(screen.getByText('Delete API Key')).toBeInTheDocument();
+    expect(screen.getByText('Delete API key?')).toBeInTheDocument();
     // The key's name is bolded inline (`<strong>{name}</strong>`), so it lands in its
     // own text node — one occurrence in the row behind the dialog, one in the prompt.
     expect(screen.getAllByText('laptop').length).toBeGreaterThanOrEqual(2);
@@ -541,7 +541,7 @@ describe('ApiKeysSection delete confirmation', () => {
     // its name) both stay put, ready to retry, rather than closing as if the
     // delete had gone through.
     expect(screen.getAllByText('laptop').length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText('Delete API Key')).toBeInTheDocument();
+    expect(screen.getByText('Delete API key?')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^delete$/i })).toBeEnabled();
   });
 

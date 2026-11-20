@@ -59,8 +59,8 @@ describe('AutonomySection', () => {
 
     render(<AutonomySection />);
 
-    await waitFor(() => expect(screen.getByRole('button', { name: /Hands-off/ })).toBeEnabled());
-    expect(screen.getByRole('button', { name: /Hands-off/ })).toHaveAttribute('aria-pressed', 'true');
+    await waitFor(() => expect(screen.getByRole('radio', { name: /Hands-off/ })).toBeEnabled());
+    expect(screen.getByRole('radio', { name: /Hands-off/ })).toHaveAttribute('aria-checked', 'true');
     expect(calls[0].url).toContain('/api/personalization/profile');
     expect(calls[0].headers.Authorization).toBe('Bearer jwt-abc');
   });
@@ -85,11 +85,11 @@ describe('AutonomySection', () => {
 
       render(<AutonomySection />);
 
-      await waitFor(() => expect(screen.getByRole('button', { name: /Cautious/ })).toBeEnabled());
-      expect(screen.getByRole('button', { name: /Balanced/ })).toBeEnabled();
-      expect(screen.getByRole('button', { name: /Hands-off/ })).toBeEnabled();
+      await waitFor(() => expect(screen.getByRole('radio', { name: /Cautious/ })).toBeEnabled());
+      expect(screen.getByRole('radio', { name: /Balanced/ })).toBeEnabled();
+      expect(screen.getByRole('radio', { name: /Hands-off/ })).toBeEnabled();
       expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
-      expect(screen.getByRole('button', { name: /Hands-off/ })).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByRole('radio', { name: /Hands-off/ })).toHaveAttribute('aria-checked', 'true');
 
       expect(calls[0].url).toContain('/api/personalization/profile');
       expect(calls[0].headers['x-api-key']).toBe('device-key');
@@ -100,9 +100,9 @@ describe('AutonomySection', () => {
       stubApi({ trustMode: 'balanced' });
 
       render(<AutonomySection />);
-      await waitFor(() => expect(screen.getByRole('button', { name: /Cautious/ })).toBeEnabled());
+      await waitFor(() => expect(screen.getByRole('radio', { name: /Cautious/ })).toBeEnabled());
 
-      fireEvent.click(screen.getByRole('button', { name: /Cautious/ }));
+      fireEvent.click(screen.getByRole('radio', { name: /Cautious/ }));
       fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
       await waitFor(() => expect(calls.some((call) => call.method === 'POST')).toBe(true));

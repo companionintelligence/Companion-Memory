@@ -38,7 +38,9 @@ export function SettingsPage() {
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
+      // A popover, menu or dropdown open inside the dialog closes on this Escape first and marks
+      // it handled; only an Escape nothing else used closes Settings.
+      if (e.key === 'Escape' && !e.defaultPrevented) {
         handleClose();
       }
     };
@@ -118,7 +120,11 @@ export function SettingsPage() {
 
           <ScrollArea className="flex-1">
             <main>
-              <div className="mx-auto max-w-2xl p-6">
+              {/* Left-aligned beside the nav, not centred in the pane: centred, a narrow page
+                  left a wide empty strip between the nav and the cards. The wider right
+                  padding keeps a section's header buttons clear of the dialog's close button
+                  in a narrow window. */}
+              <div className="max-w-[calc(48rem+5.5rem)] pt-7 pr-14 pb-10 pl-8">
                 <SettingsSectionBody
                   section={location.pathname.split('/').pop() || 'appearance'}
                   fallbackTo="/settings/appearance"

@@ -5,10 +5,12 @@ import {
   type LocalLlmMode,
   type LocalLlmModelState,
 } from '@ci/common';
-import { Badge, Button, Card, Label, Progress, Select, Switch } from '@ci/shadcn';
-import { Download, Smartphone, Trash2 } from '@ci/shadcn/icons';
+import { Badge, Button, Progress, Select, Switch } from '@ci/shadcn';
+import { Download, Trash2 } from '@ci/shadcn/icons';
 
 import { useLocalLlmPrefs, useOnDeviceModel } from '@/hooks/useOnDeviceModel';
+
+import { SettingsGroup, SettingsRow, SettingsSection, SettingsStatus } from '../kit';
 
 const MODE_OPTIONS: { value: LocalLlmMode; label: string; hint: string }[] = [
   {
@@ -48,19 +50,15 @@ export function OnDeviceModelSection() {
   const [prefs, setPrefs] = useLocalLlmPrefs();
 
   if (!probe) {
-    return <p className="text-muted-foreground text-sm">Checking this device…</p>;
+    return <SettingsSection title="On-device model" description="Checking this device…" />;
   }
 
   if (!probe.supported) {
     return (
-      <Card>
-        <Card.Header>
-          <Card.Title>On-device model</Card.Title>
-          <Card.Description>
-            {probe.availability.reason ?? 'On-device models run in the iOS and Android apps.'}
-          </Card.Description>
-        </Card.Header>
-      </Card>
+      <SettingsSection
+        title="On-device model"
+        description={probe.availability.reason ?? 'On-device models run in the iOS and Android apps.'}
+      />
     );
   }
 
@@ -82,175 +80,154 @@ export function OnDeviceModelSection() {
   };
 
   return (
-    <div className="flex flex-col gap-4">
-      <Card>
-        <Card.Header>
-          <div className="flex items-start gap-3">
-            <div className="bg-muted text-muted-foreground mt-0.5 rounded-md p-2">
-              <Smartphone className="h-4 w-4" />
-            </div>
-            <div className="min-w-0 space-y-1">
-              <Card.Title>On-device model</Card.Title>
-              <Card.Description>
-                A small language model that runs entirely on this phone — no connection needed, and nothing
-                you type leaves the device. It is smaller than the model on your Companion, so answers are
-                simpler. Models download once from Hugging Face.
-              </Card.Description>
-            </div>
-          </div>
-        </Card.Header>
-        <Card.Content className="flex flex-col gap-4">
-          <div className="grid gap-2">
-            <Label htmlFor="on-device-mode">When to use it</Label>
-            <Select
-              value={prefs.mode}
-              onValueChange={(value) => setPrefs({ mode: value as LocalLlmMode })}
-              disabled={!selectedReady && prefs.mode === 'appliance'}
-            >
-              <Select.Trigger id="on-device-mode" className="w-full">
-                <Select.Value />
-              </Select.Trigger>
-              <Select.Content>
-                {MODE_OPTIONS.map((option) => (
-                  <Select.Item
-                    key={option.value}
-                    value={option.value}
-                    disabled={option.value !== 'appliance' && !selectedReady}
-                  >
-                    {option.label}
-                  </Select.Item>
-                ))}
-              </Select.Content>
-            </Select>
-            <p className="text-muted-foreground text-xs">
-              {selectedReady
-                ? activeMode.hint
-                : 'Download a model below and choose “Use this model” to turn this on.'}
-            </p>
-          </div>
+    <SettingsSection
+      title="On-device model"
+      description="A small language model that runs entirely on this phone, with no connection needed."
+      help="Nothing you type leaves the device. It is smaller than the model on your Companion, so answers are simpler. Models download once from Hugging Face."
+    >
+      <SettingsGroup>
+        <SettingsRow
+          label="When to use it"
+          htmlFor="on-device-mode"
+          hint={
+            selectedReady
+              ? activeMode.hint
+              : 'Download a model below and choose “Use this model” to turn this on.'
+          }
+        >
+          <Select
+            value={prefs.mode}
+            onValueChange={(value) => setPrefs({ mode: value as LocalLlmMode })}
+            disabled={!selectedReady && prefs.mode === 'appliance'}
+          >
+            <Select.Trigger id="on-device-mode" className="w-full">
+              <Select.Value />
+            </Select.Trigger>
+            <Select.Content>
+              {MODE_OPTIONS.map((option) => (
+                <Select.Item
+                  key={option.value}
+                  value={option.value}
+                  disabled={option.value !== 'appliance' && !selectedReady}
+                >
+                  {option.label}
+                </Select.Item>
+              ))}
+            </Select.Content>
+          </Select>
+        </SettingsRow>
 
-          {probe.loaded.loaded ? (
-            <div className="border-border flex flex-wrap items-center justify-between gap-2 border-t pt-4">
-              <p className="text-sm" role="status">
-                <span className="font-medium">
-                  {probe.models.find((model) => model.spec.modelId === probe.loaded.modelId)?.spec.label ??
-                    'A model'}
-                </span>{' '}
-                <span className="text-muted-foreground">
-                  is loaded
-                  {probe.loaded.accelerator ? ` on the ${probe.loaded.accelerator.toUpperCase()}` : ''}.
-                </span>
-              </p>
-              <Button type="button" variant="outline" size="sm" onClick={() => void actions.unload()}>
+        {probe.loaded.loaded ? (
+          <SettingsRow
+            label="Loaded model"
+            hint={
+              <span role="status">
+                {probe.models.find((model) => model.spec.modelId === probe.loaded.modelId)?.spec.label ??
+                  'A model'}{' '}
+                is loaded{probe.loaded.accelerator ? ` on the ${probe.loaded.accelerator.toUpperCase()}` : ''}.
+              </span>
+            }
+            control={
+              <Button type="button" variant="outline" onClick={() => void actions.unload()}>
                 Unload to free memory
               </Button>
-            </div>
-          ) : null}
+            }
+          />
+        ) : null}
 
-          {error ? (
-            <p role="alert" className="text-destructive text-sm">
-              {error}
-            </p>
-          ) : null}
-        </Card.Content>
-      </Card>
+        {error ? (
+          <SettingsRow>
+            <SettingsStatus tone="error">{error}</SettingsStatus>
+          </SettingsRow>
+        ) : null}
+      </SettingsGroup>
 
-      <Card>
-        <Card.Header>
-          <Card.Title>Models</Card.Title>
-          <Card.Description>
-            {probe.availability.totalMemoryBytes
-              ? `This device has ${formatModelBytes(probe.availability.totalMemoryBytes)} of memory. Larger models need more.`
-              : 'Larger models need more memory.'}
-          </Card.Description>
-        </Card.Header>
-        <Card.Content className="flex flex-col gap-3">
-          {probe.models.map((model) => (
-            <ModelRow
-              key={model.spec.modelId}
-              model={model}
-              live={progress[model.spec.modelId]}
-              selected={prefs.modelId === model.spec.modelId}
-              loaded={probe.loaded.loaded && probe.loaded.modelId === model.spec.modelId}
-              busy={busyModelId === model.spec.modelId}
-              onDownload={() => void actions.download(model.spec.modelId)}
-              onCancel={() => void actions.cancelDownload(model.spec.modelId)}
-              onDelete={() => void actions.remove(model.spec.modelId)}
-              onUse={() => void actions.use(model.spec.modelId)}
-            />
-          ))}
-        </Card.Content>
-      </Card>
+      <SettingsGroup
+        title="Models"
+        description={
+          probe.availability.totalMemoryBytes
+            ? `This device has ${formatModelBytes(probe.availability.totalMemoryBytes)} of memory. Larger models need more.`
+            : 'Larger models need more memory.'
+        }
+      >
+        {probe.models.map((model) => (
+          <ModelRow
+            key={model.spec.modelId}
+            model={model}
+            live={progress[model.spec.modelId]}
+            selected={prefs.modelId === model.spec.modelId}
+            loaded={probe.loaded.loaded && probe.loaded.modelId === model.spec.modelId}
+            busy={busyModelId === model.spec.modelId}
+            onDownload={() => void actions.download(model.spec.modelId)}
+            onCancel={() => void actions.cancelDownload(model.spec.modelId)}
+            onDelete={() => void actions.remove(model.spec.modelId)}
+            onUse={() => void actions.use(model.spec.modelId)}
+          />
+        ))}
+      </SettingsGroup>
 
       {selected && selectedReady ? (
-        <Card>
-          <Card.Header>
-            <Card.Title>{selected.spec.label} settings</Card.Title>
-          </Card.Header>
-          <Card.Content className="flex flex-col gap-4">
-            {selected.spec.accelerators.length > 1 ? (
-              <div className="grid gap-2">
-                <Label htmlFor="on-device-accelerator">Run on</Label>
-                <Select
-                  value={gpuAllowed ? (prefs.accelerator ?? selected.spec.accelerators[0]) : 'cpu'}
-                  onValueChange={(value) => {
-                    setPrefs({ accelerator: value as 'cpu' | 'gpu' });
-                    // The next render sees the new pref; reload picks it up from storage.
-                    queueMicrotask(() => void reloadIfLoaded());
-                  }}
-                >
-                  <Select.Trigger id="on-device-accelerator" className="w-full">
-                    <Select.Value />
-                  </Select.Trigger>
-                  <Select.Content>
-                    {selected.spec.accelerators.map((accelerator) => (
-                      <Select.Item
-                        key={accelerator}
-                        value={accelerator}
-                        disabled={accelerator === 'gpu' && !gpuAllowed}
-                      >
-                        {accelerator === 'gpu'
-                          ? gpuAllowed
-                            ? 'GPU (faster, but can garble numbers and dates from your memory)'
-                            : `GPU (needs a ${formatModelBytes(selected.spec.gpuMinDeviceMemoryBytes)} phone)`
-                          : 'CPU (slower, reads your memory exactly)'}
-                      </Select.Item>
-                    ))}
-                  </Select.Content>
-                </Select>
-                <p className="text-muted-foreground text-xs">
-                  {gpuAllowed
-                    ? 'If the GPU cannot start this model, it falls back to the CPU on its own.'
-                    : `This phone has ${formatModelBytes(probe.availability.totalMemoryBytes ?? 0)} of memory; ${selected.spec.label} needs at least ${formatModelBytes(selected.spec.gpuMinDeviceMemoryBytes)} to run on the GPU, so it runs on the CPU.`}
-                </p>
-              </div>
-            ) : null}
+        <SettingsGroup title={`${selected.spec.label} settings`}>
+          {selected.spec.accelerators.length > 1 ? (
+            <SettingsRow
+              label="Run on"
+              htmlFor="on-device-accelerator"
+              hint={
+                gpuAllowed
+                  ? 'If the GPU cannot start this model, it falls back to the CPU on its own.'
+                  : `This phone has ${formatModelBytes(probe.availability.totalMemoryBytes ?? 0)} of memory; ${selected.spec.label} needs at least ${formatModelBytes(selected.spec.gpuMinDeviceMemoryBytes)} to run on the GPU, so it runs on the CPU.`
+              }
+            >
+              <Select
+                value={gpuAllowed ? (prefs.accelerator ?? selected.spec.accelerators[0]) : 'cpu'}
+                onValueChange={(value) => {
+                  setPrefs({ accelerator: value as 'cpu' | 'gpu' });
+                  queueMicrotask(() => void reloadIfLoaded());
+                }}
+              >
+                <Select.Trigger id="on-device-accelerator" className="w-full">
+                  <Select.Value />
+                </Select.Trigger>
+                <Select.Content>
+                  {selected.spec.accelerators.map((accelerator) => (
+                    <Select.Item
+                      key={accelerator}
+                      value={accelerator}
+                      disabled={accelerator === 'gpu' && !gpuAllowed}
+                    >
+                      {accelerator === 'gpu'
+                        ? gpuAllowed
+                          ? 'GPU (faster, but can garble numbers and dates from your memory)'
+                          : `GPU (needs a ${formatModelBytes(selected.spec.gpuMinDeviceMemoryBytes)} phone)`
+                        : 'CPU (slower, reads your memory exactly)'}
+                    </Select.Item>
+                  ))}
+                </Select.Content>
+              </Select>
+            </SettingsRow>
+          ) : null}
 
-            {selected.spec.capabilities.includes('thinking') ? (
-              <div className="flex items-start justify-between gap-4">
-                <div className="space-y-1">
-                  <Label htmlFor="on-device-thinking">Think before answering</Label>
-                  <p className="text-muted-foreground text-xs">
-                    Lets the model reason step by step first. Better on hard questions, noticeably slower.
-                  </p>
-                </div>
+          {selected.spec.capabilities.includes('thinking') ? (
+            <SettingsRow
+              label="Think before answering"
+              htmlFor="on-device-thinking"
+              hint="Lets the model reason step by step first. Better on hard questions, noticeably slower."
+              control={
                 <Switch
                   id="on-device-thinking"
                   checked={prefs.thinking}
                   onCheckedChange={(checked) => setPrefs({ thinking: checked })}
                 />
-              </div>
-            ) : null}
+              }
+            />
+          ) : null}
 
-            {selected.spec.capabilities.includes('tools') ? (
-              <div className="flex items-start justify-between gap-4">
-                <div className="space-y-1">
-                  <Label htmlFor="on-device-tools">Look things up in Memory</Label>
-                  <p className="text-muted-foreground text-xs">
-                    When your Companion is reachable, the model can search your memory to answer instead of
-                    guessing. Offline, it answers without.
-                  </p>
-                </div>
+          {selected.spec.capabilities.includes('tools') ? (
+            <SettingsRow
+              label="Look things up in Memory"
+              htmlFor="on-device-tools"
+              hint="When your Companion is reachable, the model can search your memory to answer instead of guessing. Offline, it answers without."
+              control={
                 <Switch
                   id="on-device-tools"
                   checked={prefs.intentTools}
@@ -259,12 +236,12 @@ export function OnDeviceModelSection() {
                     queueMicrotask(() => void reloadIfLoaded());
                   }}
                 />
-              </div>
-            ) : null}
-          </Card.Content>
-        </Card>
+              }
+            />
+          ) : null}
+        </SettingsGroup>
       ) : null}
-    </div>
+    </SettingsSection>
   );
 }
 
@@ -299,17 +276,18 @@ function ModelRow({
 
   return (
     <div
-      className="border-border flex flex-col gap-3 rounded-md border p-3"
+      data-slot="settings-row"
+      className="flex flex-col gap-3 px-5 py-4"
       data-testid={`on-device-model-${spec.modelId}`}
     >
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0 space-y-1">
           <div className="flex flex-wrap items-center gap-2">
-            <h4 className="text-sm font-semibold">{spec.label}</h4>
+            <h4 className="text-sm leading-5 font-medium">{spec.label}</h4>
             <span className="text-muted-foreground text-xs">{formatModelBytes(spec.sizeBytes)}</span>
             {selected ? <Badge variant="secondary">{loaded ? 'In use' : 'Selected'}</Badge> : null}
           </div>
-          <p className="text-muted-foreground text-xs leading-snug">{spec.description}</p>
+          <p className="text-muted-foreground text-xs leading-relaxed">{spec.description}</p>
           {spec.capabilities.length > 0 ? (
             <div className="flex flex-wrap gap-1 pt-1">
               {spec.capabilities.map((capability) => (
@@ -329,20 +307,19 @@ function ModelRow({
             <span className="text-muted-foreground text-xs">
               {formatModelBytes(bytes)} of {formatModelBytes(total)}
             </span>
-            <Button type="button" variant="ghost" size="sm" onClick={onCancel} disabled={busy}>
+            <Button type="button" variant="ghost" onClick={onCancel} disabled={busy}>
               Cancel
             </Button>
           </div>
         </div>
       ) : ready ? (
         <div className="flex flex-wrap items-center gap-2">
-          <Button type="button" size="sm" onClick={onUse} disabled={busy || loaded}>
+          <Button type="button" onClick={onUse} disabled={busy || loaded}>
             {busy ? 'Loading…' : loaded ? 'Loaded' : selected ? 'Load this model' : 'Use this model'}
           </Button>
           <Button
             type="button"
             variant="ghost"
-            size="sm"
             onClick={onDelete}
             disabled={busy}
             aria-label={`Delete ${spec.label}`}
@@ -359,7 +336,7 @@ function ModelRow({
             </p>
           ) : null}
           {fit.ok ? (
-            <Button type="button" size="sm" className="w-fit" onClick={onDownload} disabled={busy}>
+            <Button type="button" className="w-fit" onClick={onDownload} disabled={busy}>
               <Download className="h-4 w-4" />
               {status.status === 'error' ? 'Retry download' : `Download ${formatModelBytes(spec.sizeBytes)}`}
             </Button>

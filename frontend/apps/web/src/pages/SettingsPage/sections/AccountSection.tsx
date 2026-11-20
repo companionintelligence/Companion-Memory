@@ -1,11 +1,20 @@
 import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react';
 
 import { fetchJson, FetchJsonError } from '@ci/common';
-import { Button, Card, Dialog, EmailInput, Input, Label, PasswordInput } from '@ci/shadcn';
+import { Button, Dialog, EmailInput, Input, Label, PasswordInput } from '@ci/shadcn';
 import { TriangleAlert } from '@ci/shadcn/icons';
 
 import { useNeedsWebSignIn, WebSignInRequired } from '@/components/WebSignInRequired';
 import { useAuth, useCurrentUser } from '@/hooks';
+
+import {
+  SettingsFooter,
+  SettingsForm,
+  SettingsGroup,
+  SettingsRow,
+  SettingsSection,
+  SettingsStatus,
+} from '../kit';
 
 /**
  * What "sign in again" means for someone the Hub signs in: the bridge only mints a
@@ -294,15 +303,20 @@ export function AccountSection() {
     }
   };
 
-  return (
-    <>
-      <div className="mb-6">
-        <h2 className="text-xl font-semibold">Account</h2>
-        <p className="text-sm text-muted-foreground mt-1">
-          {email ? <>Signed in as {email}.</> : 'Manage your account.'}
-        </p>
-      </div>
+  const emailStatus = emailError ? (
+    <SettingsStatus tone="error">{emailError}</SettingsStatus>
+  ) : emailSavedNote ? (
+    <SettingsStatus tone="success">{emailSavedNote}</SettingsStatus>
+  ) : null;
 
+  const passwordStatus = passwordError ? (
+    <SettingsStatus tone="error">{passwordError}</SettingsStatus>
+  ) : passwordSavedNote ? (
+    <SettingsStatus tone="success">{passwordSavedNote}</SettingsStatus>
+  ) : null;
+
+  return (
+    <SettingsSection title="Account" description={email ? <>Signed in as {email}.</> : 'Manage your account.'}>
       {needsWebSignIn ? (
         <WebSignInRequired>
           Your email and password can only be changed from a web sign-in; this app signs in with its own
@@ -311,189 +325,167 @@ export function AccountSection() {
         </WebSignInRequired>
       ) : (
         <>
-          <Card className="py-0">
-            <Card.Content>
-              {emailManagedByHub ? (
-                <div className="space-y-1">
-                  <h3 className="text-sm font-medium">Email</h3>
-                  <p className="text-sm text-muted-foreground">
-                    Your Hub signs you in to Memory with this address, so it can't be changed here.
-                  </p>
-                </div>
-              ) : (
-                <form className="space-y-4" onSubmit={handleChangeEmail}>
-                  <div className="space-y-1">
-                    <h3 className="text-sm font-medium">Change email</h3>
-                    <p className="text-sm text-muted-foreground">You'll use this address to sign in.</p>
-                  </div>
-
-                  {asksCurrentPassword && (
-                    <div className="grid gap-2">
-                      <Label htmlFor="emailCurrentPassword">Current password</Label>
-                      <PasswordInput
-                        id="emailCurrentPassword"
-                        autoComplete="current-password"
-                        value={emailCurrentPassword}
-                        onChange={editAndClearError(setEmailCurrentPassword, setEmailError)}
-                        disabled={emailSaving}
-                        required
-                      />
-                    </div>
-                  )}
-
-                  <div className="grid gap-2">
-                    <Label htmlFor="newEmail">New email</Label>
-                    <EmailInput
-                      id="newEmail"
-                      autoComplete="email"
-                      value={newEmail}
-                      onChange={editAndClearError(setNewEmail, setEmailError)}
+          {emailManagedByHub ? (
+            <SettingsGroup title="Email">
+              <SettingsRow
+                label={email}
+                hint="Your Hub signs you in to Memory with this address, so it can't be changed here."
+              />
+            </SettingsGroup>
+          ) : (
+            <SettingsGroup title="Change email" description="You'll use this address to sign in.">
+              <SettingsForm onSubmit={handleChangeEmail}>
+                {asksCurrentPassword && (
+                  <SettingsRow label="Current password" htmlFor="emailCurrentPassword">
+                    <PasswordInput
+                      id="emailCurrentPassword"
+                      autoComplete="current-password"
+                      value={emailCurrentPassword}
+                      onChange={editAndClearError(setEmailCurrentPassword, setEmailError)}
                       disabled={emailSaving}
                       required
                     />
-                  </div>
-
-                  {emailError && <p className="text-sm text-destructive">{emailError}</p>}
-                  {emailSavedNote && <p className="text-sm text-muted-foreground">{emailSavedNote}</p>}
-
-                  <Button type="submit" size="sm" disabled={emailSaving || newEmail.trim().length === 0}>
-                    {emailSaving ? 'Saving…' : 'Update email'}
-                  </Button>
-                </form>
-              )}
-            </Card.Content>
-          </Card>
-
-          <Card className="py-0">
-            <Card.Content>
-              <form className="space-y-4" onSubmit={handleChangePassword}>
-                <div className="space-y-1">
-                  <h3 className="text-sm font-medium">
-                    {asksCurrentPassword ? 'Change password' : 'Set a password'}
-                  </h3>
-                  <p className="text-sm text-muted-foreground">
-                    {asksCurrentPassword
-                      ? 'Changing your password signs out every other device.'
-                      : 'This account has no password yet — set one to also sign in with your email and password.'}
-                  </p>
-                </div>
-
-                {asksCurrentPassword && (
-                  <div className="grid gap-2">
-                    <Label htmlFor="passwordCurrentPassword">Current password</Label>
-                    <PasswordInput
-                      id="passwordCurrentPassword"
-                      autoComplete="current-password"
-                      value={passwordCurrentPassword}
-                      onChange={editAndClearError(setPasswordCurrentPassword, setPasswordError)}
-                      disabled={passwordSaving}
-                      required
-                    />
-                  </div>
+                  </SettingsRow>
                 )}
 
-                <div className="grid gap-2">
-                  <Label htmlFor="newPassword">New password</Label>
+                <SettingsRow label="New email" htmlFor="newEmail">
+                  <EmailInput
+                    id="newEmail"
+                    autoComplete="email"
+                    value={newEmail}
+                    onChange={editAndClearError(setNewEmail, setEmailError)}
+                    disabled={emailSaving}
+                    required
+                  />
+                </SettingsRow>
+
+                <SettingsFooter status={emailStatus}>
+                  <Button type="submit" disabled={emailSaving || newEmail.trim().length === 0}>
+                    {emailSaving ? 'Saving…' : 'Update email'}
+                  </Button>
+                </SettingsFooter>
+              </SettingsForm>
+            </SettingsGroup>
+          )}
+
+          <SettingsGroup
+            title={asksCurrentPassword ? 'Change password' : 'Set a password'}
+            description={
+              asksCurrentPassword
+                ? 'Changing your password signs out every other device.'
+                : 'This account has no password yet. Set one to also sign in with your email and password.'
+            }
+          >
+            <SettingsForm onSubmit={handleChangePassword}>
+              {asksCurrentPassword && (
+                <SettingsRow label="Current password" htmlFor="passwordCurrentPassword">
                   <PasswordInput
-                    id="newPassword"
-                    autoComplete="new-password"
-                    minLength={MIN_PASSWORD_LENGTH}
-                    value={newPassword}
-                    onChange={editAndClearError(setNewPassword, setPasswordError)}
+                    id="passwordCurrentPassword"
+                    autoComplete="current-password"
+                    value={passwordCurrentPassword}
+                    onChange={editAndClearError(setPasswordCurrentPassword, setPasswordError)}
                     disabled={passwordSaving}
                     required
                   />
-                </div>
+                </SettingsRow>
+              )}
 
-                <div className="grid gap-2">
-                  <Label htmlFor="confirmNewPassword">Confirm new password</Label>
-                  <PasswordInput
-                    id="confirmNewPassword"
-                    autoComplete="new-password"
-                    value={confirmNewPassword}
-                    onChange={editAndClearError(setConfirmNewPassword, setPasswordError)}
-                    disabled={passwordSaving}
-                    required
-                  />
-                </div>
+              <SettingsRow label="New password" htmlFor="newPassword">
+                <PasswordInput
+                  id="newPassword"
+                  autoComplete="new-password"
+                  minLength={MIN_PASSWORD_LENGTH}
+                  value={newPassword}
+                  onChange={editAndClearError(setNewPassword, setPasswordError)}
+                  disabled={passwordSaving}
+                  required
+                />
+              </SettingsRow>
 
-                {passwordError && <p className="text-sm text-destructive">{passwordError}</p>}
-                {passwordSavedNote && <p className="text-sm text-muted-foreground">{passwordSavedNote}</p>}
+              <SettingsRow label="Confirm new password" htmlFor="confirmNewPassword">
+                <PasswordInput
+                  id="confirmNewPassword"
+                  autoComplete="new-password"
+                  value={confirmNewPassword}
+                  onChange={editAndClearError(setConfirmNewPassword, setPasswordError)}
+                  disabled={passwordSaving}
+                  required
+                />
+              </SettingsRow>
 
+              <SettingsFooter status={passwordStatus}>
                 <Button
                   type="submit"
-                  size="sm"
                   disabled={passwordSaving || newPassword.length === 0 || confirmNewPassword.length === 0}
                 >
                   {passwordSaving ? 'Saving…' : asksCurrentPassword ? 'Update password' : 'Set password'}
                 </Button>
-              </form>
-            </Card.Content>
-          </Card>
+              </SettingsFooter>
+            </SettingsForm>
+          </SettingsGroup>
 
-          <Card className="py-0">
-            <Card.Content className="space-y-4">
-              <div className="space-y-1">
-                <h3 className="text-sm font-medium">Sign out everywhere</h3>
-                <p className="text-sm text-muted-foreground">
-                  Signs out every other browser and every phone or desktop app, and deletes the API keys you
-                  made under API keys. Apps connected through your Hub keep working. This browser stays signed
-                  in.
-                </p>
-              </div>
-
-              {signOutError && <p className="text-sm text-destructive">{signOutError}</p>}
-              {signOutNote && <p className="text-sm text-muted-foreground">{signOutNote}</p>}
-
-              {confirmingSignOut ? (
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    size="sm"
-                    variant="destructive"
-                    onClick={() => void handleSignOutEverywhere()}
-                    disabled={signingOut}
-                  >
-                    {signingOut ? 'Signing out…' : 'Sign out and delete keys'}
+          <SettingsGroup>
+            <SettingsRow
+              label="Sign out everywhere"
+              align="start"
+              hint="Signs out every other browser and every phone or desktop app, and deletes the API keys you made under API keys. Apps connected through your Hub keep working. This browser stays signed in."
+              control={
+                confirmingSignOut ? (
+                  <>
+                    <Button
+                      variant="outline"
+                      onClick={() => setConfirmingSignOut(false)}
+                      disabled={signingOut}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      onClick={() => void handleSignOutEverywhere()}
+                      disabled={signingOut}
+                    >
+                      {signingOut ? 'Signing out…' : 'Sign out and delete keys'}
+                    </Button>
+                  </>
+                ) : (
+                  <Button variant="outline" onClick={() => setConfirmingSignOut(true)}>
+                    Sign out everywhere
                   </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setConfirmingSignOut(false)}
-                    disabled={signingOut}
-                  >
-                    Cancel
-                  </Button>
-                </div>
-              ) : (
-                <Button size="sm" variant="outline" onClick={() => setConfirmingSignOut(true)}>
-                  Sign out everywhere
-                </Button>
-              )}
-            </Card.Content>
-          </Card>
+                )
+              }
+            >
+              {signOutError ? <SettingsStatus tone="error">{signOutError}</SettingsStatus> : null}
+              {signOutNote ? <SettingsStatus tone="success">{signOutNote}</SettingsStatus> : null}
+            </SettingsRow>
+          </SettingsGroup>
         </>
       )}
 
-      <Card className="border-destructive/40 mb-[max(1rem,var(--safe-area-bottom))]">
-        <Card.Header>
-          <div className="flex items-start gap-3">
-            <TriangleAlert className="mt-0.5 h-5 w-5 shrink-0 text-destructive" strokeWidth={1.5} />
-            <div className="space-y-1">
-              <Card.Title>Delete account</Card.Title>
-              <Card.Description>
-                Signs you out everywhere immediately. This account, its memories and any files you uploaded
-                are then permanently deleted from this server after {PURGE_GRACE_DESCRIPTION}. This cannot be
-                undone.
-              </Card.Description>
-            </div>
-          </div>
-        </Card.Header>
-        <Card.Content>
-          <Button variant="destructive" disabled={!email} onClick={() => setOpen(true)}>
-            Delete account
-          </Button>
-        </Card.Content>
-      </Card>
+      <SettingsGroup
+        className="mb-[max(1rem,var(--safe-area-bottom))]"
+        cardClassName="border-destructive/40"
+      >
+        <SettingsRow
+          label={
+            <span className="inline-flex items-center gap-1.5">
+              <TriangleAlert className="size-4 shrink-0 text-destructive" aria-hidden="true" />
+              Delete account
+            </span>
+          }
+          align="start"
+          hint={
+            <>
+              Signs you out everywhere immediately. This account, its memories and any files you uploaded are
+              then permanently deleted from this server after {PURGE_GRACE_DESCRIPTION}. This cannot be undone.
+            </>
+          }
+          control={
+            <Button variant="destructive" disabled={!email} onClick={() => setOpen(true)}>
+              Delete account
+            </Button>
+          }
+        />
+      </SettingsGroup>
 
       <Dialog
         open={open}
@@ -561,6 +553,6 @@ export function AccountSection() {
           </Dialog.Footer>
         </Dialog.Content>
       </Dialog>
-    </>
+    </SettingsSection>
   );
 }

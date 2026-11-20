@@ -36,6 +36,11 @@ afterEach(() => {
   delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
 });
 
+/** Every button but the group's (?) help: what the card offers to do. */
+function actionButtons(): HTMLElement[] {
+  return screen.queryAllByRole('button').filter((button) => !(button.getAttribute('aria-label') ?? '').startsWith('About '));
+}
+
 describe('RecommendedModelCard', () => {
   it('renders nothing outside Memory Desktop', async () => {
     const { container } = render(<RecommendedModelCard endpoint={OLLAMA} canDownload onSwitched={vi.fn()} />);
@@ -314,7 +319,7 @@ describe('RecommendedModelCard', () => {
     expect(
       await screen.findByText('An administrator of this Companion can download it here.'),
     ).toBeInTheDocument();
-    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    expect(actionButtons()).toHaveLength(0);
   });
 
   it('tells someone who is not an administrator that only a switch is on offer when nothing is missing', async () => {
@@ -325,7 +330,7 @@ describe('RecommendedModelCard', () => {
     expect(
       await screen.findByText('An administrator of this Companion can switch to it here.'),
     ).toBeInTheDocument();
-    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    expect(actionButtons()).toHaveLength(0);
   });
 });
 

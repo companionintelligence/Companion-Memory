@@ -1,9 +1,11 @@
 import { useMemo, useState } from 'react';
 
-import { Badge, Button, Card, Input } from '@ci/shadcn';
+import { Badge, Button, Input } from '@ci/shadcn';
 import { RefreshCw, ShieldCheck, ShieldOff } from '@ci/shadcn/icons';
 
 import { useFeatures } from '@/common/feature';
+
+import { SegmentedControl, SettingsCard, SettingsEmpty, SettingsRow, SettingsSection } from '../kit';
 
 type FilterMode = 'all' | 'enabled' | 'disabled';
 
@@ -190,116 +192,99 @@ export function TrustProtocolsSection() {
   }, [filter, query, rows]);
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold">Trust, Identity &amp; Protocol Standards</h2>
-          <p className="text-muted-foreground text-sm">
-            Runtime feature-flag status and cryptographic comparison across CI-Memory protocol facades.
-            Disabled provisional routes fail closed with HTTP 404.
-          </p>
-        </div>
-
-        <Button size="sm" variant="outline" disabled={loading} onClick={() => void refresh()}>
-          <RefreshCw className="mr-1.5 size-3.5" aria-hidden="true" />
+    <SettingsSection
+      title="Trust & protocols"
+      description="Which trust, identity and protocol standards are switched on here."
+      help="Runtime feature-flag status and cryptographic comparison across CI-Memory protocol facades. Disabled provisional routes fail closed with HTTP 404."
+      actions={
+        <Button variant="outline" disabled={loading} onClick={() => void refresh()}>
+          <RefreshCw aria-hidden="true" />
           Refresh flags
         </Button>
-      </div>
+      }
+    >
+      <div className="flex flex-col gap-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <SegmentedControl
+            label="Filter protocol status"
+            value={filter}
+            onChange={setFilter}
+            options={[
+              { value: 'all', label: `All (${rows.length})` },
+              { value: 'enabled', label: `Active (${enabledCount})` },
+              { value: 'disabled', label: `Fail-closed 404 (${disabledCount})` },
+            ]}
+          />
 
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap gap-2" role="group" aria-label="Filter protocol status">
-          <Button
-            size="sm"
-            variant={filter === 'all' ? 'default' : 'outline'}
-            aria-pressed={filter === 'all'}
-            onClick={() => setFilter('all')}
-          >
-            All ({rows.length})
-          </Button>
-          <Button
-            size="sm"
-            variant={filter === 'enabled' ? 'default' : 'outline'}
-            aria-pressed={filter === 'enabled'}
-            onClick={() => setFilter('enabled')}
-          >
-            Active ({enabledCount})
-          </Button>
-          <Button
-            size="sm"
-            variant={filter === 'disabled' ? 'default' : 'outline'}
-            aria-pressed={filter === 'disabled'}
-            onClick={() => setFilter('disabled')}
-          >
-            Fail-closed 404 ({disabledCount})
-          </Button>
+          <Input
+            aria-label="Filter protocols"
+            className="w-full sm:w-64"
+            placeholder="Search standard, flag, or endpoint…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
         </div>
 
-        <Input
-          aria-label="Filter protocols"
-          className="w-full sm:w-64"
-          placeholder="Search standard, flag, or endpoint…"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
+        <SettingsCard>
+          {visibleRows.length === 0 ? (
+            <SettingsEmpty title="No standards match the current filter." />
+          ) : (
+            visibleRows.map(({ spec, enabled }) => (
+              <SettingsRow
+                key={spec.id}
+                label={
+                  <span className="inline-flex items-center gap-1.5">
+                    {enabled ? (
+                      <ShieldCheck
+                        className="size-4 shrink-0 text-teal-700 dark:text-teal-300"
+                        aria-hidden="true"
+                      />
+                    ) : (
+                      <ShieldOff className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    )}
+                    {spec.name}
+                  </span>
+                }
+                meta={<Badge variant="outline">{spec.maturity}</Badge>}
+                hint={spec.standard}
+                align="start"
+                control={
+                  // WCAG 1.4.1: text states the state explicitly rather than relying on color alone
+                  <Badge variant={enabled ? 'default' : 'secondary'}>
+                    {enabled ? 'Active' : 'Disabled (404 fail-closed)'}
+                  </Badge>
+                }
+              >
+                <dl className="grid gap-3 text-xs sm:grid-cols-3">
+                  <div>
+                    <dt className="font-medium text-muted-foreground">Surface / Endpoint</dt>
+                    <dd className="mt-0.5 font-mono break-all">{spec.surface}</dd>
+                  </div>
+                  <div>
+                    <dt className="font-medium text-muted-foreground">Identifier &amp; Proof</dt>
+                    <dd className="mt-0.5">
+                      {spec.identifier} · {spec.cryptoOrProof}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="font-medium text-muted-foreground">Flag / Activation</dt>
+                    <dd className="mt-0.5 font-mono break-all">
+                      {spec.flagKey ? `${spec.flagKey} (${spec.envVar})` : spec.envVar}
+                    </dd>
+                    {spec.caveat ? (
+                      <dd className="pt-0.5 font-medium text-amber-700 dark:text-amber-300">{spec.caveat}</dd>
+                    ) : null}
+                  </div>
+                </dl>
+
+                <p className="mt-3 text-xs text-muted-foreground">
+                  <span className="font-medium">Boundary:</span> {spec.securityBoundary}
+                </p>
+              </SettingsRow>
+            ))
+          )}
+        </SettingsCard>
       </div>
-
-      <div className="flex flex-col gap-3">
-        {visibleRows.length === 0 ? (
-          <Card className="p-4 text-sm text-muted-foreground">No standards match the current filter.</Card>
-        ) : (
-          visibleRows.map(({ spec, enabled }) => (
-            <Card key={spec.id} className="flex flex-col gap-2 p-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  {enabled ? (
-                    <ShieldCheck
-                      className="size-4 text-emerald-600 dark:text-emerald-400"
-                      aria-hidden="true"
-                    />
-                  ) : (
-                    <ShieldOff className="size-4 text-muted-foreground" aria-hidden="true" />
-                  )}
-                  <span className="font-medium">{spec.name}</span>
-                  <Badge variant="outline">{spec.maturity}</Badge>
-                </div>
-
-                {/* WCAG 1.4.1: text states the state explicitly rather than relying on color alone */}
-                <Badge variant={enabled ? 'default' : 'secondary'}>
-                  {enabled ? 'Active' : 'Disabled (404 fail-closed)'}
-                </Badge>
-              </div>
-
-              <p className="text-muted-foreground text-xs">{spec.standard}</p>
-
-              <dl className="grid gap-2 pt-1 text-xs sm:grid-cols-2 lg:grid-cols-3">
-                <div>
-                  <dt className="text-muted-foreground font-medium">Surface / Endpoint</dt>
-                  <dd className="font-mono break-all">{spec.surface}</dd>
-                </div>
-                <div>
-                  <dt className="text-muted-foreground font-medium">Identifier &amp; Proof</dt>
-                  <dd>
-                    {spec.identifier} · {spec.cryptoOrProof}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-muted-foreground font-medium">Flag / Activation</dt>
-                  <dd className="font-mono break-all">
-                    {spec.flagKey ? `${spec.flagKey} (${spec.envVar})` : spec.envVar}
-                  </dd>
-                  {spec.caveat ? (
-                    <dd className="pt-0.5 font-medium text-amber-700 dark:text-amber-300">{spec.caveat}</dd>
-                  ) : null}
-                </div>
-              </dl>
-
-              <p className="text-muted-foreground border-t pt-2 text-xs">
-                <span className="font-medium">Boundary:</span> {spec.securityBoundary}
-              </p>
-            </Card>
-          ))
-        )}
-      </div>
-    </div>
+    </SettingsSection>
   );
 }

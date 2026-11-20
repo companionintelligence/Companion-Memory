@@ -2,11 +2,13 @@ import { useState, useEffect } from 'react';
 
 import { gql } from '@apollo/client';
 import { useQuery, useMutation } from '@apollo/client/react';
-import { Button, Card, Dialog, IconButton, Input, Label } from '@ci/shadcn';
+import { Badge, Button, Dialog, IconButton, Input, Label } from '@ci/shadcn';
 import { Eye, EyeOff, Save, Trash } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 
 import { GET_PROVIDERS, type ProvidersQueryData } from '@/queries';
+
+import { SettingsCard, SettingsRow, SettingsSection } from '../kit';
 
 export interface ProviderKey {
   readonly id: string;
@@ -87,6 +89,18 @@ interface DeleteProviderKeyVariables {
 
 type OAuthProvider =
   'google' | 'microsoft' | 'facebook' | 'spotify' | 'github' | 'reddit' | 'slack' | 'dropbox';
+
+/** Listed in this order, under these names. */
+const PROVIDER_LABELS: Record<OAuthProvider, string> = {
+  facebook: 'Facebook',
+  github: 'GitHub',
+  google: 'Google',
+  microsoft: 'Microsoft',
+  reddit: 'Reddit',
+  slack: 'Slack',
+  dropbox: 'Dropbox',
+  spotify: 'Spotify',
+};
 
 interface ProviderFields {
   providerKeyId?: string;
@@ -431,36 +445,48 @@ export function OAuthSection() {
     const errors = validationErrors[provider];
 
     return (
-      <Card key={provider}>
-        <Card.Header className="flex flex-row items-center justify-between">
-          <Card.Title className="text-base font-semibold">{label}</Card.Title>
-          <div className="flex gap-2">
-            {providerData.providerKeyId && (
-              <IconButton
-                variant="outline"
-                label={t('SETTINGS_OAUTH_DELETE')}
-                onClick={() => openDeleteModal(provider)}
-                className="h-8 w-8 text-red-600 hover:text-red-700"
-              >
-                <Trash className="h-4 w-4" />
-              </IconButton>
-            )}
-            {hasProviderChanges(provider) && (
-              <IconButton
-                variant="outline"
-                label={t('SETTINGS_OAUTH_SAVE')}
-                onClick={() => handleSaveOAuthField(provider)}
-                className="h-8 w-8 text-green-600 hover:text-green-700"
-                disabled={providerData.providerKeyId != null && !providerData.clientId?.trim()}
-              >
-                <Save className="h-4 w-4" />
-              </IconButton>
-            )}
-          </div>
-        </Card.Header>
-        <Card.Content className="space-y-3">
-          <div className="grid gap-2">
-            <Label htmlFor={`${provider}ClientId`}>Client ID</Label>
+      <SettingsRow
+        key={provider}
+        label={label}
+        meta={
+          providerData.providerKeyId ? (
+            <Badge variant="outline" className="text-xs">
+              Saved
+            </Badge>
+          ) : null
+        }
+        control={
+          providerData.providerKeyId || hasProviderChanges(provider) ? (
+            <>
+              {providerData.providerKeyId && (
+                <IconButton
+                  variant="ghost"
+                  label={t('SETTINGS_OAUTH_DELETE')}
+                  onClick={() => openDeleteModal(provider)}
+                  className="text-destructive hover:text-destructive"
+                >
+                  <Trash />
+                </IconButton>
+              )}
+              {hasProviderChanges(provider) && (
+                <Button
+                  aria-label={t('SETTINGS_OAUTH_SAVE')}
+                  onClick={() => handleSaveOAuthField(provider)}
+                  disabled={providerData.providerKeyId != null && !providerData.clientId?.trim()}
+                >
+                  <Save aria-hidden="true" />
+                  Save
+                </Button>
+              )}
+            </>
+          ) : null
+        }
+      >
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid content-start gap-2">
+            <Label htmlFor={`${provider}ClientId`} className="text-xs text-muted-foreground">
+              Client ID
+            </Label>
             <div className="flex gap-2">
               <Input
                 id={`${provider}ClientId`}
@@ -478,21 +504,19 @@ export function OAuthSection() {
                 }
                 onClick={() => toggleKeyVisibility(`${provider}ClientId`)}
               >
-                {showKeys[`${provider}ClientId`] ? (
-                  <EyeOff className="h-4 w-4" />
-                ) : (
-                  <Eye className="h-4 w-4" />
-                )}
+                {showKeys[`${provider}ClientId`] ? <EyeOff /> : <Eye />}
               </IconButton>
             </div>
             {errors.clientId &&
               (providerData.providerKeyId || providerData.clientSecret?.trim().length > 0) && (
-                <p className="text-sm text-red-600">{errors.clientId}</p>
+                <p className="text-xs text-destructive">{errors.clientId}</p>
               )}
           </div>
 
-          <div className="grid gap-2">
-            <Label htmlFor={`${provider}ClientSecret`}>Client Secret</Label>
+          <div className="grid content-start gap-2">
+            <Label htmlFor={`${provider}ClientSecret`} className="text-xs text-muted-foreground">
+              Client secret
+            </Label>
             <div className="flex gap-2">
               <Input
                 id={`${provider}ClientSecret`}
@@ -515,56 +539,43 @@ export function OAuthSection() {
                 }
                 onClick={() => toggleKeyVisibility(`${provider}ClientSecret`)}
               >
-                {showKeys[`${provider}ClientSecret`] ? (
-                  <EyeOff className="h-4 w-4" />
-                ) : (
-                  <Eye className="h-4 w-4" />
-                )}
+                {showKeys[`${provider}ClientSecret`] ? <EyeOff /> : <Eye />}
               </IconButton>
             </div>
             {providerData.hasClientSecret && !providerData.clientSecret && (
-              <p className="text-sm text-muted-foreground">
+              <p className="text-xs leading-relaxed text-muted-foreground">
                 A secret is stored and is never shown. Leave blank to keep it, or enter a new one to replace
                 it.
               </p>
             )}
             {errors.clientSecret &&
               (providerData.providerKeyId || providerData.clientId?.trim().length > 0) && (
-                <p className="text-sm text-red-600">{errors.clientSecret}</p>
+                <p className="text-xs text-destructive">{errors.clientSecret}</p>
               )}
           </div>
-        </Card.Content>
-      </Card>
+        </div>
+      </SettingsRow>
     );
   };
 
   return (
-    <>
-      <div className="mb-6">
-        <h2 className="text-xl font-semibold">OAuth credentials</h2>
-        <p className="text-sm text-muted-foreground mt-1">
-          Use your own OAuth app credentials for connecting to external providers.
-        </p>
-      </div>
-
-      <div className="space-y-4">
-        {renderProvider('facebook', 'Facebook')}
-        {renderProvider('github', 'GitHub')}
-        {renderProvider('google', 'Google')}
-        {renderProvider('microsoft', 'Microsoft')}
-        {renderProvider('reddit', 'Reddit')}
-        {renderProvider('slack', 'Slack')}
-        {renderProvider('dropbox', 'Dropbox')}
-        {renderProvider('spotify', 'Spotify')}
-      </div>
+    <SettingsSection
+      title="OAuth credentials"
+      description="Use your own OAuth app credentials for connecting to external providers."
+    >
+      <SettingsCard>
+        {(Object.keys(PROVIDER_LABELS) as OAuthProvider[]).map((provider) =>
+          renderProvider(provider, PROVIDER_LABELS[provider]),
+        )}
+      </SettingsCard>
 
       <Dialog open={deleteModalOpen} onOpenChange={setDeleteModalOpen}>
         <Dialog.Content>
           <Dialog.Header>
-            <Dialog.Title>Delete OAuth Keys</Dialog.Title>
+            <Dialog.Title>Delete OAuth credentials?</Dialog.Title>
             <Dialog.Description>
-              Are you sure you want to delete the OAuth keys for {providerToDelete}? This action cannot be
-              undone.
+              Are you sure you want to delete the OAuth credentials for{' '}
+              {providerToDelete ? PROVIDER_LABELS[providerToDelete] : 'this provider'}? This cannot be undone.
             </Dialog.Description>
           </Dialog.Header>
           <Dialog.Footer>
@@ -580,6 +591,6 @@ export function OAuthSection() {
           </Dialog.Footer>
         </Dialog.Content>
       </Dialog>
-    </>
+    </SettingsSection>
   );
 }

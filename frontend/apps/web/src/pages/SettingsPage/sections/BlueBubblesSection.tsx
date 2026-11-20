@@ -1,21 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { fetchJson, getWebOrigin } from '@ci/common';
-import { Button, Card, Checkbox, Input, Label, Switch } from '@ci/shadcn';
-import {
-  AlertCircle,
-  Check,
-  CheckCircle2,
-  ClipboardCopy,
-  Clock,
-  MessageSquare,
-  Pencil,
-  RefreshCw,
-} from '@ci/shadcn/icons';
+import { Button, IconButton, Input, Label, Switch } from '@ci/shadcn';
+import { AlertCircle, Check, CheckCircle2, ClipboardCopy, Clock, Pencil, RefreshCw } from '@ci/shadcn/icons';
 
 import { useSessionAuth } from '@/hooks';
 import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
+
+import {
+  SettingsFacts,
+  SettingsFooter,
+  SettingsGroup,
+  SettingsHint,
+  SettingsLoading,
+  SettingsNotice,
+  SettingsRow,
+  SettingsSection,
+  SettingsStatus,
+} from '../kit';
 
 /**
  * What an administrator gets back. Everyone else gets {@link BlueBubblesStatusResponse}: the host,
@@ -335,99 +338,95 @@ export function BlueBubblesSection() {
   const statusIcon = () => {
     switch ((config ?? status)?.connectionStatus) {
       case 'connected':
-        return <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-500 flex-shrink-0" />;
+        return (
+          <CheckCircle2 className="size-4 shrink-0 text-teal-700 dark:text-teal-300" aria-hidden="true" />
+        );
       case 'error':
-        return <AlertCircle className="h-4 w-4 text-red-600 dark:text-red-500 flex-shrink-0" />;
+        return <AlertCircle className="size-4 shrink-0 text-destructive" aria-hidden="true" />;
       default:
-        return <Clock className="h-4 w-4 text-muted-foreground flex-shrink-0" />;
+        return <Clock className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />;
     }
   };
 
-  const heading = (
-    <div className="mb-6">
-      <h2 className="text-xl font-semibold">BlueBubbles</h2>
-      <p className="text-sm text-muted-foreground mt-1">
-        Connect a BlueBubbles server to bring iMessage/SMS history in, keep it in sync, and let the assistant
-        send and read messages on your behalf.
-      </p>
-    </div>
+  const statusGroup = (state: {
+    label: string;
+    lastError?: string | null;
+    lastSyncCursor: string | null;
+    lastWebhookReceivedAt: string | null;
+  }) => (
+    <SettingsGroup title="Status">
+      <SettingsRow>
+        <SettingsFacts
+          items={[
+            {
+              label: 'Connection',
+              value: (
+                <span className="inline-flex items-center gap-1.5">
+                  {statusIcon()}
+                  <span className="capitalize">{state.label}</span>
+                </span>
+              ),
+            },
+            { label: 'Last sync', value: formatTimestamp(state.lastSyncCursor, fmt) },
+            { label: 'Last webhook received', value: formatTimestamp(state.lastWebhookReceivedAt, fmt) },
+          ]}
+        />
+        {state.lastError ? <SettingsHint className="text-destructive">{state.lastError}</SettingsHint> : null}
+      </SettingsRow>
+    </SettingsGroup>
   );
+
+  const sectionProps = {
+    title: 'BlueBubbles',
+    description: 'Bring in iMessage and SMS history from a Mac running BlueBubbles Server.',
+    help: (
+      <>
+        <p>
+          Companion keeps the history in sync and lets the assistant send and read messages on your behalf.
+        </p>
+        <p>
+          See{' '}
+          <a href="https://bluebubbles.app" target="_blank" rel="noreferrer">
+            bluebubbles.app
+          </a>{' '}
+          to set up the server on your Mac.
+        </p>
+      </>
+    ),
+  };
 
   // Not an administrator: the server sent on/off and activity times only. The connection belongs
   // to the account an administrator set it up for, and only that account's assistant can read or
   // send messages through it.
   if (!loading && !isAdmin) {
     return (
-      <>
-        {heading}
-        <Card className="mb-6">
-          <Card.Content className="space-y-3 pt-6">
-            <h3 className="text-base font-semibold text-foreground">Connection</h3>
-            <p className="text-sm text-muted-foreground leading-snug">
-              An administrator of this Companion sets up BlueBubbles, for their own Mac. The assistant&apos;s
-              messaging tools work only for the account it was set up for.
-            </p>
-            {loadError ? <p className="text-sm text-destructive">{loadError}</p> : null}
-          </Card.Content>
-        </Card>
+      <SettingsSection {...sectionProps}>
+        <SettingsNotice>
+          An administrator of this Companion sets up BlueBubbles, for their own Mac. The assistant&apos;s
+          messaging tools work only for the account it was set up for.
+        </SettingsNotice>
+        {loadError ? <SettingsStatus tone="error">{loadError}</SettingsStatus> : null}
 
-        {status ? (
-          <Card>
-            <Card.Content className="space-y-3 pt-6">
-              <h3 className="text-base font-semibold text-foreground">Status</h3>
-              <div className="flex items-center gap-2 text-sm">
-                {statusIcon()}
-                <span className="capitalize">{status.enabled ? status.connectionStatus : 'off'}</span>
-              </div>
-              <dl className="grid gap-1 text-sm text-muted-foreground">
-                <div className="flex justify-between gap-4">
-                  <dt>Last sync</dt>
-                  <dd>{formatTimestamp(status.lastSyncCursor, fmt)}</dd>
-                </div>
-                <div className="flex justify-between gap-4">
-                  <dt>Last webhook received</dt>
-                  <dd>{formatTimestamp(status.lastWebhookReceivedAt, fmt)}</dd>
-                </div>
-              </dl>
-            </Card.Content>
-          </Card>
-        ) : null}
-      </>
+        {status
+          ? statusGroup({
+              label: status.enabled ? status.connectionStatus : 'off',
+              lastSyncCursor: status.lastSyncCursor,
+              lastWebhookReceivedAt: status.lastWebhookReceivedAt,
+            })
+          : null}
+      </SettingsSection>
     );
   }
 
   return (
-    <>
-      {heading}
-
-      <Card className="mb-6">
-        <Card.Content className="space-y-5 pt-6">
-          <div className="flex items-start gap-3">
-            <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-teal-500/15 text-teal-700 dark:text-teal-300">
-              <MessageSquare className="h-4 w-4" />
-            </div>
-            <div className="space-y-1 min-w-0">
-              <h3 className="text-base font-semibold text-foreground">Connection</h3>
-              <p className="text-sm text-muted-foreground leading-snug">
-                The Mac running BlueBubbles Server — see{' '}
-                <a
-                  href="https://bluebubbles.app"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="underline underline-offset-2"
-                >
-                  bluebubbles.app
-                </a>{' '}
-                for setup.
-              </p>
-            </div>
-          </div>
-
-          {loading ? (
-            <p className="text-sm text-muted-foreground">Loading BlueBubbles settings…</p>
-          ) : (
-            <div className="space-y-4 border-t border-border pt-4">
-              <div className="grid gap-2 sm:grid-cols-[1fr_auto] sm:items-end">
+    <SettingsSection {...sectionProps}>
+      <SettingsGroup title="Connection" description="The Mac running BlueBubbles Server.">
+        {loading ? (
+          <SettingsLoading>Loading BlueBubbles settings…</SettingsLoading>
+        ) : (
+          <>
+            <SettingsRow>
+              <div className="grid gap-4 sm:grid-cols-[1fr_auto]">
                 <div className="grid gap-2">
                   <Label htmlFor="bb-host">Host</Label>
                   <Input
@@ -449,203 +448,170 @@ export function BlueBubblesSection() {
                   />
                 </div>
               </div>
+            </SettingsRow>
 
-              <div className="flex items-start gap-3">
-                <Checkbox
-                  id="bb-https"
-                  checked={useHttps}
-                  onCheckedChange={(checked) => setUseHttps(checked === true)}
+            <SettingsRow
+              label="Use HTTPS"
+              htmlFor="bb-https"
+              control={<Switch id="bb-https" checked={useHttps} onCheckedChange={setUseHttps} />}
+            />
+
+            <SettingsRow label="Server password" htmlFor="bb-password">
+              {passwordEditing ? (
+                <Input
+                  id="bb-password"
+                  type="password"
+                  autoComplete="off"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  placeholder="BlueBubbles server password"
                 />
-                <Label htmlFor="bb-https" className="cursor-pointer font-normal">
-                  Use HTTPS
-                </Label>
-              </div>
-
-              <div className="grid gap-2">
-                <Label htmlFor="bb-password">Server password</Label>
-                {passwordEditing ? (
+              ) : (
+                <div className="flex items-center gap-2">
                   <Input
                     id="bb-password"
                     type="password"
-                    autoComplete="off"
-                    value={password}
-                    onChange={(event) => setPassword(event.target.value)}
-                    placeholder="BlueBubbles server password"
+                    value={config?.hasPassword ? '••••••••' : ''}
+                    disabled
                   />
-                ) : (
-                  <div className="flex items-center gap-2">
-                    <Input
-                      id="bb-password"
-                      type="password"
-                      value={config?.hasPassword ? '••••••••' : ''}
-                      disabled
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setPasswordEditing(true)}
-                    >
-                      <Pencil className="h-3.5 w-3.5 mr-1.5" />
-                      Change
-                    </Button>
+                  <Button type="button" variant="outline" onClick={() => setPasswordEditing(true)}>
+                    <Pencil aria-hidden="true" />
+                    Change
+                  </Button>
+                </div>
+              )}
+            </SettingsRow>
+
+            <SettingsRow
+              label="Private API enabled on the server"
+              htmlFor="bb-private-api"
+              hint="Required for the assistant to send messages (messaging.send)."
+              control={
+                <Switch id="bb-private-api" checked={hasPrivateApi} onCheckedChange={setHasPrivateApi} />
+              }
+            />
+
+            <SettingsRow
+              label="Enabled"
+              htmlFor="bb-enabled"
+              hint="Import history, accept live webhooks, and let the assistant use messaging tools."
+              control={<Switch id="bb-enabled" checked={enabled} onCheckedChange={setEnabled} />}
+            />
+
+            <SettingsFooter
+              status={
+                testResult || syncMessage || saveError || loadError || saved ? (
+                  <div className="space-y-1">
+                    {saved ? <SettingsStatus tone="success">Saved</SettingsStatus> : null}
+                    {testResult ? (
+                      <SettingsStatus ref={testResultRef} tone={testResult.ok ? 'success' : 'error'}>
+                        {testResult.ok
+                          ? `Connected${testResult.latencyMs != null ? ` (${testResult.latencyMs}ms)` : ''}.`
+                          : (testResult.error ?? 'Connection failed.')}
+                      </SettingsStatus>
+                    ) : null}
+                    {syncMessage ? <SettingsStatus ref={syncMessageRef}>{syncMessage}</SettingsStatus> : null}
+                    {saveError ? (
+                      <SettingsStatus ref={saveErrorRef} tone="error">
+                        {saveError}
+                      </SettingsStatus>
+                    ) : null}
+                    {loadError ? <SettingsStatus tone="error">{loadError}</SettingsStatus> : null}
                   </div>
-                )}
-              </div>
-
-              <div className="flex items-start gap-3">
-                <Checkbox
-                  id="bb-private-api"
-                  checked={hasPrivateApi}
-                  onCheckedChange={(checked) => setHasPrivateApi(checked === true)}
-                />
-                <div className="grid gap-0.5">
-                  <Label htmlFor="bb-private-api" className="cursor-pointer font-normal">
-                    Private API enabled on the server
-                  </Label>
-                  <span className="text-xs text-muted-foreground">
-                    Required for the assistant to send messages (messaging.send).
-                  </span>
-                </div>
-              </div>
-
-              <div className="flex items-start justify-between gap-4 border-t border-border pt-4">
-                <div className="space-y-0.5">
-                  <Label htmlFor="bb-enabled">Enabled</Label>
-                  <p className="text-xs text-muted-foreground">
-                    Import history, accept live webhooks, and let the assistant use messaging tools.
-                  </p>
-                </div>
-                <Switch id="bb-enabled" checked={enabled} onCheckedChange={setEnabled} />
-              </div>
-
-              <div className="flex flex-wrap items-center gap-3 border-t border-border pt-4">
-                <Button
-                  type="button"
-                  disabled={!dirty || saving || !hostValid || !portValid}
-                  onClick={() => void handleSave()}
-                >
-                  {saving ? 'Saving…' : 'Save'}
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={testing || !hostValid || !portValid}
-                  onClick={() => void handleTestConnection()}
-                >
-                  {testing ? 'Testing…' : 'Test connection'}
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={syncing || !config?.enabled}
-                  onClick={() => void handleSyncNow()}
-                >
-                  {syncing ? 'Starting…' : 'Sync now'}
-                </Button>
-                {saved && <span className="text-sm text-teal-700 dark:text-teal-300">Saved</span>}
-              </div>
-
-              {testResult ? (
-                <p
-                  ref={testResultRef}
-                  className={`text-sm ${testResult.ok ? 'text-teal-700 dark:text-teal-300' : 'text-destructive'}`}
-                >
-                  {testResult.ok
-                    ? `Connected${testResult.latencyMs != null ? ` (${testResult.latencyMs}ms)` : ''}.`
-                    : (testResult.error ?? 'Connection failed.')}
-                </p>
-              ) : null}
-
-              {syncMessage ? (
-                <p ref={syncMessageRef} className="text-sm text-muted-foreground">
-                  {syncMessage}
-                </p>
-              ) : null}
-              {saveError ? (
-                <p ref={saveErrorRef} className="text-sm text-destructive">
-                  {saveError}
-                </p>
-              ) : null}
-              {loadError ? <p className="text-sm text-destructive">{loadError}</p> : null}
-            </div>
-          )}
-        </Card.Content>
-      </Card>
-
-      {webhookUrl && !loading ? (
-        <Card className="mb-6">
-          <Card.Content className="space-y-3 pt-6">
-            <h3 className="text-base font-semibold text-foreground">Live updates</h3>
-            <p className="text-sm text-muted-foreground leading-snug">
-              Paste this into BlueBubbles Server under Settings → Webhooks, subscribed to{' '}
-              <span className="font-mono">new-message</span> and{' '}
-              <span className="font-mono">updated-message</span>. Without it, new messages only arrive on the
-              ten-minute backstop poll.
-            </p>
-            <div className="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2">
-              <span className="min-w-0 flex-1 truncate font-mono text-sm">{webhookUrl}</span>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                aria-label="Copy webhook URL"
-                onClick={() => void handleCopyWebhookUrl()}
-              >
-                {webhookCopied ? (
-                  <Check className="h-4 w-4 text-green-600" />
-                ) : (
-                  <ClipboardCopy className="h-4 w-4" />
-                )}
-              </Button>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              The URL contains this appliance&apos;s webhook secret — treat it like a password. The Mac must
-              be able to reach this address; if you are viewing this over a different hostname than the Mac
-              would use, substitute that one.
-            </p>
-            <div className="flex flex-wrap items-center gap-3">
+                ) : null
+              }
+            >
               <Button
                 type="button"
                 variant="outline"
-                size="sm"
+                disabled={syncing || !config?.enabled}
+                onClick={() => void handleSyncNow()}
+              >
+                {syncing ? 'Starting…' : 'Sync now'}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={testing || !hostValid || !portValid}
+                onClick={() => void handleTestConnection()}
+              >
+                {testing ? 'Testing…' : 'Test connection'}
+              </Button>
+              <Button
+                type="button"
+                disabled={!dirty || saving || !hostValid || !portValid}
+                onClick={() => void handleSave()}
+              >
+                {saving ? 'Saving…' : 'Save'}
+              </Button>
+            </SettingsFooter>
+          </>
+        )}
+      </SettingsGroup>
+
+      {webhookUrl && !loading ? (
+        <SettingsGroup
+          title="Live updates"
+          help={
+            <>
+              <p>
+                Paste the URL into BlueBubbles Server under Settings &gt; Webhooks, subscribed to{' '}
+                <code>new-message</code> and <code>updated-message</code>. Without it, new messages only
+                arrive on the ten-minute backstop poll.
+              </p>
+              <p>
+                The Mac must be able to reach this address. If you are viewing this over a different hostname
+                than the Mac would use, substitute that one.
+              </p>
+            </>
+          }
+        >
+          <SettingsRow
+            label="Webhook URL"
+            hint="Paste this into BlueBubbles Server under Settings > Webhooks. It contains this appliance's webhook secret, so treat it like a password."
+          >
+            <div className="flex items-center gap-2 rounded-md border bg-muted/40 py-1 pr-1 pl-3">
+              <span className="min-w-0 flex-1 truncate font-mono text-sm">{webhookUrl}</span>
+              <IconButton
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                label="Copy webhook URL"
+                onClick={() => void handleCopyWebhookUrl()}
+              >
+                {webhookCopied ? <Check className="text-teal-700 dark:text-teal-300" /> : <ClipboardCopy />}
+              </IconButton>
+            </div>
+          </SettingsRow>
+
+          <SettingsRow
+            label="Replace the URL"
+            hint="Do this if the URL was shown to someone who should not have it."
+            control={
+              <Button
+                type="button"
+                variant="outline"
                 disabled={rotating}
                 onClick={() => void handleRotateWebhook()}
               >
-                <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+                <RefreshCw aria-hidden="true" />
                 {rotating ? 'Making a new URL…' : 'Make a new URL'}
               </Button>
-              <span className="text-xs text-muted-foreground">
-                Do this if the URL was shown to someone who should not have it.
-              </span>
-            </div>
-            {rotateError ? <p className="text-sm text-destructive">{rotateError}</p> : null}
-          </Card.Content>
-        </Card>
+            }
+          >
+            {rotateError ? <SettingsStatus tone="error">{rotateError}</SettingsStatus> : null}
+          </SettingsRow>
+        </SettingsGroup>
       ) : null}
 
-      {config && !loading ? (
-        <Card>
-          <Card.Content className="space-y-3 pt-6">
-            <h3 className="text-base font-semibold text-foreground">Status</h3>
-            <div className="flex items-center gap-2 text-sm">
-              {statusIcon()}
-              <span className="capitalize">{config.connectionStatus}</span>
-              {config.lastError ? <span className="text-muted-foreground">— {config.lastError}</span> : null}
-            </div>
-            <dl className="grid gap-1 text-sm text-muted-foreground">
-              <div className="flex justify-between gap-4">
-                <dt>Last sync</dt>
-                <dd>{formatTimestamp(config.lastSyncCursor, fmt)}</dd>
-              </div>
-              <div className="flex justify-between gap-4">
-                <dt>Last webhook received</dt>
-                <dd>{formatTimestamp(config.lastWebhookReceivedAt, fmt)}</dd>
-              </div>
-            </dl>
-          </Card.Content>
-        </Card>
-      ) : null}
-    </>
+      {config && !loading
+        ? statusGroup({
+            label: config.connectionStatus,
+            lastError: config.lastError,
+            lastSyncCursor: config.lastSyncCursor,
+            lastWebhookReceivedAt: config.lastWebhookReceivedAt,
+          })
+        : null}
+    </SettingsSection>
   );
 }
