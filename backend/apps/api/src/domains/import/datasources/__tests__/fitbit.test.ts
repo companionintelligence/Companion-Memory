@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'path';
 
 import '..';
+import { dropGenericWhenSpecialised } from '../../stages/ParseStage';
 import { FitbitFileImporter } from '../fitbit';
 import { dataSourcesRecognize } from '../registry';
 import type { ImportParams } from '../timeline';
@@ -414,13 +415,17 @@ describe('Fitbit datasource', () => {
       expect(steps[0].timestamp!.getTime()).toBe(new Date('2026-09-16T00:00:00').getTime());
     });
 
-    it('summarises heart rate per day, with the resting figure', async () => {
-      const heart = (await importRoot()).items.filter((i) => i.id?.startsWith('fitbit:heart_rate:'));
-      // 09-17's resting value is 0 (not worn) and it has no readings: no row.
+    it('keeps one resting heart rate and one summary of the readings per day', async () => {
+      const { items } = await importRoot();
+      // 09-17's resting value is 0 (not worn): no row.
+      const resting = items.filter((i) => i.id?.startsWith('fitbit:resting_heart_rate:'));
+      expect(resting.map((i) => [i.id, i.metadata.Title, i.metadata['Resting Heart Rate']])).toEqual([
+        ['fitbit:resting_heart_rate:2026-09-16', 'Resting heart rate on 2026-09-16: 57.4', 57.4],
+      ]);
+      const heart = items.filter((i) => i.id?.startsWith('fitbit:heart_rate:'));
       expect(heart).toHaveLength(1);
       expect(heart[0].metadata).toMatchObject({
         Title: 'Heart rate on 2026-09-16',
-        'Resting Heart Rate': 57.4,
         'Average Heart Rate': 85,
         'Min Heart Rate': 64,
         'Max Heart Rate': 121,
@@ -531,6 +536,77 @@ describe('Fitbit datasource', () => {
         .filter((m) => m.data_source.name !== 'generic')
         .map((m) => path.relative(root, m.matchedPath ?? root));
       expect(claimed).toEqual([path.join('Takeout', 'Fitbit')]);
+    });
+
+    // Fitbit files dropped loose into one upload beside something else: a
+    // claim on the folder they share would keep the catch-all importer away
+    // from the other file, so each Fitbit file is claimed on its own.
+    it('claims loose files one by one and leaves the rest of the upload alone', async () => {
+      const upload = path.join(root, 'upload');
+      fs.mkdirSync(upload);
+      fs.writeFileSync(path.join(upload, 'sleep-2026-09-15.json'), JSON.stringify(SLEEP));
+      fs.writeFileSync(path.join(upload, 'exercise-0.json'), JSON.stringify(EXERCISE));
+      fs.writeFileSync(path.join(upload, 'notes.txt'), 'a note');
+
+      const matches = dropGenericWhenSpecialised(
+        await dataSourcesRecognize(
+          undefined,
+          { filename: 'upload', fullPath: upload, fsRoot: upload },
+          {},
+          { descend: true },
+        ),
+      );
+      const fitbit = matches.filter((m) => m.data_source.name === 'fitbit');
+      expect(fitbit.map((m) => path.basename(m.matchedPath!)).sort()).toEqual([
+        'exercise-0.json',
+        'sleep-2026-09-15.json',
+      ]);
+      const generic = matches.find((m) => m.data_source.name === 'generic');
+      expect(generic?.matchedPath).toBe(upload);
+      expect((generic?.excludePaths ?? []).map((p) => path.basename(p)).sort()).toEqual([
+        'exercise-0.json',
+        'sleep-2026-09-15.json',
+      ]);
+
+      // Each claimed file still reads in full.
+      const items: Array<EmittedGraph['item']> = [];
+      for (const m of fitbit) {
+        const pipeline: EmittedGraph[] = [];
+        await new FitbitFileImporter().fileImport(
+          {},
+          { filename: path.basename(m.matchedPath!), fullPath: m.matchedPath },
+          { pipeline, timeframe: {}, log: () => {} } as unknown as ImportParams,
+        );
+        items.push(...pipeline.map((g) => g.item));
+      }
+
+      expect(items.map((i) => i.id).sort()).toEqual([
+        'fitbit:exercise:51012300301',
+        'fitbit:exercise:51012300302',
+        'fitbit:sleep:46012300101',
+      ]);
+    });
+
+    it('reads a loose steps or heart-rate file the same as in its folder', async () => {
+      const read = async (fpath: string) => {
+        const pipeline: EmittedGraph[] = [];
+        await new FitbitFileImporter().fileImport({}, { filename: path.basename(fpath), fullPath: fpath }, {
+          pipeline,
+          timeframe: {},
+          log: () => {},
+        } as unknown as ImportParams);
+
+        return pipeline.map((g) => g.item);
+      };
+
+      const loose = [
+        ...(await read(path.join(ged(), 'steps-2026-09-15.json'))),
+        ...(await read(path.join(ged(), 'resting_heart_rate-2026-09-15.json'))),
+        ...(await read(path.join(ged(), 'heart_rate-2026-09-16.json'))),
+      ];
+      const whole = (await importRoot()).items.filter((i) => i.classification === 'observation');
+      const byId = (list: typeof loose) => list.map((i) => JSON.stringify([i.id, i.metadata])).sort();
+      expect(byId(loose)).toEqual(byId(whole));
     });
   });
 });

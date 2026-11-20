@@ -12,8 +12,11 @@
      steps-YYYY-MM-DD.json      a count per minute, summed into one daily row
      resting_heart_rate-*.json  one reading per day
      heart_rate-YYYY-MM-DD.json a reading every few seconds, summarised per day
-   Steps and heart rate become one 'observation' per day each. Any other file
-   in "Global Export Data/" is counted as dropped, by name.
+   Steps, resting heart rate and heart rate become one 'observation' per day
+   each. Any other file in "Global Export Data/" is counted as dropped, by name.
+   Fitbit's own folders are claimed whole; the same files dropped loose beside
+   other files are claimed one by one, so the rest of the upload stays with the
+   other importers.
    Note: the Fitbit export format varies; this targets the documented export.
 
    This source is also the one the wizard presents as "Fitbit / Google Fit",
@@ -32,6 +35,7 @@ import { GoogleFitFileImporter } from './google_fit';
 import { readJsonFile } from './readers';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
+import { readHead } from './sniff';
 import type { Graph, ImportParams } from './timeline';
 import { textContent, timeframeContains } from './timeline';
 
@@ -146,13 +150,40 @@ async function globalExportDirs(dir: string): Promise<string[]> {
   return [...new Set(out)];
 }
 
-/** Is `dir` a Fitbit folder, or a folder with the export's files directly in it? */
-async function holdsExportItself(dir: string): Promise<boolean> {
-  if (path.basename(dir).toLowerCase() === 'fitbit') {
-    return true;
+/**
+ * What a folder holding the export claims: 0.9 for Fitbit's own folders, 0.85
+ * for one that holds them as a `Fitbit/` child (a Takeout root, so recognition
+ * settles on Fitbit/), 0 for any other folder. A claim covers the whole
+ * folder, and the catch-all importer skips everything a claim covers, so
+ * loose files in an upload are claimed one by one instead.
+ */
+async function exportFolderConfidence(dir: string): Promise<number> {
+  const name = path.basename(dir).toLowerCase();
+  if (name === 'fitbit' || name === 'global export data') {
+    return 0.9;
   }
 
-  return (await filesIn(dir, (name) => READ_FILE_RES.some((re) => re.test(name)))).length > 0;
+  return (await childDir(dir, 'fitbit')) ? 0.85 : 0;
+}
+
+/**
+ * Is this one of the export's files, by name and by how it starts? Only the
+ * first few KB are read: a heart-rate file is a day of readings.
+ */
+async function isExportFile(fpath: string): Promise<boolean> {
+  const name = path.basename(fpath);
+  if (SLEEP_FILE_RE.test(name)) {
+    return isSleepExport(await readJsonFile(fpath));
+  }
+
+  if (!READ_FILE_RES.some((re) => re.test(name))) {
+    return false;
+  }
+
+  const head = (await readHead(fpath)) ?? '';
+  const key = EXERCISE_FILE_RE.test(name) ? '"activityName"' : '"dateTime"';
+
+  return /^\uFEFF?\s*\[\s*\{/.test(head) && head.includes(key);
 }
 
 // A non-empty array whose first element carries every one of `keys`: the
@@ -211,9 +242,8 @@ interface ExerciseRecord {
   averageHeartRate?: number;
 }
 
-/** A day's heart rate: the resting figure and a summary of every reading. */
+/** A day's heart-rate readings, summarised. */
 interface HeartDay {
-  resting?: number;
   min?: number;
   max?: number;
   sum: number;
@@ -275,30 +305,20 @@ export class FitbitFileImporter implements FileImporter {
     }
 
     if (st.isFile()) {
-      if (!SLEEP_FILE_RE.test(path.basename(root))) {
-        return { confidence: 0 };
-      }
-
       // Below the folder's 0.9 on purpose. Recognition keeps the more confident
       // of two nested matches, and a sleep file above its folder made every
       // Takeout import run on the sleep files alone, so nothing beside them
       // (workouts, steps, heart rate) was ever read.
-      return isSleepExport(await readJsonFile(root)) ? { confidence: 0.85 } : { confidence: 0 };
+      return (await isExportFile(root)) ? { confidence: 0.85 } : { confidence: 0 };
     }
 
     if (st.isDirectory()) {
-      // A folder that holds the export only through its Fitbit/ child (a
-      // Takeout root) claims below the Fitbit folder's 0.9, so recognition
-      // settles on Fitbit/. A claim on the Takeout root covers all of it, and
-      // the catch-all importer then skips every file there nothing else reads.
-      const claim = async (): Promise<Recognition> => ({
-        confidence: (await holdsExportItself(root)) ? 0.9 : 0.85,
-      });
+      const confidence = await exportFolderConfidence(root);
 
-      const found = await findSleepFiles(root);
+      const found = confidence > 0 ? await findSleepFiles(root) : [];
       for (const f of found) {
         if (isSleepExport(await readJsonFile(f))) {
-          return claim();
+          return { confidence };
         }
       }
 
@@ -308,9 +328,9 @@ export class FitbitFileImporter implements FileImporter {
         [STEPS_FILE_RE, ['dateTime', 'value']],
         [RESTING_HR_FILE_RE, ['dateTime', 'value']],
       ] as const) {
-        const [first] = await findFitbitFiles(root, (name) => re.test(name));
+        const [first] = confidence > 0 ? await findFitbitFiles(root, (name) => re.test(name)) : [];
         if (first && isRecordArray(await readJsonFile(first), [...keys])) {
-          return claim();
+          return { confidence };
         }
       }
 
@@ -341,22 +361,36 @@ export class FitbitFileImporter implements FileImporter {
       return;
     }
 
-    let files: string[] = [];
     if (stat.isFile()) {
-      if (SLEEP_FILE_RE.test(path.basename(root))) {
-        files.push(root);
+      // One loose file of the export, claimed on its own.
+      const name = path.basename(root);
+      if (SLEEP_FILE_RE.test(name)) {
+        await this.processFile(root, params);
+      } else {
+        const only = (re: RegExp) => (re.test(name) ? [root] : []);
+        await this.readActivity(
+          {
+            exercise: only(EXERCISE_FILE_RE),
+            steps: only(STEPS_FILE_RE),
+            resting: only(RESTING_HR_FILE_RE),
+            heart: only(HEART_RATE_FILE_RE),
+          },
+          params,
+        );
       }
-    } else if (stat.isDirectory()) {
-      files = await findSleepFiles(root);
+
+      return;
     }
 
-    for (const fpath of files) {
+    if (!stat.isDirectory()) {
+      return;
+    }
+
+    for (const fpath of await findSleepFiles(root)) {
       await this.processFile(fpath, params);
     }
 
-    if (stat.isDirectory()) {
-      await this.importActivity(root, params);
-    }
+    await this.importActivity(root, params);
 
     // Then the Google Fit half of the same export: daily metrics and workouts.
     // Directories only — a lone sleep-*.json has no Fit tree around it. The two
@@ -365,16 +399,45 @@ export class FitbitFileImporter implements FileImporter {
     // they are attributed to google_fit — only the sleep logs above are Fitbit
     // data. This keeps `data_source` describing where a record came FROM rather
     // than which card happened to import it.
-    if (stat.isDirectory()) {
-      await this.googleFit.fileImport(ctx, entry, attributeTo(params, 'google_fit'));
-    }
+    await this.googleFit.fileImport(ctx, entry, attributeTo(params, 'google_fit'));
   }
 
   /** Workouts, daily steps and daily heart rate, then a drop for every file left unread. */
   private async importActivity(root: string, params: ImportParams): Promise<void> {
+    const files = (re: RegExp) => findFitbitFiles(root, (name) => re.test(name));
+    await this.readActivity(
+      {
+        exercise: await files(EXERCISE_FILE_RE),
+        steps: await files(STEPS_FILE_RE),
+        resting: await files(RESTING_HR_FILE_RE),
+        heart: await files(HEART_RATE_FILE_RE),
+      },
+      params,
+    );
+
+    // Everything else in Global Export Data/ (calories, distance, altitude,
+    // active minutes, weight, ...) has no reader yet: say so, one per file.
+    // Dot files (.DS_Store left by unzipping on a Mac) are not export files.
+    for (const dir of await globalExportDirs(root)) {
+      const unread = (name: string) => !name.startsWith('.') && !READ_FILE_RES.some((re) => re.test(name));
+      for (const fpath of await filesIn(dir, unread)) {
+        params.pipeline.drop?.('unread_export_file', path.basename(fpath));
+      }
+    }
+  }
+
+  /**
+   * The workouts, steps and heart-rate files given. Each kind of row comes
+   * from one kind of file, so a file read on its own yields the same rows it
+   * does as part of its folder.
+   */
+  private async readActivity(
+    files: { exercise: string[]; steps: string[]; resting: string[]; heart: string[] },
+    params: ImportParams,
+  ): Promise<void> {
     const log = params.log;
 
-    for (const fpath of await findFitbitFiles(root, (name) => EXERCISE_FILE_RE.test(name))) {
+    for (const fpath of files.exercise) {
       const parsed = await readJsonFile(fpath, { log });
       const base = path.basename(fpath);
       if (Array.isArray(parsed)) {
@@ -392,7 +455,7 @@ export class FitbitFileImporter implements FileImporter {
 
     // Steps come one per minute across month-long files: sum them by day.
     const steps = new Map<string, number>();
-    for (const fpath of await findFitbitFiles(root, (name) => STEPS_FILE_RE.test(name))) {
+    for (const fpath of files.steps) {
       const parsed = await readJsonFile(fpath, { log });
       for (const rec of Array.isArray(parsed) ? parsed : []) {
         const day = fitbitLocal((rec as { dateTime?: unknown })?.dateTime)?.slice(0, 10);
@@ -403,15 +466,8 @@ export class FitbitFileImporter implements FileImporter {
       }
     }
 
-    const heart = new Map<string, HeartDay>();
-    const heartDay = (day: string): HeartDay => {
-      const found = heart.get(day) ?? { sum: 0, count: 0 };
-      heart.set(day, found);
-
-      return found;
-    };
-
-    for (const fpath of await findFitbitFiles(root, (name) => RESTING_HR_FILE_RE.test(name))) {
+    const resting = new Map<string, number>();
+    for (const fpath of files.resting) {
       const parsed = await readJsonFile(fpath, { log });
       for (const rec of Array.isArray(parsed) ? parsed : []) {
         const value = (rec as { value?: { date?: unknown; value?: unknown } })?.value;
@@ -419,18 +475,20 @@ export class FitbitFileImporter implements FileImporter {
         // A day the tracker was not worn reads 0 (or null): not a reading.
         const bpm = positiveNumber(value?.value);
         if (day && bpm !== undefined) {
-          heartDay(day).resting = bpm;
+          resting.set(day, bpm);
         }
       }
     }
 
-    for (const fpath of await findFitbitFiles(root, (name) => HEART_RATE_FILE_RE.test(name))) {
+    const heart = new Map<string, HeartDay>();
+    for (const fpath of files.heart) {
       const parsed = await readJsonFile(fpath, { log });
       for (const rec of Array.isArray(parsed) ? parsed : []) {
         const day = fitbitLocal((rec as { dateTime?: unknown })?.dateTime)?.slice(0, 10);
         const bpm = positiveNumber((rec as { value?: { bpm?: unknown } })?.value?.bpm);
         if (day && bpm !== undefined) {
-          const d = heartDay(day);
+          const d = heart.get(day) ?? { sum: 0, count: 0 };
+          heart.set(day, d);
           d.min = d.min === undefined ? bpm : Math.min(d.min, bpm);
           d.max = d.max === undefined ? bpm : Math.max(d.max, bpm);
           d.sum += bpm;
@@ -444,29 +502,23 @@ export class FitbitFileImporter implements FileImporter {
       this.pushDaily(`fitbit:steps:${day}`, day, title, { Steps: Math.round(total) }, params);
     }
 
+    for (const [day, bpm] of [...resting].sort(([a], [b]) => a.localeCompare(b))) {
+      const title = `Resting heart rate on ${day}: ${bpm}`;
+      this.pushDaily(`fitbit:resting_heart_rate:${day}`, day, title, { 'Resting Heart Rate': bpm }, params);
+    }
+
     for (const [day, d] of [...heart].sort(([a], [b]) => a.localeCompare(b))) {
       this.pushDaily(
         `fitbit:heart_rate:${day}`,
         day,
         `Heart rate on ${day}`,
         {
-          'Resting Heart Rate': d.resting,
-          'Average Heart Rate': d.count ? Math.round(d.sum / d.count) : undefined,
+          'Average Heart Rate': Math.round(d.sum / d.count),
           'Min Heart Rate': d.min,
           'Max Heart Rate': d.max,
         },
         params,
       );
-    }
-
-    // Everything else in Global Export Data/ (calories, distance, altitude,
-    // active minutes, weight, ...) has no reader yet: say so, one per file.
-    // Dot files (.DS_Store left by unzipping on a Mac) are not export files.
-    for (const dir of await globalExportDirs(root)) {
-      const unread = (name: string) => !name.startsWith('.') && !READ_FILE_RES.some((re) => re.test(name));
-      for (const fpath of await filesIn(dir, unread)) {
-        params.pipeline.drop?.('unread_export_file', path.basename(fpath));
-      }
     }
   }
 
