@@ -6,8 +6,18 @@ import { LoggerService } from '@ci/common/logging';
 import config, { LLM_API_KEY_PLACEHOLDER } from '@ci/configuration';
 
 import {
+  classifyConnectionError,
+  connectionFailureMessage,
+  containerSourceRange,
+  firstErrorCode,
+  ufwAllowCommand,
+  type ConnectionTarget,
+  type LlmConnectionFailureReason,
+} from './llmConnectionFailure';
+import {
   containerSharedConfigPath,
   DEFAULT_OPENAI_BASE_PATH,
+  isHostGatewayName,
   normalizeBasePath,
   readSharedConfig,
   sharedConfigPath,
@@ -69,7 +79,32 @@ export interface LlmEndpointPreflight {
   /** A safe, actionable status for a person or CLI; never includes a credential. */
   message?: string;
   status?: number;
+  /** Set when the request got no HTTP answer at all: what went wrong on the way. */
+  reason?: LlmConnectionFailureReason;
+  /**
+   * A command for the person to run on the computer the containers run on, shown as code after
+   * {@link message}. Only for a server on that computer that did not answer in time: a ufw rule that
+   * lets Memory's containers through. Memory never runs it.
+   */
+  fixCommand?: string;
 }
+
+/** A request to the endpoint that got no HTTP answer, described for a person. */
+export interface LlmEndpointConnectionFailure {
+  reason: LlmConnectionFailureReason;
+  /** The error code that decided {@link reason}, for logs. */
+  code: string;
+  /** The address tried, what happened and the likely cause. Carries no credential and no command. */
+  message: string;
+  /** See {@link LlmEndpointPreflight.fixCommand}. */
+  fixCommand?: string;
+}
+
+/** Ends a preflight message that has a {@link LlmEndpointPreflight.fixCommand} to show after it. */
+const UFW_HINT = 'If that computer runs Linux with ufw, this rule lets them through:';
+
+const GENERIC_UNREACHABLE_MESSAGE =
+  'Could not reach this server from the Memory API. Verify the port is exposed to the API container.';
 
 interface ResolvedLlmEndpoint {
   settings: LlmEndpointSettings;
@@ -205,6 +240,16 @@ function endpointRequestUrl(resolved: ResolvedLlmEndpoint): string {
   }
 
   return `${resolved.apiBase?.replace(/\/$/, '') ?? ''}/models`;
+}
+
+function connectionTarget(url: string): ConnectionTarget | null {
+  try {
+    const { hostname } = new URL(url);
+
+    return { hostname, port: portFromUrl(url, 80), onHost: isHostGatewayName(hostname) };
+  } catch {
+    return null;
+  }
 }
 
 function modelsFromPreflightPayload(backend: LlmBackendKind, payload: unknown): string[] {
@@ -395,21 +440,62 @@ export class LlmEndpointService implements OnModuleInit {
             : `Connected. ${models.length} model${models.length === 1 ? '' : 's'} reported.`,
       };
     } catch (error) {
+      const failure = this.describeConnectionFailure(error);
+
       this.logger.warn('LLM endpoint preflight failed', {
         backend: this.resolved.settings.backend,
         endpoint,
         error: error instanceof Error ? error.name : String(error),
+        reason: failure?.reason ?? 'unknown',
+        code: failure?.code ?? firstErrorCode(error) ?? null,
       });
+
+      if (!failure) {
+        return {
+          backend: this.resolved.settings.backend,
+          endpoint,
+          ok: false,
+          models: [],
+          message: GENERIC_UNREACHABLE_MESSAGE,
+        };
+      }
 
       return {
         backend: this.resolved.settings.backend,
         endpoint,
         ok: false,
         models: [],
-        message:
-          'Could not reach this server from the Memory API. Verify the port is exposed to the API container.',
+        message: failure.fixCommand ? `${failure.message} ${UFW_HINT}` : failure.message,
+        reason: failure.reason,
+        ...(failure.fixCommand && { fixCommand: failure.fixCommand }),
       };
     }
+  }
+
+  /**
+   * Why a request to the endpoint got no HTTP answer, in words that name the address it tried and
+   * the likely cause. Null when `error` is something else (an HTTP error, a bad payload), which the
+   * caller reports its own way.
+   *
+   * A timeout to a server on the containers' own host gets a ufw rule as well. Docker's iptables
+   * rules cover traffic into containers, not from a container to its host, so a host firewall that
+   * drops incoming connections silently eats every one of those.
+   */
+  describeConnectionFailure(error: unknown): LlmEndpointConnectionFailure | null {
+    const kind = classifyConnectionError(error);
+    const target = kind ? connectionTarget(endpointRequestUrl(this.resolved)) : null;
+
+    if (!kind || !target) {
+      return null;
+    }
+
+    const range = kind.reason === 'timeout' && target.onHost ? containerSourceRange() : undefined;
+
+    return {
+      ...kind,
+      message: connectionFailureMessage(kind, target),
+      ...(range && { fixCommand: ufwAllowCommand(target.port, range) }),
+    };
   }
 
   private reload(): void {

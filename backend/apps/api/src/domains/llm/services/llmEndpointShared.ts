@@ -197,6 +197,16 @@ export function hostGateway(env: NodeJS.ProcessEnv = process.env): string {
   return env.CI_LLM_HOST_GATEWAY?.trim() || DEFAULT_HOST_GATEWAY;
 }
 
+/**
+ * Whether `host` names the machine the containers run on: a name Docker injects, or the gateway an
+ * operator set in CI_LLM_HOST_GATEWAY. A server there sits behind that machine's own firewall.
+ */
+export function isHostGatewayName(host: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  const name = host.toLowerCase();
+
+  return GATEWAY_HOSTS.has(name) || name === hostGateway(env).toLowerCase();
+}
+
 export function llmHostRewriteEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   const value = env.CI_LLM_HOST_REWRITE?.trim().toLowerCase() ?? '';
 

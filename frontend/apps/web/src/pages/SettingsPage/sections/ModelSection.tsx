@@ -8,6 +8,7 @@ import { ModelSelector } from '@/components/ModelSelector';
 import { useCurrentUser, useModel, useSessionAuth } from '@/hooks';
 import { useLlmEndpoint, type LlmBackendKind } from '@/hooks/useLlmEndpoint';
 
+import { EndpointCheckMessage } from './EndpointCheckMessage';
 import { RecommendedModelCard } from './RecommendedModelCard';
 
 type BackendPreset = 'ollama' | 'lemonade' | 'openai_compatible';
@@ -564,7 +565,7 @@ export function ModelSection() {
                     preflight.ok ? 'text-sm text-teal-700 dark:text-teal-300' : 'text-sm text-destructive'
                   }
                 >
-                  {preflight.message ?? (preflight.ok ? 'Connected.' : 'Connection failed.')}
+                  <EndpointCheckMessage preflight={preflight} />
                 </p>
               ) : null}
             </div>
