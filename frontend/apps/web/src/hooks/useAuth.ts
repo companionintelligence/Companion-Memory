@@ -884,8 +884,17 @@ function useAuth(): ReturnValue {
 
     if (isTauriPlatform()) {
       // The desktop keeps its key in the OS keychain (tauri-plugin-ci-auth); a revoked key
-      // left there would only be read back as a credential that no longer works.
-      await removeStoredDeviceKey();
+      // left there would only be read back as a credential that no longer works. A different
+      // key there is one a Companion sign-in saved while this ran (the launch check of a revoked
+      // key can sign out alongside it). That key is the window's now, so it stays.
+      const stored = await storedDeviceKey();
+
+      if (stored === null || stored === deviceKey) {
+        await removeStoredKeyEntries();
+      }
+
+      forgetUser();
+      forgetFeatures();
     }
 
     if (isNativePlatform()) {

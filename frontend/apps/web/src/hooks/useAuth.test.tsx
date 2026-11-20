@@ -2123,6 +2123,7 @@ describe('useAuth', () => {
      * key to be given back and answers the moment it is; `revokedMidCheck` lists the keys given
      * back while their check was waiting. `exchangeAfterCheckOf` holds the sign-in's code exchange
      * until that key has been checked (up to 2 s). `signIn` answers an email sign-in.
+     * `holdRevokeUntil` holds every revoke until it returns true (up to 2 s).
      */
     function memory(
       options: {
@@ -2130,6 +2131,7 @@ describe('useAuth', () => {
         signIn?: () => Response;
         holdChecksUntilRevoked?: boolean;
         exchangeAfterCheckOf?: string;
+        holdRevokeUntil?: () => boolean;
       } = {},
     ) {
       const revoked = new Set<string>();
@@ -2158,6 +2160,14 @@ describe('useAuth', () => {
         }
 
         if (url.endsWith('/api/keys/current') && init?.method === 'DELETE') {
+          for (let waited = 0; options.holdRevokeUntil && waited < 2000; waited += 5) {
+            if (options.holdRevokeUntil()) {
+              break;
+            }
+
+            await new Promise((resolve) => setTimeout(resolve, 5));
+          }
+
           if (key) {
             revoked.add(key);
 
@@ -2414,6 +2424,35 @@ describe('useAuth', () => {
       expect(getApiKey()).toBe('new-key');
       expect(revoked.has('new-key')).toBe(false);
       expect(keychain.get('memory:ci.apiKey')).toBe('new-key');
+    });
+
+    it('a sign-in the browser hands over at launch keeps its key when the revoked stored key signs the window out meanwhile', async () => {
+      // The stored key was revoked while the app was closed, and the app was started by a sign-in.
+      // The launch check signs the old key out while that sign-in is still saving its own.
+      const { appState } = await beginNativeOidcSignIn();
+      const { keychain } = desktopShell(
+        { 'memory:ci.apiKey': 'revoked-key', 'memory:ci.apiKeyId': 'key-old' },
+        { deepLink: `companion://oidc/callback?code=otc-signed-out&state=${appState}` },
+      );
+      const { fetchMock, revoked } = memory({
+        exchangeAfterCheckOf: 'revoked-key',
+        // The sign-out's revoke answers only once the sign-in has saved its key.
+        holdRevokeUntil: () => keychain.get('memory:ci.apiKey') === 'new-key',
+      });
+      revoked.add('revoked-key');
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+
+      // The launch check did sign the old key out.
+      await waitFor(() => expect(callsTo(fetchMock, '/api/authenticate/logout')).toHaveLength(1));
+      await settle();
+      expect(getApiKey()).toBe('new-key');
+      expect(result.current[0].authenticated).toBe(true);
+      expect(revoked.has('new-key')).toBe(false);
+      // The next launch signs in with the new key.
+      expect(keychain.get('memory:ci.apiKey')).toBe('new-key');
+      expect(keychain.get('memory:ci.apiKeyId')).toBe('key-new');
     });
 
     it('a sign-in that finishes while the launch read is still out wins', async () => {
