@@ -448,8 +448,16 @@ interface FfprobeOutput {
  * Field naming matches extractVideoFields/extractCameraFields ('Frame Rate',
  * 'F-Number', 'Codec', etc.) so the ffprobe path and the fallback path land
  * identical metadata shapes.
+ *
+ * `undatedWhenTagged`: container tags (lowercase) whose presence means the
+ * container's `creation_time` is not when the thing happened, so no timestamp
+ * is taken from it (see {@link MUSIC_TAGS}).
  */
-export async function extractVideoMetadata(fpath: string, timeoutMs = 8000): Promise<MediaMetadata> {
+export async function extractVideoMetadata(
+  fpath: string,
+  timeoutMs = 8000,
+  undatedWhenTagged: readonly string[] = [],
+): Promise<MediaMetadata> {
   const out: MediaMetadata = { metadata: {} };
 
   const probe = (await runFfprobe(fpath, timeoutMs)) as FfprobeOutput | null;
@@ -497,7 +505,8 @@ export async function extractVideoMetadata(fpath: string, timeoutMs = 8000): Pro
     // QuickTime stamps creation_time with a real ISO 8601 instant (TZ-aware), so
     // unlike image EXIF we do NOT re-interpret it — `new Date(iso)` is correct.
     const tsRaw = fmtTags.creation_time || videoTags.creation_time;
-    if (tsRaw) {
+    const tagged = Object.keys(fmtTags).some((key) => undatedWhenTagged.includes(key.toLowerCase()));
+    if (tsRaw && !tagged) {
       const d = new Date(tsRaw);
       if (!Number.isNaN(d.getTime())) {
         out.timestamp = d;
@@ -570,14 +579,23 @@ export async function extractVideoMetadata(fpath: string, timeoutMs = 8000): Pro
 const COVER_ART_FIELDS = ['Codec', 'Width', 'Height', 'Frame Rate'] as const;
 
 /**
+ * Container tags a music track carries and a recording does not. Encoders
+ * stamp `creation_time` when a track is ripped, encoded or bought, so without
+ * this a music library would land on the timeline one track at a time. A
+ * tagged audio file keeps its duration but takes no date.
+ */
+const MUSIC_TAGS = ['album', 'artist', 'album_artist'];
+
+/**
  * MIME-routed dispatcher: image/* → image EXIF, video/* and audio/* → the
  * container. Anything else returns an empty result. Callers merge the returned
- * `metadata` into their item, and apply `timestamp` / `location` /
+ * `metadata` into their item and apply `timestamp` / `location` /
  * `accuracyMeters` per their own rules.
  *
  * Audio goes through the same container read as video: a voice memo's `.m4a`
- * carries its recording time as the container's `creation_time`, and without
- * this every recording was stored with no date and no duration.
+ * carries its recording time as the container's `creation_time`. Without
+ * this every recording was stored with no date and no duration. A music track
+ * keeps its duration but takes no date ({@link MUSIC_TAGS}).
  */
 export async function extractMediaMetadata(
   fpath: string,
@@ -588,7 +606,7 @@ export async function extractMediaMetadata(
   }
 
   if (mediaType && mediaType.startsWith('audio/')) {
-    const out = await extractVideoMetadata(fpath);
+    const out = await extractVideoMetadata(fpath, undefined, MUSIC_TAGS);
 
     for (const field of COVER_ART_FIELDS) {
       delete out.metadata[field];

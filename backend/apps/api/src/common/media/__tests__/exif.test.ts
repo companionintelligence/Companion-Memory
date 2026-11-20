@@ -420,6 +420,21 @@ describe('extractMediaMetadata dispatcher', () => {
     expect(result.metadata).toEqual({ Duration: 41.2, AudioCodec: 'aac' });
   });
 
+  it('takes no date from a music track, whose container time is when it was encoded', async () => {
+    mockFfprobe(
+      JSON.stringify({
+        streams: [{ codec_type: 'audio', codec_name: 'aac' }],
+        format: {
+          duration: '214.6',
+          tags: { creation_time: '2011-03-04T19:02:11.000000Z', ARTIST: 'The Tidewater Band', album: 'Low Water' },
+        },
+      }),
+    );
+    const result = await extractMediaMetadata('01 Harbour Lights.m4a', 'audio/mp4');
+    expect(result.timestamp).toBeUndefined();
+    expect(result.metadata).toEqual({ Duration: 214.6, AudioCodec: 'aac' });
+  });
+
   it('returns an empty result for unknown MIME', async () => {
     const result = await extractMediaMetadata('blob.bin', undefined);
     expect(result).toEqual({ metadata: {} });
