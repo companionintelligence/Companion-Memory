@@ -146,6 +146,15 @@ async function globalExportDirs(dir: string): Promise<string[]> {
   return [...new Set(out)];
 }
 
+/** Is `dir` a Fitbit folder, or a folder with the export's files directly in it? */
+async function holdsExportItself(dir: string): Promise<boolean> {
+  if (path.basename(dir).toLowerCase() === 'fitbit') {
+    return true;
+  }
+
+  return (await filesIn(dir, (name) => READ_FILE_RES.some((re) => re.test(name)))).length > 0;
+}
+
 // A non-empty array whose first element carries every one of `keys`: the
 // shape of Fitbit's exercise, steps and heart-rate files.
 function isRecordArray(parsed: unknown, keys: string[]): boolean {
@@ -268,10 +277,18 @@ export class FitbitFileImporter implements FileImporter {
     }
 
     if (st.isDirectory()) {
+      // A folder that holds the export only through its Fitbit/ child (a
+      // Takeout root) claims below the Fitbit folder's 0.9, so recognition
+      // settles on Fitbit/. A claim on the Takeout root covers all of it, and
+      // the catch-all importer then skips every file there nothing else reads.
+      const claim = async (): Promise<Recognition> => ({
+        confidence: (await holdsExportItself(root)) ? 0.9 : 0.85,
+      });
+
       const found = await findSleepFiles(root);
       for (const f of found) {
         if (isSleepExport(await readJsonFile(f))) {
-          return { confidence: 0.9 };
+          return claim();
         }
       }
 
@@ -283,7 +300,7 @@ export class FitbitFileImporter implements FileImporter {
       ] as const) {
         const [first] = await findFitbitFiles(root, (name) => re.test(name));
         if (first && isRecordArray(await readJsonFile(first), [...keys])) {
-          return { confidence: 0.9 };
+          return claim();
         }
       }
 

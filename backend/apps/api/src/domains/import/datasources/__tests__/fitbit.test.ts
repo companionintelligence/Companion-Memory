@@ -477,7 +477,35 @@ describe('Fitbit datasource', () => {
         { descend: true },
       );
       const fitbit = matches.filter((m) => m.data_source.name === 'fitbit');
-      expect(fitbit.map((m) => path.relative(root, m.matchedPath ?? root))).toEqual(['Takeout']);
+      expect(fitbit.map((m) => path.relative(root, m.matchedPath ?? root))).toEqual([
+        path.join('Takeout', 'Fitbit'),
+      ]);
+    });
+
+    // A claim on the Takeout root would cover every other service in it, and
+    // the catch-all importer skips whatever a claim covers.
+    it('claims the Fitbit folder rather than the Takeout around it', async () => {
+      const takeout = path.join(root, 'Takeout');
+      const fi = new FitbitFileImporter();
+      const onTakeout = await fi.recognize({}, { filename: 'Takeout', fullPath: takeout });
+      const onFitbit = await fi.recognize({}, { filename: 'Fitbit', fullPath: path.join(takeout, 'Fitbit') });
+      const onFolder = await fi.recognize({}, { filename: 'Global Export Data', fullPath: ged() });
+      expect(onTakeout.confidence).toBeGreaterThan(0);
+      expect(onTakeout.confidence).toBeLessThan(onFitbit.confidence);
+      expect(onFolder.confidence).toBe(onFitbit.confidence);
+
+      fs.mkdirSync(path.join(takeout, 'Drive'));
+      fs.writeFileSync(path.join(takeout, 'Drive', 'plan.txt'), 'notes');
+      const matches = await dataSourcesRecognize(
+        undefined,
+        { filename: path.basename(root), fullPath: root, fsRoot: root },
+        {},
+        { descend: true },
+      );
+      const claimed = matches
+        .filter((m) => m.data_source.name !== 'generic')
+        .map((m) => path.relative(root, m.matchedPath ?? root));
+      expect(claimed).toEqual([path.join('Takeout', 'Fitbit')]);
     });
   });
 });
