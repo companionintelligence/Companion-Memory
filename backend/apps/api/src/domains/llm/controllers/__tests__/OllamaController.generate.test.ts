@@ -67,6 +67,7 @@ describe('OllamaController generate attach', () => {
       (overrides.broker ?? broker) as never,
       (overrides.chatTurnService ?? chatTurnService) as never,
       (overrides.desktopAppService ?? desktopAppService) as never,
+      (overrides.llmEndpointService ?? { describeConnectionFailure: async () => null }) as never,
       logger as never,
       actionService as never,
       liveChanges,
