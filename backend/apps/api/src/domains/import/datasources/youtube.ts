@@ -114,16 +114,10 @@ export class YouTubeFileImporter implements FileImporter {
           return { confidence: 0.9 };
         }
 
-        // "YouTube and YouTube Music" Takeout folder. Scored above any one of
-        // its parts (history/, playlists/, subscriptions/), so recognition
-        // hands over the whole folder; at 0.85 the more confident history/
-        // replaced it and the parts beside it were left to chance.
+        // "YouTube and YouTube Music" Takeout folder
         const dirName = path.basename(root).toLowerCase();
-        if (
-          dirName.includes('youtube') &&
-          names.some((n) => n === 'history' || n === 'playlists' || n === 'subscriptions')
-        ) {
-          return { confidence: 0.95 };
+        if (dirName.includes('youtube') && names.some((n) => n === 'history')) {
+          return { confidence: 0.85 };
         }
 
         if (names.some((n) => n === 'history')) {
@@ -141,9 +135,14 @@ export class YouTubeFileImporter implements FileImporter {
           return { confidence: 0.85 };
         }
 
-        // A playlists folder uploaded on its own.
+        // The playlists folder, inside a Takeout or uploaded on its own. Above
+        // the 0.85 the Takeout folder (and any folder holding subscriptions.csv)
+        // claims, so recognition keeps playlists/ as a match of its own
+        // whichever order the folder is read in. Claiming the whole Takeout
+        // folder instead would hide videos/ and the rest of it from the
+        // catch-all importer.
         if (await this.isPlaylistsDir(root)) {
-          return { confidence: 0.85 };
+          return { confidence: 0.9 };
         }
       } catch {
         /* ignore */

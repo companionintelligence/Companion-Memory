@@ -423,17 +423,32 @@ describe('YouTube datasource — playlists', () => {
     return pipeline;
   };
 
-  it('recognizes the whole Takeout folder, so history, subscriptions and playlists come in together', async () => {
+  it('keeps playlists/ as a match of its own and leaves the rest of the Takeout folder to the catch-all', async () => {
+    // Without subscriptions.csv nothing claims the folders above the Takeout
+    // folder, so which matches survive does not depend on readdir order.
+    fs.rmSync(path.join(root, YT, 'subscriptions'), { recursive: true });
+    write(`${YT}/videos/Glassblowing at dawn.mp4`, 'not really a video');
     const matches = await dataSourcesRecognize(
       undefined,
       { filename: path.basename(root), fullPath: root, fsRoot: root },
       {},
       { descend: true },
     );
-    expect(matches.filter((m) => m.data_source.name === 'youtube').map((m) => m.matchedPath)).toEqual([
-      path.join(root, YT),
-    ]);
+    const youtube = matches.filter((m) => m.data_source.name === 'youtube').map((m) => m.matchedPath!);
+    expect(youtube.sort()).toEqual([path.join(root, YT, 'history'), path.join(root, YT, 'playlists')]);
+    // The uploaded videos stay with the catch-all importer: no YouTube match covers them.
+    const videos = path.join(root, YT, 'videos');
+    expect(youtube.some((m) => videos === m || videos.startsWith(m + path.sep))).toBe(false);
 
+    const pipeline = (await Promise.all(youtube.map((m) => importFrom(m)))).flat();
+    expect(pipeline.map((g) => g.item.classification).sort()).toEqual([
+      'saved_media',
+      'saved_media',
+      'watch',
+    ]);
+  });
+
+  it('reads history, subscriptions and playlists when handed the whole Takeout folder', async () => {
     const pipeline = await importFrom(path.join(root, YT));
     expect(pipeline.map((g) => g.item.classification).sort()).toEqual([
       'saved_media',
@@ -488,7 +503,7 @@ describe('YouTube datasource — playlists', () => {
   it('recognizes and imports a playlists folder uploaded on its own', async () => {
     const dir = path.join(root, YT, 'playlists');
     const rec = await new YouTubeFileImporter().recognize({}, { filename: 'playlists', fullPath: dir });
-    expect(rec.confidence).toBe(0.85);
+    expect(rec.confidence).toBe(0.9);
     expect((await importFrom(dir)).map((g) => g.item.metadata.Title).sort()).toEqual([
       'Lantern references',
       'Watch later',
