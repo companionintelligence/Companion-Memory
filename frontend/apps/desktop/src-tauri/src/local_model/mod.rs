@@ -175,6 +175,7 @@ impl LocalModelHandles {
     }
 
     /// Same reason as `ollama_child_slot`, for the Linux bridge relay.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn ollama_relay_slot(&self) -> &Mutex<Option<bridge_relay::RelayHandle>> {
         &self.ollama_relay
     }
