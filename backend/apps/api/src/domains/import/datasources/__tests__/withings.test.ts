@@ -354,6 +354,28 @@ describe('Withings datasource', () => {
       expect(swim.metadata['Average Heart Rate']).toBeUndefined();
     });
 
+    it('reads an activities.csv whose headers are translated', async () => {
+      const { items } = await importDir({
+        'activities.csv':
+          'von,bis,"von (manuell)","bis (manuell)",Zeitzone,Aktivitätstyp,Daten,GPS,Geändert\n' +
+          '2026-10-28T08:01:00+00:00,2026-10-28T09:58:31+00:00,,,Europe/Berlin,Laufen,"{""calories"":1210,""distance"":21097}",,2026-10-28T10:05:12+00:00\n',
+      });
+      expect(items).toHaveLength(1);
+      expect(items[0].classification).toBe('workout');
+      expect(items[0].metadata['Distance (km)']).toBe(21.097);
+      expect(items[0].metadata['Time Zone']).toBe('Europe/Berlin');
+    });
+
+    it('keeps the recorded length when only the start was moved by hand', async () => {
+      const { items } = await importDir({
+        'activities.csv':
+          'from,to,"from (manual)","to (manual)",Timezone,"Activity type",Data,GPS,Modified\n' +
+          '2026-10-28T08:00:00+00:00,2026-10-28T09:00:00+00:00,2026-10-29T18:00:00+00:00,,Europe/London,Running,{},,\n',
+      });
+      expect(items[0].timestamp!.toISOString()).toBe('2026-10-29T18:00:00.000Z');
+      expect(items[0].timespanEnd!.toISOString()).toBe('2026-10-29T19:00:00.000Z');
+    });
+
     it('keeps a workout whose Data cell is not JSON, without totals', async () => {
       const { items } = await importDir({
         'activities.csv':

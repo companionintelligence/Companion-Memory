@@ -332,12 +332,26 @@ function readActivities(base: string, rows: string[][], params: ImportParams): v
   const [, ...body] = rows;
   body.forEach((row, index) => {
     // A time the person corrected by hand wins over the recorded one.
-    const start = parseWithingsDate(row[2] || row[0] || '');
+    const recordedStart = parseWithingsDate(row[0] ?? '');
+    const recordedEnd = parseWithingsDate(row[1] ?? '');
+    const manualStart = parseWithingsDate(row[2] ?? '');
+    const manualEnd = parseWithingsDate(row[3] ?? '');
+    const start = manualStart ?? recordedStart;
     if (!inTimeframe(params, start)) {
       return;
     }
 
-    const end = parseWithingsDate(row[3] || row[1] || '');
+    // A start moved by hand with no end moved alongside it keeps the recorded
+    // length, rather than ending where the workout was before it moved.
+    let end = manualEnd ?? recordedEnd;
+    if (manualStart && !manualEnd && recordedStart && recordedEnd) {
+      end = new Date(recordedEnd.getTime() + (manualStart.getTime() - recordedStart.getTime()));
+    }
+
+    if (start && end && end <= start) {
+      end = undefined;
+    }
+
     const type = (row[5] ?? '').trim();
     let data: WithingsActivityData = {};
     try {
@@ -442,13 +456,39 @@ function readNamedExportFile(base: string, raw: string, params: ImportParams): b
     return true;
   }
 
-  if (name === 'activities.csv' && header.length >= 7 && /^timezone$/i.test(header[4])) {
+  if (name === 'activities.csv' && looksLikeWithingsActivities(header, rows[1])) {
     readActivities(base, rows, params);
 
     return true;
   }
 
   return false;
+}
+
+/** An IANA zone name such as `Europe/London` or `America/Argentina/Buenos_Aires`. */
+const IANA_ZONE = /^[A-Za-z]+(?:\/[A-Za-z0-9_+-]+)+$/;
+
+/**
+ * Withings' activities.csv: a `Timezone` header in column 4, or, for an
+ * account whose headers are translated, a first row with a date in column 0,
+ * an IANA zone in column 4 and a JSON object in column 6. Strava's
+ * activities.csv (`Activity ID,Activity Date,...`) has neither.
+ */
+function looksLikeWithingsActivities(header: string[], first: string[] | undefined): boolean {
+  if (header.length < 7) {
+    return false;
+  }
+
+  if (/^timezone$/i.test(header[4])) {
+    return true;
+  }
+
+  return (
+    first !== undefined &&
+    parseWithingsDate(first[0] ?? '') !== undefined &&
+    IANA_ZONE.test((first[4] ?? '').trim()) &&
+    (first[6] ?? '').trim().startsWith('{')
+  );
 }
 
 registerDataSource({
