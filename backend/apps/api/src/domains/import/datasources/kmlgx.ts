@@ -22,21 +22,50 @@ interface KMLGXOptions {
   ownerEntityId?: number;
 }
 
+interface KMLTrack {
+  when?: string[];
+  coord?: string[];
+}
+
+/** An element that can hold a gx:Track, as xml2js parses it (prefixes stripped). */
+interface KMLNode {
+  Track?: unknown[];
+  Document?: unknown[];
+  Folder?: unknown[];
+  Placemark?: unknown[];
+  MultiTrack?: unknown[];
+  MultiGeometry?: unknown[];
+}
+
 interface KMLDocument {
-  kml?: {
+  kml?: KMLNode & {
     // xml2js stores namespace declarations as attribute keys. The realistic
     // Google KML attribute is `xmlns:gx`; attrNameProcessors doesn't strip
     // namespace declarations, so we check both `gx` and `xmlns:gx`.
     $?: { gx?: string; [key: string]: string | undefined };
-    Document?: Array<{
-      Placemark?: Array<{
-        Track?: Array<{
-          when?: string[];
-          coord?: string[];
-        }>;
-      }>;
-    }>;
   };
+}
+
+// A gx:Track is the geometry of a Placemark, directly or inside a gx:MultiTrack
+// or MultiGeometry, and a Placemark can sit at the root or in Documents and
+// Folders nested to any depth. Reading only Document > Placemark > gx:Track
+// lost every track kept in a Folder or a gx:MultiTrack without a word.
+const TRACK_CONTAINERS = ['Document', 'Folder', 'Placemark', 'MultiTrack', 'MultiGeometry'] as const;
+
+function isElement(value: unknown): value is object {
+  // An element with no children parses to '' rather than an object.
+  return typeof value === 'object' && value !== null;
+}
+
+function collectTracks(node: KMLNode, out: KMLTrack[] = []): KMLTrack[] {
+  out.push(...(node.Track ?? []).filter(isElement));
+  for (const key of TRACK_CONTAINERS) {
+    for (const child of (node[key] ?? []).filter(isElement)) {
+      collectTracks(child, out);
+    }
+  }
+
+  return out;
 }
 
 const GX_NS_PREFIX = 'http://www.google.com/kml/ext/2';
@@ -122,9 +151,7 @@ export class KMLGXFileImporter implements FileImporter {
         return;
       }
 
-      const tracks = (doc.kml?.Document || [])
-        .flatMap((d) => d.Placemark || [])
-        .flatMap((p) => p.Track || []);
+      const tracks = doc.kml ? collectTracks(doc.kml) : [];
       for (const track of tracks) {
         const whens = track.when || [];
         const coords = track.coord || [];
