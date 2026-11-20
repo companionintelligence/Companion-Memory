@@ -133,4 +133,56 @@ describe('Roblox datasource', () => {
     const again = await run(p);
     expect(again.map((g) => g.item.id!)).toEqual(ids);
   });
+
+  describe("telling the account holder's chat messages apart", () => {
+    const CHAT =
+      'Timestamp,Sender,Recipient,Message,Experience\n' +
+      '2026-03-03T10:00:00Z,QuillfeatherZ,BramblewoodOtto,want to run the tower together?,Tower of Hell\n' +
+      '2026-03-03T10:01:12Z,BramblewoodOtto,QuillfeatherZ,yes joining your server now,Tower of Hell\n';
+
+    function report(files: Record<string, string>): string {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-roblox-owner-'));
+      for (const [name, content] of Object.entries(files)) {
+        fs.writeFileSync(path.join(dir, name), content);
+      }
+
+      return dir;
+    }
+
+    async function directions(dir: string): Promise<unknown[]> {
+      try {
+        const pipeline = await run(dir);
+
+        return pipeline
+          .filter((p) => p.item.classification === 'message')
+          .sort((a, b) => a.item.timestamp!.getTime() - b.item.timestamp!.getTime())
+          .map((p) => p.item.metadata.Direction);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    }
+
+    it('marks rows sent by the username in the account file as sent', async () => {
+      const dir = report({
+        'AccountInformation.csv':
+          'UserId,Username,DisplayName,Created\n4419028815,quillfeatherz,Zephyrine Q,2026-01-05T16:20:11Z\n',
+        'ChatHistory.csv': CHAT,
+      });
+
+      expect(await directions(dir)).toEqual(['sent', 'received']);
+    });
+
+    it('reads the username from a JSON account file too', async () => {
+      const dir = report({
+        'AccountInformation.json': JSON.stringify({ UserId: 4419028815, Username: 'QuillfeatherZ' }),
+        'ChatHistory.csv': CHAT,
+      });
+
+      expect(await directions(dir)).toEqual(['sent', 'received']);
+    });
+
+    it('leaves direction unset when the report names no account', async () => {
+      expect(await directions(report({ 'ChatHistory.csv': CHAT }))).toEqual([undefined, undefined]);
+    });
+  });
 });

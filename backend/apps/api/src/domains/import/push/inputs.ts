@@ -1711,7 +1711,9 @@ export function toFacebookMessengerCommunicationInput(
     communication_type: CommunicationType.CHAT,
     time: new Date(rec.startTime),
     content,
-    direction: sender && isSelf(sender) ? 'outbound' : 'inbound',
+    // The importer's `From Me`, read off the export's own profile, wins; the
+    // account-name match is for exports that do not say.
+    direction: directionFor(m) ?? (sender && isSelf(sender) ? 'outbound' : 'inbound'),
     source_type: FACEBOOK_MESSENGER_SOURCE_TYPE,
     ...(() => {
       const identity = platformIdentity(FACEBOOK_MESSENGER_SOURCE_SYSTEM, rec.sourceId);

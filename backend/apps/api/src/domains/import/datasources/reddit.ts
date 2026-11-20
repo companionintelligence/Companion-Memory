@@ -147,6 +147,43 @@ async function isRedditFile(fpath: string): Promise<boolean> {
   return required != null && (await csvHeaderHas(fpath, required));
 }
 
+/** A statistics.csv is a dozen rows; anything far bigger is not one. */
+const MAX_STATISTICS_BYTES = 1024 * 1024;
+
+/**
+ * The account's username, from the `account name` row of the export's
+ * statistics.csv (`statistic,value`), or undefined when the export has none.
+ */
+async function readAccountName(dir: string): Promise<string | undefined> {
+  try {
+    const name = (await readdir(dir)).find((n) => n.toLowerCase() === 'statistics.csv');
+    if (!name) {
+      return undefined;
+    }
+
+    const fpath = path.join(dir, name);
+    const st = await fs.promises.lstat(fpath);
+    if (!st.isFile() || st.size > MAX_STATISTICS_BYTES) {
+      return undefined;
+    }
+
+    const row = parseCSV(await fs.promises.readFile(fpath, 'utf8')).find(
+      (r) => r.statistic?.trim().toLowerCase() === 'account name',
+    );
+
+    return row?.value?.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Reddit usernames ignore case, and some files write them as u/name. */
+function sameUser(a: string, b: string): boolean {
+  const norm = (s: string) => s.trim().replace(/^\/?u\//i, '').toLowerCase();
+
+  return norm(a) === norm(b);
+}
+
 export class RedditFileImporter implements FileImporter {
   async recognize(_ctx: unknown, entry: DirEntry): Promise<Recognition> {
     const root = entry.fullPath || entry.fsRoot || entry.filename;
@@ -211,15 +248,16 @@ export class RedditFileImporter implements FileImporter {
     if (stat.isFile()) {
       await this.processFile(root, params);
     } else if (stat.isDirectory()) {
+      const owner = await readAccountName(root);
       for (const name of fs.readdirSync(root)) {
         if (REDDIT_FILES.includes(name.toLowerCase())) {
-          await this.processFile(path.join(root, name), params);
+          await this.processFile(path.join(root, name), params, owner);
         }
       }
     }
   }
 
-  private async processFile(fpath: string, params: ImportParams): Promise<void> {
+  private async processFile(fpath: string, params: ImportParams, owner?: string): Promise<void> {
     const base = path.basename(fpath).toLowerCase();
     let raw: string;
     try {
@@ -243,7 +281,7 @@ export class RedditFileImporter implements FileImporter {
       } else if (PURCHASE_FILES.includes(base)) {
         this.pushPurchase(row, params);
       } else if (MESSAGE_FILES.includes(base)) {
-        this.pushMessage(row, base, params);
+        this.pushMessage(row, base, params, owner);
       }
     }
   }
@@ -409,7 +447,7 @@ export class RedditFileImporter implements FileImporter {
   // ride in metadata for the server to resolve into people (the body must live
   // in metadata.Body, which is what the communication content is mapped from;
   // content.data is not read at push time).
-  private pushMessage(row: Record<string, string>, source: string, params: ImportParams): void {
+  private pushMessage(row: Record<string, string>, source: string, params: ImportParams, owner?: string): void {
     const chat = source === 'chat_history.csv';
     const announcement = source === 'announcements.csv';
     // announcements.csv uses `sent_at` rather than the `date`/`created_at`
@@ -466,6 +504,9 @@ export class RedditFileImporter implements FileImporter {
           Body: body || undefined, // full body — the communication content maps from here
           From: from || undefined,
           To: to || undefined,
+          // Neither file says which messages are the account's own; the
+          // account name in statistics.csv does.
+          Direction: owner && from ? (sameUser(from, owner) ? 'sent' : 'received') : undefined,
           ThreadId: thread,
           Permalink: row.permalink || undefined,
           Subreddit: subreddit || undefined,
