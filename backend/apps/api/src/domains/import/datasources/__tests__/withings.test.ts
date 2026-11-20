@@ -86,6 +86,57 @@ describe('Withings datasource', () => {
     expect((await fi.recognize({}, { filename: 'roblox-export', fullPath: roblox })).confidence).toBe(0);
   });
 
+  // The MyFitnessPal fixture above holds only the nutrition file. A real export
+  // also carries a measurement file, "Date,Weight" with no unit, and a bare
+  // "Weight" column used to be enough: Withings claimed the export's folder and
+  // imported every row of all three files as Withings measurements.
+  it('does not claim a MyFitnessPal export by its unit-less "Date,Weight" measurement file', async () => {
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'withings-mfp-'));
+    const range = '2026-10-12-to-2026-10-14';
+    await fs.promises.writeFile(
+      path.join(dir, `Nutrition-Summary-${range}.csv`),
+      'Date,Meal,Calories,Fat (g),Carbohydrates (g),Protein (g),Note\n2026-10-12,Breakfast,412.5,13.1,51.2,21.4,\n',
+    );
+    await fs.promises.writeFile(
+      path.join(dir, `Measurement-Summary-${range}.csv`),
+      'Date,Weight\n2026-10-12,71.4\n2026-10-14,71.1\n',
+    );
+    await fs.promises.writeFile(
+      path.join(dir, `Exercise-Summary-${range}.csv`),
+      'Date,Exercise,Type,Exercise Calories,Exercise Minutes,Sets,Reps Per Set,Kilograms,Steps,Note\n' +
+        '2026-10-13,Bench Press,Strength,,,4,8,60,,\n',
+    );
+    const fi = new WithingsFileImporter();
+    try {
+      const measurement = path.join(dir, `Measurement-Summary-${range}.csv`);
+      expect(
+        (await fi.recognize({}, { filename: path.basename(measurement), fullPath: measurement })).confidence,
+      ).toBe(0);
+      expect((await fi.recognize({}, { filename: path.basename(dir), fullPath: dir })).confidence).toBe(0);
+    } finally {
+      await fs.promises.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('still recognizes a quoted weight column with a unit other than kg', async () => {
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'withings-lb-'));
+    const fpath = path.join(dir, 'measurements.csv');
+    await fs.promises.writeFile(fpath, 'Date,"Weight (lb)",Comments\n"2024-01-15 08:30:00",181.7,\n');
+    try {
+      const rec = await new WithingsFileImporter().recognize(
+        {},
+        { filename: 'measurements.csv', fullPath: fpath },
+      );
+      expect(rec.confidence).toBeGreaterThan(0.8);
+    } finally {
+      await fs.promises.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('drops undated rows when a timeframe filter is active', async () => {
     const fs = await import('node:fs');
     const tmp = path.join(FIXTURES_DIR, 'withings-export', 'undated.csv');
