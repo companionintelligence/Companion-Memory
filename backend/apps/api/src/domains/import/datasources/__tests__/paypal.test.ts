@@ -215,6 +215,40 @@ describe('PayPal time zone', () => {
     expect(byId).toEqual({ TX1: old, TX2: old, TX3: old, TX4: old });
   });
 
+  it('reads CST as US Central and BST as British Summer when the same file has CDT or GMT rows', async () => {
+    const byId = await stamps([
+      '"10/31/2026","23:30:00","CDT","Shop A","Express Checkout Payment","Completed","USD","-1.00","0.00","-1.00","TX1"',
+      '"11/01/2026","01:10:00","CST","Shop B","Express Checkout Payment","Completed","USD","-1.00","0.00","-1.00","TX2"',
+      '"07/19/2026","00:41:12","BST","Shop C","Express Checkout Payment","Completed","GBP","-1.00","0.00","-1.00","TX3"',
+      '"01/15/2026","09:30:00","GMT","Shop D","Express Checkout Payment","Completed","GBP","-1.00","0.00","-1.00","TX4"',
+    ]);
+
+    expect(byId).toEqual({
+      TX1: '2026-11-01T04:30:00.000Z',
+      TX2: '2026-11-01T07:10:00.000Z',
+      TX3: '2026-07-18T23:41:12.000Z',
+      TX4: '2026-01-15T09:30:00.000Z',
+    });
+  });
+
+  it('reads IST as Irish Summer Time when the same file has GMT rows', async () => {
+    const byId = await stamps([
+      '"07/19/2026","00:41:12","IST","Shop A","Express Checkout Payment","Completed","EUR","-1.00","0.00","-1.00","TX1"',
+      '"01/15/2026","09:30:00","GMT","Shop B","Express Checkout Payment","Completed","EUR","-1.00","0.00","-1.00","TX2"',
+    ]);
+
+    expect(byId).toEqual({ TX1: '2026-07-18T23:41:12.000Z', TX2: '2026-01-15T09:30:00.000Z' });
+  });
+
+  it('reads the zone from a "Time Zone" column too', async () => {
+    const pipeline = await runImport(
+      '"Date","Time","Time Zone","Name","Type","Status","Currency","Gross","Fee","Net","Transaction ID"\n' +
+        '"07/19/2026","00:41:12","PDT","Music Shop","Express Checkout Payment","Completed","USD","-9.99","0.00","-9.99","TX1"\n',
+    );
+
+    expect((pipeline[0].item.timestamp as Date).toISOString()).toBe('2026-07-19T07:41:12.000Z');
+  });
+
   it('still pairs a card deposit with the payment it funds when both carry a zone', async () => {
     const byId = await stamps([
       '"07/19/2026","00:41:12","PDT","Music Shop","PreApproved Payment Bill User Payment","Completed","USD","-9.99","0.00","-9.99","TX1"',
