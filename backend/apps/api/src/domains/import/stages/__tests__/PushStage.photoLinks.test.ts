@@ -62,6 +62,8 @@ interface Options {
   links?: Array<{ id: string; itemId: string; relatedItemId: string; relation: string }>;
   /** Staged ids with no content row (failed, or never pushed). */
   missingContent?: string[];
+  /** Staged id -> the content row it shares with another staged item (same file bytes). */
+  sharedContent?: Record<string, string>;
   ingest?: jest.Mock;
 }
 
@@ -101,7 +103,10 @@ function makeStage(rows: StagedItem[], options: Options = {}) {
 
         return stagedIds
           .filter((id) => !(options.missingContent ?? []).includes(id))
-          .map((id) => ({ staged_id: id, content_id: `content-${id.slice(-2)}` }));
+          .map((id) => ({
+            staged_id: id,
+            content_id: options.sharedContent?.[id] ?? `content-${id.slice(-2)}`,
+          }));
       }
 
       if (sql.includes('id = ANY($2::uuid[])')) {
@@ -258,6 +263,24 @@ describe('links between staged items', () => {
 
     const edges = ingest.mock.calls.flatMap(([, input]) => input.relationships);
     expect(edges).toEqual([expect.objectContaining({ type: 'DERIVED_FROM' })]);
+  });
+
+  it('leave out a link whose two ends became one content row', async () => {
+    // An -edited copy with the original's exact bytes keys onto the original's
+    // content row. Ingest refuses a self-edge, which the log would call a failure.
+    const { stage, ingest, logger } = makeStage([photo, album, edited], {
+      links,
+      sharedContent: { [EDITED]: 'content-01' },
+    });
+
+    await stage.run(context);
+
+    const edges = ingest.mock.calls.flatMap(([, input]) => input.relationships);
+    expect(edges).toEqual([expect.objectContaining({ type: 'PART_OF' })]);
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      'Linking staged items to each other failed; importing the export again writes the links',
+      expect.anything(),
+    );
   });
 
   it('do not fail the import when the edge write fails', async () => {

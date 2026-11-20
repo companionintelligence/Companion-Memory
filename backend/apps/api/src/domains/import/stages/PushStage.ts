@@ -352,8 +352,8 @@ const ITEM_LINKS: Record<string, { type: 'PART_OF' | 'DERIVED_FROM'; reverse: bo
  * to a `person` entity, which is how the photo importers stage a face tagged in
  * a picture (Google Photos `people`, Flickr `people`). Kept apart from plain
  * `includes` because other parsers use that relation for things that are not
- * people (an Uber Eats order `includes` its dishes), and those must not become
- * an event's participants. Not a relation any parser stages.
+ * people (an Uber Eats order `includes` its dishes). Those must not become an
+ * event's participants. Not a relation any parser stages.
  */
 const DEPICTED_PEOPLE = 'includes:person';
 
@@ -362,7 +362,7 @@ const DEPICTED_PEOPLE = 'includes:person';
  * events lane never read the participants it was handed, so a photo's tagged
  * people were staged, resolved to Persons and then left off the photo: the
  * graph projection turns `participant_entity_ids` into Person -PARTICIPATED_IN->
- * Event, and that column was always empty for photos.
+ * Event. That column was always empty for photos.
  */
 function withDepictedPeople(input: CreateEventDto, participants: Map<string, string[]>): CreateEventDto {
   const people = participants.get(DEPICTED_PEOPLE);
@@ -2521,7 +2521,7 @@ export class PushStage implements ImportStageRunner {
    * `DERIVED_FROM` its original, a motion photo's clip `DERIVED_FROM` its still
    * ({@link ITEM_LINKS}).
    *
-   * The photo importers have always staged these, and nothing read them back:
+   * The photo importers have always staged these. Nothing read them back:
    * {@link participantsForMany} joins only the edges that point at an entity, so
    * every album membership, edit and Live Photo pair stopped in staging.
    *
@@ -2529,7 +2529,7 @@ export class PushStage implements ImportStageRunner {
    * in different batches (an album is staged once, beside the first of its
    * photos). Each end is found under the identity its content row is written
    * with ({@link toContentInput}), so an end that an earlier import already
-   * wrote, and this push deduped, is found too. An end with no content row
+   * wrote (and this push deduped) is found too. An end with no content row
    * (failed, or routed nowhere) leaves its link out. Keyset-paged by edge id.
    */
   private async linkStagedItems(context: StageRunContext): Promise<number> {
@@ -2563,7 +2563,10 @@ export class PushStage implements ImportStageRunner {
           const fromId = contentIds.get(from);
           const toId = contentIds.get(to);
 
-          return fromId && toId
+          // A content row keys on its file's hash, so two ends with the same
+          // bytes are one row. Ingest refuses a self-edge, which the log would
+          // then report as a failed write.
+          return fromId && toId && fromId !== toId
             ? [
                 {
                   fromKey: `content:${fromId}`,
