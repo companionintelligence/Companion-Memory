@@ -144,10 +144,10 @@ export async function childDir(dir: string, name: string): Promise<string | unde
 
 /**
  * Desktop and NAS litter that is never part of an export: Finder's
- * `.DS_Store`, Explorer's `Thumbs.db` and `desktop.ini`, and the `@eaDir`
+ * `.DS_Store`, Explorer's `Thumbs.db` and `desktop.ini`, plus the `@eaDir`
  * folder Synology DSM keeps next to every photo folder for its thumbnails
  * (`@eaDir/<photo>/SYNOPHOTO_THUMB_M.jpg`). A folder copied off the NAS
- * carries it, and walking it imported every thumbnail as an extra, undated
- * photo. The inbox scan and the generic importer both skip these names.
+ * carries it. Walking it imported every thumbnail as an extra, undated photo.
+ * The inbox scan and the generic importer both skip these names.
  */
 export const JUNK_NAMES: ReadonlySet<string> = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini', '@eaDir']);

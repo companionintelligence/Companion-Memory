@@ -73,10 +73,10 @@ const MEDIA_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.heic', '.heif', '
  * Parse Flickr's export media filename `[slug_parts..._]<photo id>[_secret]_o.<ext>`
  * into the tokens that could be its photo id, left to right, or null if `name`
  * doesn't match the convention: split on `_`, require a trailing literal `o`
- * token, and keep every all-digit token before it.
+ * token and keep every all-digit token before it.
  *
- * More than one is common. The slug is the photo's title, and a title kept
- * from the camera (`IMG_4412`) puts its own number ahead of the id
+ * More than one is common. The slug is the photo's title. A title kept from
+ * the camera (`IMG_4412`) puts its own number ahead of the id
  * (`img_4412_53990000003_o.jpg`); a secret token, when present, sits between
  * the id and `o` and can be all-digit too. Which one is the id is decided
  * against the sidecars, in {@link buildMediaIndex}.
