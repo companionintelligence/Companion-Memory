@@ -60,10 +60,10 @@ describe('Grok datasource', () => {
     expect(rec.confidence).toBe(0);
   });
 
-  it('leaves an X archive to the twitter importer, which imports the chats too', async () => {
-    // Grok scores an X archive 0.3 ON PURPOSE — low enough that twitter (0.9+)
-    // wins a bare drop and imports the WHOLE archive including these chats,
-    // non-zero so the Grok card can still be chosen explicitly.
+  it('ranks an X archive below the twitter importer', async () => {
+    // Grok scores an X archive 0.3 ON PURPOSE: low enough that twitter (0.9+)
+    // leads the run's matches, non-zero so this importer still runs and reads
+    // the archive's Grok chats.
     const root = path.join(FIXTURES_DIR, 'twitter-export');
 
     if (!fs.existsSync(root)) {
@@ -221,10 +221,10 @@ describe('Grok datasource', () => {
  * xAI publishes no export of its own, so this is the only format users actually
  * have — the grok*.json path above is a speculative fallback.
  *
- * Both cards read it on purpose: the Twitter card imports the whole archive
- * including these chats, the Grok card imports only the chats out of the same
- * .zip. The tests below pin that split, and the recognition ordering that keeps
- * a bare drop of an X archive from being reduced to Grok messages alone.
+ * Both importers claim an archive that carries it and both run. The grok
+ * importer reads only the chats and the twitter importer reads everything else,
+ * so each chat comes in once. The tests below pin that split and the
+ * recognition ordering that keeps twitter leading an X archive's matches.
  */
 describe('Grok chats inside an X archive', () => {
   let dir: string;
@@ -344,11 +344,10 @@ describe('Grok chats inside an X archive', () => {
       { filename: path.basename(root), fullPath: root },
     );
 
-    // Non-zero so findImportRoots can resolve roots when the user explicitly
-    // picks the Grok card...
+    // Non-zero, because this importer is the one that reads the Grok chats...
     expect(grok.confidence).toBeGreaterThan(0);
     // ...but under twitter, because dataSourcesRecognize ranks by confidence and
-    // a bare drop of an X archive must import the WHOLE archive, Grok included.
+    // the archive is mostly X's.
     // Pinned relationally: bumping either number alone can't silently invert it.
     expect(grok.confidence).toBeLessThan(twitter.confidence);
   });
@@ -433,7 +432,7 @@ describe('Grok chats inside an X archive', () => {
     expect(drops).toContainEqual({ reason: 'grok_unknown_sender', detail: 'chat1 (System)' });
   });
 
-  it('gives the Twitter card the same Grok rows, alongside its own', async () => {
+  it('leaves the Grok chats to the grok importer, so each one comes in once', async () => {
     const root = writeXArchive({
       tweets: [
         {
@@ -453,13 +452,14 @@ describe('Grok chats inside an X archive', () => {
       options: { includeReplies: true, includeRetweets: true },
     });
 
-    // The Twitter card imports the archive AND the chats.
+    // Both importers claim this archive and both run on it. The twitter
+    // importer reads the tweets; reading the chats too wrote every Grok
+    // message twice.
     expect(viaTwitter.items.some((i) => i.id === 'twitter:tweet:9')).toBe(true);
-    const grokFromTwitter = viaTwitter.items.filter((i) => i.id!.startsWith('grok:'));
-    // Identical ids from either card, so importing both ways dedupes rather
-    // than duplicating every Grok message.
-    expect(grokFromTwitter.map((i) => i.id!)).toEqual(viaGrok.items.map((i) => i.id!));
-    expect(grokFromTwitter.every((i) => i.metadata?.Source === 'Grok')).toBe(true);
+    expect(viaTwitter.items.filter((i) => i.id!.startsWith('grok:'))).toEqual([]);
+    expect(viaTwitter.drops.filter((d) => d.reason.startsWith('grok_'))).toEqual([]);
+    expect(viaGrok.items.length).toBeGreaterThan(0);
+    expect(viaGrok.items.every((i) => i.metadata?.Source === 'Grok')).toBe(true);
   });
 
   it('imports nothing extra from an archive with no Grok store at all', async () => {

@@ -6,9 +6,9 @@
    the grok importer have to parse that, so the readers live here.
 
    Grok lives inside the X archive too — xAI publishes no separate export — as
-   `data/grok-chat-item.js`. It imports from BOTH cards on purpose: the Twitter
-   card imports the whole archive including these chats, and the Grok card
-   imports only these chats out of the same .zip (see grok.ts recognize()).
+   `data/grok-chat-item.js`. Only the grok importer reads it. Both importers
+   claim an archive that carries it and both run, so the chats come in once,
+   from grok, beside everything else the twitter importer reads.
 */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -210,8 +210,7 @@ function findGrokMedia(index: Map<string, string>, a: GrokAttachment): string | 
  * attachment.
  *
  * Messages carry `Source: 'Grok'` — the wizard presents Grok as its own card,
- * so provenance has to match what the user was told they were importing, even
- * when the Twitter importer is what read the file.
+ * so provenance has to match what the user was told they were importing.
  *
  * Turn order is ARRAY order, not timestamp order: a question and its answer
  * share one `createdAt` to the millisecond, so sorting by time would shuffle

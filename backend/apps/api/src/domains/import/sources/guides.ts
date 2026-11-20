@@ -1414,7 +1414,7 @@ export const WIZARD_SOURCES: WizardSource[] = [
     importerReady: true,
     notes: [
       'Grok is an X product; its data is bundled with the X/Twitter export. No separate export page exists.',
-      'This card imports ONLY the Grok chats out of the archive. Use the Twitter / X card to import the whole thing — tweets, DMs and Grok together.',
+      'Memory imports everything it recognizes in the archive, whichever card you start from: your tweets and DMs come in too, alongside the Grok chats.',
     ],
   },
 
