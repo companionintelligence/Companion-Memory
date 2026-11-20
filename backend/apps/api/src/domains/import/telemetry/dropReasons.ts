@@ -273,6 +273,9 @@ export const DROP_SLUG_REASONS: Readonly<Record<string, DropReason>> = {
   // A Robinhood transaction row whose "Trans Code" is a real code this build
   // does not have a handler for — recognized as a transaction, not a home for it.
   unrecognized_trans_code: 'unsupported_shape',
+  // snapchat.ts: a history array that is neither a "Received/Sent ... History"
+  // list nor a conversation whose records carry IsSender.
+  snapchat_unknown_layout: 'unsupported_shape',
 
   // Read failures.
   no_end_marker: 'unreadable_source',
