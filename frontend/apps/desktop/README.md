@@ -185,8 +185,8 @@ working. Resolved once per launch, cheapest option first:
    `com.docker.compose.project` label). Anything else is dropped and logged in
    `desktop.log`.
 
-   A firewall on the host can still drop the containers' connections, and
-   the app cannot see that from the host: its own request to the gateway
+   A firewall on the host can still drop the containers' connections. The
+   app cannot see that from the host: its own request to the gateway
    address goes over loopback, which a firewall always lets through. So once
    Memory is up, the app runs `curl` inside the `api` container against
    `host.docker.internal:11434` (`local_model::container_reach`) and logs the
@@ -197,8 +197,8 @@ working. Resolved once per launch, cheapest option first:
    Docker's address pool as the source and the bridge gateway, the one
    address the containers call, as the destination. It doesn't open the port
    on this computer's LAN address, even on a LAN that also uses
-   172.16.0.0/12. The app never changes the firewall itself. This applies to your own Ollama in option 1 as well, including one
-   bound to `0.0.0.0`.
+   172.16.0.0/12. The app never changes the firewall itself. This applies to
+   your own Ollama in option 1 as well, including one bound to `0.0.0.0`.
 
    > **Under rootless Docker** no bridge gateway is discoverable (the
    > `host-gateway` alias resolves inside RootlessKit's namespace, moby#47684).

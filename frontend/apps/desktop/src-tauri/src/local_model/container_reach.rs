@@ -1,14 +1,14 @@
 //! Linux: checks from inside the appliance that its containers reach the
-//! Ollama they are set up to use, and says what to do when they do not.
+//! Ollama they are set up to use and says what to do when they do not.
 //!
 //! The containers call `host.docker.internal:11434`, which native Docker
 //! Engine resolves to the docker bridge gateway (172.17.0.1, say). This app
 //! cannot learn from the host whether those calls get through. A request from
-//! this host to its own gateway address travels over loopback, and a host
+//! this host to its own gateway address travels over loopback. A host
 //! firewall always lets loopback through. The containers' packets arrive on a
 //! compose bridge instead and go through the firewall's incoming rules. With
 //! ufw on and its default incoming policy (DROP), the app's own check passed
-//! while every model call from the api timed out, and nothing said why.
+//! while every model call from the api timed out. Nothing said why.
 //!
 //! So once the stack is up, the app runs curl inside the api container against
 //! the same address the api uses and logs what came back: reachable, no
@@ -123,13 +123,16 @@ fn probe_args(container: &str, port: u16) -> Vec<String> {
     .collect()
 }
 
-/// Docker's own refusal to exec, as opposed to anything curl said.
+/// Docker's own refusal to exec, as opposed to anything curl said. The last
+/// one is the OCI runtime's, for a container that stopped between Docker's
+/// check and the exec; Docker exits 126 with it.
 fn container_not_running(said: &str) -> bool {
     [
         "No such container",
         "is not running",
         "is restarting",
         "is paused",
+        "cannot exec in a stopped container",
     ]
     .iter()
     .any(|needle| said.contains(needle))
@@ -157,8 +160,11 @@ fn error_text(stdout: &str, stderr: &str) -> String {
 /// process was ended by a signal.
 ///
 /// `docker exec` passes curl's exit code through. Docker itself exits 1 when it
-/// cannot exec at all, and 126 or 127 when the program cannot be run (127 for
-/// one that is not in the image on Docker 29). curl never uses those.
+/// cannot exec at all. It exits 126 or 127 when the program cannot be run (127
+/// for one that is not in the image on Docker 29). curl never uses those. An exit
+/// above 128 is curl killed by a signal inside the container: 137 when Docker
+/// stops the container under it, as a `compose up` that recreates the api does.
+/// That is a container going away, so the check waits for the next start.
 ///
 /// curl's exit 28 covers both a connection that never came about and one that
 /// was made and then got no answer. Only the first is a firewall dropping the
@@ -183,8 +189,9 @@ fn classify(exit_code: Option<i32>, stdout: &str, stderr: &str) -> Reach {
         Some(7) => Reach::Refused { detail },
         Some(28) if connected => Reach::NoAnswer,
         Some(28) => Reach::TimedOut,
-        Some(126 | 127) => Reach::NoCurl { detail },
         _ if container_not_running(&detail) => Reach::ContainerNotRunning,
+        Some(126 | 127) => Reach::NoCurl { detail },
+        Some(code) if code > 128 => Reach::ContainerNotRunning,
         Some(code) if detail.is_empty() => Reach::Failed {
             detail: format!("the probe exited with code {code}"),
         },
@@ -261,9 +268,10 @@ struct Ufw {
     rejects: bool,
 }
 
-/// The value of `KEY=value` in a shell-style config file, unquoted.
+/// The value of `KEY=value` in a shell-style config file, unquoted. The last
+/// assignment wins, as it does when ufw reads the file.
 fn config_value<'a>(contents: &'a str, key: &str) -> Option<&'a str> {
-    contents.lines().find_map(|line| {
+    contents.lines().rev().find_map(|line| {
         let (name, value) = line.trim().split_once('=')?;
         (name.trim() == key).then(|| value.trim().trim_matches(|c| c == '"' || c == '\''))
     })
@@ -313,7 +321,7 @@ fn allow_ranges(appliance_subnets: &[Ipv4Subnet]) -> Vec<String> {
 }
 
 /// The rule names the gateway as its destination when it is known: that is the
-/// only address the containers call, and a rule for any address would also
+/// only address the containers call. A rule for any address would also
 /// open the port to hosts on a LAN that happens to use 172.16.0.0/12.
 fn ufw_allow_command(range: &str, gateway: Option<Ipv4Addr>, port: u16) -> String {
     let to = gateway.map_or_else(|| "any".to_string(), |gateway| gateway.to_string());
@@ -376,7 +384,7 @@ fn describe_target(target: &Target) -> String {
     }
 }
 
-/// The log line for what the probe found, and how loud it is.
+/// The log line for what the probe found and how loud it is.
 fn describe(reach: &Reach, target: &Target, advice: Option<&str>) -> (log::Level, String) {
     let at = describe_target(target);
     let with_advice = |message: String| match advice {
@@ -403,7 +411,7 @@ fn describe(reach: &Reach, target: &Target, advice: Option<&str>) -> (log::Level
             let next = if target.relayed {
                 format!("This app's relay passes it on to 127.0.0.1:{}; check that Ollama there answers.", target.port)
             } else {
-                "Check that your Ollama answers.".to_string()
+                "Check that the Ollama on this computer answers.".to_string()
             };
             (
                 log::Level::Warn,
@@ -417,7 +425,8 @@ fn describe(reach: &Reach, target: &Target, advice: Option<&str>) -> (log::Level
             let next = if target.relayed {
                 "This app's relay was started there; look for a relay error earlier in this log."
             } else {
-                "Check that your Ollama is still running."
+                "Check that Ollama is still running. If this app could not start its relay there, the reason is \
+                 earlier in this log."
             };
             (
                 log::Level::Warn,
@@ -579,6 +588,18 @@ mod tests {
             Reach::ContainerNotRunning
         );
 
+        // A `compose up` that recreates the api while the probe runs: the
+        // container stops under curl (exit 137, nothing printed), or stops
+        // between Docker's check and the exec. Neither says anything about
+        // Ollama, so the check waits for the start that brings the new one up.
+        assert_eq!(classify(Some(137), "", ""), Reach::ContainerNotRunning);
+        let stopped_at_exec =
+            "OCI runtime exec failed: exec failed: cannot exec in a stopped container: unknown";
+        assert_eq!(
+            classify(Some(126), "", stopped_at_exec),
+            Reach::ContainerNotRunning
+        );
+
         let daemon_down =
             "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?";
         assert_eq!(
@@ -669,6 +690,17 @@ mod tests {
             Ufw {
                 enabled: false,
                 rejects: false
+            }
+        );
+        // A key set twice: ufw goes by the last line, as a shell would.
+        assert_eq!(
+            parse_ufw(
+                "ENABLED=no\nENABLED=yes\n",
+                Some("DEFAULT_INPUT_POLICY=\"DROP\"\nDEFAULT_INPUT_POLICY=\"REJECT\"\n")
+            ),
+            Ufw {
+                enabled: true,
+                rejects: true
             }
         );
     }
@@ -830,7 +862,7 @@ mod tests {
         );
         let (_, own_ollama) = describe(&refused, &gateway_target(false), None);
         assert!(
-            own_ollama.contains("Check that your Ollama is still running"),
+            own_ollama.contains("Check that Ollama is still running"),
             "{own_ollama}"
         );
     }

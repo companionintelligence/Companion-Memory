@@ -194,12 +194,13 @@ impl LocalModelHandles {
     /// Runs the check recorded by expect_container_check, once the stack has
     /// started. Blocking: `docker exec` and up to five seconds of curl.
     ///
-    /// Both callers of ensure_local_model_then_start_stack reach this, and the
-    /// second may get here while the first is still bringing the stack up. A
-    /// probe that finds the api container not running keeps the check for the
-    /// caller that started it; any other outcome is logged once. A caller that
-    /// arrives while another's probe runs waits for it, then probes only if
-    /// that one found no api container.
+    /// Both callers of ensure_local_model_then_start_stack reach this, as does
+    /// the tray's Start. The second may get here while the first is still
+    /// bringing the stack up. A probe that finds the api container not running
+    /// (or stopped under it by a recreate) keeps the check for the caller that
+    /// started it; any other outcome is logged once. A caller that arrives
+    /// while another's probe runs waits for it, then probes only if that one
+    /// found no api container.
     pub fn check_container_reach(&self) {
         self.check_container_reach_with(container_reach::check_and_log);
     }
@@ -498,7 +499,7 @@ mod tests {
 
     /// The splash's start returns at once while the first start is still
     /// pulling images, so its probe can find no api container yet. That probe
-    /// must leave the check for the start that brings the container up, and a
+    /// must leave the check for the start that brings the container up. A
     /// check that ran must not run again at every later start.
     #[test]
     fn the_container_check_waits_for_the_api_container_and_then_runs_once() {

@@ -548,7 +548,7 @@ fn ensure_local_model_then_start_stack(
 
     // Linux: with the api container up, check from inside it that it reaches
     // the model. After the start has reported ready, so the splash never waits
-    // on it. See local_model::container_reach.
+    // on it. See local_model::container_reach. The tray's Start does the same.
     if started.is_ok() {
         handles.check_container_reach();
     }
