@@ -202,7 +202,7 @@ describe('flickr importer', () => {
   it('disambiguates the photo id from a secret token between the id and the trailing _o', async () => {
     // Real Flickr export filenames can carry a secret hash token between the
     // id and the trailing _o (e.g. the `original` URL in the fixture above:
-    // 10000001_aaaaaaaaaa_o.jpg). The id is the LEFTMOST all-digit token.
+    // 10000001_aaaaaaaaaa_o.jpg). The id is the token a sidecar names.
     const importer = getImporter('flickr');
     const dir = await fs.promises.mkdtemp(path.join(tmpdir(), 'flickr-secret-'));
     await fs.promises.writeFile(path.join(dir, 'my-photo_20000002_bbbb1111_o.jpg'), Buffer.from([0xff]));
@@ -221,5 +221,41 @@ describe('flickr importer', () => {
     const graph = pipeline.find((p) => p.item?.content?.filename === 'my-photo_20000002_bbbb1111_o.jpg');
     expect(graph).toBeTruthy();
     expect(graph!.item.metadata.Title).toBe('Secret-token filename');
+  });
+
+  it('finds the file of a photo whose title carries its own number', async () => {
+    // A title kept from the camera (`IMG_4412`) becomes the slug, so the file
+    // name holds two all-digit tokens and the id is the second. Taking the
+    // first dropped the photo as `media_asset_missing`.
+    const importer = getImporter('flickr');
+    const dir = await fs.promises.mkdtemp(path.join(tmpdir(), 'flickr-numbered-'));
+    await fs.promises.writeFile(path.join(dir, 'img_4412_53990000003_o.jpg'), Buffer.from([0xff]));
+    await fs.promises.writeFile(path.join(dir, 'heron_north_pond_53990000002_o.jpg'), Buffer.from([0xfe]));
+    await fs.promises.writeFile(
+      path.join(dir, 'photo_53990000003.json'),
+      JSON.stringify({ id: '53990000003', name: 'IMG_4412', date_taken: '2026-10-18 12:01:00' }),
+    );
+    await fs.promises.writeFile(
+      path.join(dir, 'photo_53990000002.json'),
+      JSON.stringify({ id: '53990000002', name: 'Heron at the north pond', date_taken: '2026-10-17 08:00:00' }),
+    );
+
+    const pipeline: EmittedGraph[] = [];
+    const drops: string[] = [];
+    await importer.fileImport(
+      {},
+      { filename: dir, fullPath: dir } as DirEntry,
+      {
+        pipeline: Object.assign(pipeline, { drop: (reason: string) => drops.push(reason) }),
+        timeframe: {},
+        log: () => {},
+      } as unknown as ImportParams,
+    );
+
+    const numbered = pipeline.find((p) => p.item?.content?.filename === 'img_4412_53990000003_o.jpg');
+    expect(numbered).toBeTruthy();
+    expect(numbered!.item.metadata.Title).toBe('IMG_4412');
+    expect(pipeline.find((p) => p.item?.content?.filename === 'heron_north_pond_53990000002_o.jpg')).toBeTruthy();
+    expect(drops).toEqual([]);
   });
 });
