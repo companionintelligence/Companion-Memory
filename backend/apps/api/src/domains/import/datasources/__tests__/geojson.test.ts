@@ -394,6 +394,129 @@ describe('GeoJSON datasource', () => {
       expect(drops).toEqual([]);
     });
 
+    it('does not match per-point times to points when the counts differ', async () => {
+      // Older togeojson leaves a point with no <time> out of coordTimes, so the
+      // second time here belongs to the third point, not the second.
+      const { items, drops } = await importDoc([
+        {
+          type: 'Feature',
+          properties: { coordTimes: ['2026-05-04T07:00:00Z', '2026-05-04T07:00:20Z'] },
+          geometry: {
+            type: 'LineString',
+            coordinates: [
+              [-9.15, 38.71],
+              [-9.149, 38.7108],
+              [-9.1478, 38.7115],
+            ],
+          },
+        },
+        {
+          // ...and a segment with no times out of the outer array.
+          type: 'Feature',
+          properties: {
+            time: '2026-05-06T10:00:00Z',
+            coordTimes: [['2026-05-06T10:05:00Z', '2026-05-06T10:05:30Z']],
+          },
+          geometry: {
+            type: 'MultiLineString',
+            coordinates: [
+              [
+                [-9.136, 38.712],
+                [-9.135, 38.7125],
+              ],
+              [
+                [-9.13, 38.714],
+                [-9.129, 38.7146],
+              ],
+            ],
+          },
+        },
+      ]);
+
+      expect(items.map((i) => [i.id, iso(i.timestamp)])).toEqual([
+        ['geojson:track.geojson:0:0', undefined],
+        ['geojson:track.geojson:0:1', undefined],
+        ['geojson:track.geojson:0:2', undefined],
+        ['geojson:track.geojson:1:0', '2026-05-06T10:00:00.000Z'],
+      ]);
+      expect(drops).toEqual(['position_shared_time', 'position_shared_time', 'position_shared_time']);
+    });
+
+    it('reads per-point times written flat across a MultiLineString', async () => {
+      const { items } = await importDoc([
+        {
+          type: 'Feature',
+          properties: {
+            coordinateProperties: {
+              times: ['2026-05-06T10:00:00Z', '2026-05-06T10:00:30Z', '2026-05-06T10:05:00Z'],
+            },
+          },
+          geometry: {
+            type: 'MultiLineString',
+            coordinates: [
+              [
+                [-9.136, 38.712],
+                [-9.135, 38.7125],
+              ],
+              [[-9.13, 38.714]],
+            ],
+          },
+        },
+      ]);
+
+      expect(items.map((i) => iso(i.timestamp))).toEqual([
+        '2026-05-06T10:00:00.000Z',
+        '2026-05-06T10:00:30.000Z',
+        '2026-05-06T10:05:00.000Z',
+      ]);
+    });
+
+    it('falls back to the feature time when the per-point times hold no date', async () => {
+      const { items, drops } = await importDoc([
+        {
+          type: 'Feature',
+          properties: { timestamp: '2026-05-06T10:00:00Z', coordTimes: [] },
+          geometry: {
+            type: 'LineString',
+            coordinates: [
+              [-9.136, 38.712],
+              [-9.135, 38.7125],
+            ],
+          },
+        },
+        {
+          type: 'Feature',
+          properties: { time: 'unknown', timestamp: '2026-05-07T10:00:00Z', coordTimes: [null, null] },
+          geometry: {
+            type: 'LineString',
+            coordinates: [
+              [-9.136, 38.712],
+              [-9.135, 38.7125],
+            ],
+          },
+        },
+      ]);
+
+      expect(items.map((i) => [i.id, iso(i.timestamp)])).toEqual([
+        ['geojson:track.geojson:0:0', '2026-05-06T10:00:00.000Z'],
+        ['geojson:track.geojson:1:0', '2026-05-07T10:00:00.000Z'],
+      ]);
+      expect(drops).toEqual(['position_shared_time', 'position_shared_time']);
+    });
+
+    it('counts a later point with no coordinates as having no fix, not a shared time', async () => {
+      const { items, drops } = await importDoc([
+        {
+          type: 'Feature',
+          properties: { time: '2026-05-06T10:00:00Z' },
+          geometry: { type: 'LineString', coordinates: [[-9.135, 38.7125], [-9.13], [-9.129, 38.7146]] },
+        },
+      ]);
+
+      expect(items.map((i) => i.id)).toEqual(['geojson:track.geojson:0:0']);
+      expect(drops).toEqual(['position_without_fix', 'position_shared_time']);
+    });
+
     it('does not count up to a length the coordinates only claim to have', async () => {
       // Objects, not arrays: nothing to read, however large `length` says it is.
       const { items, drops, consumed } = await importDoc([
