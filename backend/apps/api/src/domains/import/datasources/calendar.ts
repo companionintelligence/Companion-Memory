@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { ianaZoneForWindowsId } from '@ci/common/time/windowsZones';
 import { isValidTimezone, serverTimezone } from '@ci/common/time/zoned';
 import { normalizeIcsRecurrenceId } from '@ci/domains/memory';
 
@@ -52,9 +53,10 @@ export interface ParsedIcsEvent {
   recurrence?: string[];
   /**
    * The zone the series repeats in, stored as `metadata.recurrenceTimeZone`:
-   * DTSTART's `TZID` when the runtime knows it, `UTC` for a UTC DTSTART, and
-   * the server's zone for a floating DTSTART or a `TZID` the runtime does not
-   * know, because that is the zone {@link parseICSDate} read its wall clock in.
+   * DTSTART's zone when the runtime knows its `TZID` or it is a Windows zone
+   * name (see {@link icsZone}), `UTC` for a UTC DTSTART, and the server's zone
+   * for a floating DTSTART or any other `TZID`, because that is the zone
+   * {@link parseICSDate} read its wall clock in.
    */
   recurrenceTimeZone?: string;
   /**
@@ -547,6 +549,20 @@ function tzidParam(params: string | undefined): string | undefined {
   return params?.match(/(?:^|;)TZID=([^;]+)/)?.[1];
 }
 
+/**
+ * The zone a `TZID` names, spelled the way `Intl` reads it: the id itself when
+ * the runtime knows it, the IANA zone for a Windows zone name, and the id
+ * unchanged otherwise, which every caller treats as a zone it cannot read.
+ *
+ * Outlook's published calendars name every zone the Windows way
+ * (`DTSTART;TZID=Pacific Standard Time:20260818T143000`). Without the mapping
+ * those wall clocks were read in the server's zone, so an afternoon meeting in
+ * California was stored seven hours early.
+ */
+function icsZone(tzid: string): string {
+  return isValidTimezone(tzid) ? tzid : (ianaZoneForWindowsId(tzid) ?? tzid);
+}
+
 /** How many dates a set of RRULE, EXDATE and RDATE lines lists (an RRULE lists none). */
 function countDates(lines: readonly string[]): number {
   let count = 0;
@@ -575,8 +591,10 @@ function countDates(lines: readonly string[]): number {
  * line names the wall clock as the override does. Calendar reads it in the
  * series' zone, the same zone it walks the rule in. That lands on the right
  * occurrence when the master's DTSTART is written the same way (floating, or in
- * the same unknown zone), which is how exporters write them. A UTC or known-zone
- * DTSTART with an unknown-zone RECURRENCE-ID still misses.
+ * the same unknown zone), which is how exporters write them. A Windows name
+ * lands too: the series' zone is the IANA zone it maps to ({@link icsZone}),
+ * while the override keeps its key. A UTC or known-zone DTSTART with an
+ * unknown-zone RECURRENCE-ID still misses.
  */
 function exdateForOverride(recurrenceId: string, tzid: string | undefined): string | undefined {
   // Normalized ids end in `Z`; one left as written is a bare wall clock.
@@ -590,11 +608,11 @@ function exdateForOverride(recurrenceId: string, tzid: string | undefined): stri
 /**
  * The zone a series repeats in, from its DTSTART value and params.
  *
- * That is the `TZID` when the runtime knows it. A UTC date-time gives `UTC`:
- * its occurrences fall at the same UTC time all year.
+ * That is the `TZID`'s zone when the runtime knows it or it is a Windows zone
+ * name ({@link icsZone}). A UTC date-time gives `UTC`: its occurrences fall at
+ * the same UTC time all year.
  *
- * A floating date-time, or one in a zone the runtime does not know, gives the
- * server's zone. {@link parseICSDate} stored DTSTART by reading its wall clock
+ * A floating date-time, or one in any other zone, gives the server's zone. {@link parseICSDate} stored DTSTART by reading its wall clock
  * there. `parseRecurrence` reads an EXDATE or RDATE with no usable `TZID` in
  * the series' zone. Left to the owner's zone instead, the two disagree for
  * anyone whose zone is not the server's: the series starts from a shifted wall
@@ -602,9 +620,10 @@ function exdateForOverride(recurrenceId: string, tzid: string | undefined): stri
  */
 function seriesTimeZone(value: string | undefined, params: string | undefined): string | undefined {
   const tzid = tzidParam(params);
+  const zone = tzid ? icsZone(tzid) : undefined;
 
-  if (tzid && isValidTimezone(tzid)) {
-    return tzid;
+  if (zone && isValidTimezone(zone)) {
+    return zone;
   }
 
   const raw = (value ?? '').trim();
@@ -642,10 +661,11 @@ function parseICSDate(val?: string, params?: string): Date | undefined {
   // `normalizeIcsRecurrenceId` is the conversion this repo already uses for the
   // same input shape on RECURRENCE-ID — same IANA lookup, and the same
   // deliberate non-guesses: a DATE-only value, an already-`Z` value, a floating
-  // value with no TZID, or a TZID the runtime does not recognize all come back
-  // untouched and fall through to the branches below unchanged.
+  // value with no TZID, or a TZID that is neither an IANA id nor a Windows zone
+  // name ({@link icsZone}) all come back untouched and fall through to the
+  // branches below unchanged.
   const tzid = tzidParam(params);
-  const v = tzid ? normalizeIcsRecurrenceId(raw, tzid) : raw;
+  const v = tzid ? normalizeIcsRecurrenceId(raw, icsZone(tzid)) : raw;
   // All-day DATE: YYYYMMDD
   if (/^\d{8}$/.test(v)) {
     const y = +v.slice(0, 4);
