@@ -118,6 +118,9 @@ export class ImportUploadsController implements OnModuleInit {
         },
       }),
       limits: { fileSize: MAX_UPLOAD_BYTES },
+      // Browsers send the file name as raw UTF-8. Multer reads it as latin1
+      // unless told otherwise, so `José.txt` arrived as `JosÃ©.txt`.
+      defParamCharset: 'utf8',
     }),
   )
   async upload(

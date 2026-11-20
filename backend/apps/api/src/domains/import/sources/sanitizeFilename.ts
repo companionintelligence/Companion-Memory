@@ -61,7 +61,7 @@ export function sanitizeUploadName(filename: string, fallback = 'upload'): strin
   const cleaned = base
     .normalize('NFC')
     // eslint-disable-next-line no-control-regex
-    .replace(/[\x00-\x1f\x7f]/g, '')
+    .replace(/[\x00-\x1f\x7f-\x9f]/g, '')
     // Bidirectional controls can make a name show a different extension than it has.
     .replace(/[\u202a-\u202e\u2066-\u2069]/g, '')
     .replace(WINDOWS_RESERVED, '_')

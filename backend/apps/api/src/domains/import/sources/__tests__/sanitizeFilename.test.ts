@@ -50,6 +50,8 @@ describe('sanitizeUploadName', () => {
 
   it('removes control and bidirectional characters', () => {
     expect(sanitizeUploadName('ex\x00port\x1f\x7f.zip')).toBe('export.zip');
+    // C1 controls too: a UTF-8 name misread as latin1 is full of them.
+    expect(sanitizeUploadName('JosÃ\u0080\u0099\u009f.txt')).toBe('JosÃ.txt');
     expect(sanitizeUploadName('photo\u202egpj.exe')).toBe('photogpj.exe');
   });
 
