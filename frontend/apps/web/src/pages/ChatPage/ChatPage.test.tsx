@@ -946,6 +946,16 @@ describe('ChatPage', () => {
         );
       });
 
+      it('keeps the general advice for a 503 whose body only repeats the status text', () => {
+        h.selectedModel = null;
+        h.modelsError = new FetchJsonError(503, 'Service Unavailable', 'Service Unavailable');
+        renderEmpty();
+
+        expect(screen.getByTestId('chat-no-model')).toHaveTextContent(
+          'Check that Ollama (or your OpenAI-compatible server) is running',
+        );
+      });
+
       // Memory Desktop was quit and its model went with it. Settings is not the fix; opening the app is.
       it('says Memory Desktop is closed when that is why the model cannot be reached', () => {
         h.selectedModel = null;

@@ -26,8 +26,11 @@ export function modelServerFailureDetail(error: Error | null | undefined): strin
     return undefined;
   }
 
-  // fetchJson's own wording for an error body it could not read.
-  return error.message.startsWith('Fetch failed:') ? undefined : error.message;
+  // fetchJson's own wording for an error body it could not read, and the status text a JSON body
+  // with only `error` (or Nest's bare ServiceUnavailableException) leaves as the message.
+  return error.message.startsWith('Fetch failed:') || error.message === 'Service Unavailable'
+    ? undefined
+    : error.message;
 }
 
 /**
@@ -98,7 +101,7 @@ export function ChatNoModelState({ unreachable, detail, onRetry }: ChatNoModelSt
       </h2>
       <p className="mb-5 text-sm text-muted-foreground">
         {unreachable && detail
-          ? `Companion answers with a language model running on your own hardware, and the model server isn’t responding. ${detail}`
+          ? `Companion answers with a language model running on your own hardware and the model server isn’t responding. ${detail}`
           : unreachable
             ? 'Companion answers with a language model running on your own hardware, and the model server isn’t responding. Check that Ollama (or your OpenAI-compatible server) is running, or point Companion at a different one in Settings.'
             : 'Companion answers with a language model running on your own hardware, and none is set up yet. Point it at your Ollama or OpenAI-compatible server in Settings, and pick a model.'}

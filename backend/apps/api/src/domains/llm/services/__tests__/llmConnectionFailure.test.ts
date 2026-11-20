@@ -1,3 +1,4 @@
+import { createServer, type AddressInfo } from 'node:net';
 import type { networkInterfaces } from 'node:os';
 
 import { APIConnectionError, APIConnectionTimeoutError, APIError } from 'openai';
@@ -8,6 +9,8 @@ import {
   containerSourceRange,
   firstErrorCode,
   hostIpv4,
+  stalledServerMessage,
+  tcpConnects,
   ufwAllowCommand,
 } from '../llmConnectionFailure';
 
@@ -52,6 +55,8 @@ describe('classifyConnectionError', () => {
     ['DEPTH_ZERO_SELF_SIGNED_CERT', 'self-signed certificate', 'tls'],
     ['ERR_TLS_CERT_ALTNAME_INVALID', "Hostname/IP does not match certificate's altnames", 'tls'],
     ['ERR_SSL_WRONG_VERSION_NUMBER', 'wrong version number', 'tls'],
+    ['UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'unable to verify the first certificate', 'tls'],
+    ['HOSTNAME_MISMATCH', 'hostname mismatch', 'tls'],
   ])('reads %s from the cause of a fetch failure', (code, message, reason) => {
     expect(classifyConnectionError(fetchFailed(withCode(message, code)))).toEqual({ reason, code });
   });
@@ -62,16 +67,23 @@ describe('classifyConnectionError', () => {
     expect(classifyConnectionError(error)).toEqual({ reason: 'timeout', code: 'TimeoutError' });
   });
 
-  it('finds the code under the OpenAI SDK’s wrapper, and its own timeout', () => {
+  it('finds the code under the OpenAI SDK’s wrapper', () => {
     const wrapped = new APIConnectionError({
       cause: fetchFailed(withCode('connect ECONNREFUSED 172.17.0.1:8000', 'ECONNREFUSED')),
     });
 
     expect(classifyConnectionError(wrapped)).toEqual({ reason: 'refused', code: 'ECONNREFUSED' });
-    expect(classifyConnectionError(new APIConnectionTimeoutError())).toEqual({
-      reason: 'timeout',
-      code: 'APIConnectionTimeoutError',
+  });
+
+  it('does not take the SDK’s first-response timeout or a bare abort for a connect timeout', () => {
+    // The SDK's 90 second deadline around an abort: undici's 10 second connect timeout would have
+    // fired first, so the server had accepted the connection.
+    const sdkTimeout = Object.assign(new APIConnectionTimeoutError(), {
+      cause: new DOMException('This operation was aborted', 'AbortError'),
     });
+
+    expect(classifyConnectionError(sdkTimeout)).toBeNull();
+    expect(classifyConnectionError(new DOMException('This operation was aborted', 'AbortError'))).toBeNull();
   });
 
   it('looks inside an AggregateError from a connection that tried several addresses', () => {
@@ -93,6 +105,22 @@ describe('classifyConnectionError', () => {
     expect(firstErrorCode(stalled)).toBe('UND_ERR_HEADERS_TIMEOUT');
   });
 
+  it('reads the code under the OpenAI SDK’s timeout before trusting the timeout itself', () => {
+    // What the SDK throws when Node's fetch gave up waiting for headers: a timeout around a stall.
+    const headersTimeout = Object.assign(new APIConnectionTimeoutError(), {
+      cause: fetchFailed(withCode('Headers Timeout Error', 'UND_ERR_HEADERS_TIMEOUT')),
+    });
+    const connectTimeout = Object.assign(new APIConnectionTimeoutError(), {
+      cause: fetchFailed(withCode('Connect Timeout Error', 'UND_ERR_CONNECT_TIMEOUT')),
+    });
+
+    expect(classifyConnectionError(headersTimeout)).toBeNull();
+    expect(classifyConnectionError(connectTimeout)).toEqual({
+      reason: 'timeout',
+      code: 'UND_ERR_CONNECT_TIMEOUT',
+    });
+  });
+
   it('leaves an HTTP answer alone, whatever `code` its body carried', () => {
     // A proxy reporting its own upstream: the OpenAI SDK copies the body's `code` onto the error.
     const proxied = APIError.generate(
@@ -110,7 +138,7 @@ describe('classifyConnectionError', () => {
     ).toBeNull();
   });
 
-  it('returns null for errors that are not connection failures, and survives a cause cycle', () => {
+  it('returns null for errors that are not connection failures and survives a cause cycle', () => {
     const cyclic = new Error('loop') as Error & { cause?: unknown };
     cyclic.cause = cyclic;
 
@@ -176,6 +204,34 @@ describe('ufwAllowCommand', () => {
   });
 });
 
+describe('tcpConnects', () => {
+  it('says whether a bare TCP connection opens', async () => {
+    const server = createServer((socket) => socket.destroy());
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as AddressInfo;
+
+    try {
+      await expect(tcpConnects('127.0.0.1', port)).resolves.toBe(true);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+
+    // Nothing listens there any more: refused, which is neither answer.
+    await expect(tcpConnects('127.0.0.1', port)).resolves.toBeUndefined();
+  });
+});
+
+describe('stalledServerMessage', () => {
+  it('names the address and the wait, and blames no firewall', () => {
+    const message = stalledServerMessage({ hostname: 'host.docker.internal', port: 11434, onHost: true }, 5);
+
+    expect(message).toMatch(
+      /^host\.docker\.internal:11434 accepted the connection but did not answer within 5 seconds\./,
+    );
+    expect(message).not.toMatch(/firewall/);
+  });
+});
+
 describe('hostIpv4', () => {
   it('returns an IPv4 address as it is, without a lookup', async () => {
     const lookup = jest.fn();
@@ -215,7 +271,7 @@ describe('connectionFailureMessage', () => {
     );
   });
 
-  it('blames a firewall for a timeout on the host, and not for one elsewhere', () => {
+  it('blames a firewall for a timeout on the host and not for one elsewhere', () => {
     expect(connectionFailureMessage({ reason: 'timeout', code: 'UND_ERR_CONNECT_TIMEOUT' }, onHost)).toBe(
       "host.docker.internal:11434 did not answer in time. On the computer Memory runs on, that usually means a firewall is dropping connections from Memory's containers.",
     );

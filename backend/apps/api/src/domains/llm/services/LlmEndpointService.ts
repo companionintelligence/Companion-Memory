@@ -11,10 +11,13 @@ import {
   containerSourceRange,
   firstErrorCode,
   hostIpv4,
+  stalledServerMessage,
+  tcpConnects,
   ufwAllowCommand,
   type ConnectionTarget,
   type LlmConnectionFailureReason,
   type LookupIpv4,
+  type TcpProbe,
 } from './llmConnectionFailure';
 import {
   containerSharedConfigPath,
@@ -104,6 +107,9 @@ export interface LlmEndpointConnectionFailure {
 
 /** Ends a preflight message that has a {@link LlmEndpointPreflight.fixCommand} to show after it. */
 const UFW_HINT = 'If that computer runs Linux with ufw, this rule lets them through:';
+
+/** How long Test connection waits for the model list. */
+const PREFLIGHT_TIMEOUT_MS = 5_000;
 
 const GENERIC_UNREACHABLE_MESSAGE =
   'Could not reach this server from the Memory API. Verify the port is exposed to the API container.';
@@ -389,7 +395,10 @@ export class LlmEndpointService implements OnModuleInit {
    * matters to Memory. A browser or host-side curl can reach localhost while a
    * containerized API cannot, so the check intentionally runs here.
    */
-  async preflight(fetchImpl: typeof fetch = fetch, lookupImpl?: LookupIpv4): Promise<LlmEndpointPreflight> {
+  async preflight(
+    fetchImpl: typeof fetch = fetch,
+    network: { lookup?: LookupIpv4; connects?: TcpProbe } = {},
+  ): Promise<LlmEndpointPreflight> {
     const endpoint = safeEndpoint(this.resolved.apiBase ?? this.resolved.ollamaHost);
     const requestUrl = endpointRequestUrl(this.resolved);
     const headers =
@@ -401,7 +410,7 @@ export class LlmEndpointService implements OnModuleInit {
       const response = await fetchImpl(requestUrl, {
         headers,
         redirect: 'error',
-        signal: AbortSignal.timeout(5_000),
+        signal: AbortSignal.timeout(PREFLIGHT_TIMEOUT_MS),
       });
 
       if (!response.ok) {
@@ -442,16 +451,33 @@ export class LlmEndpointService implements OnModuleInit {
             : `Connected. ${models.length} model${models.length === 1 ? '' : 's'} reported.`,
       };
     } catch (error) {
-      let failure = this.describeConnectionFailure(error);
+      // Described against the URL this request went to, not the endpoint as it is now: Settings
+      // can change it during the five seconds this waits.
+      let failure = this.describeFailureAt(error, requestUrl);
+      const target = connectionTarget(requestUrl);
+
+      // The deadline above fires for a server that accepted the connection and then stalled as
+      // much as for one a firewall cut off. A bare TCP connect tells them apart, so a busy server
+      // is not met with firewall advice.
+      if (
+        failure?.code === 'TimeoutError' &&
+        target &&
+        (await (network.connects ?? tcpConnects)(target.hostname, target.port)) === true
+      ) {
+        failure = {
+          reason: 'timeout',
+          code: 'TimeoutError',
+          message: stalledServerMessage(target, PREFLIGHT_TIMEOUT_MS / 1000),
+        };
+      }
 
       // The rule names the address the containers connect to, so it opens the port to them and
       // not to a LAN that happens to share 172.16.0.0/12. It falls back to `to any` when the name
       // does not resolve here.
-      if (failure?.fixCommand) {
-        const hostname = connectionTarget(requestUrl)?.hostname;
-        const address = hostname ? await hostIpv4(hostname, lookupImpl) : undefined;
+      if (failure?.fixCommand && target) {
+        const address = await hostIpv4(target.hostname, network.lookup);
 
-        failure = address ? this.describeConnectionFailure(error, address) : failure;
+        failure = address ? this.describeFailureAt(error, requestUrl, address) : failure;
       }
 
       this.logger.warn('LLM endpoint preflight failed', {
@@ -495,8 +521,16 @@ export class LlmEndpointService implements OnModuleInit {
    * the address the containers connect to; without it the rule says `to any`.
    */
   describeConnectionFailure(error: unknown, hostAddress?: string): LlmEndpointConnectionFailure | null {
+    return this.describeFailureAt(error, endpointRequestUrl(this.resolved), hostAddress);
+  }
+
+  private describeFailureAt(
+    error: unknown,
+    requestUrl: string,
+    hostAddress?: string,
+  ): LlmEndpointConnectionFailure | null {
     const kind = classifyConnectionError(error);
-    const target = kind ? connectionTarget(endpointRequestUrl(this.resolved)) : null;
+    const target = kind ? connectionTarget(requestUrl) : null;
 
     if (!kind || !target) {
       return null;

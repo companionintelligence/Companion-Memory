@@ -338,12 +338,40 @@ describe('LlmEndpointService', () => {
       );
     });
 
-    it('counts the preflight’s own abort as a timeout too', async () => {
+    it('counts the preflight’s own deadline as a firewall timeout when a bare connect times out too', async () => {
+      const connects = jest.fn(async () => false);
       const result = await onTheHost().preflight(
         rejecting(new DOMException('The operation was aborted due to timeout', 'TimeoutError')),
+        { connects },
       );
 
-      expect(result).toMatchObject({ reason: 'timeout', fixCommand: expect.stringContaining('port 11434') });
+      expect(connects).toHaveBeenCalledWith('host.docker.internal', 11434);
+      expect(result).toMatchObject({
+        reason: 'timeout',
+        fixCommand: 'sudo ufw allow from 172.16.0.0/12 to 172.17.0.1 port 11434 proto tcp',
+      });
+    });
+
+    it('says a server that accepts the connection but stalls is slow, with no firewall rule', async () => {
+      const result = await onTheHost().preflight(
+        rejecting(new DOMException('The operation was aborted due to timeout', 'TimeoutError')),
+        { connects: async () => true },
+      );
+
+      expect(result).toMatchObject({ ok: false, reason: 'timeout' });
+      expect(result.message).toBe(
+        "host.docker.internal:11434 accepted the connection but did not answer within 5 seconds. Check that the server isn't stuck or busy, for example loading a model.",
+      );
+      expect(result).not.toHaveProperty('fixCommand');
+      expect(lookup).not.toHaveBeenCalled();
+    });
+
+    it('does not probe again after undici’s own connect timeout', async () => {
+      const connects = jest.fn(async () => true);
+
+      await onTheHost().preflight(rejecting(connectTimeout()), { connects });
+
+      expect(connects).not.toHaveBeenCalled();
     });
 
     it('uses the container’s own network when it is outside Docker’s default pool', async () => {
@@ -398,6 +426,31 @@ describe('LlmEndpointService', () => {
       expect(result.reason).toBe('timeout');
       expect(result).not.toHaveProperty('fixCommand');
       expect(result.message).not.toMatch(/ufw/);
+    });
+
+    it('still answers when the container cannot list its interfaces', async () => {
+      jest.mocked(networkInterfaces).mockImplementation(() => {
+        throw new Error('uv_interface_addresses returned Unknown system error 13');
+      });
+      const service = onTheHost();
+
+      await expect(service.preflight(rejecting(connectTimeout()))).resolves.toMatchObject({
+        ok: false,
+        reason: 'timeout',
+      });
+      expect(service.describeConnectionFailure(connectTimeout())).toMatchObject({ reason: 'timeout' });
+    });
+
+    it('describes a failure against the URL it tried, not one saved while it waited', async () => {
+      const service = onTheHost();
+      const fetchImpl = jest.fn(async () => {
+        service.update({ backend: 'ollama', port: 11500 });
+        throw fetchFailed('connect ECONNREFUSED 172.17.0.1:11434', 'ECONNREFUSED');
+      }) as unknown as typeof fetch;
+
+      const result = await service.preflight(fetchImpl);
+
+      expect(result.message).toMatch(/^host\.docker\.internal:11434 refused the connection/);
     });
 
     it('treats a gateway named in CI_LLM_HOST_GATEWAY as the host', async () => {
@@ -489,7 +542,7 @@ describe('LlmEndpointService', () => {
       );
     });
 
-    it('describes a failure for other routes without the ufw sentence, and nothing for other errors', () => {
+    it('describes a failure for other routes without the ufw sentence and nothing for other errors', () => {
       const service = onTheHost();
 
       expect(service.describeConnectionFailure(connectTimeout())).toEqual({

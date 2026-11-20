@@ -1,5 +1,5 @@
 import { lookup } from 'node:dns/promises';
-import { isIP } from 'node:net';
+import { connect, isIP } from 'node:net';
 import { networkInterfaces, type NetworkInterfaceInfo } from 'node:os';
 
 /**
@@ -24,12 +24,32 @@ export interface LlmConnectionFailureKind {
 /** Docker gives its bridge networks 172.17.0.0/16 to 172.31.0.0/16 first, all inside this block. */
 const DOCKER_DEFAULT_POOL = { network: 0xac100000, prefix: 12, text: '172.16.0.0/12' };
 
+/**
+ * The server accepted the connection and then stalled, which no firewall advice would fix. These
+ * decide the answer even under a wrapper that calls itself a timeout: the OpenAI SDK raises its
+ * `APIConnectionTimeoutError` with an `UND_ERR_HEADERS_TIMEOUT` cause.
+ */
+const STALLED_CODES = new Set(['UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT']);
+
+/**
+ * Node's own TLS codes, `EPROTO`, and OpenSSL's certificate verify errors as Node names them. Not
+ * all of those say `CERT`: `UNABLE_TO_VERIFY_LEAF_SIGNATURE` is what a server whose chain is
+ * incomplete gives, and `HOSTNAME_MISMATCH` and the `CRL_` ones don't either.
+ */
+function isTlsCode(code: string): boolean {
+  return (
+    /^ERR_(TLS|SSL)_/.test(code) ||
+    /CERT/.test(code) ||
+    /^(UNABLE_TO_|CRL_)/.test(code) ||
+    ['INVALID_CA', 'HOSTNAME_MISMATCH', 'PATH_LENGTH_EXCEEDED', 'INVALID_PURPOSE', 'EPROTO'].includes(code)
+  );
+}
+
 function reasonForCode(code: string): LlmConnectionFailureReason | null {
   switch (code) {
     case 'ECONNREFUSED':
       return 'refused';
-    // Only connect timeouts. UND_ERR_HEADERS_TIMEOUT and UND_ERR_BODY_TIMEOUT mean the server
-    // accepted the connection and then stalled, which no firewall advice would fix.
+    // Only connect timeouts. See STALLED_CODES for the ones that are not.
     case 'UND_ERR_CONNECT_TIMEOUT':
     case 'ETIMEDOUT':
       return 'timeout';
@@ -49,13 +69,13 @@ function reasonForCode(code: string): LlmConnectionFailureReason | null {
     case 'UND_ERR_SOCKET':
       return 'reset';
     default:
-      return /^ERR_(TLS|SSL)_/.test(code) || /CERT/.test(code) || code === 'EPROTO' ? 'tls' : null;
+      return isTlsCode(code) ? 'tls' : null;
   }
 }
 
 /**
- * The error and everything under it: its `cause` chain, and the per-address errors of an
- * `AggregateError`. Bounded, and safe against a cause that points back up the chain.
+ * The error and everything under it: its `cause` chain and the per-address errors of an
+ * `AggregateError`. Bounded and safe against a cause that points back up the chain.
  */
 function* errorChain(error: unknown): Generator<object> {
   const queue: unknown[] = [error];
@@ -85,45 +105,55 @@ function* errorChain(error: unknown): Generator<object> {
  * What kind of connection failure `error` is, found on the error or anywhere down its `cause` chain.
  *
  * Node's fetch (undici) rejects with a bare `TypeError: fetch failed` and puts the reason in `cause`:
- * an `Error` with `code: 'ECONNREFUSED'`, a `ConnectTimeoutError` with `code: 'UND_ERR_CONNECT_TIMEOUT'`,
- * and so on. The OpenAI SDK wraps that again in its `APIConnectionError`, and a connection that tried
+ * an `Error` with `code: 'ECONNREFUSED'`, a `ConnectTimeoutError` with `code: 'UND_ERR_CONNECT_TIMEOUT'`
+ * and so on. The OpenAI SDK wraps that again in its `APIConnectionError`. A connection that tried
  * several addresses fails with an `AggregateError` holding one error per address. An abort from
  * `AbortSignal.timeout()` arrives as a `TimeoutError` with no cause. Null when nothing in the chain is
  * a connection failure (an HTTP error, a bad payload, a redirect).
+ *
+ * Codes anywhere in the chain are read before any wrapper's name, so a timeout wrapper around a
+ * stalled server ({@link STALLED_CODES}) is not taken for a connect timeout.
  */
 export function classifyConnectionError(error: unknown): LlmConnectionFailureKind | null {
-  for (const current of errorChain(error)) {
-    const { code, name, status, status_code } = current as {
+  const chain = [...errorChain(error)];
+
+  for (const current of chain) {
+    const { code, status, status_code } = current as {
       code?: unknown;
-      name?: unknown;
       status?: unknown;
       status_code?: unknown;
     };
 
     // An error with an HTTP status is the server's answer, not a failure to reach it. The OpenAI SDK
-    // copies the `code` of the server's error body onto it, and a proxy can put `ECONNREFUSED` there
+    // copies the `code` of the server's error body onto it. A proxy can put `ECONNREFUSED` there
     // about its own upstream.
     if (typeof status === 'number' || typeof status_code === 'number') {
       return null;
     }
 
-    const reason = typeof code === 'string' ? reasonForCode(code) : null;
+    if (typeof code !== 'string') {
+      continue;
+    }
 
-    if (reason && typeof code === 'string') {
+    if (STALLED_CODES.has(code)) {
+      return null;
+    }
+
+    const reason = reasonForCode(code);
+
+    if (reason) {
       return { reason, code };
-    }
-
-    if (name === 'TimeoutError' || name === 'AbortError') {
-      return { reason: 'timeout', code: name };
-    }
-
-    // The OpenAI SDK's own timeout. Its error classes keep the default `name`, so ask the class.
-    if (current.constructor?.name === 'APIConnectionTimeoutError') {
-      return { reason: 'timeout', code: 'APIConnectionTimeoutError' };
     }
   }
 
-  return null;
+  // The preflight's own `AbortSignal.timeout()`. It fires whether the connection or the answer
+  // was slow, so the preflight checks which before it blames a firewall (see `tcpConnects`). An
+  // `AbortError` or the OpenAI SDK's `APIConnectionTimeoutError` is not taken for one: the SDK's
+  // first-response deadline (90 seconds) comes long after undici's 10 second connect timeout, so
+  // by then the server had accepted the connection and stalled.
+  return chain.some((current) => (current as { name?: unknown }).name === 'TimeoutError')
+    ? { reason: 'timeout', code: 'TimeoutError' }
+    : null;
 }
 
 /** The first string `code` on the error or its causes, for a log line about a failure nothing classified. */
@@ -183,12 +213,19 @@ function inDockerDefaultPool(address: string): boolean {
  * networks from there, so a rule for the whole block keeps working when compose re-creates the
  * network with another /16. Otherwise (a daemon with its own `default-address-pools`, or Docker
  * having moved on to 192.168.x.x) the container's own network. Undefined when this process has no
- * IPv4 address to go by.
+ * IPv4 address to go by, or cannot list its interfaces: `os.networkInterfaces()` throws in some
+ * sandboxes, and this runs inside the callers' own error handling.
  */
-export function containerSourceRange(
-  interfaces: ReturnType<typeof networkInterfaces> = networkInterfaces(),
-): string | undefined {
-  const ipv4 = Object.values(interfaces)
+export function containerSourceRange(interfaces?: ReturnType<typeof networkInterfaces>): string | undefined {
+  let listed: ReturnType<typeof networkInterfaces>;
+
+  try {
+    listed = interfaces ?? networkInterfaces();
+  } catch {
+    return undefined;
+  }
+
+  const ipv4 = Object.values(listed)
     .flat()
     .filter(
       (entry): entry is NetworkInterfaceInfo => entry != null && !entry.internal && entry.family === 'IPv4',
@@ -214,6 +251,30 @@ export function ufwAllowCommand(port: number, range: string, destination = 'any'
 }
 
 export type LookupIpv4 = (hostname: string, options: { family: 4 }) => Promise<{ address: string }>;
+
+export type TcpProbe = (hostname: string, port: number) => Promise<boolean | undefined>;
+
+/**
+ * Whether a bare TCP connection to `hostname:port` opens within `timeoutMs`. True when it does,
+ * false when nothing answers in that time (what a firewall that drops packets looks like),
+ * undefined for any other outcome (refused, not found). Sends nothing and closes at once.
+ */
+export function tcpConnects(hostname: string, port: number, timeoutMs = 1_500): Promise<boolean | undefined> {
+  return new Promise((resolve) => {
+    const socket = connect({ host: hostname, port });
+    // Called only from the events below, all of which come after `timer` is set.
+    const settle = (result: boolean | undefined) => {
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(result);
+    };
+
+    const timer = setTimeout(() => settle(false), timeoutMs);
+
+    socket.once('connect', () => settle(true));
+    socket.once('error', () => settle(undefined));
+  });
+}
 
 /**
  * The IPv4 address `hostname` resolves to in this container, which is the destination a host
@@ -284,4 +345,9 @@ export function connectionFailureMessage(kind: LlmConnectionFailureKind, target:
     case 'tls':
       return `The secure connection to ${address} failed (${kind.code}). Check the server's certificate.`;
   }
+}
+
+/** A server that accepted the connection and then sent nothing within `seconds`. No firewall is to blame. */
+export function stalledServerMessage(target: ConnectionTarget, seconds: number): string {
+  return `${target.hostname}:${target.port} accepted the connection but did not answer within ${seconds} seconds. Check that the server isn't stuck or busy, for example loading a model.`;
 }
