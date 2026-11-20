@@ -155,6 +155,57 @@ describe('Apple Health datasource', () => {
       expect(odd.metadata['Distance (km)']).toBeUndefined();
       expect(odd.metadata.Distance).toBe('4 furlong');
     });
+
+    // Each <WorkoutActivity> repeats statistics the workout already totals.
+    it('does not add the statistics of nested <WorkoutActivity> elements to the workout totals', async () => {
+      const item = await workoutOf(
+        ` <Workout workoutActivityType="HKWorkoutActivityTypeSwimBikeRun" duration="90" durationUnit="min" sourceName="Apple Watch" startDate="2026-10-13 07:00:00 -0700" endDate="2026-10-13 08:30:00 -0700">
+  <WorkoutActivity uuid="A1" startDate="2026-10-13 07:00:00 -0700" endDate="2026-10-13 07:20:00 -0700" duration="20" durationUnit="min">
+   <WorkoutStatistics type="HKQuantityTypeIdentifierDistanceSwimming" startDate="2026-10-13 07:00:00 -0700" endDate="2026-10-13 07:20:00 -0700" sum="750" unit="m"/>
+   <WorkoutStatistics type="HKQuantityTypeIdentifierActiveEnergyBurned" startDate="2026-10-13 07:00:00 -0700" endDate="2026-10-13 07:20:00 -0700" sum="180" unit="Cal"/>
+  </WorkoutActivity>
+  <WorkoutActivity uuid="A2" startDate="2026-10-13 07:25:00 -0700" endDate="2026-10-13 08:05:00 -0700" duration="40" durationUnit="min">
+   <WorkoutStatistics type="HKQuantityTypeIdentifierDistanceCycling" startDate="2026-10-13 07:25:00 -0700" endDate="2026-10-13 08:05:00 -0700" sum="20" unit="km"/>
+   <WorkoutStatistics type="HKQuantityTypeIdentifierActiveEnergyBurned" startDate="2026-10-13 07:25:00 -0700" endDate="2026-10-13 08:05:00 -0700" sum="420" unit="Cal"/>
+  </WorkoutActivity>
+  <WorkoutStatistics type="HKQuantityTypeIdentifierDistanceSwimming" startDate="2026-10-13 07:00:00 -0700" endDate="2026-10-13 07:20:00 -0700" sum="750" unit="m"/>
+  <WorkoutStatistics type="HKQuantityTypeIdentifierDistanceCycling" startDate="2026-10-13 07:25:00 -0700" endDate="2026-10-13 08:05:00 -0700" sum="20" unit="km"/>
+  <WorkoutStatistics type="HKQuantityTypeIdentifierActiveEnergyBurned" startDate="2026-10-13 07:00:00 -0700" endDate="2026-10-13 08:05:00 -0700" sum="600" unit="Cal"/>
+ </Workout>`,
+      );
+      expect(item.metadata['Distance (km)']).toBe(20.75);
+      expect(item.metadata.Calories).toBe(600);
+
+      // With no statistics of its own, the activities' totals are used once each.
+      const onlyNested = await workoutOf(
+        ` <Workout workoutActivityType="HKWorkoutActivityTypeSwimBikeRun" duration="60" durationUnit="min" sourceName="Apple Watch" startDate="2026-10-13 07:00:00 -0700" endDate="2026-10-13 08:05:00 -0700">
+  <WorkoutActivity uuid="A1" startDate="2026-10-13 07:00:00 -0700" endDate="2026-10-13 07:20:00 -0700">
+   <WorkoutStatistics type="HKQuantityTypeIdentifierDistanceSwimming" startDate="2026-10-13 07:00:00 -0700" endDate="2026-10-13 07:20:00 -0700" sum="750" unit="m"/>
+   <WorkoutStatistics type="HKQuantityTypeIdentifierActiveEnergyBurned" startDate="2026-10-13 07:00:00 -0700" endDate="2026-10-13 07:20:00 -0700" sum="180" unit="Cal"/>
+  </WorkoutActivity>
+  <WorkoutActivity uuid="A2" startDate="2026-10-13 07:25:00 -0700" endDate="2026-10-13 08:05:00 -0700">
+   <WorkoutStatistics type="HKQuantityTypeIdentifierDistanceCycling" startDate="2026-10-13 07:25:00 -0700" endDate="2026-10-13 08:05:00 -0700" sum="20" unit="km"/>
+   <WorkoutStatistics type="HKQuantityTypeIdentifierActiveEnergyBurned" startDate="2026-10-13 07:25:00 -0700" endDate="2026-10-13 08:05:00 -0700" sum="420" unit="Cal"/>
+  </WorkoutActivity>
+ </Workout>`,
+      );
+      expect(onlyNested.metadata['Distance (km)']).toBe(20.75);
+      expect(onlyNested.metadata.Calories).toBe(600);
+    });
+
+    it('stores energy logged in kilojoules as kilocalories', async () => {
+      const fromStats = await workoutOf(
+        ` <Workout workoutActivityType="HKWorkoutActivityTypeRunning" duration="30" durationUnit="min" sourceName="Apple Watch" startDate="2026-10-12 18:08:20 -0700" endDate="2026-10-12 18:38:20 -0700">
+  <WorkoutStatistics type="HKQuantityTypeIdentifierActiveEnergyBurned" startDate="2026-10-12 18:08:20 -0700" endDate="2026-10-12 18:38:20 -0700" sum="1430" unit="kJ"/>
+ </Workout>`,
+      );
+      expect(fromStats.metadata.Calories).toBe(341.8);
+
+      const fromTag = await workoutOf(
+        ` <Workout workoutActivityType="HKWorkoutActivityTypeRunning" duration="30" durationUnit="min" totalEnergyBurned="1430" totalEnergyBurnedUnit="kJ" sourceName="Apple Watch" startDate="2026-10-12 18:08:20 -0700" endDate="2026-10-12 18:38:20 -0700"/>`,
+      );
+      expect(fromTag.metadata.Calories).toBe(341.8);
+    });
   });
 
   // A5 — real multi-GB exports broke the old line-based scanner, which silently
