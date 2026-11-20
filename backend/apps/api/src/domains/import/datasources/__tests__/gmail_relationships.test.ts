@@ -154,4 +154,38 @@ describe('Gmail address-header parsing', () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('names nobody for an empty group and reads the addr (Name) form as a person', async () => {
+    const mbox =
+      `From list@example.org Fri Oct 16 20:27:19 2026\n` +
+      `Subject: Trail work day\n` +
+      `Date: Fri, 16 Oct 2026 20:27:19 +0000\n` +
+      `From: casimir@example.org (Thornwhistle, Casimir)\n` +
+      `To: undisclosed-recipients:;\n` +
+      `Message-ID: <trailday@example.org>\n\n` +
+      `body\n`;
+
+    const { dir, file } = writeMbox('gmail-group-', 'group.mbox', mbox);
+    const previous = process.env.CI_GMAIL_INCLUDE_BULK;
+    process.env.CI_GMAIL_INCLUDE_BULK = '1';
+
+    try {
+      const graphs = await importMbox(file);
+      const edges = graphs.find((graph) => graph.item)?.edges ?? [];
+
+      expect(
+        edges
+          .filter((edge) => ['from', 'to', 'cc'].includes(edge.relation ?? ''))
+          .map((edge) => [edge.relation, edge.to?.entity?.name, edge.to?.entity?.attributes?.[0]?.value]),
+      ).toEqual([['from', 'Thornwhistle, Casimir', 'casimir@example.org']]);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.CI_GMAIL_INCLUDE_BULK;
+      } else {
+        process.env.CI_GMAIL_INCLUDE_BULK = previous;
+      }
+
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

@@ -32,12 +32,37 @@ describe('splitAddressList', () => {
     ]);
   });
 
+  it('splits on every comma after a quote, bracket or parenthesis that never closes', () => {
+    expect(splitAddressList('I <3 cats, Bob')).toEqual(['I <3 cats', 'Bob']);
+    expect(splitAddressList('"Smith, John" <j@example.com>, Ann (, Bob, "Cy, Dee')).toEqual([
+      '"Smith, John" <j@example.com>',
+      'Ann (',
+      'Bob',
+      '"Cy',
+      'Dee',
+    ]);
+  });
+
+  it('reads group syntax: an empty group names nobody, a group its members', () => {
+    expect(splitAddressList('undisclosed-recipients:;')).toEqual([]);
+    expect(splitAddressList('Undisclosed recipients: ;, a@example.com')).toEqual(['a@example.com']);
+    expect(splitAddressList('Team: a@example.com, Bob <b@example.com>;, c@example.com')).toEqual([
+      'a@example.com',
+      'Bob <b@example.com>',
+      'c@example.com',
+    ]);
+  });
+
+  it('keeps a name with a colon in it whole', () => {
+    expect(splitAddressList('Mom: Jane, Sam :), Mom:, xX:Gamer:Xx')).toEqual(['Mom: Jane', 'Sam :)', 'Mom:', 'xX:Gamer:Xx']);
+  });
+
   it('drops empty entries', () => {
     expect(splitAddressList(' , a@example.com,, ')).toEqual(['a@example.com']);
   });
 
   it('stays linear on a pathological header', () => {
-    for (const unit of ['"', '<', '(', '\\', ',']) {
+    for (const unit of ['"', '<', '(', '\\', ',', ':', ';', 'a']) {
       const started = Date.now();
       splitAddressList(unit.repeat(300_000));
       expect(Date.now() - started).toBeLessThan(1_000);
@@ -52,6 +77,11 @@ describe('parseEmailAddress', () => {
       email: 'o.b@example.org',
     });
     expect(parseEmailAddress('"Doe \\"Jr\\"" <j@example.com>')).toEqual({ name: 'Doe "Jr"', email: 'j@example.com' });
+  });
+
+  it('reads the older addr (Name) form', () => {
+    expect(parseEmailAddress('j.doe@example.com (Doe, John)')).toEqual({ name: 'Doe, John', email: 'j.doe@example.com' });
+    expect(parseEmailAddress('j.doe@example.com ()')).toEqual({ email: 'j.doe@example.com' });
   });
 
   it('reads a bare address and a name without one', () => {
