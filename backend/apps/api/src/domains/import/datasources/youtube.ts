@@ -1,11 +1,13 @@
 /* YouTube — watch + search history from Google Takeout.
  * Supports both the legacy JSON export (watch-history.json) and the modern
- * Google MyActivity HTML export (watch-history.html / search-history.html). */
+ * Google MyActivity HTML export (watch-history.html / search-history.html).
+ * Also subscriptions.csv, and the playlists/ folder: playlists.csv names each
+ * playlist and every `<title>-videos.csv` lists the videos in one. */
 import fs from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import { youtubeSubscriptionIdentity } from '@ci/domains/memory';
+import { youtubePlaylistIdentity, youtubeSubscriptionIdentity } from '@ci/domains/memory';
 
 import { parseActivityCell, sha1, watchTitle, youtubeActivityGraph } from './_youtube_activity';
 import { parseCSV } from './csv';
@@ -39,6 +41,29 @@ function subscriptionsHeaderMatches(text: string): boolean {
   const header = nl === -1 ? text : text.slice(0, nl);
 
   return header.includes('Channel Id') && header.includes('Channel Url') && header.includes('Channel Title');
+}
+
+const PLAYLISTS_FILENAME = 'playlists.csv';
+const PLAYLIST_VIDEOS_SUFFIX = '-videos.csv';
+
+/** The first line of a CSV, lower-cased, for a header test that ignores Takeout's casing. */
+function csvHeader(text: string): string {
+  const nl = text.indexOf('\n');
+
+  return (nl === -1 ? text : text.slice(0, nl)).toLowerCase();
+}
+
+/** A row's value for a column, matched without regard to case. */
+function column(row: Record<string, string>, name: string): string {
+  const key = Object.keys(row).find((k) => k.trim().toLowerCase() === name);
+
+  return key ? (row[key] ?? '').trim() : '';
+}
+
+function parseTakeoutTime(raw: string): Date | undefined {
+  const d = raw ? new Date(raw) : undefined;
+
+  return d && !isNaN(d.getTime()) ? d : undefined;
 }
 
 // Google MyActivity exports separate each entry with this cell container,
@@ -89,10 +114,16 @@ export class YouTubeFileImporter implements FileImporter {
           return { confidence: 0.9 };
         }
 
-        // "YouTube and YouTube Music" Takeout folder
+        // "YouTube and YouTube Music" Takeout folder. Scored above any one of
+        // its parts (history/, playlists/, subscriptions/), so recognition
+        // hands over the whole folder; at 0.85 the more confident history/
+        // replaced it and the parts beside it were left to chance.
         const dirName = path.basename(root).toLowerCase();
-        if (dirName.includes('youtube') && names.some((n) => n === 'history')) {
-          return { confidence: 0.85 };
+        if (
+          dirName.includes('youtube') &&
+          names.some((n) => n === 'history' || n === 'playlists' || n === 'subscriptions')
+        ) {
+          return { confidence: 0.95 };
         }
 
         if (names.some((n) => n === 'history')) {
@@ -107,6 +138,11 @@ export class YouTubeFileImporter implements FileImporter {
         }
 
         if (await this.findSubscriptionsCsv(root)) {
+          return { confidence: 0.85 };
+        }
+
+        // A playlists folder uploaded on its own.
+        if (await this.isPlaylistsDir(root)) {
           return { confidence: 0.85 };
         }
       } catch {
@@ -127,6 +163,7 @@ export class YouTubeFileImporter implements FileImporter {
 
     let files: string[] = [];
     let subsFile: string | undefined;
+    let playlistsDir: string | undefined;
     try {
       const stat = fs.statSync(root);
       if (stat.isFile()) {
@@ -138,13 +175,14 @@ export class YouTubeFileImporter implements FileImporter {
       } else if (stat.isDirectory()) {
         files = this.findHistoryFiles(root);
         subsFile = await this.findSubscriptionsCsv(root);
+        playlistsDir = await this.findPlaylistsDir(root, 5);
       }
     } catch {
       return;
     }
 
-    if (!files.length && !subsFile) {
-      params.log?.('warn', 'YouTube: no watch/search history or subscriptions.csv found');
+    if (!files.length && !subsFile && !playlistsDir) {
+      params.log?.('warn', 'YouTube: no watch/search history, subscriptions.csv or playlists found');
 
       return;
     }
@@ -168,6 +206,155 @@ export class YouTubeFileImporter implements FileImporter {
 
     if (subsFile) {
       await this.importSubscriptions(subsFile, params);
+    }
+
+    if (playlistsDir) {
+      await this.importPlaylists(playlistsDir, params);
+    }
+  }
+
+  /** Takeout's playlists folder: playlists.csv, or a `playlists/` folder of `-videos.csv` lists. */
+  private async isPlaylistsDir(dir: string): Promise<boolean> {
+    let names: string[];
+    try {
+      names = await readdir(dir);
+    } catch {
+      return false;
+    }
+
+    const list = names.find((n) => n.toLowerCase() === PLAYLISTS_FILENAME);
+    if (list) {
+      try {
+        const header = csvHeader(await readFile(path.join(dir, list), 'utf8'));
+
+        return header.includes('playlist id') && header.includes('playlist title');
+      } catch {
+        return false;
+      }
+    }
+
+    return (
+      path.basename(dir).toLowerCase() === 'playlists' &&
+      names.some((n) => n.toLowerCase().endsWith(PLAYLIST_VIDEOS_SUFFIX))
+    );
+  }
+
+  private async findPlaylistsDir(dir: string, depth: number): Promise<string | undefined> {
+    if (await this.isPlaylistsDir(dir)) {
+      return dir;
+    }
+
+    if (depth <= 0) {
+      return undefined;
+    }
+
+    let entries: import('node:fs').Dirent[];
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return undefined;
+    }
+
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        const found = await this.findPlaylistsDir(path.join(dir, entry.name), depth - 1);
+        if (found) {
+          return found;
+        }
+      }
+    }
+
+    return undefined;
+  }
+
+  /**
+   * One saved item per playlist, keyed like the YouTube connection keys the
+   * same playlist when Takeout gives its id. The videos (Takeout lists ids and
+   * when each was added, not titles) ride in the body and in metadata.
+   */
+  private async importPlaylists(dir: string, params: ImportParams): Promise<void> {
+    let names: string[];
+    try {
+      names = await readdir(dir);
+    } catch {
+      return;
+    }
+
+    const readRows = async (name: string): Promise<Record<string, string>[]> => {
+      try {
+        return parseCSV(await readFile(path.join(dir, name), 'utf8'));
+      } catch (e) {
+        params.log?.('error', 'Failed to read a YouTube playlist file', {
+          file: name,
+          error: (e as Error).message,
+        });
+        params.pipeline.drop?.('unreadable_file', name);
+
+        return [];
+      }
+    };
+
+    const listName = names.find((n) => n.toLowerCase() === PLAYLISTS_FILENAME);
+    const known = new Map<string, Record<string, string>>();
+    for (const row of listName ? await readRows(listName) : []) {
+      const title = column(row, 'playlist title (original)') || column(row, 'playlist title');
+      if (title) {
+        known.set(title.toLowerCase(), row);
+      }
+    }
+
+    for (const name of names.filter((n) => n.toLowerCase().endsWith(PLAYLIST_VIDEOS_SUFFIX)).sort()) {
+      const title = name.slice(0, -PLAYLIST_VIDEOS_SUFFIX.length);
+      const meta = known.get(title.toLowerCase());
+      const videos = (await readRows(name)).flatMap((row) => {
+        const videoId = column(row, 'video id');
+        if (!videoId) {
+          return [];
+        }
+
+        const added = parseTakeoutTime(column(row, 'playlist video creation timestamp'));
+
+        return [
+          {
+            VideoId: videoId,
+            URL: `https://www.youtube.com/watch?v=${videoId}`,
+            Added: added?.toISOString(),
+          },
+        ];
+      });
+      if (!videos.length) {
+        continue;
+      }
+
+      const playlistId = meta ? column(meta, 'playlist id') : '';
+      const created = meta ? parseTakeoutTime(column(meta, 'playlist create timestamp')) : undefined;
+      if (!timeframeContains(params.timeframe, created)) {
+        continue;
+      }
+
+      const body = videos
+        .map((v) => (v.Added ? `${v.URL} (added ${v.Added.slice(0, 10)})` : v.URL))
+        .join('\n');
+      params.pipeline.push({
+        item: {
+          id: playlistId ? youtubePlaylistIdentity(playlistId).id : 'youtube:playlist-title:' + sha1(title),
+          classification: 'saved_media',
+          timestamp: created,
+          content: textContent('playlist.txt', body),
+          metadata: {
+            Title: title,
+            Text: body,
+            URL: playlistId ? `https://www.youtube.com/playlist?list=${playlistId}` : undefined,
+            PlaylistId: playlistId || undefined,
+            Visibility: (meta && column(meta, 'playlist visibility')) || undefined,
+            Updated:
+              (meta && parseTakeoutTime(column(meta, 'playlist update timestamp'))?.toISOString()) ||
+              undefined,
+            Videos: videos,
+            Source: 'YouTube',
+          },
+        },
+      });
     }
   }
 
