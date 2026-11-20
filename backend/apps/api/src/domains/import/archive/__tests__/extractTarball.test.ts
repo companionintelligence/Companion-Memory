@@ -71,6 +71,17 @@ function tarGz(entries: TarEntry[]): Buffer {
   return zlib.gzipSync(Buffer.concat(parts));
 }
 
+/** One pax record (`<len> <key>=<value>\n`, where len counts itself). */
+function paxRecord(key: string, value: string): string {
+  const rest = ` ${key}=${value}\n`;
+  let len = Buffer.byteLength(rest) + 1;
+  while (String(len).length + Buffer.byteLength(rest) !== len) {
+    len += 1;
+  }
+
+  return `${len}${rest}`;
+}
+
 const OUTBOX = JSON.stringify({ type: 'OrderedCollection', orderedItems: [] });
 
 function write(name: string, entries: TarEntry[]): { dir: string; archive: string } {
@@ -241,6 +252,53 @@ describe('extractUploadedArchive on a tarball', () => {
     } finally {
       statfs.mockRestore();
     }
+  });
+
+  it('refuses an entry whose pax name is longer than any path, before writing anything', async () => {
+    // A pax header carries names of up to 1MB that compress to almost nothing;
+    // read and kept, a few thousand of them would fill the worker's memory.
+    const longName = `media/${'a'.repeat(200)}/`.repeat(25) + 'x.json';
+    const { dir, archive } = write('longname.tar.gz', [
+      { name: 'outbox.json', body: OUTBOX },
+      { name: 'PaxHeader/x.json', type: 'x', body: paxRecord('path', longName) },
+      { name: 'x.json', body: '{}' },
+    ]);
+
+    const err: unknown = await extractUploadedArchive(archive).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toMatch(/longer than 4096 bytes/);
+    expect((err as Error).message.length).toBeLessThan(200);
+    expect(fs.existsSync(path.join(dir, 'longname'))).toBe(false);
+  });
+
+  it('reads a pax name within the limit as the entry name', async () => {
+    const name = `media_attachments/${'b'.repeat(150)}/original.jpg`;
+    const { archive } = write('pax.tar.gz', [
+      { name: 'PaxHeader/original.jpg', type: 'x', body: paxRecord('path', name) },
+      { name: 'original.jpg', body: 'jpeg' },
+    ]);
+
+    const res = await extractUploadedArchive(archive);
+
+    expect(fs.readFileSync(path.join(res.destDir, name), 'utf8')).toBe('jpeg');
+  });
+
+  it('finishes a resumed extraction into the tree an earlier attempt left', async () => {
+    const { dir, archive } = write('export.tar.gz', [
+      { name: 'outbox.json', body: OUTBOX },
+      { name: 'media/a.jpg', body: 'jpeg' },
+    ]);
+    fs.mkdirSync(path.join(dir, 'export', 'media'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'export', 'outbox.json'), 'half written');
+
+    const res = await extractUploadedArchive(archive);
+
+    expect(fs.readFileSync(path.join(res.destDir, 'outbox.json'), 'utf8')).toBe(OUTBOX);
+    expect(fs.readFileSync(path.join(res.destDir, 'media', 'a.jpg'), 'utf8')).toBe('jpeg');
   });
 
   it('refuses to write through a link a previous attempt left in the destination', async () => {

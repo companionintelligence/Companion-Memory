@@ -361,6 +361,10 @@ async function extractViaSystemUnzip(
 /** Tarball entry types that are written. Everything else is skipped. */
 const TAR_WRITTEN_TYPES: ReadonlySet<string> = new Set(['File', 'OldFile', 'ContiguousFile', 'Directory']);
 const TAR_FILE_TYPES: ReadonlySet<string> = new Set(['File', 'OldFile', 'ContiguousFile']);
+// Linux's PATH_MAX: a longer entry name could never be written. A pax header
+// can carry a name of up to 1MB that compresses to almost nothing, so this is
+// checked on the header, before the name is used for anything.
+const MAX_TAR_ENTRY_PATH_BYTES = 4096;
 
 /**
  * Read every header of a tarball without writing anything. `onEntry` throwing
@@ -408,9 +412,10 @@ function readTarHeaders(archivePath: string, onEntry: (entry: ReadEntry) => void
 
 /**
  * Extract a .tar.gz / .tgz with the guards the zip paths apply. Every header
- * is read first: an entry that is absolute, steps through `..` or resolves
- * outside `destDir`, more entries than `maxEntries`, or more declared bytes
- * than `maxTotalBytes` rejects the whole archive before anything is written.
+ * is read first: an entry that is absolute, steps through `..`, resolves
+ * outside `destDir` or has a name longer than a path can be, more entries than
+ * `maxEntries`, or more declared bytes than `maxTotalBytes` rejects the whole
+ * archive before anything is written.
  * Then only regular files and folders are written, with plain permissions and
  * the process's own ownership; links, devices and FIFOs are skipped, the way
  * the zip paths strip symlinks.
@@ -424,7 +429,12 @@ async function extractViaTar(
   let entries = 0;
   let declaredBytes = 0;
   let files = 0;
-  const names: string[] = [];
+  // A resumed extraction lands in the tree an earlier attempt left; a link
+  // there would carry an honest name elsewhere. Same check as the unzip path,
+  // made entry by entry here rather than over a list of every name, which a
+  // small archive could make gigabytes long.
+  const resumed = existsNoFollow(destDir);
+  let lastCheckedParent: string | undefined;
   // What the header pass refused, as opposed to what it could not read.
   let refusal: Error | undefined;
   const refuse = (err: Error): never => {
@@ -437,6 +447,14 @@ async function extractViaTar(
       entries += 1;
       if (entries > maxEntries) {
         refuse(new Error(`archive has more than ${maxEntries} entries (cap ${maxEntries})`));
+      }
+
+      if (Buffer.byteLength(entry.path) > MAX_TAR_ENTRY_PATH_BYTES) {
+        refuse(
+          new Error(
+            `archive entry name is longer than ${MAX_TAR_ENTRY_PATH_BYTES} bytes: ${entry.path.slice(0, 80)}…`,
+          ),
+        );
       }
 
       // node-tar would strip a leading `/` and skip a `..` entry with a
@@ -468,8 +486,19 @@ async function extractViaTar(
         }
       }
 
-      if (TAR_WRITTEN_TYPES.has(entry.type)) {
-        names.push(entry.path);
+      if (resumed && TAR_WRITTEN_TYPES.has(entry.type)) {
+        const target = path.resolve(destDir, entry.path);
+        const parent = path.dirname(target);
+        // Entries come folder by folder, so one remembered parent saves most
+        // repeat checks without a set that grows with the archive.
+        if (parent !== lastCheckedParent) {
+          lastCheckedParent = parent;
+          try {
+            assertParentInside(destDir, target);
+          } catch (err) {
+            refuse(err as Error);
+          }
+        }
       }
     });
   } catch (err) {
@@ -483,20 +512,6 @@ async function extractViaTar(
   }
 
   assertDiskFits(declaredBytes, destDir);
-
-  // A resumed extraction lands in the tree an earlier attempt left; a link
-  // there would carry an honest name elsewhere. Same check as the unzip path.
-  if (existsNoFollow(destDir)) {
-    const checked = new Set<string>();
-    for (const name of names) {
-      const target = path.resolve(destDir, name);
-      const parent = path.dirname(target);
-      if (!checked.has(parent)) {
-        checked.add(parent);
-        assertParentInside(destDir, target);
-      }
-    }
-  }
 
   fs.mkdirSync(destDir, { recursive: true });
 
