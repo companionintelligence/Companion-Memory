@@ -25,7 +25,7 @@ import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import config from '@ci/configuration';
 
 import { StagedSourceService } from '../services/StagedSourceService';
-import { sanitizeFilename, sanitizeRelativePath } from '../sources/sanitizeFilename';
+import { sanitizeRelativePath, sanitizeUploadName } from '../sources/sanitizeFilename';
 
 /**
  * Ceiling on a single uploaded archive. Real exports are large — Google Takeout
@@ -198,8 +198,9 @@ export class ImportUploadsController implements OnModuleInit {
   private async stageFile(userId: string, file: Express.Multer.File): Promise<DropSummary> {
     const dropId = uuidv7();
     // The name is attacker-controlled text landing on a real filesystem;
-    // sanitizing it is containment, not cosmetics.
-    const filename = sanitizeFilename(file.originalname);
+    // sanitizing it is containment, not cosmetics. It keeps its spaces:
+    // importers recognize `My Clippings.txt` and the like by name.
+    const filename = sanitizeUploadName(file.originalname);
     const dropDir = path.join(config.import.uploadsDir, dropId);
     const sourcePath = path.join(dropDir, filename);
 
