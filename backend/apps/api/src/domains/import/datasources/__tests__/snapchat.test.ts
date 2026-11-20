@@ -379,6 +379,30 @@ describe('Snapchat datasource', () => {
       expect(pipeline[0].item.metadata.Text).toBe('Back on Monday');
     });
 
+    it('does not read a flagless conversation as a "Sent" array because of its username', async () => {
+      const pipeline = await importTree({
+        'chat_history.json': {
+          absentee: [{ From: 'absentee', Created: '2026-10-01 19:20:11 UTC', Content: 'no sender flag' }],
+        },
+      });
+
+      expect(pipeline.length).toBe(0);
+      expect(pipeline.drops).toEqual(['snapchat_unknown_layout']);
+    });
+
+    it('keeps two chats apart when one sender writes in both at the same second', async () => {
+      const at = { ...chatHistory.ottilie_b[0], Content: 'same instant' };
+      const pipeline = await importTree({
+        'chat_history.json': {
+          ottilie_b: [at],
+          'group-1': [{ ...at, 'Conversation Title': 'Lantern Hikers' }],
+        },
+      });
+
+      expect(pipeline.length).toBe(2);
+      expect(new Set(pipeline.map((g) => g.item.id)).size).toBe(2);
+    });
+
     it('counts records it cannot place instead of finishing empty without a word', async () => {
       const pipeline = await importTree({
         'chat_history.json': {

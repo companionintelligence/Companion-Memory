@@ -208,7 +208,9 @@ export class SnapchatFileImporter implements FileImporter {
         continue;
       }
 
-      const direction = /received/i.test(key) ? 'Received' : /sent/i.test(key) ? 'Sent' : undefined;
+      // The old keys open with the word ("Sent Saved Chat History"). A username
+      // has no spaces, so "absentee" with no sender flag is not one of them.
+      const direction = /^received\s/i.test(key) ? 'Received' : /^sent\s/i.test(key) ? 'Sent' : undefined;
       if (!direction) {
         value.forEach(() => params.pipeline.drop?.('snapchat_unknown_layout', base));
         continue;
@@ -255,7 +257,9 @@ export class SnapchatFileImporter implements FileImporter {
       };
 
       try {
-        this.pushRecord(record, isSender ? 'Sent' : 'Received', isSnap, params, i, title ?? key);
+        // The index counts within this conversation, so the id carries its key:
+        // the same sender at the same second in two chats is two messages.
+        this.pushRecord(record, isSender ? 'Sent' : 'Received', isSnap, params, `${key}:${i}`, title ?? key);
       } catch (e) {
         params.log?.('error', 'Failed to import Snapchat record', {
           file: base,
@@ -270,7 +274,7 @@ export class SnapchatFileImporter implements FileImporter {
     direction: 'Received' | 'Sent',
     isSnap: boolean,
     params: ImportParams,
-    seq: number,
+    seq: number | string,
     conversation?: string,
   ): void {
     if (!rec || typeof rec !== 'object') {
