@@ -110,10 +110,14 @@ export class StravaFileImporter implements FileImporter {
       const actName = row['Activity Name'] || '';
       const actType = row['Activity Type'] || '';
       const elapsed = row['Elapsed Time'] ? parseInt(row['Elapsed Time'], 10) : undefined;
-      const metres = row['Distance.1'] ? parseFloat(row['Distance.1']) : undefined;
+      const hasMetres = 'Distance.1' in row;
+      const metresRaw = hasMetres && row['Distance.1'] ? parseFloat(row['Distance.1']) : undefined;
+      const metres = metresRaw !== undefined && Number.isFinite(metresRaw) ? metresRaw : undefined;
       // Only an export without the metres column falls back to the summary
-      // figure, whose unit the file does not state.
-      const distance = metres === undefined && row['Distance'] ? parseFloat(row['Distance']) : undefined;
+      // figure, whose unit the file does not state. A blank metres cell in an
+      // export that has the column is no distance, not a cue to store a number
+      // with no unit.
+      const distance = !hasMetres && row['Distance'] ? parseFloat(row['Distance']) : undefined;
       const end =
         actDate && !isNaN(actDate.getTime()) && elapsed !== undefined && elapsed > 0
           ? new Date(actDate.getTime() + elapsed * 1000)
@@ -142,8 +146,7 @@ export class StravaFileImporter implements FileImporter {
             Name: actName || actType || 'Strava Activity',
             'Activity Type': actType || undefined,
             'Elapsed Time (s)': elapsed,
-            'Distance (km)':
-              metres !== undefined && Number.isFinite(metres) ? Math.round(metres) / 1000 : undefined,
+            'Distance (km)': metres !== undefined ? Math.round(metres) / 1000 : undefined,
             Distance: distance,
             ...(start && { Location: `${start.latitude}, ${start.longitude}` }),
             Source: 'Strava',

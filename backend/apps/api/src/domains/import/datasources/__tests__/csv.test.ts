@@ -51,4 +51,10 @@ describe('parseCSV', () => {
       'a.2',
     ]);
   });
+
+  it('never gives two columns the same key when a suffix is already a header', () => {
+    expect(parseCSV('a,a,a.1\n1,2,3\n', { suffixDuplicateHeaders: true })).toEqual([
+      { a: '1', 'a.2': '2', 'a.1': '3' },
+    ]);
+  });
 });

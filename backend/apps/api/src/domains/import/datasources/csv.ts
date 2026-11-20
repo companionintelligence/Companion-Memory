@@ -24,15 +24,30 @@ export interface ParseCSVOptions extends ParseCSVRowsOptions {
   suffixDuplicateHeaders?: boolean;
 }
 
-/** Rename repeated names in place: `a,b,a` becomes `a,b,a.1`. */
+/**
+ * Rename repeated names in place: `a,b,a` becomes `a,b,a.1`. A suffix the
+ * header already uses is skipped (`a,a,a.1` becomes `a,a.2,a.1`), so no two
+ * columns end up under one key.
+ */
 function suffixDuplicates(headers: string[]): void {
-  const seen = new Map<string, number>();
+  const taken = new Set(headers);
+  const seen = new Set<string>();
+  const next = new Map<string, number>();
   headers.forEach((h, i) => {
-    const n = seen.get(h) ?? 0;
-    seen.set(h, n + 1);
-    if (n > 0) {
-      headers[i] = `${h}.${n}`;
+    if (!seen.has(h)) {
+      seen.add(h);
+
+      return;
     }
+
+    let n = next.get(h) ?? 1;
+    while (taken.has(`${h}.${n}`)) {
+      n++;
+    }
+
+    next.set(h, n + 1);
+    headers[i] = `${h}.${n}`;
+    taken.add(headers[i]);
   });
 }
 
