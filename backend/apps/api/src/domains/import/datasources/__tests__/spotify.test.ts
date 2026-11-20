@@ -96,7 +96,7 @@ describe('Spotify datasource', () => {
         'ms Played': 1803000,
       });
       expect(play.content.filename).toBe('episode.txt');
-      expect((await play.content.data()).toString()).toBe('Tidepool Almanac — Ep. 41: Barnacle Census');
+      expect((await play.content.data!()).toString()).toBe('Tidepool Almanac — Ep. 41: Barnacle Census');
       // The id is the one a track-shaped row with an empty name always had.
       expect(play.id).toBe('spotify:streaminghistory_podcast_0.json:0:2026-02-06 08:31::1803000');
       expect(play.timestamp?.toISOString()).toBe('2026-02-06T08:00:57.000Z');

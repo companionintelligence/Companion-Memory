@@ -84,6 +84,7 @@ function noteLocation(note: EnexNote): Location | undefined {
   // Evernote writes 0,0 for "no location" on some clients.
   return latitude === 0 && longitude === 0 ? undefined : { latitude, longitude };
 }
+
 interface EnexExport {
   'en-export'?: { note?: EnexNote[] };
 }
@@ -386,6 +387,7 @@ export class EvernoteFileImporter implements FileImporter {
       .basename(
         ((attrs && typeof attrs === 'object' && firstString(attrs['file-name'])) || '').replace(/\\/g, '/'),
       )
+      // eslint-disable-next-line no-control-regex -- strip control characters from a display name
       .replace(/[\u0000-\u001f]/g, '')
       .trim();
     const mime = firstString(resource.mime)?.trim().toLowerCase();
