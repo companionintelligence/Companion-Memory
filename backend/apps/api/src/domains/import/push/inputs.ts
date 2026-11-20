@@ -40,6 +40,7 @@ import {
 } from '@ci/domains/memory';
 import type { CreatePositionDto } from '@ci/domains/position';
 
+import { splitAddressList } from '../datasources/email_address';
 import { mimeForFile } from '../datasources/timeline';
 
 import {
@@ -1540,11 +1541,14 @@ export function toCommunicationInput(rec: CanonicalRecord): CreateCommunicationD
   // strings (the SHARED CONTRACT shape).
   const from = str(m.Contact) || str(m.Sender) || str(m.From);
   const to = recipientsFrom(m);
-  if (from || to.length) {
+  // An email's Cc, under the key the mail connections write it to.
+  const cc = recipientsFrom(m, ['Cc']);
+  if (from || to.length || cc.length) {
     input.participants_metadata = {
       ...(input.participants_metadata ?? {}),
       ...(from ? { from } : {}),
       ...(to.length ? { to } : {}),
+      ...(cc.length ? { cc } : {}),
     };
   }
 
@@ -1584,10 +1588,11 @@ function attachmentsFor(m: Record<string, unknown>): Array<Record<string, unknow
 // Recipients for participants_metadata.to. Sources record recipients under To /
 // Recipient / Recipients (email To header, SMS To, etc.); an email To header is
 // a comma-separated list, so split + de-dup into the array shape the contract
-// expects. iMessage and other multi-party sources hand us a pre-resolved array
+// expects. The split skips commas inside a quoted name ("Last, First" <addr>).
+// iMessage and other multi-party sources hand us a pre-resolved array
 // of handles, which goes in as-is. Leaves toEntityIds unset — the server
 // resolves these raw strings.
-function recipientsFrom(m: Record<string, unknown>): string[] {
+function recipientsFrom(m: Record<string, unknown>, keys = ['To', 'Recipient', 'Recipients']): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   const pushOne = (raw: string) => {
@@ -1614,14 +1619,14 @@ function recipientsFrom(m: Record<string, unknown>): string[] {
       return;
     }
 
-    for (const part of s.split(',')) {
+    for (const part of splitAddressList(s)) {
       pushOne(part);
     }
   };
 
-  push(m.To);
-  push(m.Recipient);
-  push(m.Recipients);
+  for (const key of keys) {
+    push(m[key]);
+  }
 
   return out;
 }

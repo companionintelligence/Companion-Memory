@@ -456,6 +456,23 @@ describe('toCommunicationInput', () => {
     expect(toCommunicationInput(outbound).direction).toBe('outbound');
   });
 
+  it('lists recipients without cutting a quoted "Last, First" name, and keeps Cc as cc', () => {
+    const mail = recordFor({
+      classification: 'email',
+      metadata: {
+        From: '"Wexley-Thorne, Ambrose" <ambrose.wt@example.com>',
+        To: '"Quillfeather, Zephyrine" <z.q@example.com>, Corvina Haskett <c.h@example.org>',
+        Cc: '"Marchbanks, Isolde" <isolde.m@example.org>',
+      },
+    });
+
+    expect(toCommunicationInput(mail).participants_metadata).toEqual({
+      from: '"Wexley-Thorne, Ambrose" <ambrose.wt@example.com>',
+      to: ['"Quillfeather, Zephyrine" <z.q@example.com>', 'Corvina Haskett <c.h@example.org>'],
+      cc: ['"Marchbanks, Isolde" <isolde.m@example.org>'],
+    });
+  });
+
   // ci.communications had no metadata column at all, so a field a parser set
   // that has no dedicated one was silently dropped at push — a tweet's
   // permalink, likes, retweets, language and reply-parent, concretely.

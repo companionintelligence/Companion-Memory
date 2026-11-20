@@ -114,4 +114,44 @@ describe('Gmail address-header parsing', () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('keeps a quoted "Last, First" name whole instead of minting a person per half', async () => {
+    const mbox =
+      `From ottilie@example.org Fri Oct 16 20:27:19 2026\n` +
+      `Subject: Lichen results\n` +
+      `Date: Fri, 16 Oct 2026 20:27:19 +0000\n` +
+      `From: "Brightwater, Ottilie" <ottilie.brightwater@example.org>\n` +
+      `To: Zephyrine Quillfeather <z.q@example.org>\n` +
+      `Cc: "Ashcombe, Peregrine" <p.a@example.org>, =?UTF-8?Q?M=C3=BCller=2C_Hans?= <h.m@example.de>\n` +
+      `Message-ID: <lichen1@example.org>\n\n` +
+      `body\n`;
+
+    const { dir, file } = writeMbox('gmail-lastfirst-', 'lastfirst.mbox', mbox);
+    const previous = process.env.CI_GMAIL_INCLUDE_BULK;
+    process.env.CI_GMAIL_INCLUDE_BULK = '1';
+
+    try {
+      const graphs = await importMbox(file);
+      const edges = graphs.find((graph) => graph.item)?.edges ?? [];
+
+      expect(
+        edges
+          .filter((edge) => ['from', 'to', 'cc'].includes(edge.relation ?? ''))
+          .map((edge) => [edge.relation, edge.to?.entity?.name, edge.to?.entity?.attributes?.[0]?.value]),
+      ).toEqual([
+        ['from', 'Brightwater, Ottilie', 'ottilie.brightwater@example.org'],
+        ['to', 'Zephyrine Quillfeather', 'z.q@example.org'],
+        ['cc', 'Ashcombe, Peregrine', 'p.a@example.org'],
+        ['cc', 'Müller, Hans', 'h.m@example.de'],
+      ]);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.CI_GMAIL_INCLUDE_BULK;
+      } else {
+        process.env.CI_GMAIL_INCLUDE_BULK = previous;
+      }
+
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
