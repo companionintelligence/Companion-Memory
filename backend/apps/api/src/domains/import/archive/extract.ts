@@ -28,8 +28,11 @@
  * fallback `./unpack` uses for the 40-50GB Google Takeout / Apple Photos
  * exports. This keeps the zip-slip and declared-size guards on both paths.
  *
- * .tar.gz is intentionally not handled: Node's zlib alone can't walk a tarball
- * and no tar dependency is carried here.
+ * A .tar.gz / .tgz (Mastodon's archive, GitHub's account export) goes through
+ * `extractViaTar` instead, with the same caps and containment. A tarball has no
+ * central directory, so it is read twice: once for the headers, which are
+ * checked before any byte is written, and once to write. Only regular files
+ * and folders are written; links, devices and FIFOs in a tarball are skipped.
  */
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -37,8 +40,15 @@ import path from 'node:path';
 import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 
 import AdmZip from 'adm-zip';
+import { extract as tarExtract, Parser as TarParser, type ReadEntry } from 'tar';
 
-import { assertEntryInside, assertParentInside, existsNoFollow, stripListedSymlinks } from './containment';
+import {
+  ArchiveEscapeError,
+  assertEntryInside,
+  assertParentInside,
+  existsNoFollow,
+  stripListedSymlinks,
+} from './containment';
 import { systemExtract } from './systemExtract';
 import { CorruptArchiveError, diagnoseArchive, freeBytesAt, InsufficientDiskError } from './unpack';
 
@@ -71,8 +81,8 @@ export interface ExtractResult {
   destDir: string;
   /** Number of files written. */
   files: number;
-  /** Which extractor ran: in-memory adm-zip, or streaming system `unzip`. */
-  method: 'adm-zip' | 'system-unzip';
+  /** Which extractor ran: in-memory adm-zip, streaming system `unzip`, or `tar` for a tarball. */
+  method: 'adm-zip' | 'system-unzip' | 'tar';
   /** The staged archive was deleted after a fully-successful extraction. */
   archiveDeleted?: boolean;
   /**
@@ -128,14 +138,16 @@ function systemUnzipAvailable(): boolean {
   return systemUnzipProbe;
 }
 
+const TARBALL_RE = /\.(tar\.gz|tgz)$/i;
+
 /** True when this path looks like an archive the intake path should expand. */
 export function isExtractableArchive(p: string): boolean {
-  return /\.zip$/i.test(p);
+  return /\.zip$/i.test(p) || TARBALL_RE.test(p);
 }
 
 /** Resolve the sibling directory an archive extracts into. */
 function extractionDestDir(archivePath: string): string {
-  const base = archivePath.replace(/\.zip$/i, '');
+  const base = archivePath.replace(/\.(zip|tar\.gz|tgz)$/i, '');
 
   return path.resolve(fs.existsSync(base) && !fs.statSync(base).isDirectory() ? `${base}.extracted` : base);
 }
@@ -346,6 +358,168 @@ async function extractViaSystemUnzip(
   };
 }
 
+/** Tarball entry types that are written. Everything else is skipped. */
+const TAR_WRITTEN_TYPES: ReadonlySet<string> = new Set(['File', 'OldFile', 'ContiguousFile', 'Directory']);
+const TAR_FILE_TYPES: ReadonlySet<string> = new Set(['File', 'OldFile', 'ContiguousFile']);
+
+/**
+ * Read every header of a tarball without writing anything. `onEntry` throwing
+ * stops the read at that entry and rejects with what it threw, so an archive
+ * over the entry cap is not read to its end first. Strict: a damaged or
+ * truncated archive rejects rather than yielding the entries before the damage.
+ */
+function readTarHeaders(archivePath: string, onEntry: (entry: ReadEntry) => void): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const settle = (err?: unknown) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      source.destroy();
+      if (err) {
+        reject(err instanceof Error ? err : new Error(String(err)));
+      } else {
+        resolve();
+      }
+    };
+
+    const source = fs.createReadStream(archivePath);
+    const parser = new TarParser({
+      strict: true,
+      onReadEntry: (entry) => {
+        try {
+          onEntry(entry);
+        } catch (err) {
+          parser.abort(err as Error);
+        }
+
+        entry.resume();
+      },
+    });
+
+    parser.on('error', (err: unknown) => settle(err));
+    parser.on('end', () => settle());
+    source.on('error', (err) => settle(err));
+    source.pipe(parser);
+  });
+}
+
+/**
+ * Extract a .tar.gz / .tgz with the guards the zip paths apply. Every header
+ * is read first: an entry that is absolute, steps through `..` or resolves
+ * outside `destDir`, more entries than `maxEntries`, or more declared bytes
+ * than `maxTotalBytes` rejects the whole archive before anything is written.
+ * Then only regular files and folders are written, with plain permissions and
+ * the process's own ownership; links, devices and FIFOs are skipped, the way
+ * the zip paths strip symlinks.
+ */
+async function extractViaTar(
+  archivePath: string,
+  destDir: string,
+  maxEntries: number,
+  maxTotalBytes: number,
+): Promise<ExtractResult> {
+  let entries = 0;
+  let declaredBytes = 0;
+  let files = 0;
+  const names: string[] = [];
+  // What the header pass refused, as opposed to what it could not read.
+  let refusal: Error | undefined;
+  const refuse = (err: Error): never => {
+    refusal = err;
+    throw err;
+  };
+
+  try {
+    await readTarHeaders(archivePath, (entry) => {
+      entries += 1;
+      if (entries > maxEntries) {
+        refuse(new Error(`archive has more than ${maxEntries} entries (cap ${maxEntries})`));
+      }
+
+      // node-tar would strip a leading `/` and skip a `..` entry with a
+      // warning; either one means the archive was built to write elsewhere.
+      if (
+        path.isAbsolute(entry.path) ||
+        /^[a-z]:/i.test(entry.path) ||
+        entry.path.split(/[\\/]/).includes('..')
+      ) {
+        refuse(new ArchiveEscapeError(`archive entry escapes extraction dir: ${entry.path}`));
+      }
+
+      try {
+        assertInside(destDir, entry.path);
+      } catch (err) {
+        refuse(err as Error);
+      }
+
+      if (TAR_FILE_TYPES.has(entry.type)) {
+        files += 1;
+        declaredBytes += entry.size;
+        if (declaredBytes > maxTotalBytes) {
+          refuse(
+            new Error(
+              `archive would extract more than ${(maxTotalBytes / 1e9).toFixed(1)}GB ` +
+                `(cap ${(maxTotalBytes / 1e9).toFixed(1)}GB)`,
+            ),
+          );
+        }
+      }
+
+      if (TAR_WRITTEN_TYPES.has(entry.type)) {
+        names.push(entry.path);
+      }
+    });
+  } catch (err) {
+    if (refusal) {
+      throw refusal;
+    }
+
+    throw new CorruptArchiveError([
+      { archive: archivePath, reason: `it is not a readable .tar.gz (${(err as Error).message})` },
+    ]);
+  }
+
+  assertDiskFits(declaredBytes, destDir);
+
+  // A resumed extraction lands in the tree an earlier attempt left; a link
+  // there would carry an honest name elsewhere. Same check as the unzip path.
+  if (existsNoFollow(destDir)) {
+    const checked = new Set<string>();
+    for (const name of names) {
+      const target = path.resolve(destDir, name);
+      const parent = path.dirname(target);
+      if (!checked.has(parent)) {
+        checked.add(parent);
+        assertParentInside(destDir, target);
+      }
+    }
+  }
+
+  fs.mkdirSync(destDir, { recursive: true });
+
+  try {
+    await tarExtract({
+      file: archivePath,
+      cwd: destDir,
+      strict: true,
+      preserveOwner: false,
+      filter: (_p, entry) => TAR_WRITTEN_TYPES.has((entry as ReadEntry).type),
+      onReadEntry: (entry) => {
+        // Plain permissions whatever the archive says: no setuid bits, and no
+        // 000 file the parsers could not open.
+        entry.mode = entry.type === 'Directory' ? 0o755 : 0o644;
+      },
+    });
+  } catch (err) {
+    throw new Error(`archive extraction failed (${(err as Error).message})`, { cause: err });
+  }
+
+  return { destDir, files, method: 'tar' };
+}
+
 /**
  * Extract `archivePath` into a sibling directory named after the archive
  * (`export.zip` → `export/`; falls back to `export.extracted/` if a FILE with
@@ -365,6 +539,12 @@ export async function extractUploadedArchive(
   const largeThreshold = limits.largeArchiveThreshold ?? DEFAULT_LARGE_ARCHIVE_BYTES;
 
   const destDir = extractionDestDir(archivePath);
+
+  if (TARBALL_RE.test(archivePath)) {
+    const result = await extractViaTar(archivePath, destDir, maxEntries, maxTotalBytes);
+
+    return deleteAfterExtract(archivePath, result, limits);
+  }
 
   let archiveSize = 0;
   try {
@@ -410,6 +590,14 @@ export async function extractUploadedArchive(
     result = await extractViaAdmZip(archivePath, destDir, maxEntries, maxTotalBytes);
   }
 
+  return deleteAfterExtract(archivePath, result, limits);
+}
+
+function deleteAfterExtract(
+  archivePath: string,
+  result: ExtractResult,
+  limits: ExtractLimits,
+): ExtractResult {
   // Reclaim the staged copy the moment the extraction fully succeeded — any
   // throw above leaves the archive untouched for a retry.
   if (limits.deleteArchiveAfterExtract) {

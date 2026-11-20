@@ -2755,7 +2755,7 @@ export const WIZARD_SOURCES: WizardSource[] = [
     url: 'https://github.com/settings/admin',
     steps: [
       'Open GitHub → Settings → Account → "Export account data" and request your archive (emailed in a few minutes).',
-      'Unzip and find `starred_repositories.json`.',
+      'Download the `.tar.gz` the email links to.',
       'Alternatively, use a stars exporter (e.g. ghstars) to produce a `ghstars.json`.',
       UPLOAD_STEP,
     ],
