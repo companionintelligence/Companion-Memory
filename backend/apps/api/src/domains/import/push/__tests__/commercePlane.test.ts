@@ -20,6 +20,7 @@ import {
   toProductModelInput,
   toReceiptInput,
   toReceiptLineItemInputs,
+  toThingInput,
 } from '../inputs';
 
 /**
@@ -487,6 +488,104 @@ describe('toReceiptInput', () => {
       toReceiptInput(rec, toReceiptLineItemInputs(rec), { placeEntityId: 'entity-place-1' }).placeEntityId,
     ).toBe('entity-place-1');
     expect(toReceiptInput(rec, toReceiptLineItemInputs(rec)).placeEntityId).toBeUndefined();
+  });
+});
+
+describe('a price in a currency the receipt columns cannot store', () => {
+  // `ci.receipts.currency` and `ci.receipt_line_items.currency` CHECK
+  // `^[A-Z]{3}$`. A Roblox purchase paid in Robux reached them as `Robux`, the
+  // insert was refused and the whole purchase (receipt AND thing) was lost.
+  const robux = recordFor({
+    dataSource: 'roblox',
+    occurredAt: new Date('2026-06-21T09:12:45Z'),
+    // What roblox.ts emits for a PurchaseHistory.json row.
+    metadata: {
+      Kind: 'PurchaseHistory',
+      Source: 'Roblox',
+      Date: '2026-06-21T09:12:45Z',
+      Item: 'Sparkle Time Fedora',
+      Price: '1200',
+      Currency: 'Robux',
+      PaymentMethod: 'Robux',
+      Title: 'Sparkle Time Fedora',
+    },
+  });
+
+  it('still writes the receipt and its line, with no currency and no money', () => {
+    expect(destinationsFor(robux)).toContain('receipts');
+
+    const lines = toReceiptLineItemInputs(robux);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ lineNumber: 1, description: 'Sparkle Time Fedora' });
+    expect(lines[0].currency).toBeUndefined();
+    expect(lines[0].unitPriceMinor).toBeUndefined();
+    expect(lines[0].totalPriceMinor).toBeUndefined();
+
+    const extraction = toReceiptInput(robux, lines);
+    expect(extraction.currency).toBeUndefined();
+    expect(extraction.totalMinor).toBeUndefined();
+    expect(extraction.purchasedAt).toEqual(new Date('2026-06-21T09:12:45Z'));
+  });
+
+  it('names the unit on the receipt and keeps the amount in its metadata', () => {
+    // No currency beside an amount reads as dollars in the web app, so 1200
+    // Robux would show as $1,200.00. The amount stays where the parser put it.
+    const extraction = toReceiptInput(robux, toReceiptLineItemInputs(robux));
+
+    expect(extraction.metadata).toMatchObject({
+      UnsupportedCurrency: 'Robux',
+      Price: '1200',
+      Currency: 'Robux',
+    });
+  });
+
+  it('leaves the thing priced in the unit the source used', () => {
+    // ci.objects.currency has no CHECK, and an unknown code renders as
+    // "1200 ROBUX" rather than as dollars.
+    expect(toThingInput(robux)).toMatchObject({ purchasePrice: 1200, currency: 'Robux' });
+  });
+
+  it('drops the whole breakdown, not just the total', () => {
+    const odd = recordFor({
+      metadata: {
+        Merchant: 'Shop',
+        Currency: 'US$',
+        Subtotal: '10.00',
+        Tax: '1.00',
+        Shipping: '2.00',
+        Discount: '1.00',
+        Total: '12.00',
+      },
+    });
+    const extraction = toReceiptInput(odd, toReceiptLineItemInputs(odd));
+
+    expect(extraction).toMatchObject({ merchantName: 'Shop', metadata: { UnsupportedCurrency: 'US$' } });
+    expect(extraction.subtotalMinor).toBeUndefined();
+    expect(extraction.taxMinor).toBeUndefined();
+    expect(extraction.shippingMinor).toBeUndefined();
+    expect(extraction.discountMinor).toBeUndefined();
+    expect(extraction.totalMinor).toBeUndefined();
+    expect(extraction.metadata?.TotalsMismatch).toBeUndefined();
+  });
+
+  it('keeps the unit when a negative total is refused as well', () => {
+    const credit = recordFor({
+      dataSource: 'roblox',
+      metadata: { Item: 'Refund', Amount: '-400', Currency: 'Robux' },
+    });
+    const extraction = toReceiptInput(credit, toReceiptLineItemInputs(credit));
+
+    expect(extraction.metadata).toMatchObject({ UnsupportedCurrency: 'Robux', NegativeTotalRefused: -400 });
+  });
+
+  it('upper-cases a lower-case ISO code instead of refusing it', () => {
+    const lower = recordFor({ metadata: { Product: 'Cast Iron Pan', Total: '42.50', Currency: ' usd ' } });
+    const lines = toReceiptLineItemInputs(lower);
+    const extraction = toReceiptInput(lower, lines);
+
+    expect(lines[0]).toMatchObject({ currency: 'USD', totalPriceMinor: 4250 });
+    expect(extraction).toMatchObject({ currency: 'USD', totalMinor: 4250 });
+    expect(extraction.metadata?.UnsupportedCurrency).toBeUndefined();
   });
 });
 

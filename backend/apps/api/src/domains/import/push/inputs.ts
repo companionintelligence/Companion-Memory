@@ -693,7 +693,28 @@ function toCostMinorUnits(
     return undefined;
   }
 
+  // An amount in a unit with no ISO code (Roblox's Robux) is not minor units of
+  // anything. Written beside an empty currency, every reader would take it for
+  // dollars, so it stays in the metadata instead. See toReceiptInput.
+  if (currency != null && isoCurrency(currency) == null) {
+    return undefined;
+  }
+
   return toMinorUnits(amount, currency);
+}
+
+/**
+ * `raw` as the ISO-4217 code a receipt stores, or null.
+ *
+ * `ci.receipts.currency` and `ci.receipt_line_items.currency` CHECK
+ * `^[A-Z]{3}$`, and one row that breaks it fails the whole purchase, so the
+ * code is trimmed and upper-cased (`usd` is USD) and anything still not three
+ * letters is no code at all. Same rule as `ObjectPromoteStage.parseCurrency`.
+ */
+function isoCurrency(raw: string | null | undefined): string | null {
+  const upper = raw?.trim().toUpperCase();
+
+  return upper != null && /^[A-Z]{3}$/.test(upper) ? upper : null;
 }
 
 /**
@@ -882,8 +903,9 @@ function lineFrom(
     line.quantity = quantity;
   }
 
-  if (currency) {
-    line.currency = currency;
+  const currencyCode = isoCurrency(currency);
+  if (currencyCode) {
+    line.currency = currencyCode;
   }
 
   // Cost columns, so a negative is refused rather than written — see
@@ -1073,8 +1095,14 @@ export function toReceiptInput(
     extraction.placeEntityId = links.placeEntityId;
   }
 
-  if (currency) {
-    extraction.currency = currency;
+  const currencyCode = isoCurrency(currency);
+  if (currencyCode) {
+    extraction.currency = currencyCode;
+  } else if (currency) {
+    // Priced in something with no ISO code (Robux). The money columns stay
+    // empty (see toCostMinorUnits) and the receipt names the unit; the amounts
+    // are still in the metadata under the parser's own keys.
+    extraction.metadata = { ...extraction.metadata, UnsupportedCurrency: currency };
   }
 
   // A NEGATIVE stated total is a refund or a credit, not a cost, and it is
@@ -1095,7 +1123,7 @@ export function toReceiptInput(
     // Refused, not lost. The amount stays legible on the receipt — a later
     // pass that grows a real credit/refund model has the number it needs, and
     // nobody reading the row has to guess why the total is empty.
-    extraction.metadata = { ...m, NegativeTotalRefused: stated };
+    extraction.metadata = { ...extraction.metadata, NegativeTotalRefused: stated };
   }
 
   // The money BREAKDOWN. All four are COST columns, so a negative is refused
