@@ -139,6 +139,29 @@ function unescapeXml(s: string): string {
 }
 
 // Pull the key="value" attributes out of a single tag's text.
+/** One <addr> of an MMS: an address and its PDU header type. */
+interface MmsAddr {
+  address: string;
+  type: string;
+}
+
+// PDU header types an <addr> carries (Android PduHeaders): From, To, Cc, Bcc.
+const PDU_FROM = '137';
+const PDU_TO = '151';
+const PDU_CC = '130';
+const PDU_BCC = '129';
+/** What Android writes as the From of an MMS you sent, in place of your number. */
+const INSERT_ADDRESS_TOKEN = 'insert-address-token';
+/** A group MMS has a handful of addresses; more than this is not a real message. */
+const MAX_MMS_ADDRS = 100;
+
+/** One phone number written two ways compares equal; anything else as written. */
+function phoneKey(v: string): string {
+  const digits = v.replace(/\D/g, '');
+
+  return digits.length >= 7 ? digits.slice(-10) : v.trim().toLowerCase();
+}
+
 function parseAttrs(tag: string): Record<string, string> {
   const attrs: Record<string, string> = {};
   const re = /(\w+)=(?:"([^"]*)"|'([^']*)')/g;
@@ -327,6 +350,7 @@ export class SmsBackupRestoreFileImporter implements FileImporter {
     let textParts: string[] = [];
     let mediaParts: MediaPart[] = [];
     let mediaSeq = 0;
+    let mmsAddrs: MmsAddr[] = [];
 
     // An MMS survives only if it's in-timeframe and a real inbox/sent message.
     // Deciding this at <mms> open (not close) lets us skip writing attachment
@@ -351,12 +375,13 @@ export class SmsBackupRestoreFileImporter implements FileImporter {
       textParts = [];
       mediaParts = [];
       mediaSeq = 0;
+      mmsAddrs = [];
     };
 
     const flushMms = () => {
       if (inMms && mmsKeep) {
         try {
-          this.pushMms(mmsAttrs, textParts, mediaParts, params);
+          this.pushMms(mmsAttrs, textParts, mediaParts, params, mmsAddrs);
         } catch (e) {
           params.log?.('error', `Failed to build mms in ${base}`, { error: (e as Error).message });
         }
@@ -652,6 +677,13 @@ export class SmsBackupRestoreFileImporter implements FileImporter {
           if (tagText.endsWith('/>')) {
             flushMms();
           } // empty self-closed MMS
+        } else if (name === 'addr' && inMms && mmsKeep && mmsAddrs.length < MAX_MMS_ADDRS) {
+          // <addrs><addr address=".." type=".."/></addrs>: who sent the MMS and who got it.
+          const addr = parseAttrs(tagText);
+          const address = addr.address?.trim();
+          if (address && address !== 'null' && addr.type) {
+            mmsAddrs.push({ address, type: addr.type });
+          }
         }
 
         p = g + 1;
@@ -805,6 +837,7 @@ export class SmsBackupRestoreFileImporter implements FileImporter {
     textParts: string[],
     mediaParts: MediaPart[],
     params: ImportParams,
+    addrs: MmsAddr[] = [],
   ): void {
     const date = a.date;
     const ts = date ? new Date(Number(date)) : undefined;
@@ -812,18 +845,31 @@ export class SmsBackupRestoreFileImporter implements FileImporter {
     const direction = msgBox === '1' ? 'inbound' : 'outbound';
     const contactName = a.contact_name;
     const rootAddress = a.address;
+    // The root address lists everyone in the conversation but you, joined by
+    // `~` in a group. The <addr> entries say which of them sent it.
+    const others = (rootAddress ?? '')
+      .split('~')
+      .map((v) => v.trim())
+      .filter(Boolean);
+    const addrsOf = (types: string[]) =>
+      addrs.filter((x) => types.includes(x.type) && x.address !== INSERT_ADDRESS_TOKEN).map((x) => x.address);
 
     let sender: string | undefined;
     const recipients: string[] = [];
     if (msgBox === '1') {
-      // Received MMS — the address attribute is the sender.
-      sender = rootAddress || contactName;
+      // Received MMS — the From <addr>, else the address attribute when it
+      // names one person. In a group the rest of the root list are the other
+      // recipients (you are not on it, as on a received SMS).
+      const from = addrsOf([PDU_FROM])[0];
+      sender = others.length > 1 ? from : from || rootAddress || contactName;
+      if (others.length > 1) {
+        recipients.push(...others.filter((o) => !sender || phoneKey(o) !== phoneKey(sender)));
+      }
     } else {
       // Sent MMS — sender is "Me".
       sender = 'Me';
-      if (rootAddress) {
-        recipients.push(rootAddress);
-      }
+      const to = addrsOf([PDU_TO, PDU_CC, PDU_BCC]);
+      recipients.push(...(to.length > 0 ? to : others));
     }
 
     let content = '';
