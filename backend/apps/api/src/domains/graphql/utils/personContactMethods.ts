@@ -62,7 +62,9 @@ export function contactMethodsFromPersonProperties(person: {
     out.push({
       kind,
       value: normalized,
-      rawValue: (kind === 'phone' && written.get(normalized)) || raw.trim(),
+      // The written form only stands in for a bare join key: a number the
+      // person's record states with its own formatting is shown as stated.
+      rawValue: (kind === 'phone' && raw.trim() === normalized && written.get(normalized)) || raw.trim(),
       label,
       isPrimary: false,
       source: 'properties',

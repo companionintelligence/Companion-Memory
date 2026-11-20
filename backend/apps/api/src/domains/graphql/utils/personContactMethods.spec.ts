@@ -118,7 +118,7 @@ describe('mergePersonIdentifiers', () => {
 
   it("shows an imported phone as the source wrote it, country code included, from the person's own copy", () => {
     // What an import leaves: the identifier indexed under its last ten digits
-    // with no written form, and the typed number under `Phones`.
+    // with no written form. The typed number is under `Phones`.
     const person = {
       properties: {
         phone: '2079460321',
@@ -142,8 +142,18 @@ describe('mergePersonIdentifiers', () => {
     const merged = mergePersonIdentifiers(indexed, fromProperties);
 
     // Only the number the person has; the other typed one is not a contact of theirs.
-    expect(fromProperties.map((row) => [row.value, row.rawValue])).toEqual([['2079460321', '+44 20 7946 0321']]);
+    expect(fromProperties.map((row) => [row.value, row.rawValue])).toEqual([
+      ['2079460321', '+44 20 7946 0321'],
+    ]);
     expect(merged.map((row) => [row.value, row.rawValue])).toEqual([['2079460321', '+44 20 7946 0321']]);
+  });
+
+  it("shows a phone the person's record states with its own formatting as stated", () => {
+    const rows = contactMethodsFromPersonProperties({
+      properties: { phones: ['+1 (415) 555-0100'], Phones: ['415.555.0100'] },
+    });
+
+    expect(rows.map((row) => [row.value, row.rawValue])).toEqual([['4155550100', '+1 (415) 555-0100']]);
   });
 
   it('keeps the written form an identifier already has', () => {
@@ -161,7 +171,9 @@ describe('mergePersonIdentifiers', () => {
 
     const merged = mergePersonIdentifiers(
       indexed,
-      contactMethodsFromPersonProperties({ properties: { phones: ['4155550100'], Phones: ['+1 415 555 0100'] } }),
+      contactMethodsFromPersonProperties({
+        properties: { phones: ['4155550100'], Phones: ['+1 415 555 0100'] },
+      }),
     );
 
     expect(merged).toEqual(indexed);
