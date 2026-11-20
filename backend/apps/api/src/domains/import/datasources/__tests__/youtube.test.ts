@@ -509,4 +509,34 @@ describe('YouTube datasource — playlists', () => {
       'Watch later',
     ]);
   });
+
+  it('keys a playlist on its id when its file name lost the punctuation of its title', async () => {
+    write(
+      `${YT}/playlists/playlists.csv`,
+      'Playlist ID,Playlist Title (Original),Playlist Create Timestamp\n' +
+        'PLk2Rt7Uc9Mz,Lanterns: brass/copper,2026-09-04T10:00:00+00:00\n',
+    );
+    fs.rmSync(path.join(root, YT, 'playlists', 'Lantern references-videos.csv'));
+    write(
+      `${YT}/playlists/Lanterns_ brass_copper-videos.csv`,
+      'Video ID,Playlist Video Creation Timestamp\nQx81LmP0ra1,2026-09-04T10:01:00+00:00\n',
+    );
+
+    const playlist = (await importFrom(path.join(root, YT, 'playlists'))).find(
+      (g) => g.item.metadata.Title === 'Lanterns: brass/copper',
+    )!.item;
+    expect(playlist.id).toBe('playlist:PLk2Rt7Uc9Mz');
+    expect(playlist.timestamp).toEqual(new Date('2026-09-04T10:00:00Z'));
+  });
+
+  it('still reads the video lists when playlists.csv has a header it does not know', async () => {
+    write(`${YT}/playlists/playlists.csv`, 'Something else entirely\n');
+    const dir = path.join(root, YT, 'playlists');
+    const rec = await new YouTubeFileImporter().recognize({}, { filename: 'playlists', fullPath: dir });
+    expect(rec.confidence).toBe(0.9);
+    expect((await importFrom(dir)).map((g) => g.item.metadata.Title).sort()).toEqual([
+      'Lantern references',
+      'Watch later',
+    ]);
+  });
 });

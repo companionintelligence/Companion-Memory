@@ -225,10 +225,11 @@ export class YouTubeFileImporter implements FileImporter {
     if (list) {
       try {
         const header = csvHeader(await readFile(path.join(dir, list), 'utf8'));
-
-        return header.includes('playlist id') && header.includes('playlist title');
+        if (header.includes('playlist id') && header.includes('playlist title')) {
+          return true;
+        }
       } catch {
-        return false;
+        /* unreadable: the folder's own name and video lists still decide */
       }
     }
 
@@ -294,17 +295,27 @@ export class YouTubeFileImporter implements FileImporter {
     };
 
     const listName = names.find((n) => n.toLowerCase() === PLAYLISTS_FILENAME);
+    // A file name cannot hold every character a title can, so Takeout's
+    // `<title>-videos.csv` may differ from the title in playlists.csv by its
+    // punctuation. Match exactly first, then on letters and digits alone.
+    const loose = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
     const known = new Map<string, Record<string, string>>();
+    const knownLoose = new Map<string, Record<string, string> | null>();
     for (const row of listName ? await readRows(listName) : []) {
       const title = column(row, 'playlist title (original)') || column(row, 'playlist title');
       if (title) {
         known.set(title.toLowerCase(), row);
+        // Two titles that differ only in punctuation match neither loosely.
+        knownLoose.set(loose(title), knownLoose.has(loose(title)) ? null : row);
       }
     }
 
     for (const name of names.filter((n) => n.toLowerCase().endsWith(PLAYLIST_VIDEOS_SUFFIX)).sort()) {
       const title = name.slice(0, -PLAYLIST_VIDEOS_SUFFIX.length);
-      const meta = known.get(title.toLowerCase());
+      const meta = known.get(title.toLowerCase()) ?? knownLoose.get(loose(title)) ?? undefined;
+      // The title as playlists.csv spells it, punctuation included, when it is there.
+      const shownTitle =
+        (meta && (column(meta, 'playlist title (original)') || column(meta, 'playlist title'))) || title;
       const videos = (await readRows(name)).flatMap((row) => {
         const videoId = column(row, 'video id');
         if (!videoId) {
@@ -341,7 +352,7 @@ export class YouTubeFileImporter implements FileImporter {
           timestamp: created,
           content: textContent('playlist.txt', body),
           metadata: {
-            Title: title,
+            Title: shownTitle,
             Text: body,
             URL: playlistId ? `https://www.youtube.com/playlist?list=${playlistId}` : undefined,
             PlaylistId: playlistId || undefined,

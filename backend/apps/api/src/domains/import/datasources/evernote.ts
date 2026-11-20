@@ -70,8 +70,10 @@ function noteLocation(note: EnexNote): Location | undefined {
     return undefined;
   }
 
-  const latitude = Number(firstString(attrs.latitude));
-  const longitude = Number(firstString(attrs.longitude));
+  // An empty <latitude/> is no coordinate, not 0 (Number('') is 0).
+  const coordinate = (v: string[] | undefined): number => Number(firstString(v)?.trim() || NaN);
+  const latitude = coordinate(attrs.latitude);
+  const longitude = coordinate(attrs.longitude);
   if (
     !Number.isFinite(latitude) ||
     !Number.isFinite(longitude) ||
@@ -406,7 +408,10 @@ export class EvernoteFileImporter implements FileImporter {
 
     const item = mediaItemFromFile(fpath);
     const filename = shownName || `attachment.${ext}`;
-    const mediaType = mime || item.content.mediaType || mimeForFile(filename);
+    // The declared type, unless it is a catch-all (application/octet-stream)
+    // that the file's extension improves on.
+    const fromName = item.content.mediaType || mimeForFile(filename);
+    const mediaType = mime && mime !== 'application/octet-stream' ? mime : fromName || mime;
     params.pipeline.push({
       item: {
         ...item,

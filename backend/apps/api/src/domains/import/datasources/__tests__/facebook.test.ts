@@ -1357,7 +1357,7 @@ describe('Facebook datasource — friends (JSON)', () => {
     expect(friendships[0].classification).toBe('social');
     expect(friendships[0].timestamp).toEqual(new Date(1770818400 * 1000));
     expect(friendships[0].metadata.Person).toBe('Ottilie Brændgaard');
-    expect(drops).toEqual(['malformed_entry']);
+    expect(drops).toEqual(['unnamed_connection']);
 
     // Stable across a re-import.
     const again = (await run()).pipeline.filter((p) => p.item).map((p) => p.item!.id);

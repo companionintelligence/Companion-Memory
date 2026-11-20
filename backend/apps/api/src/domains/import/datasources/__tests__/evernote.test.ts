@@ -298,4 +298,30 @@ ${PNG_B64.slice(40)}
     expect(again).toEqual([png.id]);
     expect(fs.readdirSync(store)).toHaveLength(1);
   });
+
+  it('reads an empty coordinate as missing and types an octet-stream image by its name', async () => {
+    fs.writeFileSync(
+      path.join(dir, 'Travel Journal.enex'),
+      `<?xml version="1.0" encoding="UTF-8"?>
+<en-export>
+  <note>
+    <title>Harbour</title>
+    <created>20260705T100000Z</created>
+    <note-attributes><latitude></latitude><longitude>16.59814</longitude></note-attributes>
+    <content><![CDATA[<en-note><div>Boats.</div></en-note>]]></content>
+    <resource>
+      <data encoding="base64">${PNG_B64}</data>
+      <mime>application/octet-stream</mime>
+      <resource-attributes><file-name>harbour.png</file-name></resource-attributes>
+    </resource>
+  </note>
+</en-export>`,
+    );
+
+    const pipeline = await run();
+    expect(note(pipeline, 'Harbour').location).toBeUndefined();
+    const attachment = pipeline.find((g) => g.item.metadata.Title === 'harbour.png')!.item;
+    expect(attachment.classification).toBe('media');
+    expect(attachment.content.mediaType).toBe('image/png');
+  });
 });

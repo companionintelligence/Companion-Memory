@@ -597,7 +597,7 @@ export class FacebookFileImporter implements FileImporter {
     for (const friend of friends as Array<{ name?: string; timestamp?: number }>) {
       const name = friend?.name?.trim();
       if (!name) {
-        params.pipeline.drop?.('malformed_entry', 'friend without a name');
+        params.pipeline.drop?.('unnamed_connection', 'friend without a name');
         continue;
       }
 
