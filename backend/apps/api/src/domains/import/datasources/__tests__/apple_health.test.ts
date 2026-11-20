@@ -93,6 +93,68 @@ describe('Apple Health datasource', () => {
     expect(workout).toBeDefined();
     expect(workout!.item.metadata['Activity Type']).toBe('Running');
     expect(workout!.item.metadata.Calories).toBe(350);
+    expect(workout!.item.metadata['Distance (km)']).toBe(5);
+    expect(workout!.item.metadata.Distance).toBeUndefined();
+  });
+
+  // Exports since iOS 16 put a workout's distance, energy and heart rate in
+  // <WorkoutStatistics> children; a workout saved through the newer HealthKit
+  // API has no totalDistance/totalEnergyBurned on the <Workout> tag at all.
+  // Reading only the tag left such a run with its duration and nothing else.
+  describe('workout totals', () => {
+    const wrap = (workout: string) =>
+      `<?xml version="1.0" encoding="UTF-8"?>\n<HealthData locale="en_US">\n${workout}\n</HealthData>\n`;
+    const workoutOf = async (xml: string) =>
+      (await importXml(wrap(xml))).pipeline.find((p) => p.item.classification === 'workout')!.item;
+
+    it('reads distance, energy and heart rate from <WorkoutStatistics> when the tag has none', async () => {
+      const item = await workoutOf(
+        ` <Workout workoutActivityType="HKWorkoutActivityTypeRunning" duration="31.81666666666667" durationUnit="min" sourceName="Apple Watch" sourceVersion="12.1" creationDate="2026-10-12 18:40:12 -0700" startDate="2026-10-12 18:08:20 -0700" endDate="2026-10-12 18:40:09 -0700">
+  <MetadataEntry key="HKIndoorWorkout" value="0"/>
+  <WorkoutEvent type="HKWorkoutEventTypeSegment" date="2026-10-12 18:08:20 -0700" duration="6.2" durationUnit="min"/>
+  <WorkoutStatistics type="HKQuantityTypeIdentifierActiveEnergyBurned" startDate="2026-10-12 18:08:20 -0700" endDate="2026-10-12 18:40:09 -0700" sum="341.7" unit="Cal"/>
+  <WorkoutStatistics type="HKQuantityTypeIdentifierBasalEnergyBurned" startDate="2026-10-12 18:08:20 -0700" endDate="2026-10-12 18:40:09 -0700" sum="52.1" unit="Cal"/>
+  <WorkoutStatistics type="HKQuantityTypeIdentifierDistanceWalkingRunning" startDate="2026-10-12 18:08:20 -0700" endDate="2026-10-12 18:40:09 -0700" sum="5.21" unit="km"/>
+  <WorkoutStatistics type="HKQuantityTypeIdentifierHeartRate" startDate="2026-10-12 18:08:20 -0700" endDate="2026-10-12 18:40:09 -0700" average="152.3" minimum="101" maximum="171" unit="count/min"/>
+ </Workout>`,
+      );
+      expect(item.metadata['Distance (km)']).toBe(5.21);
+      expect(item.metadata.Calories).toBe(341.7);
+      expect(item.metadata['Average Heart Rate']).toBe(152.3);
+      expect(item.metadata['Min Heart Rate']).toBe(101);
+      expect(item.metadata['Max Heart Rate']).toBe(171);
+      expect(item.metadata['Duration (min)']).toBeCloseTo(31.82, 2);
+    });
+
+    it('converts miles and keeps the tag totals ahead of the statistics', async () => {
+      const item = await workoutOf(
+        ` <Workout workoutActivityType="HKWorkoutActivityTypeCycling" duration="47.25" durationUnit="min" totalDistance="10" totalDistanceUnit="mi" totalEnergyBurned="402.5" totalEnergyBurnedUnit="Cal" sourceName="Apple Watch" startDate="2026-10-11 17:02:45 -0700" endDate="2026-10-11 17:50:00 -0700">
+  <WorkoutStatistics type="HKQuantityTypeIdentifierDistanceCycling" startDate="2026-10-11 17:02:45 -0700" endDate="2026-10-11 17:50:00 -0700" sum="9.9" unit="mi"/>
+  <WorkoutStatistics type="HKQuantityTypeIdentifierActiveEnergyBurned" startDate="2026-10-11 17:02:45 -0700" endDate="2026-10-11 17:50:00 -0700" sum="399" unit="Cal"/>
+ </Workout>`,
+      );
+      expect(item.metadata['Distance (km)']).toBe(16.093);
+      expect(item.metadata.Calories).toBe(402.5);
+    });
+
+    it('adds up a multisport workout and keeps an unconvertible unit as written', async () => {
+      const multi = await workoutOf(
+        ` <Workout workoutActivityType="HKWorkoutActivityTypeSwimBikeRun" duration="90" durationUnit="min" sourceName="Apple Watch" startDate="2026-10-13 07:00:00 -0700" endDate="2026-10-13 08:30:00 -0700">
+  <WorkoutStatistics type="HKQuantityTypeIdentifierDistanceSwimming" startDate="2026-10-13 07:00:00 -0700" endDate="2026-10-13 07:20:00 -0700" sum="750" unit="m"/>
+  <WorkoutStatistics type="HKQuantityTypeIdentifierDistanceCycling" startDate="2026-10-13 07:25:00 -0700" endDate="2026-10-13 08:05:00 -0700" sum="20" unit="km"/>
+  <WorkoutStatistics type="HKQuantityTypeIdentifierDistanceWalkingRunning" startDate="2026-10-13 08:07:00 -0700" endDate="2026-10-13 08:30:00 -0700" sum="5" unit="km"/>
+ </Workout>`,
+      );
+      expect(multi.metadata['Distance (km)']).toBe(25.75);
+
+      const odd = await workoutOf(
+        ` <Workout workoutActivityType="HKWorkoutActivityTypeRowing" duration="20" durationUnit="min" sourceName="Apple Watch" startDate="2026-10-14 07:00:00 -0700" endDate="2026-10-14 07:20:00 -0700">
+  <WorkoutStatistics type="HKQuantityTypeIdentifierDistanceRowing" startDate="2026-10-14 07:00:00 -0700" endDate="2026-10-14 07:20:00 -0700" sum="4" unit="furlong"/>
+ </Workout>`,
+      );
+      expect(odd.metadata['Distance (km)']).toBeUndefined();
+      expect(odd.metadata.Distance).toBe('4 furlong');
+    });
   });
 
   // A5 — real multi-GB exports broke the old line-based scanner, which silently
