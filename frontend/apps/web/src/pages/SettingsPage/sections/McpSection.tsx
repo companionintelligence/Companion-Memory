@@ -1125,10 +1125,13 @@ export function McpSection() {
       title="MCP servers"
       description="Connect Model Context Protocol servers to give the assistant more tools."
       actions={
-        <Button variant="outline" onClick={openCreate} disabled={!canManageServers}>
-          <Plus aria-hidden="true" />
-          {t('SETTINGS_MCP_CREATE')}
-        </Button>
+        // Only beside the configured list, as before: the catalog tab adds through its own entries.
+        activeTab === 'servers' ? (
+          <Button variant="outline" onClick={openCreate} disabled={!canManageServers}>
+            <Plus aria-hidden="true" />
+            {t('SETTINGS_MCP_CREATE')}
+          </Button>
+        ) : null
       }
     >
       {user != null && !canManageServers && (

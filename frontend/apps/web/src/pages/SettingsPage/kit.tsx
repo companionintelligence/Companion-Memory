@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import {
+  Children,
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from 'react';
 
 import { cn, Label, Popover } from '@ci/shadcn';
 import { CircleAlert, CircleCheck, CircleHelp, Info, LoaderCircle, TriangleAlert } from '@ci/shadcn/icons';
@@ -108,7 +117,14 @@ export function InfoTip({
         side={side}
         align={align}
         className="w-80 max-w-[calc(100vw-2rem)] space-y-2 p-3 text-xs leading-relaxed text-popover-foreground [&_a]:underline [&_a]:underline-offset-2 [&_code]:font-mono [&_li]:ml-4 [&_li]:list-disc [&_ul]:space-y-1"
-        onOpenAutoFocus={(event) => event.preventDefault()}
+        // Opened by hover, focus stays where the reader is. Opened by click, tap or the
+        // keyboard, it moves into the popover, so a link inside it can be reached with Tab
+        // and Escape brings focus back to the (?).
+        onOpenAutoFocus={(event) => {
+          if (!pinned.current) {
+            event.preventDefault();
+          }
+        }}
         onPointerEnter={cancelClose}
         onPointerLeave={(event) => {
           if (event.pointerType === 'mouse') {
@@ -210,8 +226,14 @@ export function SettingsGroup({
   );
 }
 
-/** The card itself: rows separated by hairlines. */
+/** The card itself: rows separated by hairlines. Nothing at all when every row is hidden. */
 export function SettingsCard({ children, className }: { children: ReactNode; className?: string }) {
+  // Rows are mostly conditional. When none of them shows, an empty bordered box would
+  // read as something that failed to load.
+  if (Children.toArray(children).length === 0) {
+    return null;
+  }
+
   return (
     <div
       data-slot="settings-card"
@@ -475,6 +497,50 @@ export function SettingsLoading({ children = 'Loading…' }: { children?: ReactN
   );
 }
 
+/**
+ * The keyboard pattern of a radio group: one tab stop (the checked option, or the first one
+ * that can be chosen), and the arrow keys move the choice to the next or previous option.
+ */
+function useRadioKeys<T extends string>(
+  options: ReadonlyArray<{ value: T; disabled?: boolean }>,
+  value: T,
+  onChange: (value: T) => void,
+  groupDisabled: boolean | undefined,
+) {
+  const buttons = useRef(new Map<T, HTMLButtonElement>());
+  const choosable = groupDisabled ? [] : options.filter((option) => !option.disabled);
+  const tabStop = choosable.some((option) => option.value === value) ? value : choosable[0]?.value;
+
+  return {
+    tabIndex: (option: T) => (option === tabStop ? 0 : -1),
+    ref: (option: T) => (button: HTMLButtonElement | null) => {
+      if (button) {
+        buttons.current.set(option, button);
+      } else {
+        buttons.current.delete(option);
+      }
+    },
+    onKeyDown: (event: KeyboardEvent, current: T) => {
+      const step =
+        event.key === 'ArrowRight' || event.key === 'ArrowDown'
+          ? 1
+          : event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+            ? -1
+            : 0;
+
+      if (step === 0 || choosable.length === 0) {
+        return;
+      }
+
+      event.preventDefault();
+      const from = choosable.findIndex((option) => option.value === current);
+      const next = choosable[(from + step + choosable.length) % choosable.length];
+      buttons.current.get(next.value)?.focus();
+      onChange(next.value);
+    },
+  };
+}
+
 /** Two to four mutually exclusive choices in one control: theme, location mode, a filter. */
 export function SegmentedControl<T extends string>({
   label,
@@ -491,6 +557,8 @@ export function SegmentedControl<T extends string>({
   disabled?: boolean;
   className?: string;
 }) {
+  const keys = useRadioKeys(options, value, onChange, disabled);
+
   return (
     <div
       role="radiogroup"
@@ -507,6 +575,9 @@ export function SegmentedControl<T extends string>({
             role="radio"
             aria-checked={checked}
             disabled={disabled || option.disabled}
+            ref={keys.ref(option.value)}
+            tabIndex={keys.tabIndex(option.value)}
+            onKeyDown={(event) => keys.onKeyDown(event, option.value)}
             onClick={() => onChange(option.value)}
             className={cn(
               'h-7 flex-1 cursor-pointer rounded-md px-3 text-sm font-medium whitespace-nowrap transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 max-device:h-10',
@@ -540,6 +611,8 @@ export function ChoiceList<T extends string>({
   onChange: (value: T) => void;
   disabled?: boolean;
 }) {
+  const keys = useRadioKeys(options, value, onChange, disabled);
+
   return (
     <div role="radiogroup" aria-label={label} className={ROW_DIVIDERS}>
       {options.map((option) => {
@@ -552,6 +625,9 @@ export function ChoiceList<T extends string>({
             role="radio"
             aria-checked={checked}
             disabled={disabled}
+            ref={keys.ref(option.value)}
+            tabIndex={keys.tabIndex(option.value)}
+            onKeyDown={(event) => keys.onKeyDown(event, option.value)}
             onClick={() => onChange(option.value)}
             className={cn(
               'flex w-full cursor-pointer items-start gap-3 px-5 py-4 text-left transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset disabled:cursor-not-allowed disabled:opacity-60',

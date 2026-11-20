@@ -1,10 +1,11 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
   ChoiceList,
   InfoTip,
   SegmentedControl,
+  SettingsCard,
   SettingsFooter,
   SettingsGroup,
   SettingsRow,
@@ -21,6 +22,20 @@ describe('InfoTip', () => {
     fireEvent.click(screen.getByRole('button', { name: 'About autonomy' }));
 
     expect(await screen.findByText('Chat asks before it deletes anything.')).toBeInTheDocument();
+  });
+
+  it('moves focus into the popover when opened by click, so Tab reaches a link in it', async () => {
+    render(
+      <InfoTip label="About BlueBubbles">
+        See <a href="https://bluebubbles.app">bluebubbles.app</a>.
+      </InfoTip>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'About BlueBubbles' }));
+
+    const popover = await screen.findByRole('dialog');
+    expect(popover).toContainElement(screen.getByRole('link', { name: 'bluebubbles.app' }));
+    await waitFor(() => expect(popover.contains(document.activeElement)).toBe(true));
   });
 
   it('closes again on a second click', async () => {
@@ -69,6 +84,19 @@ describe('SettingsRow', () => {
     const { container } = render(<SettingsRow label="Enabled">{false}</SettingsRow>);
 
     expect(container.querySelector('.mt-3')).toBeNull();
+  });
+});
+
+describe('SettingsCard', () => {
+  it('draws nothing when every row is hidden', () => {
+    const { container } = render(
+      <SettingsCard>
+        {false}
+        {null}
+      </SettingsCard>,
+    );
+
+    expect(container.querySelector('[data-slot="settings-card"]')).toBeNull();
   });
 });
 
@@ -132,5 +160,38 @@ describe('SegmentedControl and ChoiceList', () => {
     expect(screen.getByRole('radio', { name: /Balanced/ })).toHaveAttribute('aria-checked', 'true');
     fireEvent.click(screen.getByRole('radio', { name: /Cautious/ }));
     expect(onChange).toHaveBeenCalledWith('cautious');
+  });
+
+  it('keep one tab stop and move the choice with the arrow keys, skipping disabled options', () => {
+    const onChange = vi.fn();
+
+    render(
+      <SegmentedControl
+        label="Location tracking"
+        value="off"
+        onChange={onChange}
+        options={[
+          { value: 'off', label: 'Off' },
+          { value: 'always', label: 'Always', disabled: true },
+          { value: 'when_in_use', label: 'While using' },
+        ]}
+      />,
+    );
+
+    const off = screen.getByRole('radio', { name: 'Off' });
+    const whileUsing = screen.getByRole('radio', { name: 'While using' });
+
+    expect(off).toHaveAttribute('tabindex', '0');
+    expect(whileUsing).toHaveAttribute('tabindex', '-1');
+
+    fireEvent.keyDown(off, { key: 'ArrowRight' });
+    expect(onChange).toHaveBeenLastCalledWith('when_in_use');
+    expect(whileUsing).toHaveFocus();
+
+    fireEvent.keyDown(whileUsing, { key: 'ArrowDown' });
+    expect(onChange).toHaveBeenLastCalledWith('off');
+
+    fireEvent.keyDown(off, { key: 'ArrowLeft' });
+    expect(onChange).toHaveBeenLastCalledWith('when_in_use');
   });
 });

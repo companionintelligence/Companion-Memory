@@ -247,15 +247,17 @@ export function AboutYouSection({ refreshToken = 0 }: AboutYouSectionProps) {
 
   const prefers = view?.preferences.filter((p) => p.relationship === 'PREFERS') ?? [];
   const dislikes = view?.preferences.filter((p) => p.relationship === 'DISLIKES') ?? [];
-  const hasProfile =
-    view != null &&
-    (view.dossier != null ||
-      prefers.length > 0 ||
-      dislikes.length > 0 ||
-      view.schedule != null ||
-      view.trustMode != null ||
-      view.family.length > 0 ||
-      view.recentAnswers.length > 0);
+  // The same tests the rows below use, so the card shows exactly when one of them does.
+  const hasProfile = Boolean(
+    view &&
+      (view.dossier ||
+        prefers.length > 0 ||
+        dislikes.length > 0 ||
+        view.schedule ||
+        view.trustMode ||
+        view.family.length > 0 ||
+        view.recentAnswers.length > 0),
+  );
 
   return (
     <SettingsSection {...sectionProps}>
