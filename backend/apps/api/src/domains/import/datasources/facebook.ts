@@ -459,7 +459,9 @@ async function readOwnerName(root: string): Promise<string | undefined> {
  * Undefined when neither tells, which leaves the push to match the sender
  * against the Memory account's name. A profile name nobody in the thread uses
  * (a name changed since, a different spelling) says nothing about it, so it
- * must not mark every message there as received.
+ * must not mark every message there as received. Nor does the owner's name
+ * say anything about a sender who is not on the thread's roster (a former
+ * name, a member who left): those messages also go to the push's name match.
  */
 function threadOwner(
   owner: string | undefined,
@@ -1377,7 +1379,9 @@ export class FacebookFileImporter implements FileImporter {
         const context: Metadata = {
           Sender: sender,
           To: to.length ? to.join(', ') : undefined,
-          ...(self && sender ? { 'From Me': sender === self } : {}),
+          ...(self && sender && (sender === self || participants.includes(sender))
+            ? { 'From Me': sender === self }
+            : {}),
           Thread: thread,
         };
         const text = extractEntryBodyText(section);
@@ -1530,7 +1534,9 @@ export class FacebookFileImporter implements FileImporter {
       const context: Metadata = {
         Sender: msg.sender_name || undefined,
         To: to.length ? to.join(', ') : undefined,
-        ...(self && msg.sender_name ? { 'From Me': msg.sender_name === self } : {}),
+        ...(self && msg.sender_name && (msg.sender_name === self || participants.includes(msg.sender_name))
+          ? { 'From Me': msg.sender_name === self }
+          : {}),
         Conversation: thread.title || undefined,
       };
       if (!timeframeContains(params.timeframe, ts)) {

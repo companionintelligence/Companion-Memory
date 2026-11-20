@@ -194,7 +194,7 @@ describe('Facebook datasource — HTML (Download Your Information) format', () =
   });
 });
 
-describe("Facebook datasource — which messages are the owner's", () => {
+describe("Facebook datasource: which messages are the owner's", () => {
   const roots: string[] = [];
 
   afterAll(() => {
@@ -315,6 +315,23 @@ describe("Facebook datasource — which messages are the owner's", () => {
       'Who is in for the loop?': undefined,
       'Boat at 9': undefined,
     });
+  });
+
+  it("leaves a sender who is not on the thread's roster to the push", async () => {
+    const root = buildExport(false);
+    // A one-to-one thread with a message under a name neither participant has now.
+    writeThread(root, 'casimir_404', {
+      participants: [{ name: 'Casimir Thornwhistle' }, { name: ZOE_META }],
+      title: 'Casimir Thornwhistle',
+      messages: [
+        { sender_name: 'Zoe Ashcombe', timestamp_ms: 1758000000000, content: 'Sent under my old name' },
+        { sender_name: 'Casimir Thornwhistle', timestamp_ms: 1758000100000, content: 'Got it' },
+      ],
+    });
+
+    const marks = await fromMe(root);
+    expect(marks['Sent under my old name']).toBeUndefined();
+    expect(marks['Got it']).toBe(false);
   });
 
   it('works out the owner of a one-to-one HTML thread from its folder name', async () => {
