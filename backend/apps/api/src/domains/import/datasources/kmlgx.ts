@@ -47,9 +47,9 @@ interface KMLDocument {
 }
 
 // A gx:Track is the geometry of a Placemark, directly or inside a gx:MultiTrack
-// or MultiGeometry, and a Placemark can sit at the root or in Documents and
-// Folders nested to any depth. Reading only Document > Placemark > gx:Track
-// lost every track kept in a Folder or a gx:MultiTrack without a word.
+// or MultiGeometry. A Placemark can sit at the root or in Documents and Folders
+// nested to any depth. Reading only Document > Placemark > gx:Track lost every
+// track kept in a Folder or a gx:MultiTrack without a word.
 const TRACK_CONTAINERS = ['Document', 'Folder', 'Placemark', 'MultiTrack', 'MultiGeometry'] as const;
 
 function isElement(value: unknown): value is object {
@@ -59,11 +59,13 @@ function isElement(value: unknown): value is object {
 
 function collectTracks(root: KMLNode): KMLTrack[] {
   const tracks: KMLTrack[] = [];
-  // A stack rather than recursion, and one push per track rather than
+  // A stack rather than recursion and one push per track rather than
   // `push(...tracks)`: the nesting depth and the number of children are
-  // whatever the file says, and either one could overflow the call stack and
-  // lose every track in the file. Children go on in reverse so tracks come out
-  // in document order.
+  // whatever the file says. Either one could overflow the call stack and lose
+  // every track in the file. Children go on in reverse so they come off in the
+  // order xml2js lists them. That is document order among elements of one name
+  // but not across names, because xml2js groups same-named children: a Folder's
+  // tracks come out before those of a Placemark written ahead of the Folder.
   const stack: KMLNode[] = [root];
   for (let node = stack.pop(); node; node = stack.pop()) {
     for (const track of node.Track ?? []) {

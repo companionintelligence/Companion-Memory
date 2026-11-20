@@ -142,14 +142,19 @@ describe('GPX & KMLGX datasources', () => {
     async function importKML(content: string): Promise<EmittedGraph[]> {
       const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'test-kml-nested-'));
       const kmlPath = path.join(tmp, 'tracks.kml');
-      fs.writeFileSync(kmlPath, content, 'utf8');
-      const fileImporter = new KMLGXFileImporter();
-      expect((await fileImporter.recognize(undefined, { fullPath: kmlPath } as DirEntry)).confidence).toBe(1);
-      const { params, collected } = makeParams();
-      await fileImporter.fileImport(undefined, { fullPath: kmlPath } as DirEntry, params);
-      fs.rmSync(tmp, { recursive: true, force: true });
+      try {
+        fs.writeFileSync(kmlPath, content, 'utf8');
+        const fileImporter = new KMLGXFileImporter();
+        expect((await fileImporter.recognize(undefined, { fullPath: kmlPath } as DirEntry)).confidence).toBe(
+          1,
+        );
+        const { params, collected } = makeParams();
+        await fileImporter.fileImport(undefined, { fullPath: kmlPath } as DirEntry, params);
 
-      return collected;
+        return collected;
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
     }
 
     const times = (collected: EmittedGraph[]) => collected.map((g) => g.item.timestamp?.toISOString()).sort();

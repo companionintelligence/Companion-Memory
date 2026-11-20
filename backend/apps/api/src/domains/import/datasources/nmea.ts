@@ -14,9 +14,9 @@ type NMEAOptions = Record<string, never>;
 /**
  * An RMC or GGA sentence from any satellite system. The talker id says which
  * system the fix came from: GP (GPS), GL (GLONASS), GA (Galileo), GB or BD
- * (BeiDou), GQ (QZSS), GI (NavIC), and GN for a fix that combines several,
- * which is what current multi-GNSS receivers write. The fields are the same
- * for all of them. Group 1 is the sentence type.
+ * (BeiDou), GQ (QZSS), GI (NavIC) and GN for a fix that combines several
+ * (what current multi-GNSS receivers write). The fields are the same for all
+ * of them. Group 1 is the sentence type.
  */
 const FIX_SENTENCE = /^\$(?:GP|GN|GL|GA|GB|BD|GQ|GI)(RMC|GGA),/;
 
