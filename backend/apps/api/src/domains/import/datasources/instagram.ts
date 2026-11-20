@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { insideRoot } from './_ai_media';
 import { parseMetaJson } from './_meta_json';
 import { listFiles } from './fsWalk';
 import { decodeEntities, htmlToText } from './htmlToText';
@@ -28,6 +29,15 @@ interface IGMessage {
   content?: string;
   share?: { link?: string };
   is_unsent?: boolean;
+  photos?: IGMediaRef[];
+  videos?: IGMediaRef[];
+  gifs?: IGMediaRef[];
+  audio_files?: IGMediaRef[];
+  files?: IGMediaRef[];
+}
+/** A file a DM carried, `uri` relative to the export root. */
+interface IGMediaRef {
+  uri?: string;
 }
 interface IGThread {
   participants?: Array<{ name: string }>;
@@ -375,6 +385,50 @@ async function hasHtmlActivity(actRoot: string): Promise<boolean> {
   );
 }
 
+/**
+ * The files a DM carried (photos, videos, gifs, voice clips, files), as paths
+ * inside the export. A photo-only DM has no `content`, so without these it
+ * landed as an empty message and the photo was not imported at all. A
+ * reference that resolves outside the export, or to nothing (Meta splits large
+ * exports across several downloads), is left off and logged.
+ */
+function messageMediaPaths(exportRoot: string, actRoot: string, msg: IGMessage, params: ImportParams): string[] {
+  const refs = [
+    ...(msg.photos ?? []),
+    ...(msg.videos ?? []),
+    ...(msg.gifs ?? []),
+    ...(msg.audio_files ?? []),
+    ...(msg.files ?? []),
+  ];
+
+  return refs.flatMap((ref) => {
+    if (typeof ref?.uri !== 'string' || !ref.uri) {
+      return [];
+    }
+
+    const rel = ref.uri.split('\\').join('/');
+    const found = [exportRoot, actRoot]
+      .map((base) => path.resolve(base, rel))
+      .find((abs) => insideRoot(exportRoot, abs) && isRegularFile(abs));
+
+    if (!found) {
+      params.log?.('warn', 'Instagram message attachment referenced but missing on disk', { uri: rel });
+
+      return [];
+    }
+
+    return [found];
+  });
+}
+
+function isRegularFile(abs: string): boolean {
+  try {
+    return fs.lstatSync(abs).isFile();
+  } catch {
+    return false;
+  }
+}
+
 async function hasJsonActivity(actRoot: string): Promise<boolean> {
   const found = await listFiles(actRoot, {
     maxDepth: ACTIVITY_WALK_DEPTH,
@@ -533,6 +587,11 @@ export class InstagramFileImporter implements FileImporter {
     // thread after the OTHER party, so the owner is the participant that is NOT the title.
     const names = (thread.participants ?? []).map((p) => p.name).filter(Boolean);
     const owner = names.length === 2 ? names.find((n) => n !== thread.title) : undefined;
+    // A DM's media `uri` is relative to the export root: the folder holding
+    // your_instagram_activity/ in current exports, the one holding messages/
+    // in older ones. The thread file sits at <activity>/messages/inbox/<thread>/.
+    const actRoot = path.resolve(path.dirname(fpath), '..', '..', '..');
+    const exportRoot = path.basename(actRoot) === 'your_instagram_activity' ? path.dirname(actRoot) : actRoot;
     for (const msg of thread.messages ?? []) {
       if (msg.is_unsent) {
         params.pipeline.drop?.('unsent_message');
@@ -546,6 +605,7 @@ export class InstagramFileImporter implements FileImporter {
 
       const text = msg.content ?? msg.share?.link ?? '';
       const to = names.filter((n) => n !== msg.sender_name);
+      const media = messageMediaPaths(exportRoot, actRoot, msg, params);
       params.pipeline.push({
         item: {
           classification: 'message',
@@ -558,6 +618,10 @@ export class InstagramFileImporter implements FileImporter {
             Conversation: thread.title || undefined,
             Source: 'Instagram',
             Text: text || undefined,
+            // The same attachment lane Messenger's DMs take (facebook.ts
+            // attachmentMetadata): uploaded with the message, and a content row
+            // each so a photo someone sent can be found by itself.
+            ...(media.length > 0 && { MediaFilePaths: media, AttachmentContent: true }),
           },
         },
       });
