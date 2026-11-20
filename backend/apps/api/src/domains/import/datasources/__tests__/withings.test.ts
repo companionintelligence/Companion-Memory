@@ -305,6 +305,25 @@ describe('Withings datasource', () => {
       expect(sleep[1].timestamp!.toISOString()).toBe('2026-10-30T21:47:00.000Z');
     });
 
+    // Nights recorded before a device tracked stages carry blank or zero stage
+    // columns and only the time awake. 0 minutes asleep would count each one
+    // as a night without sleep in the daily total.
+    it('counts a night without sleep stages as its length less the time awake', async () => {
+      const { items } = await importDir({
+        'sleep.csv':
+          'from,to,"light (s)","deep (s)","rem (s)","awake (s)","wake up"\n' +
+          '2019-03-02T23:30:00+00:00,2019-03-03T07:00:00+00:00,,,,1800,1\n' +
+          '2019-03-03T23:00:00+00:00,2019-03-04T06:00:00+00:00,0,0,0,,0\n' +
+          '2019-03-05T23:00:00+00:00,,,,,600,0\n',
+      });
+      expect(items.map((i) => i.metadata['Minutes Asleep'])).toEqual([420, 420, undefined]);
+      expect(items.map((i) => i.metadata.Title)).toEqual([
+        'Slept 420 min on 2019-03-03',
+        'Slept 420 min on 2019-03-04',
+        'Slept ? min on 2019-03-05',
+      ]);
+    });
+
     it('reads a sleep.csv whose headers are translated', async () => {
       const { items } = await importDir({
         'sleep.csv':

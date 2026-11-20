@@ -103,6 +103,14 @@ export class WithingsFileImporter extends CsvExportImporter {
 
   protected async processFile(fpath: string, params: ImportParams): Promise<void> {
     const base = path.basename(fpath);
+    // The per-reading raw_*.csv samples, often the export's largest files:
+    // counted as dropped, by file, without reading them.
+    if (/^raw_.+\.csv$/i.test(base)) {
+      params.pipeline.drop?.('unread_export_file', base);
+
+      return;
+    }
+
     let raw: string;
     try {
       raw = await fs.promises.readFile(fpath, 'utf8');
@@ -265,12 +273,20 @@ function readSleep(base: string, rows: string[][], params: ImportParams): void {
       return;
     }
 
-    const seconds = [2, 3, 4].map((i) => cellNumber(row[i]) ?? 0);
-    const asleep = Math.round(seconds.reduce((a, b) => a + b, 0) / 60);
+    const staged = [2, 3, 4].map((i) => cellNumber(row[i]) ?? 0).reduce((a, b) => a + b, 0);
     const awake = cellNumber(row[5]);
     const end = parseWithingsDate(row[1] ?? '');
+    // Nights from before the device tracked stages have none, only the time
+    // awake: count the night less that, rather than a night of no sleep.
+    const inBed = start && end && end > start ? (end.getTime() - start.getTime()) / 1000 : undefined;
+    const asleep =
+      staged > 0
+        ? Math.round(staged / 60)
+        : inBed !== undefined
+          ? Math.round(Math.max(0, inBed - (awake ?? 0)) / 60)
+          : undefined;
     const night = (row[1] || row[0] || '').slice(0, 10);
-    const title = `Slept ${asleep} min` + (night ? ` on ${night}` : '');
+    const title = `Slept ${asleep ?? '?'} min` + (night ? ` on ${night}` : '');
 
     params.pipeline.push({
       item: {
@@ -399,18 +415,11 @@ function readAggregate(base: string, name: string, rows: string[][], params: Imp
 
 /**
  * Read one of the export's files that the `Date`-column path can't: sleep,
- * workouts and the daily totals. The per-reading `raw_*.csv` samples are
- * counted as dropped, by file. Returns false for any other file, which then
+ * workouts and the daily totals. Returns false for any other file, which then
  * goes through the `Date`-column path as before.
  */
 function readNamedExportFile(base: string, raw: string, params: ImportParams): boolean {
   const name = base.toLowerCase();
-  if (/^raw_.+\.csv$/.test(name)) {
-    params.pipeline.drop?.('unread_export_file', base);
-
-    return true;
-  }
-
   const aggregate = /^aggregates_(.+)\.csv$/.exec(name);
   if (name !== 'sleep.csv' && name !== 'activities.csv' && !aggregate) {
     return false;
