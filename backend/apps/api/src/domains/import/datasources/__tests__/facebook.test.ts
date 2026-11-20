@@ -297,6 +297,26 @@ describe("Facebook datasource — which messages are the owner's", () => {
     expect((await fromMe(root))['Who is in for the loop?']).toBe(true);
   });
 
+  it('ignores a profile name nobody in the thread goes by', async () => {
+    const root = buildExport(false);
+    const profileDir = path.join(root, 'personal_information', 'profile_information');
+    fs.mkdirSync(profileDir, { recursive: true });
+    // Renamed since: the threads still carry the name the messages were sent under.
+    fs.writeFileSync(
+      path.join(profileDir, 'profile_information.json'),
+      JSON.stringify({ profile_v2: { name: { full_name: 'Zoe Ashcombe' } } }),
+    );
+
+    // The one-to-one thread still tells; the rest is left to the push.
+    expect(await fromMe(root)).toEqual({
+      'See you at the trailhead at 7 then': true,
+      'Here is the ridge': false,
+      'I can bring the stove': undefined,
+      'Who is in for the loop?': undefined,
+      'Boat at 9': undefined,
+    });
+  });
+
   it('works out the owner of a one-to-one HTML thread from its folder name', async () => {
     const root = path.join(FIXTURES_DIR, 'facebook-html-export');
     const fi = new FacebookFileImporter();

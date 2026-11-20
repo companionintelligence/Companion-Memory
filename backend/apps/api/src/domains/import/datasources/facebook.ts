@@ -453,18 +453,21 @@ async function readOwnerName(root: string): Promise<string | undefined> {
 }
 
 /**
- * Who in this thread is the export's owner: the profile's name when the export
- * has one, else, in a two-person thread named after one of them, the other one
- * (Meta titles a one-to-one thread with the other person's name). Undefined
- * when neither tells, which leaves the push to match the sender against the
- * Memory account's name.
+ * Who in this thread is the export's owner: the profile's name when someone in
+ * the thread goes by it, else, in a two-person thread named after one of them,
+ * the other one (Meta titles a one-to-one thread with the other person's name).
+ * Undefined when neither tells, which leaves the push to match the sender
+ * against the Memory account's name. A profile name nobody in the thread uses
+ * (a name changed since, a different spelling) says nothing about it, so it
+ * must not mark every message there as received.
  */
 function threadOwner(
   owner: string | undefined,
+  names: ReadonlySet<string>,
   participants: string[],
   isTitle: (name: string) => boolean,
 ): string | undefined {
-  if (owner) {
+  if (owner && names.has(owner)) {
     return owner;
   }
 
@@ -1362,7 +1365,8 @@ export class FacebookFileImporter implements FileImporter {
 
     // The thread name here is the folder name, so compare letters and digits only.
     const fold = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
-    const self = threadOwner(owner, participants, (n) => !!thread && fold(n) === fold(thread));
+    const names = new Set([...participants, ...sections.map((section) => extractHeading(section) || '')]);
+    const self = threadOwner(owner, names, participants, (n) => !!thread && fold(n) === fold(thread));
     let idx = 0;
     for (const section of sections) {
       const i = idx++;
@@ -1512,7 +1516,8 @@ export class FacebookFileImporter implements FileImporter {
     const rel = exportRelPath(root, fpath);
     // Thread roster, so each message can derive recipients (To = participants minus sender).
     const participants = (thread.participants ?? []).map((p) => p.name).filter(Boolean) as string[];
-    const self = threadOwner(owner, participants, (n) => n === thread.title);
+    const names = new Set([...participants, ...(thread.messages ?? []).map((msg) => msg.sender_name ?? '')]);
+    const self = threadOwner(owner, names, participants, (n) => n === thread.title);
     let idx = 0;
     for (const msg of thread.messages ?? []) {
       const i = idx++;

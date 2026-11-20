@@ -58,13 +58,20 @@ function looksRoblox(name: string): boolean {
 const MAX_ACCOUNT_FILE_BYTES = 1024 * 1024;
 
 /**
+ * A file about the account itself (`AccountInformation`, `Account_Info`,
+ * `AccountDetails`), not a list of other accounts (`BlockedAccounts`,
+ * `LinkedAccounts`) or the account's transactions.
+ */
+const ACCOUNT_FILE_RE = /^(user[\s_-]*)?account([\s_-]*(info(rmation)?|details?|profile|settings))?$/i;
+
+/**
  * The report owner's username, from a file named like `AccountInformation`
- * with a `Username` column or field. Best-effort like the rest of this
- * importer: the report's layout is undocumented.
+ * with a `Username` column or field, holding one row. Best-effort like the rest
+ * of this importer: the report's layout is undocumented.
  */
 async function reportOwner(files: string[]): Promise<string | undefined> {
   for (const f of files) {
-    if (!/account/i.test(path.basename(f))) {
+    if (!ACCOUNT_FILE_RE.test(path.basename(f, path.extname(f)))) {
       continue;
     }
 
@@ -75,13 +82,12 @@ async function reportOwner(files: string[]): Promise<string | undefined> {
 
       const raw = await fs.promises.readFile(f, 'utf8');
       const rows: unknown[] = path.extname(f).toLowerCase() === '.csv' ? parseCSV(raw) : [JSON.parse(raw)].flat();
-      for (const row of rows) {
-        if (row && typeof row === 'object') {
-          const key = Object.keys(row).find((k) => /^user_?name$/i.test(k));
-          const value = key ? (row as Record<string, unknown>)[key] : undefined;
-          if (typeof value === 'string' && value.trim()) {
-            return value.trim();
-          }
+      const row = rows.length === 1 ? rows[0] : undefined;
+      if (row && typeof row === 'object') {
+        const key = Object.keys(row).find((k) => /^user_?name$/i.test(k));
+        const value = key ? (row as Record<string, unknown>)[key] : undefined;
+        if (typeof value === 'string' && value.trim()) {
+          return value.trim();
         }
       }
     } catch {

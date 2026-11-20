@@ -184,5 +184,25 @@ describe('Roblox datasource', () => {
     it('leaves direction unset when the report names no account', async () => {
       expect(await directions(report({ 'ChatHistory.csv': CHAT }))).toEqual([undefined, undefined]);
     });
+
+    it('does not take the owner from a file that lists other accounts', async () => {
+      const dir = report({
+        'AlternateAccounts.csv': 'UserId,Username\n5520017741,BramblewoodOtto\n',
+        'BlockedAccounts.csv': 'UserId,Username\n5520017741,BramblewoodOtto\n6620017742,Marigold_Penhallow\n',
+        'AccountInformation.csv': 'UserId,Username\n4419028815,QuillfeatherZ\n',
+        'ChatHistory.csv': CHAT,
+      });
+
+      expect(await directions(dir)).toEqual(['sent', 'received']);
+    });
+
+    it('leaves direction unset when only a list of other accounts names anyone', async () => {
+      const dir = report({
+        'LinkedAccounts.csv': 'UserId,Username\n5520017741,BramblewoodOtto\n',
+        'ChatHistory.csv': CHAT,
+      });
+
+      expect(await directions(dir)).toEqual([undefined, undefined]);
+    });
   });
 });
