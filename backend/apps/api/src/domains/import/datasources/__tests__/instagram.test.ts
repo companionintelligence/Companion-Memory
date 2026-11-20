@@ -521,7 +521,13 @@ describe('Instagram datasource: photo DMs', () => {
   // Its `uri` is relative to the export root, which is the folder holding
   // your_instagram_activity/ in current exports and the one holding messages/
   // in older ones.
-  const importThread = async (root: string, threadDir: string, uri: string, extra: string[] = []) => {
+  const importThread = async (
+    root: string,
+    threadDir: string,
+    uri: string,
+    extra: string[] = [],
+    log: ImportParams['log'] = () => {},
+  ) => {
     fs.mkdirSync(path.join(threadDir, 'photos'), { recursive: true });
     fs.writeFileSync(path.join(threadDir, 'photos', '18012345678901234.jpg'), 'jpeg');
     fs.writeFileSync(
@@ -544,7 +550,7 @@ describe('Instagram datasource: photo DMs', () => {
     await new InstagramFileImporter().fileImport({}, { filename: 'ig', fullPath: root }, {
       pipeline,
       timeframe: {},
-      log: () => {},
+      log,
     } as unknown as ImportParams);
 
     return pipeline.find((p) => p.item.classification === 'message')!.item;
@@ -554,17 +560,26 @@ describe('Instagram datasource: photo DMs', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ig-photo-dm-'));
     try {
       const thread = 'your_instagram_activity/messages/inbox/ottoline_17841400000000001';
+      const log = jest.fn();
       const msg = await importThread(
         root,
         path.join(root, thread),
         `${thread}/photos/18012345678901234.jpg`,
         // Outside the export, and a file Meta put in another download: neither is attached.
         ['../../etc/passwd', `${thread}/photos/not-in-this-download.jpg`],
+        log,
       );
 
       expect(msg.metadata.Text).toBeUndefined();
       expect(msg.metadata.MediaFilePaths).toEqual([path.join(root, thread, 'photos', '18012345678901234.jpg')]);
       expect(msg.metadata.AttachmentContent).toBe(true);
+      // One line for the thread, not one per file: a split export misses thousands.
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(log).toHaveBeenCalledWith(
+        'warn',
+        'Instagram message attachments referenced but missing on disk',
+        expect.objectContaining({ thread: 'ottoline_17841400000000001', count: 2 }),
+      );
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

@@ -390,9 +390,11 @@ async function hasHtmlActivity(actRoot: string): Promise<boolean> {
  * inside the export. A photo-only DM has no `content`, so without these it
  * landed as an empty message and the photo was not imported at all. A
  * reference that resolves outside the export, or to nothing (Meta splits large
- * exports across several downloads), is left off and logged.
+ * exports across several downloads), is left off and added to `missing`. The
+ * caller logs those once per thread: a single download of a split export can
+ * be missing thousands of them.
  */
-function messageMediaPaths(exportRoot: string, actRoot: string, msg: IGMessage, params: ImportParams): string[] {
+function messageMediaPaths(exportRoot: string, actRoot: string, msg: IGMessage, missing: string[]): string[] {
   const refs = [
     ...(msg.photos ?? []),
     ...(msg.videos ?? []),
@@ -412,7 +414,7 @@ function messageMediaPaths(exportRoot: string, actRoot: string, msg: IGMessage, 
       .find((abs) => insideRoot(exportRoot, abs) && isRegularFile(abs));
 
     if (!found) {
-      params.log?.('warn', 'Instagram message attachment referenced but missing on disk', { uri: rel });
+      missing.push(rel);
 
       return [];
     }
@@ -592,6 +594,7 @@ export class InstagramFileImporter implements FileImporter {
     // in older ones. The thread file sits at <activity>/messages/inbox/<thread>/.
     const actRoot = path.resolve(path.dirname(fpath), '..', '..', '..');
     const exportRoot = path.basename(actRoot) === 'your_instagram_activity' ? path.dirname(actRoot) : actRoot;
+    const missing: string[] = [];
     for (const msg of thread.messages ?? []) {
       if (msg.is_unsent) {
         params.pipeline.drop?.('unsent_message');
@@ -605,7 +608,7 @@ export class InstagramFileImporter implements FileImporter {
 
       const text = msg.content ?? msg.share?.link ?? '';
       const to = names.filter((n) => n !== msg.sender_name);
-      const media = messageMediaPaths(exportRoot, actRoot, msg, params);
+      const media = messageMediaPaths(exportRoot, actRoot, msg, missing);
       params.pipeline.push({
         item: {
           classification: 'message',
@@ -619,11 +622,19 @@ export class InstagramFileImporter implements FileImporter {
             Source: 'Instagram',
             Text: text || undefined,
             // The same attachment lane Messenger's DMs take (facebook.ts
-            // attachmentMetadata): uploaded with the message, and a content row
-            // each so a photo someone sent can be found by itself.
+            // attachmentMetadata): uploaded with the message plus a content row
+            // each, so a photo someone sent can be found by itself.
             ...(media.length > 0 && { MediaFilePaths: media, AttachmentContent: true }),
           },
         },
+      });
+    }
+
+    if (missing.length > 0) {
+      params.log?.('warn', 'Instagram message attachments referenced but missing on disk', {
+        thread: path.basename(path.dirname(fpath)),
+        count: missing.length,
+        example: missing[0],
       });
     }
   }
