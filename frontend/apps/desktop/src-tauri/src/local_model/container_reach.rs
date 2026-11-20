@@ -11,11 +11,12 @@
 //! while every model call from the api timed out, and nothing said why.
 //!
 //! So once the stack is up, the app runs curl inside the api container against
-//! the same address the api uses and logs what came back: reachable, timed out
-//! (a firewall drops the connections), refused (nothing listens where the
-//! containers arrive) or another error. The app never changes the firewall.
-//! When ufw is on and its configuration is readable without root, the warning
-//! names the rule to add.
+//! the same address the api uses and logs what came back: reachable, no
+//! connection in time (a firewall drops the connections), a connection but no
+//! answer, a connection turned away (nothing listens where the containers
+//! arrive, or a firewall rejects them) or another error. The app never changes
+//! the firewall. When ufw is on and its configuration is readable without root,
+//! the warning names the rule to add.
 //!
 //! Compiled everywhere, like bridge_relay, so its tests run on every leg of
 //! `desktop-build.yml`. Only the Linux path records a check: Docker Desktop on
@@ -62,9 +63,13 @@ pub struct Target {
 pub enum Reach {
     /// Ollama's `/api/version` answered with a success status.
     Reachable,
-    /// No answer within CURL_MAX_SECONDS: the connection is being dropped.
+    /// No connection within CURL_MAX_SECONDS: the attempts are being dropped.
     TimedOut,
-    /// curl could not connect (its exit code 7). `detail` is what curl said.
+    /// A connection was made but nothing answered within CURL_MAX_SECONDS. The
+    /// containers get through to this host, so no firewall drops them.
+    NoAnswer,
+    /// curl could not connect (its exit code 7): refused, or turned away with
+    /// an ICMP error. `detail` is what curl said.
     Refused { detail: String },
     /// Something answered, with this status instead of Ollama's version.
     HttpStatus(u16),
@@ -92,8 +97,9 @@ fn api_container() -> String {
 
 /// The `docker` arguments of the probe. No shell, so nothing is quoted.
 /// `--noproxy` because the api calls Ollama directly, whatever proxy the image
-/// sets. `-w` prints the HTTP status on stdout; `-sS` keeps curl's own error
-/// on stderr.
+/// sets. `-w` prints the HTTP status and how many connections curl made on
+/// stdout (`000 0` when it never connected); `-sS` keeps curl's own error on
+/// stderr.
 fn probe_args(container: &str, port: u16) -> Vec<String> {
     let max_seconds = CURL_MAX_SECONDS.to_string();
     let url = format!("http://host.docker.internal:{port}/api/version");
@@ -109,7 +115,7 @@ fn probe_args(container: &str, port: u16) -> Vec<String> {
         "-m",
         &max_seconds,
         "-w",
-        "%{http_code}",
+        "%{http_code} %{num_connects}",
         &url,
     ]
     .iter()
@@ -130,14 +136,17 @@ fn container_not_running(said: &str) -> bool {
 }
 
 /// What went wrong, in the words of whoever said it. curl writes its error to
-/// stderr and only the HTTP status (`000` when there was none) to stdout.
-/// Docker 29 writes a failed exec ("executable file not found") to stdout when
-/// stdout is a pipe, as it is here.
+/// stderr and only its `-w` numbers to stdout. Docker 29 writes a failed exec
+/// ("executable file not found") to stdout when stdout is a pipe, as it is
+/// here.
 fn error_text(stdout: &str, stderr: &str) -> String {
     let (stdout, stderr) = (stdout.trim(), stderr.trim());
     if !stderr.is_empty() {
         stderr.to_string()
-    } else if stdout.chars().all(|c| c.is_ascii_digit()) {
+    } else if stdout
+        .chars()
+        .all(|c| c.is_ascii_digit() || c.is_ascii_whitespace())
+    {
         String::new()
     } else {
         stdout.to_string()
@@ -150,18 +159,29 @@ fn error_text(stdout: &str, stderr: &str) -> String {
 /// `docker exec` passes curl's exit code through. Docker itself exits 1 when it
 /// cannot exec at all, and 126 or 127 when the program cannot be run (127 for
 /// one that is not in the image on Docker 29). curl never uses those.
+///
+/// curl's exit 28 covers both a connection that never came about and one that
+/// was made and then got no answer. Only the first is a firewall dropping the
+/// packets, so the connection count tells them apart.
 fn classify(exit_code: Option<i32>, stdout: &str, stderr: &str) -> Reach {
     let detail = error_text(stdout, stderr);
+    let mut written = stdout.split_whitespace();
+    let status = written.next().and_then(|status| status.parse::<u16>().ok());
+    let connected = written
+        .next()
+        .and_then(|count| count.parse::<u32>().ok())
+        .is_some_and(|count| count > 0);
 
     match exit_code {
-        Some(0) => match stdout.trim().parse::<u16>() {
-            Ok(status) if (200..300).contains(&status) => Reach::Reachable,
-            Ok(status) => Reach::HttpStatus(status),
-            Err(_) => Reach::Failed {
+        Some(0) => match status {
+            Some(status) if (200..300).contains(&status) => Reach::Reachable,
+            Some(status) => Reach::HttpStatus(status),
+            None => Reach::Failed {
                 detail: format!("curl printed no HTTP status (stdout: {:?})", stdout.trim()),
             },
         },
         Some(7) => Reach::Refused { detail },
+        Some(28) if connected => Reach::NoAnswer,
         Some(28) => Reach::TimedOut,
         Some(126 | 127) => Reach::NoCurl { detail },
         _ if container_not_running(&detail) => Reach::ContainerNotRunning,
@@ -292,8 +312,12 @@ fn allow_ranges(appliance_subnets: &[Ipv4Subnet]) -> Vec<String> {
     ranges
 }
 
-fn ufw_allow_command(range: &str, port: u16) -> String {
-    format!("sudo ufw allow from {range} to any port {port} proto tcp")
+/// The rule names the gateway as its destination when it is known: that is the
+/// only address the containers call, and a rule for any address would also
+/// open the port to hosts on a LAN that happens to use 172.16.0.0/12.
+fn ufw_allow_command(range: &str, gateway: Option<Ipv4Addr>, port: u16) -> String {
+    let to = gateway.map_or_else(|| "any".to_string(), |gateway| gateway.to_string());
+    format!("sudo ufw allow from {range} to {to} port {port} proto tcp")
 }
 
 /// What to tell the person about the firewall, or None when it is unlikely to
@@ -302,22 +326,27 @@ fn firewall_advice(
     reach: &Reach,
     ufw: Option<Ufw>,
     ranges: &[String],
-    port: u16,
+    target: &Target,
 ) -> Option<String> {
+    let port = target.port;
     let ufw_on = ufw.is_some_and(|ufw| ufw.enabled);
     let ufw_rejects = ufw.is_some_and(|ufw| ufw.enabled && ufw.rejects);
     let commands = ranges
         .iter()
-        .map(|range| ufw_allow_command(range, port))
+        .map(|range| ufw_allow_command(range, target.gateway, port))
         .collect::<Vec<_>>()
         .join("` and `");
+    let destination = match target.gateway {
+        Some(gateway) => format!("{gateway} port {port}"),
+        None => format!("port {port}"),
+    };
 
     match reach {
         Reach::TimedOut if ufw_on => Some(format!(
             "ufw is on. Allow the appliance's networks with `{commands}`."
         )),
         Reach::TimedOut => Some(format!(
-            "Allow incoming TCP connections to port {port} from the appliance's docker networks ({}) in this \
+            "Allow incoming TCP connections from the appliance's docker networks ({}) to {destination} in this \
              computer's firewall.",
             ranges.join(", ")
         )),
@@ -370,6 +399,20 @@ fn describe(reach: &Reach, target: &Target, advice: Option<&str>) -> (log::Level
                 target.port
             )),
         ),
+        Reach::NoAnswer => {
+            let next = if target.relayed {
+                format!("This app's relay passes it on to 127.0.0.1:{}; check that Ollama there answers.", target.port)
+            } else {
+                "Check that your Ollama answers.".to_string()
+            };
+            (
+                log::Level::Warn,
+                format!(
+                    "The appliance's containers get no answer from Ollama. From inside the api container, {at} \
+                     accepted the connection but sent nothing back within {CURL_MAX_SECONDS} seconds. {next}"
+                ),
+            )
+        }
         Reach::Refused { detail } => {
             let next = if target.relayed {
                 "This app's relay was started there; look for a relay error earlier in this log."
@@ -379,8 +422,9 @@ fn describe(reach: &Reach, target: &Target, advice: Option<&str>) -> (log::Level
             (
                 log::Level::Warn,
                 with_advice(format!(
-                    "The appliance's containers cannot reach Ollama. From inside the api container, the \
-                     connection to {at} was refused, so nothing is listening there for them ({detail}). {next}"
+                    "The appliance's containers cannot reach Ollama. From inside the api container, curl could \
+                     not connect to {at} ({detail}). Either nothing is listening there for them or a firewall on \
+                     this computer turns their connections away. {next}"
                 )),
             )
         }
@@ -423,7 +467,7 @@ pub(super) fn check_and_log(target: &Target) -> bool {
     // Asked only when the firewall may be the cause: each read spawns docker.
     let advice = if reach.may_be_firewall() {
         let ranges = allow_ranges(&super::bridge_relay::discover_appliance_subnets());
-        firewall_advice(&reach, read_ufw(), &ranges, target.port)
+        firewall_advice(&reach, read_ufw(), &ranges, target)
     } else {
         None
     };
@@ -439,6 +483,8 @@ mod tests {
     use super::*;
 
     const TIMED_OUT: &str = "curl: (28) Connection timed out after 5002 milliseconds";
+    const NO_ANSWER: &str =
+        "curl: (28) Operation timed out after 5001 milliseconds with 0 bytes received";
     const REFUSED: &str =
         "curl: (7) Failed to connect to host.docker.internal port 11434 after 0 ms: Could not connect to server";
 
@@ -457,7 +503,7 @@ mod tests {
         assert_eq!(api_container(), "ci-server-desktop-api-1");
         assert_eq!(
             probe_args("ci-server-desktop-api-1", 11434).join(" "),
-            "exec ci-server-desktop-api-1 curl --noproxy * -sS -o /dev/null -m 5 -w %{http_code} \
+            "exec ci-server-desktop-api-1 curl --noproxy * -sS -o /dev/null -m 5 -w %{http_code} %{num_connects} \
              http://host.docker.internal:11434/api/version"
         );
     }
@@ -466,23 +512,41 @@ mod tests {
     /// a real run printed (curl 8.14 in the 2026.11.19 api image).
     #[test]
     fn curls_exit_code_and_status_decide_the_outcome() {
-        assert_eq!(classify(Some(0), "200", ""), Reach::Reachable);
-        assert_eq!(classify(Some(0), "204\n", ""), Reach::Reachable);
-        assert_eq!(classify(Some(28), "000", TIMED_OUT), Reach::TimedOut);
+        assert_eq!(classify(Some(0), "200 1", ""), Reach::Reachable);
+        assert_eq!(classify(Some(0), "204 1\n", ""), Reach::Reachable);
+        assert_eq!(classify(Some(28), "000 0", TIMED_OUT), Reach::TimedOut);
         assert_eq!(
-            classify(Some(7), "000", REFUSED),
+            classify(Some(7), "000 0", REFUSED),
             Reach::Refused {
                 detail: REFUSED.to_string()
             }
         );
     }
 
+    /// Exit 28 also ends a request whose connection was made but never
+    /// answered. Nothing dropped those packets, so it is not a timeout to
+    /// blame on a firewall.
+    #[test]
+    fn a_connection_that_gets_no_answer_is_not_a_dropped_one() {
+        assert_eq!(classify(Some(28), "000 1", NO_ANSWER), Reach::NoAnswer);
+        assert!(!Reach::NoAnswer.may_be_firewall());
+
+        let (level, message) = describe(&Reach::NoAnswer, &gateway_target(true), None);
+        assert_eq!(level, log::Level::Warn);
+        assert!(message.contains("accepted the connection"), "{message}");
+        assert!(
+            message.contains("relay passes it on to 127.0.0.1:11434"),
+            "{message}"
+        );
+        assert!(!message.contains("firewall"), "{message}");
+    }
+
     /// Without `-f`, curl exits 0 for any HTTP status. Only a success is Ollama
     /// answering its version.
     #[test]
     fn an_answer_that_is_not_a_success_is_not_ollama() {
-        assert_eq!(classify(Some(0), "404", ""), Reach::HttpStatus(404));
-        assert_eq!(classify(Some(0), "502", ""), Reach::HttpStatus(502));
+        assert_eq!(classify(Some(0), "404 1", ""), Reach::HttpStatus(404));
+        assert_eq!(classify(Some(0), "502 1", ""), Reach::HttpStatus(502));
         assert!(matches!(classify(Some(0), "", ""), Reach::Failed { .. }));
     }
 
@@ -526,13 +590,13 @@ mod tests {
 
         let unresolved = "curl: (6) Could not resolve host: host.docker.internal";
         assert_eq!(
-            classify(Some(6), "000", unresolved),
+            classify(Some(6), "000 0", unresolved),
             Reach::Failed {
                 detail: unresolved.to_string()
             }
         );
         assert!(
-            matches!(classify(Some(52), "000", ""), Reach::Failed { detail } if detail.contains("52"))
+            matches!(classify(Some(52), "000 1", ""), Reach::Failed { detail } if detail.contains("52"))
         );
         assert!(matches!(classify(None, "", ""), Reach::Failed { .. }));
     }
@@ -647,7 +711,8 @@ mod tests {
     }
 
     /// The reported case: ufw on with its default DROP policy, the user's
-    /// Ollama on *:11434 and the containers timing out.
+    /// Ollama on *:11434 and the containers timing out. The rule opens the port
+    /// on the gateway address only, so a LAN in 172.16.0.0/12 gains nothing.
     #[test]
     fn a_timeout_with_ufw_on_names_the_exact_rule() {
         let ranges = allow_ranges(&parse_subnets("172.18.0.0/16"));
@@ -655,12 +720,14 @@ mod tests {
             enabled: true,
             rejects: false,
         });
-        let advice = firewall_advice(&Reach::TimedOut, ufw, &ranges, 11434).expect("advice");
-        let (level, message) = describe(&Reach::TimedOut, &gateway_target(false), Some(&advice));
+        let target = gateway_target(false);
+        let advice = firewall_advice(&Reach::TimedOut, ufw, &ranges, &target).expect("advice");
+        let (level, message) = describe(&Reach::TimedOut, &target, Some(&advice));
 
         assert_eq!(level, log::Level::Warn);
         assert!(
-            message.contains("`sudo ufw allow from 172.16.0.0/12 to any port 11434 proto tcp`"),
+            message
+                .contains("`sudo ufw allow from 172.16.0.0/12 to 172.17.0.1 port 11434 proto tcp`"),
             "{message}"
         );
         assert!(
@@ -670,6 +737,26 @@ mod tests {
         assert!(
             message.contains("most likely by a firewall on this computer"),
             "{message}"
+        );
+    }
+
+    /// Rootless Docker reports no gateway, so the rule cannot name one.
+    #[test]
+    fn without_a_known_gateway_the_rule_is_for_any_address() {
+        let rootless = Target {
+            port: 11434,
+            gateway: None,
+            relayed: false,
+        };
+        let ufw = Some(Ufw {
+            enabled: true,
+            rejects: false,
+        });
+        let ranges = vec!["172.16.0.0/12".to_string()];
+        let advice = firewall_advice(&Reach::TimedOut, ufw, &ranges, &rootless).expect("advice");
+        assert!(
+            advice.contains("`sudo ufw allow from 172.16.0.0/12 to any port 11434 proto tcp`"),
+            "{advice}"
         );
     }
 
@@ -683,9 +770,10 @@ mod tests {
                 rejects: false,
             }),
         ] {
-            let advice = firewall_advice(&Reach::TimedOut, ufw, &ranges, 11434).expect("advice");
+            let advice = firewall_advice(&Reach::TimedOut, ufw, &ranges, &gateway_target(false))
+                .expect("advice");
             assert!(!advice.contains("sudo"), "{advice}");
-            assert!(advice.contains("port 11434"), "{advice}");
+            assert!(advice.contains("172.17.0.1 port 11434"), "{advice}");
             assert!(advice.contains("192.168.32.0/20"), "{advice}");
         }
     }
@@ -698,6 +786,7 @@ mod tests {
             detail: REFUSED.to_string(),
         };
         let ranges = vec!["172.16.0.0/12".to_string()];
+        let target = gateway_target(false);
 
         assert_eq!(
             firewall_advice(
@@ -707,11 +796,11 @@ mod tests {
                     rejects: false
                 }),
                 &ranges,
-                11434
+                &target
             ),
             None
         );
-        assert_eq!(firewall_advice(&refused, None, &ranges, 11434), None);
+        assert_eq!(firewall_advice(&refused, None, &ranges, &target), None);
         let advice = firewall_advice(
             &refused,
             Some(Ufw {
@@ -719,17 +808,21 @@ mod tests {
                 rejects: true,
             }),
             &ranges,
-            11434,
+            &target,
         )
         .expect("ufw rejects");
         assert!(
-            advice.contains("sudo ufw allow from 172.16.0.0/12 to any port 11434 proto tcp"),
+            advice.contains("sudo ufw allow from 172.16.0.0/12 to 172.17.0.1 port 11434 proto tcp"),
             "{advice}"
         );
 
         let (level, message) = describe(&refused, &gateway_target(true), None);
         assert_eq!(level, log::Level::Warn);
         assert!(message.contains("nothing is listening there"), "{message}");
+        assert!(
+            message.contains("turns their connections away"),
+            "{message}"
+        );
         assert!(message.contains("relay"), "{message}");
         assert!(
             message.contains("Could not connect to server"),

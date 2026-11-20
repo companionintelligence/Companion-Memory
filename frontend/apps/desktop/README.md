@@ -190,12 +190,15 @@ working. Resolved once per launch, cheapest option first:
    address goes over loopback, which a firewall always lets through. So once
    Memory is up, the app runs `curl` inside the `api` container against
    `host.docker.internal:11434` (`local_model::container_reach`) and logs the
-   outcome in `desktop.log`. A timeout means the connections are being
-   dropped. With ufw on (its default incoming policy drops them), the warning
-   names the rule to add, usually
-   `sudo ufw allow from 172.16.0.0/12 to any port 11434 proto tcp`. The app
-   never changes the firewall itself. This applies to your own Ollama in
-   option 1 as well, including one bound to `0.0.0.0`.
+   outcome in `desktop.log`. A connection that never comes about within five
+   seconds means they are being dropped. With ufw on (its default incoming
+   policy drops them), the warning names the rule to add, usually
+   `sudo ufw allow from 172.16.0.0/12 to 172.17.0.1 port 11434 proto tcp`:
+   Docker's address pool as the source and the bridge gateway, the one
+   address the containers call, as the destination. It doesn't open the port
+   on this computer's LAN address, even on a LAN that also uses
+   172.16.0.0/12. The app never changes the firewall itself. This applies to your own Ollama in option 1 as well, including one
+   bound to `0.0.0.0`.
 
    > **Under rootless Docker** no bridge gateway is discoverable (the
    > `host-gateway` alias resolves inside RootlessKit's namespace, moby#47684).
