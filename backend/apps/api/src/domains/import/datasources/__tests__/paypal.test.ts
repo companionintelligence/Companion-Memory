@@ -170,6 +170,61 @@ describe('PayPal dedup', () => {
   });
 });
 
+describe('PayPal time zone', () => {
+  // The Activity download's own column order: Date, Time, TimeZone, then the rest.
+  const HEADER =
+    '"Date","Time","TimeZone","Name","Type","Status","Currency","Gross","Fee","Net","Transaction ID"\n';
+
+  async function stamps(rows: string[]): Promise<Record<string, string | undefined>> {
+    const pipeline = await runImport(HEADER + rows.join('\n') + '\n');
+
+    return Object.fromEntries(
+      pipeline.map((p) => [
+        p.item.metadata['Transaction ID'],
+        (p.item.timestamp as Date | undefined)?.toISOString(),
+      ]),
+    );
+  }
+
+  it('reads each row in the zone its TimeZone column names, daylight saving included', async () => {
+    const byId = await stamps([
+      '"07/19/2026","00:41:12","PDT","Music Shop","PreApproved Payment Bill User Payment","Completed","USD","-9.99","0.00","-9.99","TX1"',
+      '"11/12/2026","07:05:44","PST","Print Shop","General Payment","Completed","USD","-15.00","0.00","-15.00","TX2"',
+      '"07/19/2026","00:41:12","CEST","Buchladen","Express Checkout Payment","Completed","EUR","-12.00","0.00","-12.00","TX3"',
+      '"01/15/2026","09:30:00","EST","Hardware Store","Express Checkout Payment","Completed","USD","-20.00","0.00","-20.00","TX4"',
+    ]);
+
+    expect(byId).toEqual({
+      TX1: '2026-07-19T07:41:12.000Z',
+      TX2: '2026-11-12T15:05:44.000Z',
+      TX3: '2026-07-18T22:41:12.000Z',
+      TX4: '2026-01-15T14:30:00.000Z',
+    });
+  });
+
+  it('keeps the old reading for an abbreviation that names more than one zone, an unknown one or none', async () => {
+    const byId = await stamps([
+      '"07/19/2026","00:41:12","CST","Shop A","Express Checkout Payment","Completed","USD","-1.00","0.00","-1.00","TX1"',
+      '"07/19/2026","00:41:12","IST","Shop B","Express Checkout Payment","Completed","USD","-1.00","0.00","-1.00","TX2"',
+      '"07/19/2026","00:41:12","XYZ","Shop C","Express Checkout Payment","Completed","USD","-1.00","0.00","-1.00","TX3"',
+      '"07/19/2026","00:41:12","","Shop D","Express Checkout Payment","Completed","USD","-1.00","0.00","-1.00","TX4"',
+    ]);
+    // The wall clock read in the zone of the process, whatever it is here.
+    const old = new Date('2026-07-19T00:41:12').toISOString();
+
+    expect(byId).toEqual({ TX1: old, TX2: old, TX3: old, TX4: old });
+  });
+
+  it('still pairs a card deposit with the payment it funds when both carry a zone', async () => {
+    const byId = await stamps([
+      '"07/19/2026","00:41:12","PDT","Music Shop","PreApproved Payment Bill User Payment","Completed","USD","-9.99","0.00","-9.99","TX1"',
+      '"07/19/2026","00:41:12","PDT","","General Card Deposit","Completed","USD","9.99","0.00","9.99","TX2"',
+    ]);
+
+    expect(Object.keys(byId)).toEqual(['TX1']);
+  });
+});
+
 describe('PayPal recognize()', () => {
   const HEADER_CSV =
     '"Date","Time","Name","Type","Status","Currency","Gross","Fee","Net","Transaction ID"\n' +

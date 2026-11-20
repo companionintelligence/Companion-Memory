@@ -15,8 +15,50 @@ function parsePayPalCSV(text: string): Record<string, string>[] {
   return parseCSV(text, { findHeader: (r) => (r[0] ?? '').trim() === 'Date' });
 }
 
-// Combine "MM/DD/YYYY" date and "HH:MM:SS" time into a Date.
-function parsePayPalDate(date: string, time: string): Date | undefined {
+/**
+ * UTC offsets for the zone abbreviations PayPal writes in the TimeZone column.
+ * Each row carries the abbreviation in force on its own date (`PDT` on a July
+ * row, `PST` on a November one), so one fixed offset per abbreviation is exact.
+ *
+ * Left out on purpose: abbreviations that name more than one zone. `CST` is US
+ * Central and China, `IST` India, Ireland and Israel, `BST` British Summer and
+ * Bangladesh, `AST` Atlantic and Arabia. A row with one of those keeps the
+ * reading it always had rather than a guess, as `TemporalRepairStage` refuses
+ * abbreviations for the same reason.
+ */
+const PAYPAL_ZONE_OFFSETS: ReadonlyMap<string, string> = new Map([
+  ['UTC', '+00:00'],
+  ['GMT', '+00:00'],
+  ['HST', '-10:00'],
+  ['AKST', '-09:00'],
+  ['AKDT', '-08:00'],
+  ['PST', '-08:00'],
+  ['PDT', '-07:00'],
+  ['MST', '-07:00'],
+  ['MDT', '-06:00'],
+  ['CDT', '-05:00'],
+  ['EST', '-05:00'],
+  ['EDT', '-04:00'],
+  ['WET', '+00:00'],
+  ['WEST', '+01:00'],
+  ['CET', '+01:00'],
+  ['CEST', '+02:00'],
+  ['EET', '+02:00'],
+  ['EEST', '+03:00'],
+  ['JST', '+09:00'],
+  ['AWST', '+08:00'],
+  ['ACST', '+09:30'],
+  ['ACDT', '+10:30'],
+  ['AEST', '+10:00'],
+  ['AEDT', '+11:00'],
+  ['NZST', '+12:00'],
+  ['NZDT', '+13:00'],
+]);
+
+// Combine "MM/DD/YYYY" date and "HH:MM:SS" time into a Date, in the row's
+// TimeZone when the column names one PAYPAL_ZONE_OFFSETS knows. Otherwise the
+// wall clock is read in the server's zone, as it always was.
+function parsePayPalDate(date: string, time: string, zone?: string): Date | undefined {
   if (!date) {
     return undefined;
   }
@@ -29,7 +71,7 @@ function parsePayPalDate(date: string, time: string): Date | undefined {
 
   const [mm, dd, yyyy] = parts;
   const iso = `${yyyy}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}T${time || '00:00:00'}`;
-  const d = new Date(iso);
+  const d = new Date(iso + (PAYPAL_ZONE_OFFSETS.get((zone ?? '').trim().toUpperCase()) ?? ''));
 
   return isNaN(d.getTime()) ? undefined : d;
 }
@@ -94,7 +136,7 @@ export class PayPalFileImporter extends CsvExportImporter {
         continue;
       }
 
-      const t = parsePayPalDate(r['Date'], r['Time']);
+      const t = parsePayPalDate(r['Date'], r['Time'], r['TimeZone']);
       if (t) {
         paymentTimes.push(t.getTime());
       }
@@ -124,7 +166,7 @@ export class PayPalFileImporter extends CsvExportImporter {
       return;
     }
 
-    const ts = parsePayPalDate(row['Date'], row['Time']);
+    const ts = parsePayPalDate(row['Date'], row['Time'], row['TimeZone']);
     if (!timeframeContains(params.timeframe, ts)) {
       return;
     }
