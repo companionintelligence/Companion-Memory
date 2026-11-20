@@ -2854,7 +2854,7 @@ export const WIZARD_SOURCES: WizardSource[] = [
     wait: 'instant',
     steps: ['Save the NMEA log from your GPS logger (commonly `.nmea`, `.log`, or `.txt`).', UPLOAD_STEP],
     expectedFormat:
-      'A text log of NMEA sentences beginning with `$GPRMC` / `$GPGGA` (date + fix, with altitude).',
+      'A text log of NMEA `RMC` / `GGA` sentences (date + fix, with altitude), such as `$GPRMC` from a GPS receiver or `$GNRMC` from a multi-GNSS one.',
     inboxPath: 'nmea',
     signature: ['*.nmea', '*.log', '*.txt'],
     importer: 'nmea',
