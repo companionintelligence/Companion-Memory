@@ -19,6 +19,7 @@ import {
   SettingsStatus,
 } from '../kit';
 
+import { EndpointCheckMessage } from './EndpointCheckMessage';
 import { RecommendedModelCard } from './RecommendedModelCard';
 
 type BackendPreset = 'ollama' | 'lemonade' | 'openai_compatible';
@@ -431,7 +432,7 @@ export function ModelSection() {
     <SettingsStatus>Save changes before testing this endpoint.</SettingsStatus>
   ) : preflight && testedConfig === config ? (
     <SettingsStatus tone={preflight.ok ? 'success' : 'error'}>
-      {preflight.message ?? (preflight.ok ? 'Connected.' : 'Connection failed.')}
+      <EndpointCheckMessage preflight={preflight} />
     </SettingsStatus>
   ) : showEndpointForm && !canEditEndpoint ? (
     <SettingsStatus>Changing the endpoint is reserved for an administrator of this Companion.</SettingsStatus>

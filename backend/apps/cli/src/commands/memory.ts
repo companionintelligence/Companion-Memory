@@ -48,7 +48,9 @@ export async function memoryCheckCommand(ctx: CliContext, options: MemoryCheckOp
   }
 
   if (!result.ok) {
-    throw new CliError(result.message ?? 'Memory could not reach its inference server.', 2);
+    const message = result.message ?? 'Memory could not reach its inference server.';
+
+    throw new CliError(result.fixCommand ? `${message} ${result.fixCommand}` : message, 2);
   }
 }
 
@@ -140,6 +142,10 @@ function renderEndpoint(ctx: CliContext, endpoint: LlmEndpointConfig): void {
 function renderPreflight(ctx: CliContext, result: LlmEndpointPreflight): void {
   ctx.term.out(`${result.ok ? 'Connected' : 'Not connected'}  ${result.endpoint}`);
   ctx.term.out(result.message ?? (result.ok ? 'The backend answered.' : 'The backend did not answer.'));
+
+  if (result.fixCommand) {
+    ctx.term.out(`  ${result.fixCommand}`);
+  }
 
   if (result.models.length > 0) {
     ctx.term.out(`models      ${result.models.join(', ')}`);

@@ -418,6 +418,20 @@ async function mintAndStoreApiKey(jwt: string, memoryOrigin?: string): Promise<s
     return null;
   }
 
+  const revokeUrl = `${base}/api/keys/current`;
+  // Desktop only: the key an earlier sign-in left in the keychain. This sign-in replaces it, so
+  // it is given back whether or not the new key saves; left alone, every sign-in added one more
+  // full-access key that nothing would use again. The desktop window only ever talks to the
+  // appliance it is served from, so the old key goes back to the server that issued it. A phone,
+  // or any sign-in to a Memory named by `memoryOrigin`, can be talking to a different appliance,
+  // which must never be sent the old one.
+  const replaced = isTauriPlatform() && !memoryOrigin ? await storedDeviceKey() : null;
+  const giveBackReplaced = async () => {
+    if (replaced && replaced !== created.key) {
+      await revokeDeviceKey(replaced, revokeUrl);
+    }
+  };
+
   try {
     await secureStorageSet(API_KEY_STORAGE, created.key);
     await secureStorageSet(API_KEY_ID_STORAGE, created.id);
@@ -426,17 +440,35 @@ async function mintAndStoreApiKey(jwt: string, memoryOrigin?: string): Promise<s
     // The key is live on the server, but this device could not keep it. Nothing would ever use
     // it and no sign-out would ever revoke it. A desktop with no default keyring (no Secret
     // Service) left one such full-access key behind on every try. Give it back first.
-    await revokeDeviceKey(created.key, `${base}/api/keys/current`);
+    await revokeDeviceKey(created.key, revokeUrl);
+
+    // The key the window is signed in with stays: it still works and the window's sign-out gives
+    // it back. Given back here, the window would carry on with a key Memory no longer takes.
+    const giveBack = replaced !== null && getApiKey() !== replaced;
+
+    if (giveBack) {
+      // A keystore read still in flight from launch must not put the key given back in place.
+      bumpNativeCredentialEpoch();
+      await giveBackReplaced();
+    }
 
     // A write that got partway kept the key just revoked; nothing may read that back.
-    if ((await storedDeviceKey()) === created.key) {
+    const stored = await storedDeviceKey();
+
+    if (stored !== null && (stored === created.key || (giveBack && stored === replaced))) {
       await removeStoredKeyEntries();
     }
 
     throw new DeviceKeyNotSavedError(error);
   }
 
+  // A keystore read still in flight from launch must not put the previous key back over this one.
+  bumpNativeCredentialEpoch();
   setApiKey(created.key);
+  // Only once the new key is the one requests carry: the window's check of the old key then
+  // cannot read the revocation as this window being signed out. Not awaited, so a slow answer
+  // does not hold up the sign-in. It never rejects.
+  void giveBackReplaced();
 
   return created.key;
 }
@@ -538,6 +570,24 @@ async function revokeDeviceKey(key: string, url = '/api/keys/current'): Promise<
   } catch (error) {
     console.warn('Could not revoke this device key on the server', error);
   }
+}
+
+/**
+ * Desktop, after an email sign-in: give back the key an earlier Companion sign-in left in the
+ * keychain (one the launch could not read, or a sign-out could not delete). Left there, the next
+ * launch reads it back ahead of the cookie session this sign-in made. That signs the window in
+ * to the account the key belongs to, or, once Memory says the key is revoked, signs it out and
+ * ends the email session with it.
+ */
+async function giveBackStoredDesktopKey(): Promise<void> {
+  const stored = await storedDeviceKey();
+
+  if (!stored || stored === getApiKey()) {
+    return;
+  }
+
+  await revokeDeviceKey(stored);
+  await removeStoredKeyEntries();
 }
 
 interface OidcNativeExchangeResponse {
@@ -667,8 +717,8 @@ function useAuth(): ReturnValue {
   const [unreachable, setUnreachable] = useState<boolean>(false);
 
   const [accessToken, setAccessToken] = useState<string | null>(null);
-  // Native-only: present once the keystore API key is loaded/minted. Drives the
-  // authenticated state on native, where there is no JWT in `accessToken`.
+  // Phone and desktop (after a Companion sign-in): present once the stored API key is loaded or a
+  // new one minted. Drives the authenticated state there, where there is no JWT in `accessToken`.
   const [nativeApiKey, setNativeApiKey] = useState<string | null>(null);
   const [signOutPrompt, setSignOutPrompt] = useState<SignOutPrompt>({ open: false, unsentCaptures: 0 });
 
@@ -707,6 +757,10 @@ function useAuth(): ReturnValue {
           setNativeApiKey(await mintAndStoreApiKey(jwt));
         } else {
           setAccessToken(jwt);
+
+          if (jwt && isTauriPlatform()) {
+            void giveBackStoredDesktopKey();
+          }
         }
 
         // Memory answered the sign-in, so the session check it left unanswered no longer
@@ -801,9 +855,10 @@ function useAuth(): ReturnValue {
   // The sign-out itself, once there is nothing left to ask. `logout` decides whether to ask.
   const signOut = useCallback(async () => {
     // The key this device signs in with (phone and desktop), read before it is dropped below.
-    // The stored copy when none is in memory: the desktop never loads its stored key back on
-    // start, and a phone can sign out before the keystore restore lands. Deleting that copy
-    // below without revoking it would leave a working key on the server that no device holds.
+    // The stored copy when none is in memory: the app can sign out before the keystore restore
+    // lands. A desktop whose keychain could not be read at start never loaded it at all. Deleting
+    // that copy below without revoking it would leave a working key on the server that no
+    // device holds.
     const deviceKey =
       getApiKey() ?? (isNativePlatform() || isTauriPlatform() ? await storedDeviceKey() : null);
 
@@ -829,8 +884,17 @@ function useAuth(): ReturnValue {
 
     if (isTauriPlatform()) {
       // The desktop keeps its key in the OS keychain (tauri-plugin-ci-auth); a revoked key
-      // left there would only be read back as a credential that no longer works.
-      await removeStoredDeviceKey();
+      // left there would only be read back as a credential that no longer works. A different
+      // key there is one a Companion sign-in saved while this ran (the launch check of a revoked
+      // key can sign out alongside it). That key is the window's now, so it stays.
+      const stored = await storedDeviceKey();
+
+      if (stored === null || stored === deviceKey) {
+        await removeStoredKeyEntries();
+      }
+
+      forgetUser();
+      forgetFeatures();
     }
 
     if (isNativePlatform()) {
@@ -972,6 +1036,10 @@ function useAuth(): ReturnValue {
     const timer = setInterval(checkWhenVisible, DEVICE_KEY_CHECK_MS);
     document.addEventListener('visibilitychange', checkWhenVisible);
     window.addEventListener('focus', check);
+    // Ask once straight away too. A key read back from the keychain at start may have been
+    // revoked while the app was closed. Waiting a minute to ask would leave the window on error
+    // pages until then.
+    checkWhenVisible();
 
     return () => {
       stopped = true;
@@ -1019,6 +1087,10 @@ function useAuth(): ReturnValue {
           setNativeApiKey(await mintAndStoreApiKey(jwt));
         } else {
           setAccessToken(jwt);
+
+          if (jwt && isTauriPlatform()) {
+            void giveBackStoredDesktopKey();
+          }
         }
 
         // As in login: Memory answered, so the outage the session check saw is over.
@@ -1116,6 +1188,28 @@ function useAuth(): ReturnValue {
           }
 
           return;
+        }
+
+        if (isTauriPlatform()) {
+          // Desktop: a Companion sign-in leaves no cookie session, only the key it saved in the
+          // OS keychain. Read it back first, or every launch after one ends on the sign-in page
+          // while that key stays live on the server. No origin to restore: the window is served
+          // by the appliance it signs in to and sends everything there. An email sign-in keeps
+          // its cookie and stores no key, so with nothing stored (or a keychain that cannot be
+          // read) it carries on to the cookie check below.
+          const epoch = nativeCredentialEpoch;
+          const storedKey = await storedDeviceKey();
+
+          if (epoch !== nativeCredentialEpoch) {
+            return;
+          }
+
+          if (storedKey) {
+            setApiKey(storedKey);
+            setNativeApiKey(storedKey);
+
+            return;
+          }
         }
 
         const bridged = await alignHubSession();

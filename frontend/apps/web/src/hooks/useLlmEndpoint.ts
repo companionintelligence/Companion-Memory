@@ -36,6 +36,10 @@ export interface LlmEndpointPreflight {
   models: string[];
   message?: string;
   status?: number;
+  /** Why the request got no HTTP answer: `refused`, `timeout`, `host_not_found`, `no_route`, `reset` or `tls`. */
+  reason?: string;
+  /** A command the message refers to, for the computer Memory runs on (a ufw rule after a firewall timeout). */
+  fixCommand?: string;
 }
 
 export function useLlmEndpoint() {

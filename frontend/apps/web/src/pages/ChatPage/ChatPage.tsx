@@ -26,7 +26,7 @@ import { useAuth, useChatRequester, useCounter, useDesktopApp, useModel } from '
 import { useLocalLlmPrefs } from '@/hooks/useOnDeviceModel';
 import { clearAgentChatContext, formatAgentChatDraft, readAgentChatContext } from '@/lib/agentChat';
 
-import { ChatNoModelState } from './ChatNoModelState';
+import { ChatNoModelState, modelServerFailureDetail } from './ChatNoModelState';
 import { CHAT_BASE, chatThreadPath } from './chatPaths';
 import { ChatSidebar } from './ChatSidebar';
 import { PhoneChatBar } from './PhoneChatBar';
@@ -436,7 +436,13 @@ function ChatPageContent() {
       />
     );
   } else if (resolvedThreadId.current == null && hasNoModel) {
-    emptyState = <ChatNoModelState unreachable={modelsError != null} onRetry={refetchModels} />;
+    emptyState = (
+      <ChatNoModelState
+        unreachable={modelsError != null}
+        detail={modelServerFailureDetail(modelsError)}
+        onRetry={refetchModels}
+      />
+    );
   } else if (resolvedThreadId.current == null) {
     emptyState = (
       // The ten starters overflow a phone viewport, so this column scrolls on
