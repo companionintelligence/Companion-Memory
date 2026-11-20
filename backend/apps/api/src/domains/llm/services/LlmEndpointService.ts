@@ -453,32 +453,22 @@ export class LlmEndpointService implements OnModuleInit {
     } catch (error) {
       // Described against the URL this request went to, not the endpoint as it is now: Settings
       // can change it during the five seconds this waits.
-      let failure = this.describeFailureAt(error, requestUrl);
       const target = connectionTarget(requestUrl);
-
       // The deadline above fires for a server that accepted the connection and then stalled as
       // much as for one a firewall cut off. A bare TCP connect tells them apart, so a busy server
       // is not met with firewall advice.
-      if (
-        failure?.code === 'TimeoutError' &&
-        target &&
-        (await (network.connects ?? tcpConnects)(target.hostname, target.port)) === true
-      ) {
-        failure = {
-          reason: 'timeout',
-          code: 'TimeoutError',
-          message: stalledServerMessage(target, PREFLIGHT_TIMEOUT_MS / 1000),
-        };
-      }
-
-      // The rule names the address the containers connect to, so it opens the port to them and
-      // not to a LAN that happens to share 172.16.0.0/12. It falls back to `to any` when the name
-      // does not resolve here.
-      if (failure?.fixCommand && target) {
-        const address = await hostIpv4(target.hostname, network.lookup);
-
-        failure = address ? this.describeFailureAt(error, requestUrl, address) : failure;
-      }
+      const stalled =
+        target != null &&
+        classifyConnectionError(error)?.code === 'TimeoutError' &&
+        (await (network.connects ?? tcpConnects)(target.hostname, target.port)) === true;
+      const failure: LlmEndpointConnectionFailure | null =
+        stalled && target
+          ? {
+              reason: 'timeout',
+              code: 'TimeoutError',
+              message: stalledServerMessage(target, PREFLIGHT_TIMEOUT_MS / 1000),
+            }
+          : await this.describeFailureAt(error, requestUrl, network.lookup);
 
       this.logger.warn('LLM endpoint preflight failed', {
         backend: this.resolved.settings.backend,
@@ -517,18 +507,20 @@ export class LlmEndpointService implements OnModuleInit {
    *
    * A timeout to a server on the containers' own host gets a ufw rule as well. Docker's iptables
    * rules cover traffic into containers, not from a container to its host, so a host firewall that
-   * drops incoming connections silently eats every one of those. `hostAddress` narrows the rule to
-   * the address the containers connect to; without it the rule says `to any`.
+   * drops incoming connections silently eats every one of those. The rule names the address the
+   * gateway name resolves to here, the only one the containers call, so it doesn't open the port on
+   * the host's LAN address to a LAN that shares 172.16.0.0/12. When the name doesn't resolve there
+   * is no rule: the only one left would be for any address.
    */
-  describeConnectionFailure(error: unknown, hostAddress?: string): LlmEndpointConnectionFailure | null {
-    return this.describeFailureAt(error, endpointRequestUrl(this.resolved), hostAddress);
+  async describeConnectionFailure(error: unknown): Promise<LlmEndpointConnectionFailure | null> {
+    return this.describeFailureAt(error, endpointRequestUrl(this.resolved));
   }
 
-  private describeFailureAt(
+  private async describeFailureAt(
     error: unknown,
     requestUrl: string,
-    hostAddress?: string,
-  ): LlmEndpointConnectionFailure | null {
+    lookupImpl?: LookupIpv4,
+  ): Promise<LlmEndpointConnectionFailure | null> {
     const kind = classifyConnectionError(error);
     const target = kind ? connectionTarget(requestUrl) : null;
 
@@ -537,11 +529,12 @@ export class LlmEndpointService implements OnModuleInit {
     }
 
     const range = kind.reason === 'timeout' && target.onHost ? containerSourceRange() : undefined;
+    const hostAddress = range ? await hostIpv4(target.hostname, lookupImpl) : undefined;
 
     return {
       ...kind,
       message: connectionFailureMessage(kind, target),
-      ...(range && { fixCommand: ufwAllowCommand(target.port, range, hostAddress) }),
+      ...(range && hostAddress && { fixCommand: ufwAllowCommand(target.port, range, hostAddress) }),
     };
   }
 

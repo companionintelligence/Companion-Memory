@@ -384,14 +384,18 @@ describe('LlmEndpointService', () => {
       );
     });
 
-    it('says `to any` when the gateway name does not resolve in the container', async () => {
+    it('gives no rule when the gateway name does not resolve in the container, rather than one for any address', async () => {
       jest
         .mocked(lookup)
         .mockRejectedValueOnce(Object.assign(new Error('getaddrinfo ENOTFOUND'), { code: 'ENOTFOUND' }));
 
       const result = await onTheHost().preflight(rejecting(connectTimeout()));
 
-      expect(result.fixCommand).toBe('sudo ufw allow from 172.16.0.0/12 to any port 11434 proto tcp');
+      expect(result.reason).toBe('timeout');
+      expect(result).not.toHaveProperty('fixCommand');
+      expect(result.message).toBe(
+        "host.docker.internal:11434 did not answer in time. On the computer Memory runs on, that usually means a firewall is dropping connections from Memory's containers.",
+      );
     });
 
     it('uses a gateway set as an IP address as it is, without a lookup', async () => {
@@ -438,7 +442,9 @@ describe('LlmEndpointService', () => {
         ok: false,
         reason: 'timeout',
       });
-      expect(service.describeConnectionFailure(connectTimeout())).toMatchObject({ reason: 'timeout' });
+      await expect(service.describeConnectionFailure(connectTimeout())).resolves.toMatchObject({
+        reason: 'timeout',
+      });
     });
 
     it('describes a failure against the URL it tried, not one saved while it waited', async () => {
@@ -542,17 +548,26 @@ describe('LlmEndpointService', () => {
       );
     });
 
-    it('describes a failure for other routes without the ufw sentence and nothing for other errors', () => {
+    it('describes a failure for other routes without the ufw sentence and nothing for other errors', async () => {
       const service = onTheHost();
 
-      expect(service.describeConnectionFailure(connectTimeout())).toEqual({
+      await expect(service.describeConnectionFailure(connectTimeout())).resolves.toEqual({
         reason: 'timeout',
         code: 'UND_ERR_CONNECT_TIMEOUT',
         message:
           "host.docker.internal:11434 did not answer in time. On the computer Memory runs on, that usually means a firewall is dropping connections from Memory's containers.",
-        fixCommand: 'sudo ufw allow from 172.16.0.0/12 to any port 11434 proto tcp',
+        fixCommand: 'sudo ufw allow from 172.16.0.0/12 to 172.17.0.1 port 11434 proto tcp',
       });
-      expect(service.describeConnectionFailure(new Error('model not found'))).toBeNull();
+      await expect(service.describeConnectionFailure(new Error('model not found'))).resolves.toBeNull();
+    });
+
+    it('tells other routes there is no rule when the gateway name does not resolve', async () => {
+      jest.mocked(lookup).mockRejectedValueOnce(new Error('getaddrinfo ENOTFOUND'));
+
+      const failure = await onTheHost().describeConnectionFailure(connectTimeout());
+
+      expect(failure).toMatchObject({ reason: 'timeout' });
+      expect(failure).not.toHaveProperty('fixCommand');
     });
   });
 });

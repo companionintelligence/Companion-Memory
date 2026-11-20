@@ -19,7 +19,7 @@ function renderResult(preflight: LlmEndpointPreflight) {
 
 describe('EndpointCheckMessage', () => {
   it('shows the firewall rule as its own block of code after the message', () => {
-    const command = 'sudo ufw allow from 172.16.0.0/12 to any port 11434 proto tcp';
+    const command = 'sudo ufw allow from 172.16.0.0/12 to 172.17.0.1 port 11434 proto tcp';
     const status = renderResult({
       ...base,
       ok: false,

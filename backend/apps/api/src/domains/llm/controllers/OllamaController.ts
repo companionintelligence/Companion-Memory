@@ -81,7 +81,7 @@ export class OllamaController {
     try {
       return await this.ollamaService.getAvailableModels(context);
     } catch (error: unknown) {
-      return await this.desktopAppService.rethrow(this.unreachable(error) ?? error);
+      return await this.desktopAppService.rethrow((await this.unreachable(error)) ?? error);
     }
   }
 
@@ -90,8 +90,8 @@ export class OllamaController {
    * bare 500. Chat shows the message under "Chat can't reach a model". The firewall rule itself is
    * left to Test connection in Settings, which can show it as a command.
    */
-  private unreachable(error: unknown): ServiceUnavailableException | null {
-    const failure = this.llmEndpointService.describeConnectionFailure(error);
+  private async unreachable(error: unknown): Promise<ServiceUnavailableException | null> {
+    const failure = await this.llmEndpointService.describeConnectionFailure(error);
 
     if (!failure) {
       return null;

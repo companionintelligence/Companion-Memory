@@ -191,13 +191,7 @@ describe('containerSourceRange', () => {
 });
 
 describe('ufwAllowCommand', () => {
-  it('allows the range to the configured port over TCP', () => {
-    expect(ufwAllowCommand(11434, '172.16.0.0/12')).toBe(
-      'sudo ufw allow from 172.16.0.0/12 to any port 11434 proto tcp',
-    );
-  });
-
-  it('names the host address when there is one', () => {
+  it('allows the range to the host address and the configured port over TCP', () => {
     expect(ufwAllowCommand(11434, '172.16.0.0/12', '172.17.0.1')).toBe(
       'sudo ufw allow from 172.16.0.0/12 to 172.17.0.1 port 11434 proto tcp',
     );

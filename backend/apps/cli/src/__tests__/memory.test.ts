@@ -54,7 +54,7 @@ describe('ci-import memory', () => {
   });
 
   it('prints the firewall rule a failed check suggests, on its own line and in the error', async () => {
-    const fixCommand = 'sudo ufw allow from 172.16.0.0/12 to any port 11434 proto tcp';
+    const fixCommand = 'sudo ufw allow from 172.16.0.0/12 to 172.17.0.1 port 11434 proto tcp';
     const ctx = harness({
       preflightLlmEndpoint: async () => ({
         ...endpoint,

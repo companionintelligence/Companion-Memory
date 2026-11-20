@@ -18,7 +18,7 @@ describe('OllamaController listModels', () => {
         throw thrown;
       }),
     };
-    const llmEndpointService = { describeConnectionFailure: jest.fn(() => failure) };
+    const llmEndpointService = { describeConnectionFailure: jest.fn(async () => failure) };
     const controller = new OllamaController(
       {} as never,
       { getAvailableModels: jest.fn(async () => Promise.reject(error)) } as never,
@@ -60,7 +60,7 @@ describe('OllamaController listModels', () => {
       reason: 'timeout',
       code: 'UND_ERR_CONNECT_TIMEOUT',
       message: 'host.docker.internal:11434 did not answer in time.',
-      fixCommand: 'sudo ufw allow from 172.16.0.0/12 to any port 11434 proto tcp',
+      fixCommand: 'sudo ufw allow from 172.16.0.0/12 to 172.17.0.1 port 11434 proto tcp',
     });
 
     const thrown = (await controller

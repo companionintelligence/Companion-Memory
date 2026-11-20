@@ -242,11 +242,11 @@ export function containerSourceRange(interfaces?: ReturnType<typeof networkInter
  * A ufw rule that lets this container's connections through to `port` on the host.
  *
  * `destination` is the host address the containers connect to (Docker's `host-gateway`, the
- * docker0 address, 172.17.0.1 unless the daemon says otherwise). With it the rule matches only
- * connections to that address: a machine on a LAN that also uses 172.16.0.0/12 addresses
- * connects to the host's LAN address and stays blocked. Without it the rule is `to any`.
+ * docker0 address, 172.17.0.1 unless the daemon says otherwise). The rule matches only connections
+ * to that address: a machine on a LAN that also uses 172.16.0.0/12 addresses connects to the
+ * host's LAN address and stays blocked.
  */
-export function ufwAllowCommand(port: number, range: string, destination = 'any'): string {
+export function ufwAllowCommand(port: number, range: string, destination: string): string {
   return `sudo ufw allow from ${range} to ${destination} port ${port} proto tcp`;
 }
 
