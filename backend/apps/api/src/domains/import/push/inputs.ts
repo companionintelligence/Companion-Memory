@@ -1399,6 +1399,9 @@ export function toObservationInput(rec: CanonicalRecord): CreateObjectObservatio
   return input;
 }
 
+/** The largest value a Postgres INTEGER column (`duration_seconds`) holds. */
+const MAX_INTEGER_COLUMN = 2_147_483_647;
+
 const COMMUNICATION_TYPE_BY_KIND: Record<string, CommunicationType> = {
   'communication.email': CommunicationType.EMAIL,
   'communication.call': CommunicationType.CALL,
@@ -1499,8 +1502,16 @@ export function toCommunicationInput(rec: CanonicalRecord): CreateCommunicationD
   // fraction (macOS CallHistory's ZDURATION is a float, 312.5 failed the whole
   // call), so round it and leave out anything that is not a number. The exact
   // value stays in metadata.
-  const duration = m.Duration != null ? Number(m.Duration) : Number.NaN;
-  if (Number.isFinite(duration) && duration >= 0) {
+  //
+  // Only a number or a numeric string counts: `Number('')` and `Number(false)`
+  // are 0, which would record a blank duration as a zero-second call. Anything
+  // past the INTEGER column's ceiling is left out as well, since it would fail
+  // the insert just like the fraction did.
+  const duration =
+    typeof m.Duration === 'number' || (typeof m.Duration === 'string' && m.Duration.trim() !== '')
+      ? Number(m.Duration)
+      : Number.NaN;
+  if (Number.isFinite(duration) && duration >= 0 && Math.round(duration) <= MAX_INTEGER_COLUMN) {
     input.duration_seconds = Math.round(duration);
   }
 

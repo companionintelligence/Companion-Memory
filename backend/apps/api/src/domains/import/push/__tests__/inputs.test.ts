@@ -514,7 +514,7 @@ describe('toCommunicationInput', () => {
   });
 
   it('leaves out a call duration that is not a usable number', () => {
-    for (const Duration of ['about a minute', -5]) {
+    for (const Duration of ['about a minute', -5, -0.4, '', '  ', false, 3e9]) {
       const input = toCommunicationInput(recordFor({ classification: 'call', metadata: { Duration } }));
 
       expect(input.duration_seconds).toBeUndefined();
