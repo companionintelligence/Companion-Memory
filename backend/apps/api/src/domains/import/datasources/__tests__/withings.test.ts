@@ -347,6 +347,7 @@ describe('Withings datasource', () => {
       expect(run.metadata.Calories).toBe(1210);
       expect(run.metadata.Steps).toBe(19840);
       expect(run.metadata['Average Heart Rate']).toBe(158);
+      expect(run.metadata['Floors Climbed']).toBe(88);
       expect(run.metadata['Max Heart Rate']).toBe(181);
       expect(run.metadata['Time Zone']).toBe('Europe/London');
       expect(swim.metadata['Distance (km)']).toBe(1.5);

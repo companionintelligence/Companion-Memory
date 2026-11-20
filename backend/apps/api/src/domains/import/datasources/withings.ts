@@ -379,7 +379,8 @@ function readActivities(base: string, rows: string[][], params: ImportParams): v
           'Distance (km)': metres !== undefined ? Math.round(metres) / 1000 : undefined,
           Calories: positive(data.calories),
           Steps: positive(data.steps),
-          'Elevation (m)': positive(data.elevation),
+          // Floors, as in Withings' API and aggregates_elevation.csv, not metres.
+          'Floors Climbed': positive(data.elevation),
           'Average Heart Rate': positive(data.hr_average),
           'Min Heart Rate': positive(data.hr_min),
           'Max Heart Rate': positive(data.hr_max),
