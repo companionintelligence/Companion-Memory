@@ -536,7 +536,7 @@ export function ApiKeysSection() {
           {keys.map((key) => (
             <SettingsRow
               key={key.id}
-              label={<span className="truncate">{key.name}</span>}
+              label={<span className="block truncate">{key.name}</span>}
               meta={
                 isExpired(key.expires_at) ? (
                   <Badge variant="destructive" className="text-xs">

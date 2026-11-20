@@ -33,6 +33,22 @@ const SUCCESS_TEXT = 'text-teal-700 dark:text-teal-300';
 // --card, which left the rows of a card with no visible separation.
 const ROW_DIVIDERS = 'divide-y divide-foreground/[0.08]';
 
+/**
+ * The (?)'s name for a heading: "About privacy", but "About API path" and "About BlueBubbles",
+ * since lowercasing an acronym or a product name makes a screen reader say it as a word.
+ */
+function aboutLabel(text: ReactNode): string {
+  if (typeof text !== 'string') {
+    return 'More about this';
+  }
+
+  const firstWord = text.split(/\s/, 1)[0];
+
+  return /^[A-Z][^A-Z]*$/.test(firstWord)
+    ? `About ${text[0].toLowerCase()}${text.slice(1)}`
+    : `About ${text}`;
+}
+
 /** The (?) button. Opens on hover with a mouse, and on click or tap everywhere. */
 export function InfoTip({
   label,
@@ -51,6 +67,10 @@ export function InfoTip({
   const [open, setOpen] = useState(false);
   // A click pins the popover open, so moving the mouse away no longer closes it.
   const pinned = useRef(false);
+  // Whether focus went into the popover. Only then does closing hand it back to the (?):
+  // after a hover it never left what the reader was doing, such as typing in a field.
+  const holdsFocus = useRef(false);
+  const content = useRef<HTMLDivElement>(null);
   const closeTimer = useRef<number | undefined>(undefined);
 
   const cancelClose = useCallback(() => window.clearTimeout(closeTimer.current), []);
@@ -93,6 +113,12 @@ export function InfoTip({
             if (open && pinned.current) {
               pinned.current = false;
               setOpen(false);
+            } else if (open) {
+              // A mouse hovers before it clicks, so the popover is already open and will not
+              // move focus on its own.
+              pinned.current = true;
+              holdsFocus.current = true;
+              content.current?.focus();
             } else {
               pinned.current = true;
               setOpen(true);
@@ -114,6 +140,7 @@ export function InfoTip({
         </button>
       </Popover.Trigger>
       <Popover.Content
+        ref={content}
         side={side}
         align={align}
         className="w-80 max-w-[calc(100vw-2rem)] space-y-2 p-3 text-xs leading-relaxed text-popover-foreground [&_a]:underline [&_a]:underline-offset-2 [&_code]:font-mono [&_li]:ml-4 [&_li]:list-disc [&_ul]:space-y-1"
@@ -121,7 +148,17 @@ export function InfoTip({
         // keyboard, it moves into the popover, so a link inside it can be reached with Tab
         // and Escape brings focus back to the (?).
         onOpenAutoFocus={(event) => {
+          holdsFocus.current = pinned.current;
+
           if (!pinned.current) {
+            event.preventDefault();
+          }
+        }}
+        // Radix focuses the trigger whenever a popover closes. After a hover-only open that
+        // pulled focus out of the field the reader was typing in, for moving the mouse past.
+        // Left alone unless focus fell to the body, as when a link inside was clicked.
+        onCloseAutoFocus={(event) => {
+          if (!holdsFocus.current && document.activeElement !== document.body) {
             event.preventDefault();
           }
         }}
@@ -159,7 +196,7 @@ export function SettingsSection({
         <div className="min-w-0">
           <div className="flex items-center gap-1.5">
             <h2 className="text-lg leading-7 font-semibold">{title}</h2>
-            {help ? <InfoTip label={`About ${title.toLowerCase()}`}>{help}</InfoTip> : null}
+            {help ? <InfoTip label={aboutLabel(title)}>{help}</InfoTip> : null}
           </div>
           {description ? <p className="mt-0.5 text-sm text-muted-foreground">{description}</p> : null}
         </div>
@@ -207,13 +244,7 @@ export function SettingsGroup({
                 <h3 id={headingId} className="text-sm font-semibold">
                   {title}
                 </h3>
-                {help ? (
-                  <InfoTip
-                    label={typeof title === 'string' ? `About ${title.toLowerCase()}` : 'More about this'}
-                  >
-                    {help}
-                  </InfoTip>
-                ) : null}
+                {help ? <InfoTip label={aboutLabel(title)}>{help}</InfoTip> : null}
               </div>
             ) : null}
             {description ? <p className="mt-0.5 text-xs text-muted-foreground">{description}</p> : null}
@@ -290,13 +321,15 @@ export function SettingsRow({
   align?: 'center' | 'start';
   testId?: string;
 }) {
+  // min-w-0 lets a long label shrink to the row, so a label that truncates (a key or server
+  // name) shows an ellipsis instead of running under the buttons.
   const labelText =
     label == null ? null : htmlFor ? (
-      <Label htmlFor={htmlFor} className="text-sm leading-5 font-medium">
+      <Label htmlFor={htmlFor} className="min-w-0 text-sm leading-5 font-medium">
         {label}
       </Label>
     ) : (
-      <span className="text-sm leading-5 font-medium">{label}</span>
+      <span className="min-w-0 text-sm leading-5 font-medium">{label}</span>
     );
 
   // Beside a control the label column starts at 12rem and grows, so on a narrow screen the
@@ -307,16 +340,7 @@ export function SettingsRow({
         {label != null ? (
           <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
             {labelText}
-            {help ? (
-              <InfoTip
-                label={
-                  helpLabel ??
-                  (typeof label === 'string' ? `About ${label.toLowerCase()}` : 'More about this')
-                }
-              >
-                {help}
-              </InfoTip>
-            ) : null}
+            {help ? <InfoTip label={helpLabel ?? aboutLabel(label)}>{help}</InfoTip> : null}
             {meta}
           </div>
         ) : null}
@@ -336,12 +360,13 @@ export function SettingsRow({
           )}
         >
           {heading}
-          <div className="flex shrink-0 items-center gap-2">{control}</div>
+          <div className="flex max-w-full shrink-0 items-center gap-2">{control}</div>
         </div>
       ) : (
         heading
       )}
-      {children != null && children !== false ? (
+      {/* Counted, not compared: `{error}{note}` arrives as an array even when both are null. */}
+      {Children.toArray(children).length > 0 ? (
         <div className={cn(heading || control != null ? 'mt-3' : null)}>{children}</div>
       ) : null}
     </div>
@@ -563,7 +588,11 @@ export function SegmentedControl<T extends string>({
     <div
       role="radiogroup"
       aria-label={label}
-      className={cn('inline-flex h-9 items-center gap-1 rounded-lg bg-muted p-1 max-device:h-12', className)}
+      // max-w-full: a width set by the caller (w-72) gives way on a phone narrower than it.
+      className={cn(
+        'inline-flex h-9 max-w-full items-center gap-1 rounded-lg bg-muted p-1 max-device:h-12',
+        className,
+      )}
     >
       {options.map((option) => {
         const checked = option.value === value;

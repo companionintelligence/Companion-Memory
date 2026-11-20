@@ -38,7 +38,9 @@ afterEach(() => {
 
 /** Every button but the group's (?) help: what the card offers to do. */
 function actionButtons(): HTMLElement[] {
-  return screen.queryAllByRole('button').filter((button) => !(button.getAttribute('aria-label') ?? '').startsWith('About '));
+  return screen
+    .queryAllByRole('button')
+    .filter((button) => !(button.getAttribute('aria-label') ?? '').startsWith('About '));
 }
 
 describe('RecommendedModelCard', () => {

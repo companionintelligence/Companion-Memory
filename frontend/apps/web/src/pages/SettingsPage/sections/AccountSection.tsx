@@ -316,7 +316,10 @@ export function AccountSection() {
   ) : null;
 
   return (
-    <SettingsSection title="Account" description={email ? <>Signed in as {email}.</> : 'Manage your account.'}>
+    <SettingsSection
+      title="Account"
+      description={email ? <>Signed in as {email}.</> : 'Manage your account.'}
+    >
       {needsWebSignIn ? (
         <WebSignInRequired>
           Your email and password can only be changed from a web sign-in; this app signs in with its own
@@ -461,10 +464,7 @@ export function AccountSection() {
         </>
       )}
 
-      <SettingsGroup
-        className="mb-[max(1rem,var(--safe-area-bottom))]"
-        cardClassName="border-destructive/40"
-      >
+      <SettingsGroup className="mb-[max(1rem,var(--safe-area-bottom))]" cardClassName="border-destructive/40">
         <SettingsRow
           label={
             <span className="inline-flex items-center gap-1.5">
@@ -476,7 +476,8 @@ export function AccountSection() {
           hint={
             <>
               Signs you out everywhere immediately. This account, its memories and any files you uploaded are
-              then permanently deleted from this server after {PURGE_GRACE_DESCRIPTION}. This cannot be undone.
+              then permanently deleted from this server after {PURGE_GRACE_DESCRIPTION}. This cannot be
+              undone.
             </>
           }
           control={

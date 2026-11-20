@@ -1176,7 +1176,7 @@ export function McpSection() {
                 return (
                   <SettingsRow
                     key={server.id}
-                    label={<span className="truncate">{server.name}</span>}
+                    label={<span className="block truncate">{server.name}</span>}
                     meta={
                       <>
                         <Badge variant="outline" className="text-xs">

@@ -6,7 +6,7 @@ import { Brain, Eye, Wrench } from '@ci/shadcn/icons';
 
 import { ModelSelector } from '@/components/ModelSelector';
 import { useCurrentUser, useModel, useSessionAuth } from '@/hooks';
-import { useLlmEndpoint, type LlmBackendKind } from '@/hooks/useLlmEndpoint';
+import { useLlmEndpoint, type LlmBackendKind, type LlmEndpointConfig } from '@/hooks/useLlmEndpoint';
 
 import {
   SettingsFooter,
@@ -120,6 +120,9 @@ export function ModelSection() {
   const [apiKey, setApiKey] = useState('');
   const [clearApiKey, setClearApiKey] = useState(false);
   const [saved, setSaved] = useState(false);
+  // The endpoint the last test ran against. A save replaces `config`, and that result then
+  // describes an endpoint this page no longer shows.
+  const [testedConfig, setTestedConfig] = useState<LlmEndpointConfig | null>(null);
   const [imageDescriptionEnabled, setImageDescriptionEnabled] = useState(false);
   const [imageDescriptionLoading, setImageDescriptionLoading] = useState(true);
   const [imageDescriptionSaving, setImageDescriptionSaving] = useState(false);
@@ -280,6 +283,7 @@ export function ModelSection() {
   };
 
   const handleCheckEndpoint = async () => {
+    setTestedConfig(config);
     const result = await checkEndpoint();
 
     if (result?.ok) {
@@ -415,18 +419,20 @@ export function ModelSection() {
   const modelsUnavailable = modelsError != null;
   const showEndpointForm = config != null && !config.locked;
 
+  // One line at a time, so the newest thing wins: a save or an unsaved edit outranks the last
+  // test, whose result was for the endpoint as it stood then.
   const endpointStatus = endpointError ? (
     <SettingsStatus tone="error">{endpointError}</SettingsStatus>
   ) : testing ? (
     <SettingsStatus tone="pending">Testing connection…</SettingsStatus>
-  ) : preflight ? (
-    <SettingsStatus tone={preflight.ok ? 'success' : 'error'}>
-      {preflight.message ?? (preflight.ok ? 'Connected.' : 'Connection failed.')}
-    </SettingsStatus>
   ) : saved ? (
     <SettingsStatus tone="success">Saved</SettingsStatus>
   ) : endpointDirty ? (
     <SettingsStatus>Save changes before testing this endpoint.</SettingsStatus>
+  ) : preflight && testedConfig === config ? (
+    <SettingsStatus tone={preflight.ok ? 'success' : 'error'}>
+      {preflight.message ?? (preflight.ok ? 'Connected.' : 'Connection failed.')}
+    </SettingsStatus>
   ) : showEndpointForm && !canEditEndpoint ? (
     <SettingsStatus>Changing the endpoint is reserved for an administrator of this Companion.</SettingsStatus>
   ) : null;
@@ -434,7 +440,7 @@ export function ModelSection() {
   return (
     <SettingsSection
       title="Model"
-      description="Point Companion at your inference server, choose a model, and set tool and thinking preferences."
+      description="Point Companion at your inference server, choose a model and set tool and thinking preferences."
     >
       <SettingsGroup
         title="Inference server"
@@ -669,7 +675,7 @@ export function ModelSection() {
           label="Describe images"
           htmlFor="model-image-description"
           hint="Run vision passes on uploads to write titles and captions."
-          help="On by default when your chat model understands images, off when it does not, and it switches with the model. Turning it on for a model that was off requeues undescribed photos that were skipped or failed earlier."
+          help="On by default when your chat model understands images and off when it does not, switching with the model. Turning it on for a model that was off requeues undescribed photos that were skipped or failed earlier."
           control={
             <Switch
               id="model-image-description"
@@ -687,12 +693,12 @@ export function ModelSection() {
 
       <SettingsGroup
         title="Memory governance and decision engines"
-        help="Control governed fact lifecycle, temporal recency weighting, and whether fast Contrastive (System 1) and Generative (System 2) decision engines are active."
+        help="Control governed fact lifecycle, temporal recency weighting and whether fast Contrastive (System 1) and Generative (System 2) decision engines are active."
       >
         <SettingsRow
           label="Governed memory supersession"
           htmlFor="model-memory-governance"
-          hint="Classify distilled memories into typed categories, automatically supersede outdated facts, and surface conflicting claims."
+          hint="Classify distilled memories into typed categories, automatically supersede outdated facts and surface conflicting claims."
           control={
             <Switch
               id="model-memory-governance"
@@ -725,7 +731,7 @@ export function ModelSection() {
           label="Contrastive fast decisions (System 1)"
           htmlFor="model-contrastive-decision"
           hint="Fast embedding-geometry routing and gating with cached action vectors."
-          help="Uses sub-10ms embedding-geometry primitives (Noul, Choice, Score, and candidate reranking) with cached action vectors for fast routing and gating."
+          help="Uses sub-10ms embedding-geometry primitives (Noul, Choice, Score and candidate reranking) with cached action vectors for fast routing and gating."
           control={
             <Switch
               id="model-contrastive-decision"

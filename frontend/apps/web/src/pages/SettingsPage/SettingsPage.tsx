@@ -12,6 +12,11 @@ import { appHomePath } from '@/lib/appHome';
 import { settingsPathToProfile, visibleSettingsSections } from './settingsNav';
 import { SettingsSectionBody } from './SettingsSections';
 
+/** An open Radix popover, dialog, alert dialog, menu or select list. */
+const OPEN_LAYER = ['dialog', 'alertdialog', 'menu', 'listbox']
+  .map((role) => `[role="${role}"][data-state="open"]`)
+  .join(', ');
+
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>
   [
     'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors w-full text-left whitespace-nowrap',
@@ -38,16 +43,19 @@ export function SettingsPage() {
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      // A popover, menu or dropdown open inside the dialog closes on this Escape first and marks
-      // it handled; only an Escape nothing else used closes Settings.
-      if (e.key === 'Escape' && !e.defaultPrevented) {
+      // A popover, menu, dropdown or dialog open inside Settings takes this Escape and closes
+      // itself; only an Escape with none of them open closes Settings. Tooltips are not in the
+      // list: Radix marks an Escape handled when it closes one too, and the close button's own
+      // tooltip says "Close settings (Esc)". Checked on window in the capture phase, before Radix
+      // sees the key, because by the bubble phase the layer may already be gone from the page.
+      if (e.key === 'Escape' && !document.querySelector(OPEN_LAYER)) {
         handleClose();
       }
     };
 
-    document.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keydown', onKeyDown, true);
 
-    return () => document.removeEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
   }, [handleClose]);
 
   if (isMobile == null) {

@@ -87,6 +87,7 @@ export function AboutYouSection({ refreshToken = 0 }: AboutYouSectionProps) {
   const [correction, setCorrection] = useState('');
   const [saving, setSaving] = useState(false);
   const [savedNote, setSavedNote] = useState<string | null>(null);
+  const [correctionError, setCorrectionError] = useState<string | null>(null);
 
   const [task, setTask] = useState('');
   const [applying, setApplying] = useState(false);
@@ -157,6 +158,7 @@ export function AboutYouSection({ refreshToken = 0 }: AboutYouSectionProps) {
 
     setSaving(true);
     setSavedNote(null);
+    setCorrectionError(null);
     try {
       await submitAboutYouCorrection(authToken, trimmed);
       setCorrection('');
@@ -164,7 +166,7 @@ export function AboutYouSection({ refreshToken = 0 }: AboutYouSectionProps) {
       setSavedNote('Saved — the next “How you’d do it” will use this.');
       await load({ background: true });
     } catch {
-      setSavedNote('Could not save that correction.');
+      setCorrectionError('Could not save that correction.');
     } finally {
       setSaving(false);
     }
@@ -209,6 +211,7 @@ export function AboutYouSection({ refreshToken = 0 }: AboutYouSectionProps) {
   const handleFollowUp = (question: string) => {
     setAnswering(question);
     setSavedNote(null);
+    setCorrectionError(null);
     correctionRef.current?.focus();
   };
 
@@ -250,21 +253,21 @@ export function AboutYouSection({ refreshToken = 0 }: AboutYouSectionProps) {
   // The same tests the rows below use, so the card shows exactly when one of them does.
   const hasProfile = Boolean(
     view &&
-      (view.dossier ||
-        prefers.length > 0 ||
-        dislikes.length > 0 ||
-        view.schedule ||
-        view.trustMode ||
-        view.family.length > 0 ||
-        view.recentAnswers.length > 0),
+    (view.dossier ||
+      prefers.length > 0 ||
+      dislikes.length > 0 ||
+      view.schedule ||
+      view.trustMode ||
+      view.family.length > 0 ||
+      view.recentAnswers.length > 0),
   );
 
   return (
     <SettingsSection {...sectionProps}>
       {!view?.hasSignal && (
         <SettingsNotice>
-          Still thin. Answer questions on the Feed, or add a correction below so Companion has something to work
-          with.
+          Still thin. Answer questions on the Feed, or add a correction below so Companion has something to
+          work with.
         </SettingsNotice>
       )}
 
@@ -364,7 +367,9 @@ export function AboutYouSection({ refreshToken = 0 }: AboutYouSectionProps) {
               <ul className="space-y-3">
                 {view.recentAnswers.slice(0, 5).map((answer) => (
                   <li key={answer.id} className="rounded-lg border border-border p-3">
-                    {answer.question && <p className="mb-1 text-xs text-muted-foreground">{answer.question}</p>}
+                    {answer.question && (
+                      <p className="mb-1 text-xs text-muted-foreground">{answer.question}</p>
+                    )}
                     <p className="text-sm text-foreground/90">{answer.answer}</p>
                   </li>
                 ))}
@@ -400,7 +405,9 @@ export function AboutYouSection({ refreshToken = 0 }: AboutYouSectionProps) {
           )}
         </SettingsRow>
 
-        <SettingsFooter status={composeError ? <SettingsStatus tone="error">{composeError}</SettingsStatus> : null}>
+        <SettingsFooter
+          status={composeError ? <SettingsStatus tone="error">{composeError}</SettingsStatus> : null}
+        >
           {composed && (
             <Button variant="ghost" onClick={clear}>
               Clear
@@ -437,7 +444,15 @@ export function AboutYouSection({ refreshToken = 0 }: AboutYouSectionProps) {
           />
         </SettingsRow>
 
-        <SettingsFooter status={savedNote ? <SettingsStatus>{savedNote}</SettingsStatus> : null}>
+        <SettingsFooter
+          status={
+            correctionError ? (
+              <SettingsStatus tone="error">{correctionError}</SettingsStatus>
+            ) : savedNote ? (
+              <SettingsStatus tone="success">{savedNote}</SettingsStatus>
+            ) : null
+          }
+        >
           <Button disabled={saving || correction.trim().length === 0} onClick={() => void handleCorrection()}>
             {saving ? <Loader2 className="animate-spin" aria-hidden="true" /> : null}
             Save correction

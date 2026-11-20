@@ -38,6 +38,30 @@ describe('InfoTip', () => {
     await waitFor(() => expect(popover.contains(document.activeElement)).toBe(true));
   });
 
+  it('leaves focus in the field being typed in when a hover opens and closes it', async () => {
+    render(
+      <>
+        <input aria-label="Port" />
+        <InfoTip label="About port">The port the server listens on.</InfoTip>
+      </>,
+    );
+    const field = screen.getByRole('textbox', { name: 'Port' });
+    const button = screen.getByRole('button', { name: 'About port' });
+    field.focus();
+
+    fireEvent.pointerEnter(button, { pointerType: 'mouse' });
+    expect(await screen.findByText('The port the server listens on.')).toBeInTheDocument();
+
+    fireEvent.pointerLeave(button, { pointerType: 'mouse' });
+    await waitFor(() =>
+      expect(screen.queryByText('The port the server listens on.')).not.toBeInTheDocument(),
+    );
+    // Radix hands focus back a tick after the popover goes.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(field).toHaveFocus();
+  });
+
   it('closes again on a second click', async () => {
     render(<InfoTip label="About port">The port the server listens on.</InfoTip>);
     const button = screen.getByRole('button', { name: 'About port' });
@@ -53,7 +77,11 @@ describe('InfoTip', () => {
 describe('SettingsSection', () => {
   it('puts the long explanation behind a (?) named after the section', async () => {
     render(
-      <SettingsSection title="Privacy" description="What can leave this appliance." help="Search never leaves.">
+      <SettingsSection
+        title="Privacy"
+        description="What can leave this appliance."
+        help="Search never leaves."
+      >
         <p>body</p>
       </SettingsSection>,
     );
@@ -84,6 +112,33 @@ describe('SettingsRow', () => {
     const { container } = render(<SettingsRow label="Enabled">{false}</SettingsRow>);
 
     expect(container.querySelector('.mt-3')).toBeNull();
+  });
+
+  it('renders nothing below the label when every one of several children is null', () => {
+    const error: string | null = null;
+    const note: string | null = null;
+    const { container } = render(
+      <SettingsRow label="Sign out everywhere">
+        {error}
+        {note}
+      </SettingsRow>,
+    );
+
+    expect(container.querySelector('.mt-3')).toBeNull();
+  });
+
+  it('keeps acronyms and product names as written in the (?) name', () => {
+    render(
+      <>
+        <SettingsRow label="API path" help="Where the server mounts its API." />
+        <SettingsRow label="BlueBubbles" help="iMessage on a Mac." />
+        <SettingsRow label="Describe images" help="Vision passes on uploads." />
+      </>,
+    );
+
+    expect(screen.getByRole('button', { name: 'About API path' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'About BlueBubbles' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'About describe images' })).toBeInTheDocument();
   });
 });
 

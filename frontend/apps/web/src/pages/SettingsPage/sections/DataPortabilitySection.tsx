@@ -111,7 +111,7 @@ export function DataPortabilitySection() {
         <SettingsGroup title="Export and import">
           <SettingsRow
             label="Export all data"
-            hint="An NDJSON archive of your memories, files, graph, schedule, and settings."
+            hint="An NDJSON archive of your memories, files, graph, schedule and settings."
             help="Streams the archive as it is written, so large accounts are supported without a single-file size cap."
             control={
               <Button onClick={() => void handleExport()} disabled={exporting}>

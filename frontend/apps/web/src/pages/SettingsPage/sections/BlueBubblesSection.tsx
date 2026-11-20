@@ -494,7 +494,7 @@ export function BlueBubblesSection() {
             <SettingsRow
               label="Enabled"
               htmlFor="bb-enabled"
-              hint="Import history, accept live webhooks, and let the assistant use messaging tools."
+              hint="Import history, accept live webhooks and let the assistant use messaging tools."
               control={<Switch id="bb-enabled" checked={enabled} onCheckedChange={setEnabled} />}
             />
 

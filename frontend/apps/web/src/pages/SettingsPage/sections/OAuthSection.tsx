@@ -449,7 +449,8 @@ export function OAuthSection() {
         key={provider}
         label={label}
         meta={
-          providerData.providerKeyId ? (
+          // Not beside edits that are still waiting for Save, where "Saved" would read as theirs.
+          providerData.providerKeyId && !hasProviderChanges(provider) ? (
             <Badge variant="outline" className="text-xs">
               Saved
             </Badge>

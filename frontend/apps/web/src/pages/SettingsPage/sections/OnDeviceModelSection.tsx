@@ -79,6 +79,9 @@ export function OnDeviceModelSection() {
     }
   };
 
+  const loadedLabel =
+    probe.models.find((model) => model.spec.modelId === probe.loaded.modelId)?.spec.label ?? 'A model';
+
   return (
     <SettingsSection
       title="On-device model"
@@ -122,9 +125,7 @@ export function OnDeviceModelSection() {
             label="Loaded model"
             hint={
               <span role="status">
-                {probe.models.find((model) => model.spec.modelId === probe.loaded.modelId)?.spec.label ??
-                  'A model'}{' '}
-                is loaded{probe.loaded.accelerator ? ` on the ${probe.loaded.accelerator.toUpperCase()}` : ''}.
+                {`${loadedLabel} is loaded${probe.loaded.accelerator ? ` on the ${probe.loaded.accelerator.toUpperCase()}` : ''}.`}
               </span>
             }
             control={
