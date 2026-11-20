@@ -571,9 +571,12 @@ export function toThingInput(rec: CanonicalRecord): CreateItemDto {
     input.purchasePrice = price;
   }
 
+  // Upper-cased like the receipt's own code (`usd` is USD) so a thing and its
+  // receipt name the same unit. A unit with no ISO code (Robux) is kept as the
+  // source wrote it: `ci.objects.currency` has no CHECK.
   const currency = str(readCommerceField(m, 'CURRENCY'));
   if (currency) {
-    input.currency = currency;
+    input.currency = isoCurrency(currency) ?? currency;
   }
 
   if (rec.startTime) {
@@ -906,6 +909,10 @@ function lineFrom(
   const currencyCode = isoCurrency(currency);
   if (currencyCode) {
     line.currency = currencyCode;
+  } else if (currency) {
+    // The line's prices stay empty below (see toCostMinorUnits). Say why on the
+    // line itself, since its unit can differ from the header's.
+    line.metadata = { UnsupportedCurrency: currency };
   }
 
   // Cost columns, so a negative is refused rather than written — see
@@ -1054,7 +1061,15 @@ export function toReceiptInput(
   links: ReceiptEntityLinks = {},
 ): ReceiptExtraction {
   const m = rec.metadata;
-  const currency = str(readCommerceField(m, 'CURRENCY'));
+  // The header's own unit. When the header names none, a line priced in a unit
+  // with no ISO code (Robux) still decides it: otherwise the header's stated
+  // total would be written with no currency and read as dollars.
+  const currency =
+    str(readCommerceField(m, 'CURRENCY')) ??
+    commerceLineItems(rec)
+      .map((entry) => str(readCommerceField(entry, 'CURRENCY')))
+      .find((code) => code != null && isoCurrency(code) == null) ??
+    null;
   const extraction: ReceiptExtraction = {
     purchasedAt: new Date(rec.startTime),
     metadata: m,
@@ -1096,9 +1111,10 @@ export function toReceiptInput(
   }
 
   const currencyCode = isoCurrency(currency);
+  const unsupportedCurrency = currency != null && currencyCode == null;
   if (currencyCode) {
     extraction.currency = currencyCode;
-  } else if (currency) {
+  } else if (unsupportedCurrency) {
     // Priced in something with no ISO code (Robux). The money columns stay
     // empty (see toCostMinorUnits) and the receipt names the unit; the amounts
     // are still in the metadata under the parser's own keys.
@@ -1109,12 +1125,15 @@ export function toReceiptInput(
   // refused outright — including the line-sum fallback below, which would
   // otherwise answer with whatever positive lines survived the same guard and
   // report a credit as a purchase. See toCostMinorUnits for why this lane
-  // refuses rather than models.
+  // refuses rather than models. A header in an unsupported unit skips the
+  // fallback too: a line that states its own ISO code would otherwise hand the
+  // header a total in that code, written with no currency beside it.
   const stated = num(readCommerceField(m, 'TOTAL'));
   const refusedTotal = stated != null && Number.isFinite(stated) && stated < 0;
-  const total = refusedTotal
-    ? undefined
-    : (toCostMinorUnits(stated, currency) ?? sumLines(lines, (l) => l.totalPriceMinor));
+  const total =
+    refusedTotal || unsupportedCurrency
+      ? undefined
+      : (toCostMinorUnits(stated, currency) ?? sumLines(lines, (l) => l.totalPriceMinor));
   if (total != null) {
     extraction.totalMinor = total;
   }

@@ -586,6 +586,55 @@ describe('a price in a currency the receipt columns cannot store', () => {
     expect(lines[0]).toMatchObject({ currency: 'USD', totalPriceMinor: 4250 });
     expect(extraction).toMatchObject({ currency: 'USD', totalMinor: 4250 });
     expect(extraction.metadata?.UnsupportedCurrency).toBeUndefined();
+    expect(toThingInput(lower).currency).toBe('USD');
+  });
+
+  it('marks the line whose own unit is unsupported, even under an ISO header', () => {
+    const mixed = recordFor({
+      metadata: {
+        Currency: 'USD',
+        Total: '10.00',
+        LineItems: [
+          { Product: 'Gift card', Total: '10.00' },
+          { Product: 'Sparkle Time Fedora', Price: '1200', Currency: 'Robux' },
+        ],
+      },
+    });
+    const lines = toReceiptLineItemInputs(mixed);
+
+    expect(lines[0]).toMatchObject({ currency: 'USD', totalPriceMinor: 1000 });
+    expect(lines[0].metadata).toBeUndefined();
+    expect(lines[1].totalPriceMinor).toBeUndefined();
+    expect(lines[1].metadata).toEqual({ UnsupportedCurrency: 'Robux' });
+    expect(toReceiptInput(mixed, lines)).toMatchObject({ currency: 'USD', totalMinor: 1000 });
+  });
+
+  it('does not total an unsupported header from lines that state their own ISO code', () => {
+    const odd = recordFor({
+      metadata: {
+        Currency: 'Robux',
+        LineItems: [{ Product: 'Gift card', Total: '10.00', Currency: 'EUR' }],
+      },
+    });
+    const extraction = toReceiptInput(odd, toReceiptLineItemInputs(odd));
+
+    expect(extraction.currency).toBeUndefined();
+    expect(extraction.totalMinor).toBeUndefined();
+    expect(extraction.metadata).toMatchObject({ UnsupportedCurrency: 'Robux' });
+  });
+
+  it('takes an unsupported unit from the lines when the header names none', () => {
+    const silent = recordFor({
+      metadata: {
+        Total: '1200',
+        LineItems: [{ Product: 'Sparkle Time Fedora', Price: '1200', Currency: 'Robux' }],
+      },
+    });
+    const extraction = toReceiptInput(silent, toReceiptLineItemInputs(silent));
+
+    expect(extraction.currency).toBeUndefined();
+    expect(extraction.totalMinor).toBeUndefined();
+    expect(extraction.metadata).toMatchObject({ UnsupportedCurrency: 'Robux' });
   });
 });
 
