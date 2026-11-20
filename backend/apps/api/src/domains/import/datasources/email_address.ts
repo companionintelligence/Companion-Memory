@@ -7,9 +7,9 @@
  * named `"Quillfeather` and another named `Zephyrine"`. These helpers split
  * only on the commas BETWEEN mailboxes.
  *
- * Linear scans, never a regex over the whole header: a single pathological
- * 120k-character address header once took a backtracking regex 8.5 s, and a
- * longer one hung a whole mbox import.
+ * Linear scans, never a backtracking regex over the whole header: a single
+ * pathological 120k-character address header once took one 8.5 s and a longer
+ * one hung a whole mbox import.
  */
 import { decodeHeaderField } from './email_mime';
 
@@ -24,13 +24,38 @@ export interface Mailbox {
  * Split an address-list header into the text of each mailbox, on the commas
  * outside a quoted string, an `<…>` address and a `(…)` comment. A list with
  * no quotes, brackets or parentheses splits exactly as it would on every
- * comma, and so does whatever follows a quote, bracket or parenthesis that is
- * never closed (a name like `I <3 cats` in a chat's recipient list). Group
- * syntax goes: `undisclosed-recipients:;` names nobody, and `Team: a@x, b@y;`
- * is the two addresses. Empty entries are dropped and each entry is trimmed.
+ * comma. So does whatever follows a quote, bracket or parenthesis that is
+ * never closed (a name like `I <3 cats`). Group syntax goes:
+ * `undisclosed-recipients:;` names nobody and `Team: a@x, b@y;` is the two
+ * addresses. Empty entries are dropped and each entry is trimmed.
  */
 export function splitAddressList(header: string): string[] {
-  return splitMailboxes(header).map(withoutGroup).filter(Boolean);
+  const parts = splitMailboxes(header);
+  const closed = groupsClosed(parts);
+
+  return parts.map((part, i) => withoutGroup(part, closed[i])).filter(Boolean);
+}
+
+/**
+ * A group's `Label:` before its first mailbox. The label is a phrase, so it may
+ * be quoted (`"Project Team": a@x;`). Each alternative starts on a character
+ * the other cannot, so a failed match backs off in linear time.
+ */
+const GROUP_LABEL = /^(?:"(?:[^"\\]|\\.)*"|[^"<>@(),:;])*:/;
+
+/**
+ * For each entry, whether a `;` closes a group at or after it before another
+ * label opens one. A label counts only then: an unquoted display name with a
+ * colon in it (`Re: Invoice <a@x>`) is not a group and keeps its whole name.
+ */
+function groupsClosed(parts: readonly string[]): boolean[] {
+  const closed: boolean[] = [];
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const next = i + 1 < parts.length && closed[i + 1] && !GROUP_LABEL.test(parts[i + 1]);
+    closed[i] = parts[i].endsWith(';') || next;
+  }
+
+  return closed;
 }
 
 /** {@link splitAddressList} before the group syntax is taken off. */
@@ -73,12 +98,13 @@ function splitMailboxes(header: string): string[] {
 
 /**
  * One entry without the RFC 5322 group syntax around it: the `Label:` before a
- * group's first mailbox and the `;` after its last, and nothing at all for an
- * empty group. Only taken off when what is left is an address or nothing, so a
- * name with a colon in it ("Mom: Jane" in a chat's recipient list) stays whole.
+ * group's first mailbox, the `;` after its last and nothing at all for an empty
+ * group. The label is only read in a group that `;` closes (`closed`). Both
+ * are only taken off when what is left is an address or nothing, so a name with
+ * a colon in it ("Mom: Jane") stays whole.
  */
-function withoutGroup(part: string): string {
-  const label = /^[^"<>@(),:;]*:/.exec(part);
+function withoutGroup(part: string, closed: boolean): string {
+  const label = closed ? GROUP_LABEL.exec(part) : null;
   let rest = label ? part.slice(label[0].length).trim() : part;
   const closes = rest.endsWith(';');
   if (closes) {
@@ -134,25 +160,37 @@ export function parseEmailAddress(raw: string): Mailbox {
 /**
  * Decode the RFC 2047 encoded words of an address-list header without losing
  * where one mailbox ends. The list is split first, while every comma in it is
- * a real one, and a decoded name that now holds a comma or a quote is quoted,
- * so `=?UTF-8?Q?M=C3=BCller=2C_Hans?= <h@x>` reads `"Müller, Hans" <h@x>` and
- * still splits into one mailbox. A header with no encoded word is returned
- * unchanged.
+ * a real one. A decoded name that now holds a comma or a quote is quoted, so
+ * `=?UTF-8?Q?M=C3=BCller=2C_Hans?= <h@x>` reads `"Müller, Hans" <h@x>` and
+ * still splits into one mailbox. A group's label and closing `;` stay outside
+ * those quotes. A header with no encoded word is returned unchanged.
  */
 export function decodeAddressList(raw: string): string {
   if (!raw.includes('=?')) {
     return raw;
   }
 
-  return splitMailboxes(raw)
-    .map((part) => {
-      const decoded = decodeHeaderField(part);
+  const parts = splitMailboxes(raw);
+  const closed = groupsClosed(parts);
+
+  return parts
+    .map((part, i) => {
+      const label = (closed[i] ? GROUP_LABEL.exec(part)?.[0] : undefined) ?? '';
+      let mailbox = part.slice(label.length).trim();
+      const closes = mailbox.endsWith(';');
+      if (closes) {
+        mailbox = mailbox.slice(0, -1).trim();
+      }
+
+      const decoded = decodeHeaderField(mailbox);
       const { name, email } = parseEmailAddress(decoded);
       const quoted = decoded.startsWith('"');
+      const out =
+        name && email && !quoted && /[",]/.test(name)
+          ? `"${name.replace(/(["\\])/g, '\\$1')}" <${email}>`
+          : decoded;
 
-      return name && email && !quoted && /[",]/.test(name)
-        ? `"${name.replace(/(["\\])/g, '\\$1')}" <${email}>`
-        : decoded;
+      return `${label ? `${label} ` : ''}${out}${closes ? ';' : ''}`;
     })
     .join(', ');
 }

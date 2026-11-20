@@ -24,7 +24,9 @@ describe('splitAddressList', () => {
 
   it('ignores commas in an escaped quote, a comment and an address', () => {
     expect(
-      splitAddressList('"Doe \\"Jr, the second\\"" <j@example.com>, Ann (work, mostly) <a@example.com>, <"odd,local"@example.com>'),
+      splitAddressList(
+        '"Doe \\"Jr, the second\\"" <j@example.com>, Ann (work, mostly) <a@example.com>, <"odd,local"@example.com>',
+      ),
     ).toEqual([
       '"Doe \\"Jr, the second\\"" <j@example.com>',
       'Ann (work, mostly) <a@example.com>',
@@ -54,7 +56,31 @@ describe('splitAddressList', () => {
   });
 
   it('keeps a name with a colon in it whole', () => {
-    expect(splitAddressList('Mom: Jane, Sam :), Mom:, xX:Gamer:Xx')).toEqual(['Mom: Jane', 'Sam :)', 'Mom:', 'xX:Gamer:Xx']);
+    expect(splitAddressList('Mom: Jane, Sam :), Mom:, xX:Gamer:Xx')).toEqual([
+      'Mom: Jane',
+      'Sam :)',
+      'Mom:',
+      'xX:Gamer:Xx',
+    ]);
+  });
+
+  it('reads a colon in an unquoted display name as part of the name when no ";" closes a group', () => {
+    expect(splitAddressList('Re: Invoice <billing@example.com>, Meeting at 10:30 <m@example.com>')).toEqual([
+      'Re: Invoice <billing@example.com>',
+      'Meeting at 10:30 <m@example.com>',
+    ]);
+    // A later group's ";" closes that group only.
+    expect(splitAddressList('Re: Invoice <billing@example.com>, Team: a@example.com;')).toEqual([
+      'Re: Invoice <billing@example.com>',
+      'a@example.com',
+    ]);
+  });
+
+  it('reads a quoted group label', () => {
+    expect(splitAddressList('"Project Team": a@example.com, b@example.com;')).toEqual([
+      'a@example.com',
+      'b@example.com',
+    ]);
   });
 
   it('drops empty entries', () => {
@@ -62,7 +88,7 @@ describe('splitAddressList', () => {
   });
 
   it('stays linear on a pathological header', () => {
-    for (const unit of ['"', '<', '(', '\\', ',', ':', ';', 'a']) {
+    for (const unit of ['"', '<', '(', '\\', ',', ':', ';', 'a', '"a";', 'a,;', '"a":']) {
       const started = Date.now();
       splitAddressList(unit.repeat(300_000));
       expect(Date.now() - started).toBeLessThan(1_000);
@@ -76,11 +102,17 @@ describe('parseEmailAddress', () => {
       name: 'Brightwater, Ottilie',
       email: 'o.b@example.org',
     });
-    expect(parseEmailAddress('"Doe \\"Jr\\"" <j@example.com>')).toEqual({ name: 'Doe "Jr"', email: 'j@example.com' });
+    expect(parseEmailAddress('"Doe \\"Jr\\"" <j@example.com>')).toEqual({
+      name: 'Doe "Jr"',
+      email: 'j@example.com',
+    });
   });
 
   it('reads the older addr (Name) form', () => {
-    expect(parseEmailAddress('j.doe@example.com (Doe, John)')).toEqual({ name: 'Doe, John', email: 'j.doe@example.com' });
+    expect(parseEmailAddress('j.doe@example.com (Doe, John)')).toEqual({
+      name: 'Doe, John',
+      email: 'j.doe@example.com',
+    });
     expect(parseEmailAddress('j.doe@example.com ()')).toEqual({ email: 'j.doe@example.com' });
   });
 
@@ -93,7 +125,9 @@ describe('parseEmailAddress', () => {
 
 describe('decodeAddressList', () => {
   it('quotes an encoded name that decodes to "Last, First", so it still splits as one mailbox', () => {
-    const decoded = decodeAddressList('=?UTF-8?Q?M=C3=BCller=2C_Hans?= <h.m@example.de>, Ann <a@example.com>');
+    const decoded = decodeAddressList(
+      '=?UTF-8?Q?M=C3=BCller=2C_Hans?= <h.m@example.de>, Ann <a@example.com>',
+    );
 
     expect(decoded).toBe('"Müller, Hans" <h.m@example.de>, Ann <a@example.com>');
     expect(splitAddressList(decoded).map(parseEmailAddress)).toEqual([
@@ -102,9 +136,25 @@ describe('decodeAddressList', () => {
     ]);
   });
 
-  it('leaves an encoded name with no comma, and an already quoted one, as decoded', () => {
-    expect(decodeAddressList('=?utf-8?q?Zo=C3=AB_Brightwater?= <z@example.org>')).toBe('Zoë Brightwater <z@example.org>');
-    expect(decodeAddressList('"=?iso-8859-1?Q?M=FCller=2C_Hans?=" <h@example.de>')).toBe('"Müller, Hans" <h@example.de>');
+  it('leaves as decoded an encoded name with no comma or one already quoted', () => {
+    expect(decodeAddressList('=?utf-8?q?Zo=C3=AB_Brightwater?= <z@example.org>')).toBe(
+      'Zoë Brightwater <z@example.org>',
+    );
+    expect(decodeAddressList('"=?iso-8859-1?Q?M=FCller=2C_Hans?=" <h@example.de>')).toBe(
+      '"Müller, Hans" <h@example.de>',
+    );
+  });
+
+  it("keeps a group's label and closing ';' outside the quotes around an encoded name", () => {
+    const decoded = decodeAddressList(
+      'Team: =?UTF-8?Q?M=C3=BCller=2C_Hans?= <h.m@example.de>, b@example.com;',
+    );
+
+    expect(decoded).toBe('Team: "Müller, Hans" <h.m@example.de>, b@example.com;');
+    expect(splitAddressList(decoded).map(parseEmailAddress)).toEqual([
+      { name: 'Müller, Hans', email: 'h.m@example.de' },
+      { email: 'b@example.com' },
+    ]);
   });
 
   it('returns a header with no encoded word unchanged', () => {
