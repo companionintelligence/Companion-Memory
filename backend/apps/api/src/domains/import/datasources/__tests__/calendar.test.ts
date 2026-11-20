@@ -436,6 +436,25 @@ describe('Calendar datasource', () => {
     }
   });
 
+  it('reads a quoted TZID, as Outlook desktop exports write it', () => {
+    const [event] = parseIcsEvents(
+      [
+        'BEGIN:VCALENDAR',
+        'BEGIN:VEVENT',
+        'UID:desktop@outlook',
+        'SUMMARY:Dentist',
+        'DTSTART;TZID="Pacific Standard Time":20260818T143000',
+        'DTEND;TZID="Pacific Standard Time":20260818T153000',
+        'END:VEVENT',
+        'END:VCALENDAR',
+      ].join('\r\n'),
+      'calendar.ics',
+    );
+
+    expect(event.dtStart?.toISOString()).toBe('2026-08-18T21:30:00.000Z');
+    expect(event.dtEnd?.toISOString()).toBe('2026-08-18T22:30:00.000Z');
+  });
+
   it("keeps the event's own properties when a nested VALARM repeats them", async () => {
     // RFC 5545 §3.6.6 nests VALARM INSIDE the VEVENT, and every Apple/Google
     // export emits it AFTER the event's own properties. The parser used to fold
@@ -664,6 +683,9 @@ describe('Calendar datasource', () => {
       // The zone the parser read the wall clock in (see seriesTimeZone).
       ['a floating start', 'DTSTART:20261005T100000', serverTimezone()],
       ['a Windows zone name', 'DTSTART;TZID=Pacific Standard Time:20261005T100000', PACIFIC],
+      // Outlook's desktop export quotes the TZID.
+      ['a quoted Windows zone name', 'DTSTART;TZID="Pacific Standard Time":20261005T100000', PACIFIC],
+      ['a quoted IANA id', 'DTSTART;TZID="America/Los_Angeles":20261005T100000', PACIFIC],
       ['a zone the runtime does not know', 'DTSTART;TZID=Not/AZone:20261005T100000', serverTimezone()],
     ])('sets the series zone for %s', (_, dtstart, zone) => {
       const [event] = parseIcsEvents(
@@ -853,6 +875,7 @@ describe('Calendar datasource', () => {
       // The series' zone is America/Los_Angeles; the overrides keep their
       // Windows-named wall clock as their key.
       ['a Windows zone name', ';TZID=Pacific Standard Time'],
+      ['a quoted Windows zone name', ';TZID="Pacific Standard Time"'],
       ['a zone the runtime does not know', ';TZID=Customized Time Zone'],
       ['a floating time', ''],
     ])('does not draw the occurrence an override replaces, for %s', (_, tzid) => {

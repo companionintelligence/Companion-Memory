@@ -558,9 +558,15 @@ function tzidParam(params: string | undefined): string | undefined {
  * (`DTSTART;TZID=Pacific Standard Time:20260818T143000`). Without the mapping
  * those wall clocks were read in the server's zone, so an afternoon meeting in
  * California was stored seven hours early.
+ *
+ * RFC 5545 §3.2 lets any parameter value be a quoted-string, and Outlook's
+ * desktop export quotes its TZIDs (`DTSTART;TZID="Pacific Standard Time":...`),
+ * so the quotes come off before either lookup.
  */
 function icsZone(tzid: string): string {
-  return isValidTimezone(tzid) ? tzid : (ianaZoneForWindowsId(tzid) ?? tzid);
+  const id = /^".*"$/.test(tzid) ? tzid.slice(1, -1) : tzid;
+
+  return isValidTimezone(id) ? id : (ianaZoneForWindowsId(id) ?? tzid);
 }
 
 /** How many dates a set of RRULE, EXDATE and RDATE lines lists (an RRULE lists none). */
