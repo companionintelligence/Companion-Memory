@@ -1,6 +1,10 @@
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'path';
 
+import '..';
 import { FitbitFileImporter } from '../fitbit';
+import { dataSourcesRecognize } from '../registry';
 import type { ImportParams } from '../timeline';
 
 import type { EmittedGraph } from './support/emitted';
@@ -68,7 +72,7 @@ describe('Fitbit datasource', () => {
     }
   });
 
-  it('imports sleep records into sleep items, ignoring non-sleep json', async () => {
+  it('imports sleep records into sleep items', async () => {
     const root = path.join(FIXTURES_DIR, 'fitbit-export');
     const fi = new FitbitFileImporter();
     const pipeline: EmittedGraph[] = [];
@@ -78,10 +82,13 @@ describe('Fitbit datasource', () => {
       log: () => {},
     } as unknown as ImportParams);
 
-    // 2 records from sleep-2023-01-15 + 1 from sleep-2023-01-16 = 3; steps file ignored
-    expect(pipeline.length).toBe(3);
+    // 2 records from sleep-2023-01-15 + 1 from sleep-2023-01-16 = 3, and one
+    // daily row from the steps file beside them.
+    const sleep = pipeline.filter((g) => g.item.classification === 'sleep');
+    expect(sleep.length).toBe(3);
+    expect(pipeline.filter((g) => g.item.metadata.Steps === 1200).length).toBe(1);
 
-    for (const g of pipeline) {
+    for (const g of sleep) {
       expect(g.item.classification).toBe('sleep');
       expect(g.item.metadata.Source).toBe('Fitbit');
       // Title-fallback fix: a title-bearing key is set, not the bare 'sleep.txt'.
@@ -89,11 +96,11 @@ describe('Fitbit datasource', () => {
       expect(g.item.metadata.Title).not.toBe('sleep.txt');
     }
 
-    const byMinutes = pipeline.map((g) => Number(g.item.metadata['Minutes Asleep'])).sort((a, b) => a - b);
+    const byMinutes = sleep.map((g) => Number(g.item.metadata['Minutes Asleep'])).sort((a, b) => a - b);
     expect(byMinutes).toEqual([40, 420, 455]);
 
     // Find the main overnight record and verify its fields + timestamp.
-    const main = pipeline.find((g) => g.item.metadata['Minutes Asleep'] === 420)!;
+    const main = sleep.find((g) => g.item.metadata['Minutes Asleep'] === 420)!;
     expect(main.item.metadata['Minutes Awake']).toBe(30);
     expect(main.item.metadata.Efficiency).toBe(92);
     expect(main.item.metadata['Date Of Sleep']).toBe('2023-01-15');
@@ -184,7 +191,8 @@ describe('Fitbit datasource', () => {
           log: () => {},
         } as unknown as ImportParams,
       );
-      expect(pipeline.length).toBe(3);
+      // 3 sleep records and the steps file's one daily row.
+      expect(pipeline.length).toBe(4);
       expect(pipeline.every((g) => g.item.metadata.Source === 'Fitbit')).toBe(true);
       expect(pipeline.every((g) => g.item.dataSource === undefined)).toBe(true);
     });
@@ -209,8 +217,9 @@ describe('Fitbit datasource', () => {
           log: () => {},
         } as unknown as ImportParams,
       );
-      // Malformed files contribute nothing; the 3 real records still import.
-      expect(pipeline.length).toBe(3);
+      // Malformed files contribute nothing; the 3 real records (and the daily
+      // steps row) still import.
+      expect(pipeline.length).toBe(4);
     } finally {
       await fs.promises.unlink(emptyFile).catch(() => {});
       await fs.promises.unlink(badFile).catch(() => {});
@@ -277,5 +286,198 @@ describe('Fitbit datasource', () => {
     } finally {
       await fs.promises.rm(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  // The export's Global Export Data/ folder holds workouts, per-minute steps
+  // and heart rate beside the sleep logs. Only the sleep logs were read, and
+  // the rest was skipped without a drop being counted.
+  describe('workouts, steps and heart rate', () => {
+    let root: string;
+    const ged = () => path.join(root, 'Takeout', 'Fitbit', 'Global Export Data');
+    const write = (name: string, body: unknown) =>
+      fs.writeFileSync(path.join(ged(), name), typeof body === 'string' ? body : JSON.stringify(body));
+
+    const SLEEP = [
+      {
+        logId: 46012300101,
+        dateOfSleep: '2026-09-17',
+        startTime: '2026-09-16T23:12:30.000',
+        endTime: '2026-09-17T06:42:30.000',
+        minutesAsleep: 412,
+        minutesAwake: 38,
+        duration: 27000000,
+      },
+    ];
+    const EXERCISE = [
+      {
+        logId: 51012300301,
+        activityName: 'Run',
+        averageHeartRate: 141,
+        calories: 310,
+        duration: 2040000,
+        steps: 4800,
+        startTime: '09/17/26 07:02:00',
+        distance: 5.31,
+        distanceUnit: 'Kilometer',
+      },
+      {
+        logId: 51012300302,
+        activityName: 'Bike',
+        calories: 390,
+        duration: 3060000,
+        steps: 0,
+        startTime: '10/17/26 17:45:00',
+        distance: 10.2,
+        distanceUnit: 'Mile',
+      },
+    ];
+    // One entry per minute in a real file; zeros where nothing was counted.
+    const STEPS = [
+      { dateTime: '09/16/26 00:00:00', value: '0' },
+      { dateTime: '09/16/26 08:01:00', value: '96' },
+      { dateTime: '09/16/26 08:02:00', value: '104' },
+      { dateTime: '09/17/26 07:10:00', value: '150' },
+      { dateTime: '09/18/26 00:00:00', value: '0' },
+    ];
+    const RESTING = [
+      { dateTime: '09/16/26 00:00:00', value: { date: '09/16/26', value: 57.4, error: 6.8 } },
+      { dateTime: '09/17/26 00:00:00', value: { date: '09/17/26', value: 0.0, error: 0.0 } },
+    ];
+    const HEART = [
+      { dateTime: '09/16/26 07:00:05', value: { bpm: 64, confidence: 2 } },
+      { dateTime: '09/16/26 07:00:10', value: { bpm: 70, confidence: 3 } },
+      { dateTime: '09/16/26 07:00:20', value: { bpm: 121, confidence: 3 } },
+    ];
+
+    beforeEach(() => {
+      root = fs.mkdtempSync(path.join(os.tmpdir(), 'fitbit-takeout-'));
+      fs.mkdirSync(ged(), { recursive: true });
+      write('sleep-2026-09-15.json', SLEEP);
+      write('exercise-0.json', EXERCISE);
+      write('steps-2026-09-15.json', STEPS);
+      write('resting_heart_rate-2026-09-15.json', RESTING);
+      write('heart_rate-2026-09-16.json', HEART);
+      write('calories-2026-09-15.json', [{ dateTime: '09/16/26 00:00:00', value: '1.2' }]);
+      write('altitude-2026-09-15.json', [{ dateTime: '09/16/26 08:01:00', value: '10' }]);
+    });
+
+    afterEach(() => {
+      fs.rmSync(root, { recursive: true, force: true });
+    });
+
+    async function importRoot(timeframe: Record<string, unknown> = {}) {
+      const pipeline: EmittedGraph[] = [];
+      const drops: Array<[string, string | undefined]> = [];
+      Object.assign(pipeline, { drop: (reason: string, detail?: string) => drops.push([reason, detail]) });
+      await new FitbitFileImporter().fileImport(
+        {},
+        { filename: 'Takeout', fullPath: path.join(root, 'Takeout') },
+        {
+          pipeline,
+          timeframe,
+          log: () => {},
+        } as unknown as ImportParams,
+      );
+
+      return { items: pipeline.map((g) => g.item), drops };
+    }
+
+    it('imports each logged activity as a workout', async () => {
+      const workouts = (await importRoot()).items.filter((i) => i.classification === 'workout');
+      expect(workouts).toHaveLength(2);
+      const [run, bike] = workouts;
+      expect(run.id).toBe('fitbit:exercise:51012300301');
+      expect(run.metadata.Title).toBe('Run');
+      // Same zone-less reading as the sleep logs' start times.
+      expect(run.timestamp!.getTime()).toBe(new Date('2026-09-17T07:02:00').getTime());
+      expect(run.timespanEnd!.getTime() - run.timestamp!.getTime()).toBe(2040000);
+      expect(run.metadata['Duration (min)']).toBe(34);
+      expect(run.metadata['Distance (km)']).toBe(5.31);
+      expect(run.metadata.Calories).toBe(310);
+      expect(run.metadata.Steps).toBe(4800);
+      expect(run.metadata['Average Heart Rate']).toBe(141);
+      expect(run.metadata.Source).toBe('Fitbit');
+      expect(bike.metadata['Distance (km)']).toBe(16.415);
+      expect(bike.metadata.Steps).toBeUndefined();
+    });
+
+    it('sums per-minute steps into one row per day', async () => {
+      const steps = (await importRoot()).items.filter(
+        (i) => i.metadata.Steps !== undefined && i.classification === 'observation',
+      );
+      expect(steps.map((i) => [i.metadata.Date, i.metadata.Steps])).toEqual([
+        ['2026-09-16', 200],
+        ['2026-09-17', 150],
+      ]);
+      expect(steps[0].id).toBe('fitbit:steps:2026-09-16');
+      expect(steps[0].metadata.Title).toBe('Steps on 2026-09-16: 200');
+      expect(steps[0].timestamp!.getTime()).toBe(new Date('2026-09-16T00:00:00').getTime());
+    });
+
+    it('summarises heart rate per day, with the resting figure', async () => {
+      const heart = (await importRoot()).items.filter((i) => i.id?.startsWith('fitbit:heart_rate:'));
+      // 09-17's resting value is 0 (not worn) and it has no readings: no row.
+      expect(heart).toHaveLength(1);
+      expect(heart[0].metadata).toMatchObject({
+        Title: 'Heart rate on 2026-09-16',
+        'Resting Heart Rate': 57.4,
+        'Average Heart Rate': 85,
+        'Min Heart Rate': 64,
+        'Max Heart Rate': 121,
+      });
+    });
+
+    it('counts every other Global Export Data file as dropped', async () => {
+      const { drops } = await importRoot();
+      expect(drops.sort()).toEqual([
+        ['unread_export_file', 'altitude-2026-09-15.json'],
+        ['unread_export_file', 'calories-2026-09-15.json'],
+      ]);
+    });
+
+    it('applies the timeframe to the new rows', async () => {
+      const { items } = await importRoot({ since: new Date('2026-09-17T00:00:00') });
+      expect(items.map((i) => i.metadata.Title).sort()).toEqual(['Bike', 'Run', 'Steps on 2026-09-17: 150']);
+    });
+
+    it('reads a Fitbit folder once even when it is the folder imported', async () => {
+      // The files sit directly in Fitbit/, which is read both as the import
+      // root and as a Fitbit folder.
+      const fitbitDir = path.join(root, 'Fitbit');
+      fs.mkdirSync(fitbitDir);
+      fs.writeFileSync(path.join(fitbitDir, 'steps-2026-09-15.json'), JSON.stringify(STEPS));
+      const pipeline: EmittedGraph[] = [];
+      await new FitbitFileImporter().fileImport({}, { filename: 'Fitbit', fullPath: fitbitDir }, {
+        pipeline,
+        timeframe: {},
+        log: () => {},
+      } as unknown as ImportParams);
+      expect(pipeline.map((g) => g.item.metadata.Steps)).toEqual([200, 150]);
+    });
+
+    it('recognizes a Fitbit export that has workouts but no sleep logs', async () => {
+      fs.unlinkSync(path.join(ged(), 'sleep-2026-09-15.json'));
+      const rec = await new FitbitFileImporter().recognize(
+        {},
+        { filename: 'Takeout', fullPath: path.join(root, 'Takeout') },
+      );
+      expect(rec.confidence).toBeGreaterThan(0.8);
+    });
+
+    it('is claimed as the whole folder in a real import, not sleep file by sleep file', async () => {
+      // A second sleep file beside the first, as a real export has one per month.
+      write(
+        'sleep-2026-10-15.json',
+        SLEEP.map((r) => ({ ...r, logId: r.logId + 100 })),
+      );
+      const matches = await dataSourcesRecognize(
+        undefined,
+        { filename: path.basename(root), fullPath: root, fsRoot: root },
+        {},
+        { descend: true },
+      );
+      const fitbit = matches.filter((m) => m.data_source.name === 'fitbit');
+      expect(fitbit.map((m) => path.relative(root, m.matchedPath ?? root))).toEqual(['Takeout']);
+    });
   });
 });
