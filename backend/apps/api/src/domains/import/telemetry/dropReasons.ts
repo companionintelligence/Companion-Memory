@@ -263,6 +263,10 @@ export const DROP_SLUG_REASONS: Readonly<Record<string, DropReason>> = {
   whatsapp_attachment_unsupported: 'media_unsupported',
   retweet_media_not_imported: 'media_unsupported',
 
+  // Carried by other records of the same export.
+  // notion.ts: a database CSV, whose rows Notion also exports as pages.
+  notion_database_csv: 'represented_elsewhere',
+
   // Shape.
   unsupported_entity_type: 'unsupported_shape',
   // A Spotify play row with none of the track/episode/audiobook fields set —
