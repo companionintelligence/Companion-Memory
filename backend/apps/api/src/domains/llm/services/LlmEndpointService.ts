@@ -10,9 +10,11 @@ import {
   connectionFailureMessage,
   containerSourceRange,
   firstErrorCode,
+  hostIpv4,
   ufwAllowCommand,
   type ConnectionTarget,
   type LlmConnectionFailureReason,
+  type LookupIpv4,
 } from './llmConnectionFailure';
 import {
   containerSharedConfigPath,
@@ -387,7 +389,7 @@ export class LlmEndpointService implements OnModuleInit {
    * matters to Memory. A browser or host-side curl can reach localhost while a
    * containerized API cannot, so the check intentionally runs here.
    */
-  async preflight(fetchImpl: typeof fetch = fetch): Promise<LlmEndpointPreflight> {
+  async preflight(fetchImpl: typeof fetch = fetch, lookupImpl?: LookupIpv4): Promise<LlmEndpointPreflight> {
     const endpoint = safeEndpoint(this.resolved.apiBase ?? this.resolved.ollamaHost);
     const requestUrl = endpointRequestUrl(this.resolved);
     const headers =
@@ -440,7 +442,17 @@ export class LlmEndpointService implements OnModuleInit {
             : `Connected. ${models.length} model${models.length === 1 ? '' : 's'} reported.`,
       };
     } catch (error) {
-      const failure = this.describeConnectionFailure(error);
+      let failure = this.describeConnectionFailure(error);
+
+      // The rule names the address the containers connect to, so it opens the port to them and
+      // not to a LAN that happens to share 172.16.0.0/12. It falls back to `to any` when the name
+      // does not resolve here.
+      if (failure?.fixCommand) {
+        const hostname = connectionTarget(requestUrl)?.hostname;
+        const address = hostname ? await hostIpv4(hostname, lookupImpl) : undefined;
+
+        failure = address ? this.describeConnectionFailure(error, address) : failure;
+      }
 
       this.logger.warn('LLM endpoint preflight failed', {
         backend: this.resolved.settings.backend,
@@ -479,9 +491,10 @@ export class LlmEndpointService implements OnModuleInit {
    *
    * A timeout to a server on the containers' own host gets a ufw rule as well. Docker's iptables
    * rules cover traffic into containers, not from a container to its host, so a host firewall that
-   * drops incoming connections silently eats every one of those.
+   * drops incoming connections silently eats every one of those. `hostAddress` narrows the rule to
+   * the address the containers connect to; without it the rule says `to any`.
    */
-  describeConnectionFailure(error: unknown): LlmEndpointConnectionFailure | null {
+  describeConnectionFailure(error: unknown, hostAddress?: string): LlmEndpointConnectionFailure | null {
     const kind = classifyConnectionError(error);
     const target = kind ? connectionTarget(endpointRequestUrl(this.resolved)) : null;
 
@@ -494,7 +507,7 @@ export class LlmEndpointService implements OnModuleInit {
     return {
       ...kind,
       message: connectionFailureMessage(kind, target),
-      ...(range && { fixCommand: ufwAllowCommand(target.port, range) }),
+      ...(range && { fixCommand: ufwAllowCommand(target.port, range, hostAddress) }),
     };
   }
 

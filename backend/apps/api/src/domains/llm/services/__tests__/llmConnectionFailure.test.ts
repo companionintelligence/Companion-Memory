@@ -1,12 +1,13 @@
 import type { networkInterfaces } from 'node:os';
 
-import { APIConnectionError, APIConnectionTimeoutError } from 'openai';
+import { APIConnectionError, APIConnectionTimeoutError, APIError } from 'openai';
 
 import {
   classifyConnectionError,
   connectionFailureMessage,
   containerSourceRange,
   firstErrorCode,
+  hostIpv4,
   ufwAllowCommand,
 } from '../llmConnectionFailure';
 
@@ -92,6 +93,23 @@ describe('classifyConnectionError', () => {
     expect(firstErrorCode(stalled)).toBe('UND_ERR_HEADERS_TIMEOUT');
   });
 
+  it('leaves an HTTP answer alone, whatever `code` its body carried', () => {
+    // A proxy reporting its own upstream: the OpenAI SDK copies the body's `code` onto the error.
+    const proxied = APIError.generate(
+      502,
+      { error: { message: 'upstream refused', code: 'ECONNREFUSED' } },
+      undefined,
+      new Headers(),
+    );
+
+    expect(proxied.code).toBe('ECONNREFUSED');
+    expect(classifyConnectionError(proxied)).toBeNull();
+    // Ollama's own ResponseError carries `status_code`.
+    expect(
+      classifyConnectionError(Object.assign(new Error('x'), { status_code: 500, code: 'ECONNRESET' })),
+    ).toBeNull();
+  });
+
   it('returns null for errors that are not connection failures, and survives a cause cycle', () => {
     const cyclic = new Error('loop') as Error & { cause?: unknown };
     cyclic.cause = cyclic;
@@ -149,6 +167,36 @@ describe('ufwAllowCommand', () => {
     expect(ufwAllowCommand(11434, '172.16.0.0/12')).toBe(
       'sudo ufw allow from 172.16.0.0/12 to any port 11434 proto tcp',
     );
+  });
+
+  it('names the host address when there is one', () => {
+    expect(ufwAllowCommand(11434, '172.16.0.0/12', '172.17.0.1')).toBe(
+      'sudo ufw allow from 172.16.0.0/12 to 172.17.0.1 port 11434 proto tcp',
+    );
+  });
+});
+
+describe('hostIpv4', () => {
+  it('returns an IPv4 address as it is, without a lookup', async () => {
+    const lookup = jest.fn();
+
+    await expect(hostIpv4('172.17.0.1', lookup)).resolves.toBe('172.17.0.1');
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it('resolves a name to its IPv4 address', async () => {
+    const lookup = jest.fn(async () => ({ address: '172.17.0.1' }));
+
+    await expect(hostIpv4('host.docker.internal', lookup)).resolves.toBe('172.17.0.1');
+    expect(lookup).toHaveBeenCalledWith('host.docker.internal', { family: 4 });
+  });
+
+  it('gives nothing for a name that does not resolve, or not in time', async () => {
+    const failing = jest.fn(async () => Promise.reject(new Error('getaddrinfo ENOTFOUND')));
+    const hanging = jest.fn(() => new Promise<{ address: string }>(() => undefined));
+
+    await expect(hostIpv4('host.docker.internal', failing)).resolves.toBeUndefined();
+    await expect(hostIpv4('host.docker.internal', hanging, 10)).resolves.toBeUndefined();
   });
 });
 

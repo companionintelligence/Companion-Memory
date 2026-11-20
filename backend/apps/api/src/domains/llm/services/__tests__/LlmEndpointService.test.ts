@@ -1,3 +1,4 @@
+import { lookup } from 'node:dns/promises';
 import { networkInterfaces } from 'node:os';
 
 import config from '@ci/configuration';
@@ -6,6 +7,11 @@ import { LlmEndpointService } from '../LlmEndpointService';
 
 // The firewall hint reads the container's own address; each test says what it is.
 jest.mock('node:os', () => ({ ...jest.requireActual('node:os'), networkInterfaces: jest.fn(() => ({})) }));
+// The rule names the address host.docker.internal resolves to in the container (host-gateway).
+jest.mock('node:dns/promises', () => ({
+  ...jest.requireActual('node:dns/promises'),
+  lookup: jest.fn(async () => ({ address: '172.17.0.1', family: 4 })),
+}));
 
 jest.mock('../llmEndpointShared', () => {
   const actual = jest.requireActual('../llmEndpointShared');
@@ -302,6 +308,7 @@ describe('LlmEndpointService', () => {
 
     beforeEach(() => {
       containerAddress('172.18.0.5', 16);
+      jest.mocked(lookup).mockClear();
       logger.warn.mockClear();
     });
 
@@ -323,8 +330,9 @@ describe('LlmEndpointService', () => {
       expect(result).toMatchObject({
         ok: false,
         reason: 'timeout',
-        fixCommand: 'sudo ufw allow from 172.16.0.0/12 to any port 11500 proto tcp',
+        fixCommand: 'sudo ufw allow from 172.16.0.0/12 to 172.17.0.1 port 11500 proto tcp',
       });
+      expect(lookup).toHaveBeenCalledWith('host.docker.internal', { family: 4 });
       expect(result.message).toBe(
         "host.docker.internal:11500 did not answer in time. On the computer Memory runs on, that usually means a firewall is dropping connections from Memory's containers. If that computer runs Linux with ufw, this rule lets them through:",
       );
@@ -343,7 +351,43 @@ describe('LlmEndpointService', () => {
 
       const result = await onTheHost().preflight(rejecting(connectTimeout()));
 
-      expect(result.fixCommand).toBe('sudo ufw allow from 192.168.16.0/20 to any port 11434 proto tcp');
+      expect(result.fixCommand).toBe(
+        'sudo ufw allow from 192.168.16.0/20 to 172.17.0.1 port 11434 proto tcp',
+      );
+    });
+
+    it('says `to any` when the gateway name does not resolve in the container', async () => {
+      jest
+        .mocked(lookup)
+        .mockRejectedValueOnce(Object.assign(new Error('getaddrinfo ENOTFOUND'), { code: 'ENOTFOUND' }));
+
+      const result = await onTheHost().preflight(rejecting(connectTimeout()));
+
+      expect(result.fixCommand).toBe('sudo ufw allow from 172.16.0.0/12 to any port 11434 proto tcp');
+    });
+
+    it('uses a gateway set as an IP address as it is, without a lookup', async () => {
+      const previous = process.env.CI_LLM_HOST_GATEWAY;
+      process.env.CI_LLM_HOST_GATEWAY = '172.17.0.1';
+
+      try {
+        (config as { services: { ollama: { host: string } } }).services.ollama.host =
+          'http://172.17.0.1:11434';
+        const service = new LlmEndpointService(logger as never);
+        service.onModuleInit();
+
+        await expect(service.preflight(rejecting(connectTimeout()))).resolves.toHaveProperty(
+          'fixCommand',
+          'sudo ufw allow from 172.16.0.0/12 to 172.17.0.1 port 11434 proto tcp',
+        );
+        expect(lookup).not.toHaveBeenCalled();
+      } finally {
+        if (previous === undefined) {
+          delete process.env.CI_LLM_HOST_GATEWAY;
+        } else {
+          process.env.CI_LLM_HOST_GATEWAY = previous;
+        }
+      }
     });
 
     it('leaves the rule out when the container has no IPv4 address to base it on', async () => {
@@ -384,6 +428,7 @@ describe('LlmEndpointService', () => {
       const result = await service.preflight(rejecting(connectTimeout()));
 
       expect(result).toMatchObject({ reason: 'timeout', endpoint: 'http://192.168.1.50:8000/v1' });
+      expect(lookup).not.toHaveBeenCalled();
       expect(result.message).toBe(
         '192.168.1.50:8000 did not answer in time. Check that the server is up and that no firewall on the way drops the connection.',
       );

@@ -1,3 +1,5 @@
+import { lookup } from 'node:dns/promises';
+import { isIP } from 'node:net';
 import { networkInterfaces, type NetworkInterfaceInfo } from 'node:os';
 
 /**
@@ -91,7 +93,20 @@ function* errorChain(error: unknown): Generator<object> {
  */
 export function classifyConnectionError(error: unknown): LlmConnectionFailureKind | null {
   for (const current of errorChain(error)) {
-    const { code, name } = current as { code?: unknown; name?: unknown };
+    const { code, name, status, status_code } = current as {
+      code?: unknown;
+      name?: unknown;
+      status?: unknown;
+      status_code?: unknown;
+    };
+
+    // An error with an HTTP status is the server's answer, not a failure to reach it. The OpenAI SDK
+    // copies the `code` of the server's error body onto it, and a proxy can put `ECONNREFUSED` there
+    // about its own upstream.
+    if (typeof status === 'number' || typeof status_code === 'number') {
+      return null;
+    }
+
     const reason = typeof code === 'string' ? reasonForCode(code) : null;
 
     if (reason && typeof code === 'string') {
@@ -186,9 +201,49 @@ export function containerSourceRange(
   return ipv4.map((entry) => networkOf(entry.cidr)).find((network) => network != null);
 }
 
-/** A ufw rule that lets this container's connections through to `port` on the host. */
-export function ufwAllowCommand(port: number, range: string): string {
-  return `sudo ufw allow from ${range} to any port ${port} proto tcp`;
+/**
+ * A ufw rule that lets this container's connections through to `port` on the host.
+ *
+ * `destination` is the host address the containers connect to (Docker's `host-gateway`, the
+ * docker0 address, 172.17.0.1 unless the daemon says otherwise). With it the rule matches only
+ * connections to that address: a machine on a LAN that also uses 172.16.0.0/12 addresses
+ * connects to the host's LAN address and stays blocked. Without it the rule is `to any`.
+ */
+export function ufwAllowCommand(port: number, range: string, destination = 'any'): string {
+  return `sudo ufw allow from ${range} to ${destination} port ${port} proto tcp`;
+}
+
+export type LookupIpv4 = (hostname: string, options: { family: 4 }) => Promise<{ address: string }>;
+
+/**
+ * The IPv4 address `hostname` resolves to in this container, which is the destination a host
+ * firewall sees for these connections. Undefined when it does not resolve within `timeoutMs`.
+ */
+export async function hostIpv4(
+  hostname: string,
+  lookupImpl: LookupIpv4 = lookup,
+  timeoutMs = 1_000,
+): Promise<string | undefined> {
+  if (isIP(hostname) === 4) {
+    return hostname;
+  }
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    const found = await Promise.race([
+      lookupImpl(hostname, { family: 4 }),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), timeoutMs);
+      }),
+    ]);
+
+    return found && isIP(found.address) === 4 ? found.address : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Where a failed request was going, as the person configured it. */
