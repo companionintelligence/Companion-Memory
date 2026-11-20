@@ -344,6 +344,34 @@ describe('extractUploadedArchive on a tarball', () => {
     fs.writeFileSync(archive, zlib.gzipSync(tar, { level: 9 }));
 
     await expect(extractUploadedArchive(archive)).rejects.toThrow(/decompression ratio/);
+    await expect(extractUploadedArchive(archive)).rejects.not.toThrow(CorruptArchiveError);
     expect(fs.existsSync(path.join(dir, 'bomb'))).toBe(false);
+  });
+
+  it('refuses a name no filesystem here can hold before writing anything', async () => {
+    // 300 bytes in one name: under the whole-path cap, over NAME_MAX.
+    const { dir, archive } = write('wide.tar.gz', [
+      { name: 'outbox.json', body: OUTBOX },
+      { name: 'PaxHeader/x', type: 'x', body: paxRecord('path', `${'y'.repeat(300)}.json`) },
+      { name: 'x.json', body: '{}' },
+    ]);
+
+    await expect(extractUploadedArchive(archive)).rejects.toThrow(/cannot be written/);
+    expect(fs.existsSync(path.join(dir, 'wide'))).toBe(false);
+  });
+
+  it('stops writing once the extraction fails', async () => {
+    // `a` as a file, then `a/b.txt` needs it as a folder: the write fails there.
+    const { dir, archive } = write('clash.tar.gz', [
+      { name: 'a', body: 'file' },
+      { name: 'a/b.txt', body: 'x' },
+      ...Array.from({ length: 300 }, (_, i) => ({ name: `later/f${i}.txt`, body: 'x' })),
+    ]);
+
+    await expect(extractUploadedArchive(archive)).rejects.toThrow(/archive extraction failed/);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    const later = path.join(dir, 'clash', 'later');
+    expect(fs.existsSync(later) ? fs.readdirSync(later) : []).toEqual([]);
   });
 });

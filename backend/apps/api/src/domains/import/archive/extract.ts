@@ -40,7 +40,7 @@ import path from 'node:path';
 import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 
 import AdmZip from 'adm-zip';
-import { extract as tarExtract, Parser as TarParser, type ReadEntry } from 'tar';
+import { Parser as TarParser, type ReadEntry, Unpack as TarUnpack } from 'tar';
 
 import {
   ArchiveEscapeError,
@@ -365,6 +365,11 @@ const TAR_FILE_TYPES: ReadonlySet<string> = new Set(['File', 'OldFile', 'Contigu
 // can carry a name of up to 1MB that compresses to almost nothing, so this is
 // checked on the header, before the name is used for anything.
 const MAX_TAR_ENTRY_PATH_BYTES = 4096;
+// NAME_MAX, and node-tar's own default depth limit. The strict writer refuses
+// both mid-extraction, after earlier entries are already on disk, so the header
+// pass refuses them first.
+const MAX_TAR_NAME_BYTES = 255;
+const MAX_TAR_DEPTH = 1024;
 
 /**
  * Read every header of a tarball without writing anything. `onEntry` throwing
@@ -457,6 +462,15 @@ async function extractViaTar(
         );
       }
 
+      const segments = entry.path.split('/');
+      if (
+        segments.length > MAX_TAR_DEPTH ||
+        segments.some((segment) => Buffer.byteLength(segment) > MAX_TAR_NAME_BYTES) ||
+        Buffer.byteLength(path.resolve(destDir, entry.path)) >= MAX_TAR_ENTRY_PATH_BYTES
+      ) {
+        refuse(new Error(`archive entry name cannot be written on this disk: ${entry.path.slice(0, 80)}…`));
+      }
+
       // node-tar would strip a leading `/` and skip a `..` entry with a
       // warning; either one means the archive was built to write elsewhere.
       if (
@@ -506,6 +520,12 @@ async function extractViaTar(
       throw refusal;
     }
 
+    // node-tar's zip-bomb guard. The archive read fine and was refused, so
+    // "re-download the export" (CorruptArchiveError's advice) would not help.
+    if (/max decompression ratio exceeded/.test((err as Error).message)) {
+      throw new Error(`archive refused: ${(err as Error).message}`, { cause: err });
+    }
+
     throw new CorruptArchiveError([
       { archive: archivePath, reason: `it is not a readable .tar.gz (${(err as Error).message})` },
     ]);
@@ -516,8 +536,26 @@ async function extractViaTar(
   fs.mkdirSync(destDir, { recursive: true });
 
   try {
-    await tarExtract({
-      file: archivePath,
+    await writeTarEntries(archivePath, destDir);
+  } catch (err) {
+    throw new Error(`archive extraction failed (${(err as Error).message})`, { cause: err });
+  }
+
+  return { destDir, files, method: 'tar' };
+}
+
+/**
+ * The write pass. `tar.extract` rejects on the first error but its unpacker
+ * keeps reading and writing every entry after it, so a failed stage would
+ * still be filling the destination while a retry or the run's cleanup works
+ * on the same tree. This aborts the unpacker and closes the file on the first
+ * error instead.
+ */
+function writeTarEntries(archivePath: string, destDir: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let failed = false;
+    const source = fs.createReadStream(archivePath);
+    const unpack = new TarUnpack({
       cwd: destDir,
       strict: true,
       preserveOwner: false,
@@ -528,11 +566,32 @@ async function extractViaTar(
         entry.mode = entry.type === 'Directory' ? 0o755 : 0o644;
       },
     });
-  } catch (err) {
-    throw new Error(`archive extraction failed (${(err as Error).message})`, { cause: err });
-  }
 
-  return { destDir, files, method: 'tar' };
+    const fail = (err: unknown) => {
+      if (failed) {
+        return;
+      }
+
+      failed = true;
+      source.destroy();
+      const error = err instanceof Error ? err : new Error(String(err));
+      // Abort stops the parse, but entries it already queued would still be
+      // written. Every path is deeper than -1, so the path check skips them.
+      // Both raise errors of their own, which `failed` swallows.
+      unpack.maxDepth = -1;
+      unpack.abort(error);
+      reject(error);
+    };
+
+    unpack.on('error', fail);
+    unpack.on('close', () => {
+      if (!failed) {
+        resolve();
+      }
+    });
+    source.on('error', fail);
+    source.pipe(unpack);
+  });
 }
 
 /**
