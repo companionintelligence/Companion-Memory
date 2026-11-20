@@ -612,11 +612,12 @@ function exdateForOverride(recurrenceId: string, tzid: string | undefined): stri
  * name ({@link icsZone}). A UTC date-time gives `UTC`: its occurrences fall at
  * the same UTC time all year.
  *
- * A floating date-time, or one in any other zone, gives the server's zone. {@link parseICSDate} stored DTSTART by reading its wall clock
- * there. `parseRecurrence` reads an EXDATE or RDATE with no usable `TZID` in
- * the series' zone. Left to the owner's zone instead, the two disagree for
- * anyone whose zone is not the server's: the series starts from a shifted wall
- * clock and none of its excluded dates match an occurrence.
+ * A floating date-time, or one in any other zone, gives the server's zone.
+ * {@link parseICSDate} stored DTSTART by reading its wall clock there.
+ * `parseRecurrence` reads an EXDATE or RDATE with no usable `TZID` in the
+ * series' zone. Left to the owner's zone instead, the two disagree for anyone
+ * whose zone is not the server's: the series starts from a shifted wall clock
+ * and none of its excluded dates match an occurrence.
  */
 function seriesTimeZone(value: string | undefined, params: string | undefined): string | undefined {
   const tzid = tzidParam(params);
