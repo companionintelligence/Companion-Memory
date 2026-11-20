@@ -12,6 +12,7 @@ import path from 'node:path';
 
 import { extractMediaMetadata } from '@ci/common/media/exif';
 
+import { JUNK_NAMES } from './fsWalk';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { isPathWithinOrEqual, registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
@@ -55,7 +56,7 @@ class GenericFileImporter implements FileImporter {
 
   private async processFile(fpath: string, params: ImportParams) {
     const base = path.basename(fpath);
-    if (base.startsWith('.')) {
+    if (base.startsWith('.') || JUNK_NAMES.has(base)) {
       return;
     }
 
@@ -126,7 +127,7 @@ async function* walkDir(root: string, excludePaths: readonly string[] = []): Asy
   const entries = await fs.promises.readdir(root, { withFileTypes: true });
   for (const e of entries) {
     const full = path.join(root, e.name);
-    if (isClaimed(full, excludePaths)) {
+    if (isClaimed(full, excludePaths) || JUNK_NAMES.has(e.name)) {
       continue;
     }
 
