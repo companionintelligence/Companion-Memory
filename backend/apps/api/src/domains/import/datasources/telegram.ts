@@ -409,12 +409,13 @@ export class TelegramFileImporter implements FileImporter {
     // A folder match claims the whole export, so the folder walk no longer
     // reaches it. The files no message points at (profile pictures, stories,
     // the media of chats the owner left) still come in as loose files, as they
-    // did when the folder walk staged them.
+    // did when the folder walk staged them. So does anything else in a folder
+    // that merely holds a result.json. The depth bound is far past any export.
     if (stat.isDirectory()) {
       const exportDir = path.dirname(fpath);
       const referenced = referencedFiles(data, exportDir);
 
-      for await (const found of walkFiles(exportDir, { maxDepth: 8, skipHidden: true })) {
+      for await (const found of walkFiles(exportDir, { maxDepth: 32, skipHidden: true })) {
         const file = path.resolve(found);
         const inJunk = path
           .relative(exportDir, file)
