@@ -54,7 +54,7 @@ class GenericFileImporter implements FileImporter {
     }
   }
 
-  private async processFile(fpath: string, params: ImportParams) {
+  async processFile(fpath: string, params: ImportParams) {
     const base = path.basename(fpath);
     if (base.startsWith('.') || JUNK_NAMES.has(base)) {
       return;
@@ -107,6 +107,16 @@ class GenericFileImporter implements FileImporter {
 
     params.pipeline.push({ item });
   }
+}
+
+/**
+ * Stage one file the way the folder walk does: EXIF or container dates when
+ * the file has them, undated otherwise. For an importer that claims a whole
+ * folder and still wants the files it does not read itself to come in, as
+ * they did when the folder walk reached them (Telegram's profile pictures).
+ */
+export async function stageLooseFile(fpath: string, params: ImportParams): Promise<void> {
+  await new GenericFileImporter().processFile(fpath, params);
 }
 
 /**

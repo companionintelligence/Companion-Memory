@@ -193,6 +193,9 @@ describe('Telegram media messages', () => {
     fs.writeFileSync(path.join(root, 'chats', 'chat_001', 'files', 'ferry_timetable.pdf'), '%PDF-1.4');
     fs.writeFileSync(path.join(root, 'chats', 'chat_002', 'photos', 'photo_1@14-07-2026_19-22-05.jpg'), 'jpeg');
     fs.writeFileSync(path.join(root, 'chats', 'chat_002', 'photos', 'photo_2@14-07-2026_19-30-00.jpg'), 'jpeg');
+    fs.mkdirSync(path.join(root, 'chats', 'chat_002', 'video_files'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'chats', 'chat_002', 'video_files', 'IMG_2231.MP4'), 'mp4');
+    fs.writeFileSync(path.join(root, 'chats', 'chat_002', 'video_files', 'IMG_2231.MP4_thumb.jpg'), 'jpeg');
     fs.writeFileSync(
       path.join(root, 'result.json'),
       JSON.stringify({
@@ -226,6 +229,12 @@ describe('Telegram media messages', () => {
                 }),
                 message(5, { file: `../${outsideName()}`, file_name: 'outside.pdf', mime_type: 'application/pdf' }),
                 message(6, {}),
+                message(7, {
+                  file: 'chats/chat_002/video_files/IMG_2231.MP4',
+                  thumbnail: 'chats/chat_002/video_files/IMG_2231.MP4_thumb.jpg',
+                  media_type: 'video_file',
+                  mime_type: 'video/mp4',
+                }),
               ],
             },
           ],
@@ -238,22 +247,30 @@ describe('Telegram media messages', () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  const run = async () => {
+  /** Import the export through its result.json, or through the folder when `folder` is set. */
+  const run = async (folder = false) => {
     const drops: string[] = [];
     const pipeline: TestPipeline = Object.assign([] as EmittedGraph[], {
       drop: (reason: string) => {
         drops.push(reason);
       },
     });
-    await new TelegramFileImporter().fileImport({}, { filename: 'result.json', fullPath: path.join(root, 'result.json') }, {
+    const entry = folder
+      ? { filename: path.basename(root), fullPath: root }
+      : { filename: 'result.json', fullPath: path.join(root, 'result.json') };
+    await new TelegramFileImporter().fileImport({}, entry, {
       pipeline,
       timeframe: {},
       log: () => {},
     } as unknown as ImportParams);
 
     const byId = new Map(pipeline.filter((p) => p.item).map((p) => [p.item.id, p.item]));
+    // Files staged on their own rather than as a message: they carry no id.
+    const loose = pipeline
+      .filter((p) => p.item && !p.item.id)
+      .map((p) => path.relative(root, p.item.intermediateLocation!));
 
-    return { byId, drops };
+    return { byId, drops, loose };
   };
 
   it('attaches the photo and the file to the messages they came with', async () => {
@@ -291,10 +308,12 @@ describe('Telegram media messages', () => {
       path.join(root, 'chats', 'chat_002', 'photos', 'photo_2@14-07-2026_19-30-00.jpg'),
     );
 
-    // No bytes to upload, but the message says what was sent.
-    expect(metaAttachments(byId.get('telegram:2002:4')!.metadata.MediaAttachments)).toEqual([
-      { type: 'image', mimetype: 'image/webp' },
-    ]);
+    // No bytes to upload, but the message says what was sent. Kept apart from
+    // the attachments: the export's settings left it out, so nothing is missing
+    // and the upload must not count it as a gap in the import.
+    const sticker = byId.get('telegram:2002:4')!;
+    expect(sticker.metadata.MediaAttachments).toBeUndefined();
+    expect(sticker.metadata.MediaLeftOut).toEqual([{ type: 'image', mimetype: 'image/webp', kind: 'sticker' }]);
 
     // Only the message with neither text nor media is dropped.
     expect(byId.has('telegram:2002:6')).toBe(false);
@@ -313,6 +332,26 @@ describe('Telegram media messages', () => {
     } finally {
       fs.rmSync(outside, { force: true });
     }
+  });
+
+  it('still brings in the files no message points at when it imports the whole folder', async () => {
+    // Telegram claims the folder, so the folder walk no longer stages what is
+    // in it. Profile pictures and the like are in no message, and used to come
+    // in through that walk.
+    fs.mkdirSync(path.join(root, 'profile_pictures'));
+    fs.writeFileSync(path.join(root, 'profile_pictures', 'photo_1@01-03-2026_10-00-00.jpg'), 'jpeg');
+    fs.mkdirSync(path.join(root, 'profile_pictures', '@eaDir'));
+    fs.writeFileSync(path.join(root, 'profile_pictures', '@eaDir', 'SYNOPHOTO_THUMB_M.jpg'), 'jpeg');
+
+    const fromFolder = await run(true);
+
+    expect(fromFolder.loose).toEqual([path.join('profile_pictures', 'photo_1@01-03-2026_10-00-00.jpg')]);
+    expect(metaAttachments(fromFolder.byId.get('telegram:2002:7')!.metadata.MediaAttachments)[0]?.path).toBe(
+      path.join(root, 'chats', 'chat_002', 'video_files', 'IMG_2231.MP4'),
+    );
+
+    // Matched on result.json alone, the folder walk still covers the rest.
+    expect((await run()).loose).toEqual([]);
   });
 
   it('is recognized as the whole export folder, so its media are not imported again as loose files', async () => {
