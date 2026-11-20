@@ -422,9 +422,10 @@ async function mintAndStoreApiKey(jwt: string, memoryOrigin?: string): Promise<s
   // Desktop only: the key an earlier sign-in left in the keychain. This sign-in replaces it, so
   // it is given back whether or not the new key saves; left alone, every sign-in added one more
   // full-access key that nothing would use again. The desktop window only ever talks to the
-  // appliance it is served from, so the old key goes back to the server that issued it. A phone
-  // can be signing in to a different appliance, which must never be sent the old one.
-  const replaced = isTauriPlatform() ? await storedDeviceKey() : null;
+  // appliance it is served from, so the old key goes back to the server that issued it. A phone,
+  // or any sign-in to a Memory named by `memoryOrigin`, can be talking to a different appliance,
+  // which must never be sent the old one.
+  const replaced = isTauriPlatform() && !memoryOrigin ? await storedDeviceKey() : null;
   const giveBackReplaced = async () => {
     if (replaced && replaced !== created.key) {
       await revokeDeviceKey(replaced, revokeUrl);
@@ -440,12 +441,21 @@ async function mintAndStoreApiKey(jwt: string, memoryOrigin?: string): Promise<s
     // it and no sign-out would ever revoke it. A desktop with no default keyring (no Secret
     // Service) left one such full-access key behind on every try. Give it back first.
     await revokeDeviceKey(created.key, revokeUrl);
-    await giveBackReplaced();
+
+    // The key the window is signed in with stays: it still works and the window's sign-out gives
+    // it back. Given back here, the window would carry on with a key Memory no longer takes.
+    const giveBack = replaced !== null && getApiKey() !== replaced;
+
+    if (giveBack) {
+      // A keystore read still in flight from launch must not put the key given back in place.
+      bumpNativeCredentialEpoch();
+      await giveBackReplaced();
+    }
 
     // A write that got partway kept the key just revoked; nothing may read that back.
     const stored = await storedDeviceKey();
 
-    if (stored !== null && (stored === created.key || stored === replaced)) {
+    if (stored !== null && (stored === created.key || (giveBack && stored === replaced))) {
       await removeStoredKeyEntries();
     }
 
@@ -456,8 +466,9 @@ async function mintAndStoreApiKey(jwt: string, memoryOrigin?: string): Promise<s
   bumpNativeCredentialEpoch();
   setApiKey(created.key);
   // Only once the new key is the one requests carry: the window's check of the old key then
-  // cannot read the revocation as this window being signed out.
-  await giveBackReplaced();
+  // cannot read the revocation as this window being signed out. Not awaited, so a slow answer
+  // does not hold up the sign-in. It never rejects.
+  void giveBackReplaced();
 
   return created.key;
 }
@@ -559,6 +570,24 @@ async function revokeDeviceKey(key: string, url = '/api/keys/current'): Promise<
   } catch (error) {
     console.warn('Could not revoke this device key on the server', error);
   }
+}
+
+/**
+ * Desktop, after an email sign-in: give back the key an earlier Companion sign-in left in the
+ * keychain (one the launch could not read, or a sign-out could not delete). Left there, the next
+ * launch reads it back ahead of the cookie session this sign-in made. That signs the window in
+ * to the account the key belongs to, or, once Memory says the key is revoked, signs it out and
+ * ends the email session with it.
+ */
+async function giveBackStoredDesktopKey(): Promise<void> {
+  const stored = await storedDeviceKey();
+
+  if (!stored || stored === getApiKey()) {
+    return;
+  }
+
+  await revokeDeviceKey(stored);
+  await removeStoredKeyEntries();
 }
 
 interface OidcNativeExchangeResponse {
@@ -688,7 +717,7 @@ function useAuth(): ReturnValue {
   const [unreachable, setUnreachable] = useState<boolean>(false);
 
   const [accessToken, setAccessToken] = useState<string | null>(null);
-  // Phone, and desktop after a Companion sign-in: present once the stored API key is loaded or a
+  // Phone and desktop (after a Companion sign-in): present once the stored API key is loaded or a
   // new one minted. Drives the authenticated state there, where there is no JWT in `accessToken`.
   const [nativeApiKey, setNativeApiKey] = useState<string | null>(null);
   const [signOutPrompt, setSignOutPrompt] = useState<SignOutPrompt>({ open: false, unsentCaptures: 0 });
@@ -728,6 +757,10 @@ function useAuth(): ReturnValue {
           setNativeApiKey(await mintAndStoreApiKey(jwt));
         } else {
           setAccessToken(jwt);
+
+          if (jwt && isTauriPlatform()) {
+            void giveBackStoredDesktopKey();
+          }
         }
 
         // Memory answered the sign-in, so the session check it left unanswered no longer
@@ -823,7 +856,7 @@ function useAuth(): ReturnValue {
   const signOut = useCallback(async () => {
     // The key this device signs in with (phone and desktop), read before it is dropped below.
     // The stored copy when none is in memory: the app can sign out before the keystore restore
-    // lands, and a desktop whose keychain could not be read at start never loaded it. Deleting
+    // lands. A desktop whose keychain could not be read at start never loaded it at all. Deleting
     // that copy below without revoking it would leave a working key on the server that no
     // device holds.
     const deviceKey =
@@ -995,8 +1028,8 @@ function useAuth(): ReturnValue {
     document.addEventListener('visibilitychange', checkWhenVisible);
     window.addEventListener('focus', check);
     // Ask once straight away too. A key read back from the keychain at start may have been
-    // revoked while the app was closed, and waiting a minute to ask would leave the window on
-    // error pages until then.
+    // revoked while the app was closed. Waiting a minute to ask would leave the window on error
+    // pages until then.
     checkWhenVisible();
 
     return () => {
@@ -1045,6 +1078,10 @@ function useAuth(): ReturnValue {
           setNativeApiKey(await mintAndStoreApiKey(jwt));
         } else {
           setAccessToken(jwt);
+
+          if (jwt && isTauriPlatform()) {
+            void giveBackStoredDesktopKey();
+          }
         }
 
         // As in login: Memory answered, so the outage the session check saw is over.
