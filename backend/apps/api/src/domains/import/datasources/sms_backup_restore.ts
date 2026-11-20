@@ -138,7 +138,6 @@ function unescapeXml(s: string): string {
   return decodeEntities(s, { xml: true });
 }
 
-// Pull the key="value" attributes out of a single tag's text.
 /** One <addr> of an MMS: an address and its PDU header type. */
 interface MmsAddr {
   address: string;
@@ -162,6 +161,7 @@ function phoneKey(v: string): string {
   return digits.length >= 7 ? digits.slice(-10) : v.trim().toLowerCase();
 }
 
+// Pull the key="value" attributes out of a single tag's text.
 function parseAttrs(tag: string): Record<string, string> {
   const attrs: Record<string, string> = {};
   const re = /(\w+)=(?:"([^"]*)"|'([^']*)')/g;
