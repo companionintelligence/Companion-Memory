@@ -48,6 +48,37 @@ describe('Telegram datasource', () => {
     expect(entities[0].entity!.metadata!.Source).toBe('Telegram');
   });
 
+  it("keeps a contact's number as Telegram wrote it, country code included", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tg-phones-'));
+    const fpath = path.join(dir, 'result.json');
+    fs.writeFileSync(
+      fpath,
+      JSON.stringify({
+        personal_information: { user_id: 1, first_name: 'Zephyrine', phone_number: '+1 206 555 0147' },
+        contacts: {
+          list: [{ user_id: 5530912876, first_name: 'Mirabeau', last_name: 'Telfaire', phone_number: '+44 20 7946 0321' }],
+        },
+        chats: { list: [] },
+      }),
+    );
+    const pipeline: EmittedGraph[] = [];
+
+    try {
+      await new TelegramFileImporter().fileImport({}, { filename: 'result.json', fullPath: fpath }, {
+        pipeline,
+        timeframe: {},
+        log: () => {},
+      } as unknown as ImportParams);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+
+    const entity = pipeline.find((p) => p.entity)!.entity!;
+    expect(entity.name).toBe('Mirabeau Telfaire');
+    expect(entity.metadata).toMatchObject({ Source: 'Telegram', Phones: ['+44 20 7946 0321'] });
+    expect(entity.accumulate).toEqual(['Phones']);
+  });
+
   it('parses message metadata and joins text entity arrays', async () => {
     const fpath = path.join(FIXTURES_DIR, 'telegram-export', 'result.json');
     const fi = new TelegramFileImporter();

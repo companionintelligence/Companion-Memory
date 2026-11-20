@@ -115,6 +115,57 @@ describe('mergePersonIdentifiers', () => {
     expect(merged[0]?.source).toBe('user');
     expect(merged[1]?.kind).toBe('phone');
   });
+
+  it("shows an imported phone as the source wrote it, country code included, from the person's own copy", () => {
+    // What an import leaves: the identifier indexed under its last ten digits
+    // with no written form, and the typed number under `Phones`.
+    const person = {
+      properties: {
+        phone: '2079460321',
+        phones: ['2079460321'],
+        Phones: ['+44 20 7946 0321', '+1 (206) 555-0133'],
+      },
+    };
+    const indexed: PersonIdentifierType[] = [
+      {
+        kind: 'phone',
+        value: '2079460321',
+        rawValue: null,
+        label: null,
+        isPrimary: false,
+        source: null,
+        verifiedAt: null,
+      },
+    ];
+
+    const fromProperties = contactMethodsFromPersonProperties(person);
+    const merged = mergePersonIdentifiers(indexed, fromProperties);
+
+    // Only the number the person has; the other typed one is not a contact of theirs.
+    expect(fromProperties.map((row) => [row.value, row.rawValue])).toEqual([['2079460321', '+44 20 7946 0321']]);
+    expect(merged.map((row) => [row.value, row.rawValue])).toEqual([['2079460321', '+44 20 7946 0321']]);
+  });
+
+  it('keeps the written form an identifier already has', () => {
+    const indexed: PersonIdentifierType[] = [
+      {
+        kind: 'phone',
+        value: '4155550100',
+        rawValue: '(415) 555-0100',
+        label: 'mobile',
+        isPrimary: true,
+        source: 'user',
+        verifiedAt: null,
+      },
+    ];
+
+    const merged = mergePersonIdentifiers(
+      indexed,
+      contactMethodsFromPersonProperties({ properties: { phones: ['4155550100'], Phones: ['+1 415 555 0100'] } }),
+    );
+
+    expect(merged).toEqual(indexed);
+  });
 });
 
 /** What a save leaves on the row: the stored person with the patch applied, as `properties || patch` does. */

@@ -182,7 +182,10 @@ export class TelegramFileImporter implements FileImporter {
         entity: {
           name,
           attributes: [{ name: 'phone', value: c.phone_number, identity: true }],
-          metadata: { Source: 'Telegram' },
+          // The number as Telegram wrote it, country code included: the person
+          // is matched on its last ten digits, and shows this.
+          metadata: { Source: 'Telegram', Phones: [c.phone_number] },
+          accumulate: ['Phones'],
         },
       });
     }
