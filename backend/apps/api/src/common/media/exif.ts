@@ -563,10 +563,21 @@ export async function extractVideoMetadata(fpath: string, timeoutMs = 8000): Pro
 }
 
 /**
- * MIME-routed dispatcher: image/* → image EXIF, video/* → video container.
- * Anything else returns an empty result. Callers merge the returned `metadata`
- * into their item, and apply `timestamp` / `location` / `accuracyMeters` per
- * their own rules.
+ * The picture fields {@link extractVideoMetadata} reads off a video stream. In
+ * an audio file the only video stream is its cover art, so these describe the
+ * cover rather than the recording.
+ */
+const COVER_ART_FIELDS = ['Codec', 'Width', 'Height', 'Frame Rate'] as const;
+
+/**
+ * MIME-routed dispatcher: image/* → image EXIF, video/* and audio/* → the
+ * container. Anything else returns an empty result. Callers merge the returned
+ * `metadata` into their item, and apply `timestamp` / `location` /
+ * `accuracyMeters` per their own rules.
+ *
+ * Audio goes through the same container read as video: a voice memo's `.m4a`
+ * carries its recording time as the container's `creation_time`, and without
+ * this every recording was stored with no date and no duration.
  */
 export async function extractMediaMetadata(
   fpath: string,
@@ -574,6 +585,16 @@ export async function extractMediaMetadata(
 ): Promise<MediaMetadata> {
   if (mediaType && mediaType.startsWith('video/')) {
     return extractVideoMetadata(fpath);
+  }
+
+  if (mediaType && mediaType.startsWith('audio/')) {
+    const out = await extractVideoMetadata(fpath);
+
+    for (const field of COVER_ART_FIELDS) {
+      delete out.metadata[field];
+    }
+
+    return out;
   }
 
   if (mediaType && mediaType.startsWith('image/')) {

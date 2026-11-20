@@ -102,7 +102,7 @@ class GenericFileImporter implements FileImporter {
       item.metadata['Timestamp Source'] = 'None';
       item.metadata['File Modified'] = fs.statSync(fpath).mtime.toISOString();
     } else {
-      item.metadata['Timestamp Source'] = item.content.mediaType?.startsWith('video/') ? 'Container' : 'EXIF';
+      item.metadata['Timestamp Source'] = item.content.mediaType?.startsWith('image/') ? 'EXIF' : 'Container';
     }
 
     params.pipeline.push({ item });
