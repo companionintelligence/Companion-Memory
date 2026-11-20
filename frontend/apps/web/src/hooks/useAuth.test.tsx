@@ -1,6 +1,7 @@
 import { type ReactNode } from 'react';
 
 import {
+  apiKeyHeaders,
   beginNativeOidcSignIn,
   getApiBaseUrl,
   getApiKey,
@@ -10,7 +11,7 @@ import {
 } from '@ci/common';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { jwtDecode } from 'jwt-decode';
-import { MemoryRouter, useNavigate } from 'react-router-dom';
+import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { bindPowerSyncDatabase } from '@/api/powersync/session';
@@ -1874,10 +1875,7 @@ describe('useAuth', () => {
     expect(secureStore.has('ci.apiKey')).toBe(false);
   });
 
-  it('desktop logout revokes the stored key even though it was never loaded back into memory', async () => {
-    // The desktop app keeps its key in the OS keychain and does not load it on start, so after a
-    // restart only the stored copy knows which key this device holds. An earlier build left that
-    // copy in localStorage: signing out moves it into the keychain, then revokes it.
+  it('desktop: a key an earlier build left in localStorage moves to the keychain at start and logout revokes it', async () => {
     const keychain = new Map<string, string>();
     (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {
       invoke: vi.fn(async (command: string, args?: { key?: string; value?: string }) => {
@@ -1903,6 +1901,9 @@ describe('useAuth', () => {
     try {
       const { result } = renderHook(() => useAuth(), { wrapper });
       await waitFor(() => expect(result.current[0].initializing).toBe(false));
+      expect(result.current[0].authenticated).toBe(true);
+      expect(keychain.get('memory:ci.apiKey')).toBe('desktop-stored-key');
+      expect(localStorage.getItem('ci.apiKey')).toBeNull();
 
       await act(async () => {
         await result.current[1].logout();
@@ -1984,9 +1985,11 @@ describe('useAuth', () => {
     });
 
     it('signs the window out when Memory says the key no longer works', async () => {
+      let revoked = false;
       const { result, fetchMock, keychain } = await signedInDesktop(() =>
-        jsonResponse({ message: 'Unauthorized' }, false, 401),
+        revoked ? jsonResponse({ message: 'Unauthorized' }, false, 401) : emptyResponse(true, 204),
       );
+      revoked = true;
 
       // Coming back to the window asks at once, without waiting for the next scheduled check.
       act(() => {
@@ -2005,19 +2008,27 @@ describe('useAuth', () => {
       vi.useFakeTimers({ shouldAdvanceTime: true });
 
       try {
+        let revoked = false;
         const { result, fetchMock, navigateTo } = await signedInDesktop(() =>
-          jsonResponse({ message: 'Unauthorized' }, false, 401),
+          revoked ? jsonResponse({ message: 'Unauthorized' }, false, 401) : emptyResponse(true, 204),
         );
+        revoked = true;
+        const checksBefore = keyChecks(fetchMock);
 
         // A new page every 40 seconds with no focus change: the minute must not start over on each one.
         for (const page of ['/planning', '/memory', '/chat']) {
-          act(() => navigateTo(page));
+          const checksBeforePage = keyChecks(fetchMock);
+          await act(async () => {
+            navigateTo(page);
+          });
+          // A check that started over would ask at once on the new page.
+          expect(keyChecks(fetchMock)).toBe(checksBeforePage);
           await act(async () => {
             await vi.advanceTimersByTimeAsync(40_000);
           });
         }
 
-        expect(keyChecks(fetchMock)).toBeGreaterThan(0);
+        expect(keyChecks(fetchMock)).toBeGreaterThan(checksBefore);
         await waitFor(() => expect(result.current[0].authenticated).toBe(false));
       } finally {
         vi.useRealTimers();
@@ -2040,6 +2051,541 @@ describe('useAuth', () => {
       expect(result.current[0].authenticated).toBe(true);
       expect(getApiKey()).toBe('desktop-key');
     });
+  });
+
+  describe('desktop: a Companion sign-in across restarts', () => {
+    interface ShellOptions {
+      /** A sign-in callback the shell hands over at launch, as when the browser started the app. */
+      deepLink?: string;
+      /** Hold the first read of the key until `releaseFirstKeyRead`. It answers with what the keychain held when asked. */
+      holdFirstKeyRead?: boolean;
+      /** The first read of the key fails, as a keychain that is still locked does. */
+      failFirstKeyRead?: boolean;
+      /** Every write fails. */
+      refuseWrites?: boolean;
+    }
+
+    let releaseHeldRead = () => {};
+
+    /** A Memory Desktop shell whose keychain starts with `stored` (names as the plugin keeps them). */
+    function desktopShell(stored: Record<string, string>, options: ShellOptions = {}) {
+      const keychain = new Map(Object.entries(stored));
+      const firstKeyReadHeld = new Promise<void>((resolve) => {
+        releaseHeldRead = resolve;
+      });
+      let keyReads = 0;
+
+      (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {
+        invoke: vi.fn(async (command: string, args?: { key?: string; value?: string }) => {
+          switch (command) {
+            case 'take_pending_deep_link_command':
+              return options.deepLink ?? null;
+            case 'plugin:ci-auth|secure_get': {
+              // What the keychain holds when asked, even if the answer is held back.
+              const value = keychain.get(args?.key ?? '') ?? null;
+              const firstKeyRead = args?.key === 'memory:ci.apiKey' && ++keyReads === 1;
+
+              if (firstKeyRead && options.failFirstKeyRead) {
+                throw new Error('Keychain locked');
+              }
+
+              if (firstKeyRead && options.holdFirstKeyRead) {
+                await firstKeyReadHeld;
+              }
+
+              return { value };
+            }
+
+            case 'plugin:ci-auth|secure_set':
+              if (options.refuseWrites) {
+                throw new Error('Keychain refused the write');
+              }
+
+              keychain.set(args?.key ?? '', args?.value ?? '');
+
+              return null;
+            case 'plugin:ci-auth|secure_remove':
+              keychain.delete(args?.key ?? '');
+
+              return null;
+            default:
+              return null;
+          }
+        }),
+      };
+
+      return { keychain, releaseFirstKeyRead: () => releaseHeldRead() };
+    }
+
+    /**
+     * The appliance the window is served from. It remembers the keys given back to it. The key
+     * check answers by that list. With `holdChecksUntilRevoked`, a check waits (up to 2 s) for its
+     * key to be given back and answers the moment it is; `revokedMidCheck` lists the keys given
+     * back while their check was waiting. `exchangeAfterCheckOf` holds the sign-in's code exchange
+     * until that key has been checked (up to 2 s). `signIn` answers an email sign-in.
+     * `holdRevokeUntil` holds every revoke until it returns true (up to 2 s).
+     */
+    function memory(
+      options: {
+        refresh?: () => Response;
+        signIn?: () => Response;
+        holdChecksUntilRevoked?: boolean;
+        exchangeAfterCheckOf?: string;
+        holdRevokeUntil?: () => boolean;
+      } = {},
+    ) {
+      const revoked = new Set<string>();
+      const revokedMidCheck = new Set<string>();
+      const checked = new Set<string>();
+      const waiting = new Map<string, () => void>();
+      const fetchMock = setFetch(async (url, init) => {
+        const key = (init?.headers as Record<string, string> | undefined)?.['x-api-key'];
+
+        if (url.endsWith('/api/keys/check')) {
+          if (key) {
+            checked.add(key);
+          }
+
+          if (options.holdChecksUntilRevoked && key && !revoked.has(key)) {
+            await new Promise<void>((resolve) => {
+              waiting.set(key, resolve);
+              setTimeout(resolve, 2000);
+            });
+            waiting.delete(key);
+          }
+
+          return key && !revoked.has(key)
+            ? emptyResponse(true, 204)
+            : jsonResponse({ message: 'Unauthorized' }, false, 401);
+        }
+
+        if (url.endsWith('/api/keys/current') && init?.method === 'DELETE') {
+          for (let waited = 0; options.holdRevokeUntil && waited < 2000; waited += 5) {
+            if (options.holdRevokeUntil()) {
+              break;
+            }
+
+            await new Promise((resolve) => setTimeout(resolve, 5));
+          }
+
+          if (key) {
+            revoked.add(key);
+
+            if (waiting.has(key)) {
+              revokedMidCheck.add(key);
+              waiting.get(key)?.();
+            }
+          }
+
+          return emptyResponse(true, 204);
+        }
+
+        if (url.endsWith('/api/authenticate/oidc/native/exchange')) {
+          for (let waited = 0; options.exchangeAfterCheckOf && waited < 2000; waited += 5) {
+            if (checked.has(options.exchangeAfterCheckOf)) {
+              break;
+            }
+
+            await new Promise((resolve) => setTimeout(resolve, 5));
+          }
+
+          return jsonResponse({ accessToken: 'desktop-jwt' });
+        }
+
+        if (url.endsWith('/api/keys')) {
+          return jsonResponse({ id: 'key-new', key: 'new-key' });
+        }
+
+        if (url.endsWith('/api/authenticate/refresh')) {
+          return options.refresh?.() ?? emptyResponse(false, 401);
+        }
+
+        if (url.endsWith('/api/authenticate') && options.signIn) {
+          return options.signIn();
+        }
+
+        return emptyResponse(true, 204);
+      });
+
+      return { fetchMock, revoked, revokedMidCheck };
+    }
+
+    const callsTo = (fetchMock: ReturnType<typeof setFetch>, path: string) =>
+      fetchMock.mock.calls.filter(([input]) => String(input).endsWith(path));
+
+    const settle = () =>
+      act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      });
+
+    afterEach(() => {
+      releaseHeldRead();
+      delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+      setApiKey(null);
+    });
+
+    it('reads the stored key back at launch: signed in and requests carry it', async () => {
+      const { keychain } = desktopShell({ 'memory:ci.apiKey': 'kept-key' });
+      const { fetchMock } = memory();
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+
+      await waitFor(() => expect(result.current[0].initializing).toBe(false));
+      expect(result.current[0].authenticated).toBe(true);
+      expect(getApiKey()).toBe('kept-key');
+      expect(apiKeyHeaders()).toEqual({ 'x-api-key': 'kept-key' });
+      // A Companion sign-in made no cookie session, so there is none to look for.
+      expect(callsTo(fetchMock, '/api/authenticate/hub-bridge')).toHaveLength(0);
+      expect(callsTo(fetchMock, '/api/authenticate/refresh')).toHaveLength(0);
+      // Asked about straight away, not after the first minute.
+      await waitFor(() => expect(callsTo(fetchMock, '/api/keys/check')).toHaveLength(1));
+      expect(callsTo(fetchMock, '/api/keys/check')[0][1]?.headers).toMatchObject({ 'x-api-key': 'kept-key' });
+      await settle();
+      expect(result.current[0].authenticated).toBe(true);
+      expect(keychain.get('memory:ci.apiKey')).toBe('kept-key');
+    });
+
+    it.each<[string, Record<string, string>, ShellOptions]>([
+      ['nothing is stored', {}, {}],
+      ['the keychain cannot be read', { 'memory:ci.apiKey': 'kept-key' }, { failFirstKeyRead: true }],
+    ])('goes on to the cookie session an email sign-in keeps when %s', async (_case, stored, options) => {
+      desktopShell(stored, options);
+      const { fetchMock } = memory({ refresh: () => jsonResponse({ accessToken: 'email-session' }) });
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+
+      await waitFor(() => expect(result.current[0].authToken).toBe('email-session'));
+      expect(result.current[0].authenticated).toBe(true);
+      expect(getApiKey()).toBeNull();
+      expect(apiKeyHeaders()).toEqual({});
+      expect(callsTo(fetchMock, '/api/keys/check')).toHaveLength(0);
+    });
+
+    it('signs the window out at launch when the stored key was revoked while the app was closed', async () => {
+      const { keychain } = desktopShell({
+        'memory:ci.apiKey': 'revoked-key',
+        'memory:ci.apiKeyId': 'key-old',
+        'memory:ci.apiKeyCapability': 'full',
+      });
+      const { revoked } = memory();
+      revoked.add('revoked-key');
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      let pathname: string | undefined;
+      const { result } = renderHook(
+        () => {
+          pathname = useLocation().pathname;
+
+          return useAuth();
+        },
+        {
+          wrapper: ({ children }: { children: ReactNode }) => (
+            <MemoryRouter initialEntries={['/memory']}>
+              <AuthProvider args={[]}>{children}</AuthProvider>
+            </MemoryRouter>
+          ),
+        },
+      );
+
+      // Well inside the minute between scheduled checks.
+      await waitFor(() => expect(keychain.size).toBe(0));
+      expect(result.current[0].authenticated).toBe(false);
+      expect(getApiKey()).toBeNull();
+      // `/` is the desktop sign-in page.
+      expect(pathname).toBe('/');
+    });
+
+    it('a sign-in from the sign-in page gives back the key the keychain held and keeps the new one', async () => {
+      // The keychain was still locked at launch, so the window came up signed out with a key stored.
+      const { keychain } = desktopShell(
+        { 'memory:ci.apiKey': 'old-key', 'memory:ci.apiKeyId': 'key-old' },
+        { failFirstKeyRead: true },
+      );
+      const { fetchMock, revoked } = memory();
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await waitFor(() => expect(result.current[0].initializing).toBe(false));
+      expect(result.current[0].authenticated).toBe(false);
+
+      // Sign in with Companion account. The browser hands the result back.
+      const { appState } = await beginNativeOidcSignIn();
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent('companion-deep-link', {
+            detail: `companion://oidc/callback?code=otc-new&state=${appState}`,
+          }),
+        );
+      });
+
+      await waitFor(() => expect(result.current[0].authenticated).toBe(true));
+      const revokes = callsTo(fetchMock, '/api/keys/current');
+      expect(revokes).toHaveLength(1);
+      expect(revokes[0][1]?.method).toBe('DELETE');
+      expect(revokes[0][1]?.headers).toMatchObject({ 'x-api-key': 'old-key' });
+      expect([...revoked]).toEqual(['old-key']);
+      expect(getApiKey()).toBe('new-key');
+      expect(keychain.get('memory:ci.apiKey')).toBe('new-key');
+      expect(keychain.get('memory:ci.apiKeyId')).toBe('key-new');
+    });
+
+    it('a sign-in whose key the keychain will not save still gives back the key it held', async () => {
+      const { keychain } = desktopShell(
+        { 'memory:ci.apiKey': 'old-key' },
+        { failFirstKeyRead: true, refuseWrites: true },
+      );
+      const { revoked } = memory();
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await waitFor(() => expect(result.current[0].initializing).toBe(false));
+
+      const { appState } = await beginNativeOidcSignIn();
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent('companion-deep-link', {
+            detail: `companion://oidc/callback?code=otc-unsaved&state=${appState}`,
+          }),
+        );
+      });
+
+      await waitFor(() => expect(result.current[0].error).toBeInstanceOf(DeviceKeyNotSavedError));
+      expect([...revoked].sort()).toEqual(['new-key', 'old-key']);
+      // Nothing may read the key just given back at the next launch.
+      expect(keychain.has('memory:ci.apiKey')).toBe(false);
+      expect(result.current[0].authenticated).toBe(false);
+      expect(getApiKey()).toBeNull();
+    });
+
+    it('a sign-in whose key will not save leaves the window on the key it is signed in with', async () => {
+      // The launch read the old key back, then the browser handed over a sign-in the keychain refuses.
+      const { appState } = await beginNativeOidcSignIn();
+      const { keychain } = desktopShell(
+        { 'memory:ci.apiKey': 'old-key' },
+        { deepLink: `companion://oidc/callback?code=otc-kept&state=${appState}`, refuseWrites: true },
+      );
+      const { revoked } = memory({ exchangeAfterCheckOf: 'old-key' });
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+
+      await waitFor(() => expect(result.current[0].error).toBeInstanceOf(DeviceKeyNotSavedError));
+      await settle();
+      expect([...revoked]).toEqual(['new-key']);
+      expect(getApiKey()).toBe('old-key');
+      expect(result.current[0].authenticated).toBe(true);
+      expect(keychain.get('memory:ci.apiKey')).toBe('old-key');
+    });
+
+    it('an email sign-in gives back the key the keychain still held, so the next launch keeps that session', async () => {
+      // The keychain was still locked at launch, so the window came up signed out with a key stored.
+      const { keychain } = desktopShell(
+        { 'memory:ci.apiKey': 'old-key', 'memory:ci.apiKeyId': 'key-old' },
+        { failFirstKeyRead: true },
+      );
+      const { revoked } = memory({ signIn: () => jsonResponse({ accessToken: 'email-session' }) });
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await waitFor(() => expect(result.current[0].initializing).toBe(false));
+
+      await act(async () => {
+        await result.current[1].login('jo@example.com', 'secret');
+      });
+
+      expect(result.current[0].authToken).toBe('email-session');
+      await waitFor(() => expect(keychain.has('memory:ci.apiKey')).toBe(false));
+      expect(keychain.has('memory:ci.apiKeyId')).toBe(false);
+      expect([...revoked]).toEqual(['old-key']);
+      expect(getApiKey()).toBeNull();
+    });
+
+    it('a sign-in the browser hands over at launch replaces the stored key without being signed out by its check', async () => {
+      // The launch restore puts the old key in place first and asks about it. That check is
+      // answered the moment the sign-in gives the old key back, so Memory says 401.
+      const { appState } = await beginNativeOidcSignIn();
+      const { keychain } = desktopShell(
+        { 'memory:ci.apiKey': 'old-key' },
+        { deepLink: `companion://oidc/callback?code=otc-launch&state=${appState}` },
+      );
+      const { fetchMock, revoked, revokedMidCheck } = memory({
+        holdChecksUntilRevoked: true,
+        exchangeAfterCheckOf: 'old-key',
+      });
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+
+      await waitFor(() => expect(getApiKey()).toBe('new-key'));
+      await waitFor(() => expect(revoked.has('old-key')).toBe(true));
+      await settle();
+      const checked = callsTo(fetchMock, '/api/keys/check').map(
+        ([, init]) => (init?.headers as Record<string, string> | undefined)?.['x-api-key'],
+      );
+      expect(checked).toContain('old-key');
+      // The check of the old key was still waiting when the sign-in gave that key back.
+      expect(revokedMidCheck.has('old-key')).toBe(true);
+      expect(result.current[0].authenticated).toBe(true);
+      expect(getApiKey()).toBe('new-key');
+      expect(revoked.has('new-key')).toBe(false);
+      expect(keychain.get('memory:ci.apiKey')).toBe('new-key');
+    });
+
+    it('a sign-in the browser hands over at launch keeps its key when the revoked stored key signs the window out meanwhile', async () => {
+      // The stored key was revoked while the app was closed, and the app was started by a sign-in.
+      // The launch check signs the old key out while that sign-in is still saving its own.
+      const { appState } = await beginNativeOidcSignIn();
+      const { keychain } = desktopShell(
+        { 'memory:ci.apiKey': 'revoked-key', 'memory:ci.apiKeyId': 'key-old' },
+        { deepLink: `companion://oidc/callback?code=otc-signed-out&state=${appState}` },
+      );
+      const { fetchMock, revoked } = memory({
+        exchangeAfterCheckOf: 'revoked-key',
+        // The sign-out's revoke answers only once the sign-in has saved its key.
+        holdRevokeUntil: () => keychain.get('memory:ci.apiKey') === 'new-key',
+      });
+      revoked.add('revoked-key');
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+
+      // The launch check did sign the old key out.
+      await waitFor(() => expect(callsTo(fetchMock, '/api/authenticate/logout')).toHaveLength(1));
+      await settle();
+      expect(getApiKey()).toBe('new-key');
+      expect(result.current[0].authenticated).toBe(true);
+      expect(revoked.has('new-key')).toBe(false);
+      // The next launch signs in with the new key.
+      expect(keychain.get('memory:ci.apiKey')).toBe('new-key');
+      expect(keychain.get('memory:ci.apiKeyId')).toBe('key-new');
+    });
+
+    it('a sign-in that finishes while the launch read is still out wins', async () => {
+      const { appState } = await beginNativeOidcSignIn();
+      const shell = desktopShell(
+        { 'memory:ci.apiKey': 'old-key' },
+        { deepLink: `companion://oidc/callback?code=otc-race&state=${appState}`, holdFirstKeyRead: true },
+      );
+      const { revoked } = memory();
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+
+      await waitFor(() => expect(result.current[0].authenticated).toBe(true));
+      expect(getApiKey()).toBe('new-key');
+      expect(result.current[0].initializing).toBe(true);
+
+      // The launch read now answers with the key the sign-in has already given back.
+      shell.releaseFirstKeyRead();
+      await waitFor(() => expect(result.current[0].initializing).toBe(false));
+      await settle();
+      expect(getApiKey()).toBe('new-key');
+      expect(result.current[0].authenticated).toBe(true);
+      expect(revoked.has('old-key')).toBe(true);
+      expect(shell.keychain.get('memory:ci.apiKey')).toBe('new-key');
+    });
+
+    it('a sign-out while the launch read is still out wins', async () => {
+      const shell = desktopShell({ 'memory:ci.apiKey': 'old-key' }, { holdFirstKeyRead: true });
+      const { fetchMock, revoked } = memory();
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+
+      let signedOut: Promise<void> | undefined;
+      act(() => {
+        signedOut = result.current[1].logout();
+      });
+
+      // Read from the keychain, since nothing was in memory yet.
+      await waitFor(() => expect(revoked.has('old-key')).toBe(true));
+      await act(async () => {
+        await signedOut;
+      });
+      expect(shell.keychain.has('memory:ci.apiKey')).toBe(false);
+
+      shell.releaseFirstKeyRead();
+      await waitFor(() => expect(result.current[0].initializing).toBe(false));
+      await settle();
+      expect(result.current[0].authenticated).toBe(false);
+      expect(getApiKey()).toBeNull();
+      // The late read put nothing back: no key was taken up to be checked or signed out again.
+      expect(callsTo(fetchMock, '/api/keys/check')).toHaveLength(0);
+      expect(callsTo(fetchMock, '/api/keys/current')).toHaveLength(1);
+    });
+  });
+
+  it('web: a key in localStorage is not read back at launch; the cookie session decides', async () => {
+    localStorage.setItem('ci.apiKey', 'web-stored-key');
+    const fetchMock = setFetch((url) =>
+      url.endsWith('/api/authenticate/refresh')
+        ? jsonResponse({ accessToken: 'web-session' })
+        : emptyResponse(),
+    );
+
+    try {
+      const { result } = renderHook(() => useAuth(), { wrapper });
+
+      await waitFor(() => expect(result.current[0].authToken).toBe('web-session'));
+      expect(getApiKey()).toBeNull();
+      expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/api/keys/check'))).toBe(false);
+    } finally {
+      localStorage.removeItem('ci.apiKey');
+    }
+  });
+
+  it('phone: connecting to another appliance never sends it the key the phone held before', async () => {
+    localStorage.setItem('ci.apiBaseUrl', 'https://first.example.com');
+    setApiBaseUrl('https://first.example.com');
+    const secureStore = new Map<string, string>([
+      ['ci.apiKey', 'first-box-key'],
+      ['ci.apiBaseUrl', 'https://first.example.com'],
+    ]);
+    (window as unknown as { Capacitor?: unknown }).Capacitor = {
+      isNativePlatform: () => true,
+      getPlatform: () => 'ios',
+      Plugins: {
+        SecureStoragePlugin: {
+          get: vi.fn(async ({ key }: { key: string }) => {
+            if (!secureStore.has(key)) {
+              throw new Error('not found');
+            }
+
+            return { value: secureStore.get(key) };
+          }),
+          set: vi.fn(async ({ key, value }: { key: string; value: string }) => {
+            secureStore.set(key, value);
+
+            return { value: true };
+          }),
+          remove: vi.fn(async ({ key }: { key: string }) => {
+            secureStore.delete(key);
+
+            return { value: true };
+          }),
+        },
+      },
+    };
+    const fetchMock = setFetch((url) =>
+      url.endsWith('/api/keys')
+        ? jsonResponse({ id: 'key-2', key: 'second-box-key' })
+        : emptyResponse(true, 204),
+    );
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(result.current[0].authenticated).toBe(true));
+    expect(getApiKey()).toBe('first-box-key');
+
+    await act(async () => {
+      await result.current[1].completePortalMemoryConnect('portal-bearer', 'https://second.example.com');
+    });
+
+    expect(getApiKey()).toBe('second-box-key');
+    expect(secureStore.get('ci.apiKey')).toBe('second-box-key');
+    const toSecondBox = fetchMock.mock.calls.filter(([input]) =>
+      String(input).startsWith('https://second.example.com'),
+    );
+    expect(toSecondBox.length).toBeGreaterThan(0);
+    expect(
+      toSecondBox.some(
+        ([, init]) =>
+          (init?.headers as Record<string, string> | undefined)?.['x-api-key'] === 'first-box-key',
+      ),
+    ).toBe(false);
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/api/keys/current'))).toBe(false);
   });
 
   it('desktop: gives the new key back when the keychain will not save it', async () => {
