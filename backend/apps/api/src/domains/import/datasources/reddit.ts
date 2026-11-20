@@ -177,9 +177,13 @@ async function readAccountName(dir: string): Promise<string | undefined> {
   }
 }
 
-/** Reddit usernames ignore case, and some files write them as u/name. */
+/** Reddit usernames ignore case. Some files write them as u/name. */
 function sameUser(a: string, b: string): boolean {
-  const norm = (s: string) => s.trim().replace(/^\/?u\//i, '').toLowerCase();
+  const norm = (s: string) =>
+    s
+      .trim()
+      .replace(/^\/?u\//i, '')
+      .toLowerCase();
 
   return norm(a) === norm(b);
 }
@@ -447,7 +451,12 @@ export class RedditFileImporter implements FileImporter {
   // ride in metadata for the server to resolve into people (the body must live
   // in metadata.Body, which is what the communication content is mapped from;
   // content.data is not read at push time).
-  private pushMessage(row: Record<string, string>, source: string, params: ImportParams, owner?: string): void {
+  private pushMessage(
+    row: Record<string, string>,
+    source: string,
+    params: ImportParams,
+    owner?: string,
+  ): void {
     const chat = source === 'chat_history.csv';
     const announcement = source === 'announcements.csv';
     // announcements.csv uses `sent_at` rather than the `date`/`created_at`

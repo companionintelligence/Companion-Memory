@@ -873,7 +873,7 @@ describe('Outlook desktop export', () => {
  * (push/legacyKeys.ts).
  */
 describe('Outlook contacts: the fields a person record reads', () => {
-  it('stores the birthday, middle name, job title and company, and keeps the name "First Last"', async () => {
+  it('keeps the name "First Last" and stores the birthday, middle name, job title and company', async () => {
     const { entities } = await importCsv(
       csvOf(OUTLOOK_HEADER, [
         {
@@ -934,7 +934,7 @@ describe('Outlook contacts: the fields a person record reads', () => {
     expect(entities[0].metadata?.birth_date).toBe(expected);
   });
 
-  it('names a card with no person\'s name after its company, not its phone number', async () => {
+  it("names a card with no person's name after its company, not its phone number", async () => {
     const { entities, dropped } = await importCsv(
       csvOf(OUTLOOK_HEADER, [
         {

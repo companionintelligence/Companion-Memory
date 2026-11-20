@@ -56,7 +56,14 @@ describe('Telegram datasource', () => {
       JSON.stringify({
         personal_information: { user_id: 1, first_name: 'Zephyrine', phone_number: '+1 206 555 0147' },
         contacts: {
-          list: [{ user_id: 5530912876, first_name: 'Mirabeau', last_name: 'Telfaire', phone_number: '+44 20 7946 0321' }],
+          list: [
+            {
+              user_id: 5530912876,
+              first_name: 'Mirabeau',
+              last_name: 'Telfaire',
+              phone_number: '+44 20 7946 0321',
+            },
+          ],
         },
         chats: { list: [] },
       }),

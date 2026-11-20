@@ -189,9 +189,9 @@ const NAME_ORDER: string[] = [CANON.PREFIX, CANON.FIRST, CANON.MIDDLE, CANON.LAS
  * Columns written onto the person as the fields its record reads
  * (`properties.first_name`, `.middle_name`, `.last_name`, `.job_title`,
  * `.organization`), the keys vcard.ts writes for a card. Matched apart from the
- * dialects, like NAME_PARTS, so they cannot change which dialect wins, and
- * they never touch the display name or the key: an Outlook contact is still
- * named "First Last".
+ * dialects, like NAME_PARTS, so they cannot change which dialect wins. They
+ * never touch the display name or the key: an Outlook contact is still named
+ * "First Last".
  */
 const PERSON_FIELDS: Record<string, RegExp[]> = {
   first_name: [/^(first name|given name)$/i],
@@ -204,7 +204,7 @@ const PERSON_FIELDS: Record<string, RegExp[]> = {
 /**
  * A Birthday cell as the `YYYY-MM-DD` a person's birth date holds, or '' when it
  * gives no whole date. Google writes `1987-03-21` (`--03-21` with no year).
- * Outlook writes the computer's short date: `3/21/1987` in English, and
+ * Outlook writes the computer's short date: `3/21/1987` in English and
  * `0/0/00` for none. A slash date is read month first, as English Outlook
  * writes it, unless its first number cannot be a month (`21/3/1987`). A
  * day-first date whose day is 12 or less still reads month first: the CSV does

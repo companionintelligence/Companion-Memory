@@ -249,7 +249,9 @@ describe('Reddit datasource', () => {
       } as unknown as ImportParams);
 
       return Object.fromEntries(
-        pipeline.filter((p) => p.item.classification === 'message').map((p) => [p.item.id, p.item.metadata.Direction]),
+        pipeline
+          .filter((p) => p.item.classification === 'message')
+          .map((p) => [p.item.id, p.item.metadata.Direction]),
       );
     };
 

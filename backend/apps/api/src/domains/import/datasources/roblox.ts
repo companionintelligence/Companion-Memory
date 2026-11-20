@@ -81,7 +81,8 @@ async function reportOwner(files: string[]): Promise<string | undefined> {
       }
 
       const raw = await fs.promises.readFile(f, 'utf8');
-      const rows: unknown[] = path.extname(f).toLowerCase() === '.csv' ? parseCSV(raw) : [JSON.parse(raw)].flat();
+      const rows: unknown[] =
+        path.extname(f).toLowerCase() === '.csv' ? parseCSV(raw) : [JSON.parse(raw)].flat();
       const row = rows.length === 1 ? rows[0] : undefined;
       if (row && typeof row === 'object') {
         const key = Object.keys(row).find((k) => /^user_?name$/i.test(k));
