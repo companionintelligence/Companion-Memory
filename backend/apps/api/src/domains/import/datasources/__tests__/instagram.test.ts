@@ -571,7 +571,9 @@ describe('Instagram datasource: photo DMs', () => {
       );
 
       expect(msg.metadata.Text).toBeUndefined();
-      expect(msg.metadata.MediaFilePaths).toEqual([path.join(root, thread, 'photos', '18012345678901234.jpg')]);
+      expect(msg.metadata.MediaFilePaths).toEqual([
+        path.join(root, thread, 'photos', '18012345678901234.jpg'),
+      ]);
       expect(msg.metadata.AttachmentContent).toBe(true);
       // One line for the thread, not one per file: a split export misses thousands.
       expect(log).toHaveBeenCalledTimes(1);
@@ -591,7 +593,9 @@ describe('Instagram datasource: photo DMs', () => {
       const thread = 'messages/inbox/ottoline_17841400000000001';
       const msg = await importThread(root, path.join(root, thread), `${thread}/photos/18012345678901234.jpg`);
 
-      expect(msg.metadata.MediaFilePaths).toEqual([path.join(root, thread, 'photos', '18012345678901234.jpg')]);
+      expect(msg.metadata.MediaFilePaths).toEqual([
+        path.join(root, thread, 'photos', '18012345678901234.jpg'),
+      ]);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

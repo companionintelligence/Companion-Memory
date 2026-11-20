@@ -73,7 +73,13 @@ function makeStage(rows: StagedItem[], options: Options = {}) {
   const contentLookups: unknown[][] = [];
   const ingest =
     options.ingest ?? jest.fn(async () => ({ entities: [], errors: [], relationshipsProcessed: 2 }));
-  const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), debug: jest.fn(), error: jest.fn() };
+  const logger = {
+    setContext: jest.fn(),
+    log: jest.fn(),
+    warn: jest.fn(),
+    debug: jest.fn(),
+    error: jest.fn(),
+  };
 
   const dataSource = {
     query: jest.fn(async (sql: string, params: unknown[] = []) => {
@@ -166,8 +172,12 @@ function makeStage(rows: StagedItem[], options: Options = {}) {
 
   const stage = new PushStage(
     dataSource as never,
-    { createManyDetailed: jest.fn(async (_c: unknown, input: unknown[]) => aligned(input.length, 'comm')) } as never,
-    { createManyDetailed: jest.fn(async (_c: unknown, input: unknown[]) => aligned(input.length, 'content')) } as never,
+    {
+      createManyDetailed: jest.fn(async (_c: unknown, input: unknown[]) => aligned(input.length, 'comm')),
+    } as never,
+    {
+      createManyDetailed: jest.fn(async (_c: unknown, input: unknown[]) => aligned(input.length, 'content')),
+    } as never,
     {
       createDetailed: jest.fn(async (_c: unknown, input: CreateEventDto[]) => {
         events.push(...input);
@@ -213,14 +223,22 @@ describe('the people tagged in a photo', () => {
     await stage.run(context);
 
     const byTitle = new Map(events.map((event) => [event.title, event]));
-    expect(byTitle.get('Haystack Rock at low tide')?.participant_entity_ids).toEqual(['person-1', 'person-2']);
+    expect(byTitle.get('Haystack Rock at low tide')?.participant_entity_ids).toEqual([
+      'person-1',
+      'person-2',
+    ]);
     expect(events.filter((event) => event.participant_entity_ids)).toHaveLength(1);
   });
 });
 
 describe('links between staged items', () => {
   const links = [
-    { id: '55555555-5555-4555-8555-555555555501', itemId: PHOTO, relatedItemId: ALBUM, relation: 'in_collection' },
+    {
+      id: '55555555-5555-4555-8555-555555555501',
+      itemId: PHOTO,
+      relatedItemId: ALBUM,
+      relation: 'in_collection',
+    },
     { id: '55555555-5555-4555-8555-555555555502', itemId: PHOTO, relatedItemId: EDITED, relation: 'edit' },
     {
       id: '55555555-5555-4555-8555-555555555503',

@@ -2559,7 +2559,9 @@ export class PushStage implements ImportStageRunner {
         ]);
         const relationships = linkable.flatMap((edge) => {
           const link = ITEM_LINKS[edge.relation];
-          const [from, to] = link.reverse ? [edge.relatedItemId, edge.itemId] : [edge.itemId, edge.relatedItemId];
+          const [from, to] = link.reverse
+            ? [edge.relatedItemId, edge.itemId]
+            : [edge.itemId, edge.relatedItemId];
           const fromId = contentIds.get(from);
           const toId = contentIds.get(to);
 
@@ -2608,7 +2610,10 @@ export class PushStage implements ImportStageRunner {
    * reached no content row (failed, routed nowhere, or routed elsewhere) are
    * absent.
    */
-  private async contentRowsFor(context: StageRunContext, stagedItemIds: string[]): Promise<Map<string, string>> {
+  private async contentRowsFor(
+    context: StageRunContext,
+    stagedItemIds: string[],
+  ): Promise<Map<string, string>> {
     const rows = await this.retrying(context, 'reading the linked staged items', () =>
       this.dataSource.query<StagedItem[]>(
         `SELECT ${STAGED_ITEM_COLUMNS}

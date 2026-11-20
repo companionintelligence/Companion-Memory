@@ -237,7 +237,11 @@ describe('flickr importer', () => {
     );
     await fs.promises.writeFile(
       path.join(dir, 'photo_53990000002.json'),
-      JSON.stringify({ id: '53990000002', name: 'Heron at the north pond', date_taken: '2026-10-17 08:00:00' }),
+      JSON.stringify({
+        id: '53990000002',
+        name: 'Heron at the north pond',
+        date_taken: '2026-10-17 08:00:00',
+      }),
     );
 
     const pipeline: EmittedGraph[] = [];
@@ -255,7 +259,9 @@ describe('flickr importer', () => {
     const numbered = pipeline.find((p) => p.item?.content?.filename === 'img_4412_53990000003_o.jpg');
     expect(numbered).toBeTruthy();
     expect(numbered!.item.metadata.Title).toBe('IMG_4412');
-    expect(pipeline.find((p) => p.item?.content?.filename === 'heron_north_pond_53990000002_o.jpg')).toBeTruthy();
+    expect(
+      pipeline.find((p) => p.item?.content?.filename === 'heron_north_pond_53990000002_o.jpg'),
+    ).toBeTruthy();
     expect(drops).toEqual([]);
   });
 });

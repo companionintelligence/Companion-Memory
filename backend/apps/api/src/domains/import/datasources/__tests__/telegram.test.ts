@@ -191,8 +191,14 @@ describe('Telegram media messages', () => {
     fs.mkdirSync(path.join(root, 'chats', 'chat_001', 'files'), { recursive: true });
     fs.mkdirSync(path.join(root, 'chats', 'chat_002', 'photos'), { recursive: true });
     fs.writeFileSync(path.join(root, 'chats', 'chat_001', 'files', 'ferry_timetable.pdf'), '%PDF-1.4');
-    fs.writeFileSync(path.join(root, 'chats', 'chat_002', 'photos', 'photo_1@14-07-2026_19-22-05.jpg'), 'jpeg');
-    fs.writeFileSync(path.join(root, 'chats', 'chat_002', 'photos', 'photo_2@14-07-2026_19-30-00.jpg'), 'jpeg');
+    fs.writeFileSync(
+      path.join(root, 'chats', 'chat_002', 'photos', 'photo_1@14-07-2026_19-22-05.jpg'),
+      'jpeg',
+    );
+    fs.writeFileSync(
+      path.join(root, 'chats', 'chat_002', 'photos', 'photo_2@14-07-2026_19-30-00.jpg'),
+      'jpeg',
+    );
     fs.mkdirSync(path.join(root, 'chats', 'chat_002', 'video_files'), { recursive: true });
     fs.writeFileSync(path.join(root, 'chats', 'chat_002', 'video_files', 'IMG_2231.MP4'), 'mp4');
     fs.writeFileSync(path.join(root, 'chats', 'chat_002', 'video_files', 'IMG_2231.MP4_thumb.jpg'), 'jpeg');
@@ -227,7 +233,11 @@ describe('Telegram media messages', () => {
                   sticker_emoji: '👍',
                   mime_type: 'image/webp',
                 }),
-                message(5, { file: `../${outsideName()}`, file_name: 'outside.pdf', mime_type: 'application/pdf' }),
+                message(5, {
+                  file: `../${outsideName()}`,
+                  file_name: 'outside.pdf',
+                  mime_type: 'application/pdf',
+                }),
                 message(6, {}),
                 message(7, {
                   file: 'chats/chat_002/video_files/IMG_2231.MP4',
@@ -313,7 +323,9 @@ describe('Telegram media messages', () => {
     // and the upload must not count it as a gap in the import.
     const sticker = byId.get('telegram:2002:4')!;
     expect(sticker.metadata.MediaAttachments).toBeUndefined();
-    expect(sticker.metadata.MediaLeftOut).toEqual([{ type: 'image', mimetype: 'image/webp', kind: 'sticker' }]);
+    expect(sticker.metadata.MediaLeftOut).toEqual([
+      { type: 'image', mimetype: 'image/webp', kind: 'sticker' },
+    ]);
 
     // Only the message with neither text nor media is dropped.
     expect(byId.has('telegram:2002:6')).toBe(false);

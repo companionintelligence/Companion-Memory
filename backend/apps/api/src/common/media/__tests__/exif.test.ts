@@ -426,7 +426,11 @@ describe('extractMediaMetadata dispatcher', () => {
         streams: [{ codec_type: 'audio', codec_name: 'aac' }],
         format: {
           duration: '214.6',
-          tags: { creation_time: '2011-03-04T19:02:11.000000Z', ARTIST: 'The Tidewater Band', album: 'Low Water' },
+          tags: {
+            creation_time: '2011-03-04T19:02:11.000000Z',
+            ARTIST: 'The Tidewater Band',
+            album: 'Low Water',
+          },
         },
       }),
     );

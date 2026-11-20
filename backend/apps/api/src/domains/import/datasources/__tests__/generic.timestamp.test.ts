@@ -133,7 +133,10 @@ describe('generic importer timestamps', () => {
     // A Voice Memos .m4a (audio/mp4) records when it was made the same way a
     // video does; audio used to skip the container read and land undated.
     mockFfprobe({
-      format: { tags: { major_brand: 'M4A ', creation_time: '2026-09-28T01:15:00.000000Z' }, duration: '41.2' },
+      format: {
+        tags: { major_brand: 'M4A ', creation_time: '2026-09-28T01:15:00.000000Z' },
+        duration: '41.2',
+      },
       streams: [{ codec_type: 'audio', codec_name: 'aac' }],
     });
     const [item] = await runImport(await dirWith('Temple bells.m4a', Buffer.from('notreallyanm4a')));

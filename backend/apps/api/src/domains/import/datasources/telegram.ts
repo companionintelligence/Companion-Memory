@@ -109,7 +109,15 @@ function telegramAttachments(
       ? [{ ref: msg.photo, filename: undefined, mimetype: undefined, kind: undefined, photo: true }]
       : []),
     ...(typeof msg.file === 'string'
-      ? [{ ref: msg.file, filename: msg.file_name, mimetype: msg.mime_type, kind: msg.media_type, photo: false }]
+      ? [
+          {
+            ref: msg.file,
+            filename: msg.file_name,
+            mimetype: msg.mime_type,
+            kind: msg.media_type,
+            photo: false,
+          },
+        ]
       : []),
   ];
   const attached: AttachmentDescriptor[] = [];
@@ -161,7 +169,8 @@ function referencedFiles(data: TGExport, exportDir: string): Set<string> {
   for (const chat of data.chats?.list ?? []) {
     for (const msg of chat?.messages ?? []) {
       for (const ref of [msg?.photo, msg?.file, msg?.thumbnail]) {
-        const abs = typeof ref === 'string' && !LEFT_OUT_RE.test(ref) ? exportFile(exportDir, ref) : undefined;
+        const abs =
+          typeof ref === 'string' && !LEFT_OUT_RE.test(ref) ? exportFile(exportDir, ref) : undefined;
 
         if (abs) {
           found.add(abs);
