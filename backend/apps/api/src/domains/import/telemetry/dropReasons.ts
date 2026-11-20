@@ -241,6 +241,8 @@ export const DROP_SLUG_REASONS: Readonly<Record<string, DropReason>> = {
   position_without_time: 'no_timestamp',
   trip_without_start_time: 'no_timestamp',
   undated_retweet: 'no_timestamp',
+  // _garmin_connect_export.ts: an activity or night with no start time.
+  garmin_undated_record: 'no_timestamp',
   // A GPS sample with no fix is a row with a time and no coordinates, which is
   // the same hole in the other axis.
   position_without_fix: 'empty_record',
