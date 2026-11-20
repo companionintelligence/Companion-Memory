@@ -1,13 +1,11 @@
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 
-import { Badge, Button, Input } from '@ci/shadcn';
-import { RefreshCw, ShieldCheck, ShieldOff } from '@ci/shadcn/icons';
+import { Badge, Button, cn } from '@ci/shadcn';
+import { ChevronDown, RefreshCw } from '@ci/shadcn/icons';
 
 import { useFeatures } from '@/common/feature';
 
-import { SegmentedControl, SettingsCard, SettingsEmpty, SettingsRow, SettingsSection } from '../kit';
-
-type FilterMode = 'all' | 'enabled' | 'disabled';
+import { SettingsGroup, SettingsRow, SettingsSection } from '../kit';
 
 export interface TrustProtocolSpec {
   id: string;
@@ -153,8 +151,6 @@ export const TRUST_PROTOCOL_SPECS: readonly TrustProtocolSpec[] = [
 
 export function TrustProtocolsSection() {
   const { isFeatureEnabled, loading, refresh } = useFeatures();
-  const [filter, setFilter] = useState<FilterMode>('all');
-  const [query, setQuery] = useState('');
 
   const rows = useMemo(
     () =>
@@ -165,37 +161,22 @@ export function TrustProtocolsSection() {
     [isFeatureEnabled],
   );
 
-  const enabledCount = rows.filter((r) => r.enabled).length;
-  const disabledCount = rows.length - enabledCount;
-
-  const visibleRows = useMemo(() => {
-    const q = query.trim().toLowerCase();
-
-    return rows.filter(({ spec, enabled }) => {
-      if (filter === 'enabled' && !enabled) {
-        return false;
-      }
-
-      if (filter === 'disabled' && enabled) {
-        return false;
-      }
-
-      if (!q) {
-        return true;
-      }
-
-      return [spec.name, spec.standard, spec.flagKey ?? 'core', spec.surface, spec.cryptoOrProof]
-        .join(' ')
-        .toLowerCase()
-        .includes(q);
-    });
-  }, [filter, query, rows]);
+  const on = rows.filter((row) => row.enabled);
+  const off = rows.filter((row) => !row.enabled);
 
   return (
     <SettingsSection
       title="Trust & protocols"
-      description="Which trust, identity and protocol standards are switched on here."
-      help="Runtime feature-flag status and cryptographic comparison across CI-Memory protocol facades. Disabled provisional routes fail closed with HTTP 404."
+      description="Identity and protocol standards this Memory server supports."
+      help={
+        <>
+          <p>
+            Most of these are provisional and sit behind a server setting. While one is off, its routes answer
+            404, so nothing can reach it by accident.
+          </p>
+          <p>To turn one on, set the variable shown under its Details on the Memory server, then refresh.</p>
+        </>
+      }
       actions={
         <Button variant="outline" disabled={loading} onClick={() => void refresh()}>
           <RefreshCw aria-hidden="true" />
@@ -203,88 +184,102 @@ export function TrustProtocolsSection() {
         </Button>
       }
     >
-      <div className="flex flex-col gap-2.5">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <SegmentedControl
-            label="Filter protocol status"
-            value={filter}
-            onChange={setFilter}
-            options={[
-              { value: 'all', label: `All (${rows.length})` },
-              { value: 'enabled', label: `Active (${enabledCount})` },
-              { value: 'disabled', label: `Fail-closed 404 (${disabledCount})` },
-            ]}
-          />
+      <SettingsGroup title={`On (${on.length})`}>
+        {on.map(({ spec }) => (
+          <ProtocolRow key={spec.id} spec={spec} />
+        ))}
+      </SettingsGroup>
 
-          <Input
-            aria-label="Filter protocols"
-            className="w-full sm:w-64"
-            placeholder="Search standard, flag, or endpoint…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-        </div>
-
-        <SettingsCard>
-          {visibleRows.length === 0 ? (
-            <SettingsEmpty title="No standards match the current filter." />
-          ) : (
-            visibleRows.map(({ spec, enabled }) => (
-              <SettingsRow
-                key={spec.id}
-                label={
-                  <span className="inline-flex items-center gap-1.5">
-                    {enabled ? (
-                      <ShieldCheck
-                        className="size-4 shrink-0 text-teal-700 dark:text-teal-300"
-                        aria-hidden="true"
-                      />
-                    ) : (
-                      <ShieldOff className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-                    )}
-                    {spec.name}
-                  </span>
-                }
-                meta={<Badge variant="outline">{spec.maturity}</Badge>}
-                hint={spec.standard}
-                align="start"
-                control={
-                  // WCAG 1.4.1: text states the state explicitly rather than relying on color alone
-                  <Badge variant={enabled ? 'default' : 'secondary'}>
-                    {enabled ? 'Active' : 'Disabled (404 fail-closed)'}
-                  </Badge>
-                }
-              >
-                <dl className="grid gap-3 text-xs sm:grid-cols-3">
-                  <div>
-                    <dt className="font-medium text-muted-foreground">Surface / Endpoint</dt>
-                    <dd className="mt-0.5 font-mono break-all">{spec.surface}</dd>
-                  </div>
-                  <div>
-                    <dt className="font-medium text-muted-foreground">Identifier &amp; Proof</dt>
-                    <dd className="mt-0.5">
-                      {spec.identifier} · {spec.cryptoOrProof}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="font-medium text-muted-foreground">Flag / Activation</dt>
-                    <dd className="mt-0.5 font-mono break-all">
-                      {spec.flagKey ? `${spec.flagKey} (${spec.envVar})` : spec.envVar}
-                    </dd>
-                    {spec.caveat ? (
-                      <dd className="pt-0.5 font-medium text-amber-700 dark:text-amber-300">{spec.caveat}</dd>
-                    ) : null}
-                  </div>
-                </dl>
-
-                <p className="mt-3 text-xs text-muted-foreground">
-                  <span className="font-medium">Boundary:</span> {spec.securityBoundary}
-                </p>
-              </SettingsRow>
-            ))
-          )}
-        </SettingsCard>
-      </div>
+      {off.length > 0 ? (
+        <SettingsGroup
+          title={`Off (${off.length})`}
+          description="Each one answers 404 until its server setting turns it on."
+        >
+          {off.map(({ spec }) => (
+            <ProtocolRow key={spec.id} spec={spec} />
+          ))}
+        </SettingsGroup>
+      ) : null}
     </SettingsSection>
+  );
+}
+
+/**
+ * One standard: its name and the standard it implements, with the technical detail
+ * (endpoints, identifier, proof, boundary, how to turn it on) folded under Details.
+ * Only the exceptions get a badge: provisional and flag-gated is the usual case.
+ */
+function ProtocolRow({ spec }: { spec: TrustProtocolSpec }) {
+  const [open, setOpen] = useState(false);
+  const detailsId = useId();
+
+  return (
+    <SettingsRow
+      label={spec.name}
+      hint={spec.standard}
+      align="start"
+      meta={
+        <>
+          {spec.maturity === 'Core' ? (
+            <Badge variant="outline" className="border-foreground/15 text-xs">
+              Always on
+            </Badge>
+          ) : null}
+          {spec.maturity === 'Experimental' ? (
+            <Badge variant="outline" className="border-foreground/15 text-xs">
+              Experimental
+            </Badge>
+          ) : null}
+          {spec.caveat ? (
+            <Badge
+              variant="outline"
+              className="border-amber-500/30 bg-amber-500/10 text-xs text-amber-800 dark:text-amber-200"
+            >
+              Security review pending
+            </Badge>
+          ) : null}
+        </>
+      }
+      control={
+        <Button
+          variant="ghost"
+          // Chevron only on a phone, so the toggle stays on the row instead of dropping under it.
+          className="max-device:size-9 max-device:px-0"
+          aria-expanded={open}
+          aria-controls={detailsId}
+          aria-label={`Details for ${spec.name}`}
+          onClick={() => setOpen((current) => !current)}
+        >
+          <span className="max-device:hidden">Details</span>
+          <ChevronDown
+            aria-hidden="true"
+            className={cn('transition-transform motion-reduce:transition-none', open && 'rotate-180')}
+          />
+        </Button>
+      }
+    >
+      {open ? (
+        <dl
+          id={detailsId}
+          className="grid gap-x-4 gap-y-2 rounded-lg bg-foreground/[0.03] p-3 text-xs sm:grid-cols-[7rem_1fr]"
+        >
+          <dt className="text-muted-foreground">Endpoints</dt>
+          <dd className="font-mono break-all">{spec.surface}</dd>
+          <dt className="text-muted-foreground">Identifier</dt>
+          <dd>{spec.identifier}</dd>
+          <dt className="text-muted-foreground">Proof</dt>
+          <dd>{spec.cryptoOrProof}</dd>
+          <dt className="text-muted-foreground">Boundary</dt>
+          <dd>{spec.securityBoundary}</dd>
+          <dt className="text-muted-foreground">{spec.flagKey ? 'Turn on with' : 'Setting'}</dt>
+          <dd>
+            <span className={spec.flagKey ? 'font-mono break-all' : undefined}>{spec.envVar}</span>
+            {spec.caveat ? (
+              <span className="mt-1 block font-medium text-amber-700 dark:text-amber-300">{spec.caveat}</span>
+            ) : null}
+          </dd>
+        </dl>
+      ) : null}
+    </SettingsRow>
   );
 }

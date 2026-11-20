@@ -24,38 +24,57 @@ describe('TrustProtocolsSection', () => {
     h.refresh.mockClear();
   });
 
-  it('renders live feature-flag status and identifies fail-closed 404 provisional surfaces', () => {
+  it('splits the standards into what is on and what is off', () => {
     render(<TrustProtocolsSection />);
 
     expect(screen.getByText('Trust & protocols')).toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: 'All (9)' })).toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: 'Active (2)' })).toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: 'Fail-closed 404 (7)' })).toBeInTheDocument();
 
-    expect(screen.getByText('Solid Protocol & WebID Pod Facade')).toBeInTheDocument();
-    expect(screen.getByText('Verifiable Trust Community (OpenVTC)')).toBeInTheDocument();
-    expect(screen.getByText('DIDComm Messaging v2.1')).toBeInTheDocument();
+    const on = screen.getByRole('region', { name: 'On (2)' });
+    const off = screen.getByRole('region', { name: 'Off (7)' });
+
+    expect(within(on).getByText('Companion Asks & Delegated Consent')).toBeInTheDocument();
+    expect(within(on).getByText('Capability Attenuated API Keys & Field Crypto')).toBeInTheDocument();
+    expect(within(off).getByText('Solid Protocol & WebID Pod Facade')).toBeInTheDocument();
+    expect(within(off).getByText('Verifiable Trust Community (OpenVTC)')).toBeInTheDocument();
+    expect(within(off).getByText('DIDComm Messaging v2.1')).toBeInTheDocument();
   });
 
-  it('filters by active state and searches by standard, flag, or endpoint', () => {
+  it('moves a standard to On when its flag is on', () => {
     h.enabledFlags = new Set(['ask', 'vtc.credentials']);
     render(<TrustProtocolsSection />);
 
-    fireEvent.click(screen.getByRole('radio', { name: 'Active (3)' }));
-    expect(screen.getByText('Verifiable Trust Community (OpenVTC)')).toBeInTheDocument();
-    expect(screen.queryByText('DIDComm Messaging v2.1')).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('radio', { name: 'All (9)' }));
-    fireEvent.change(screen.getByLabelText('Filter protocols'), { target: { value: 'eddsa-jcs-2022' } });
-    expect(screen.getByText('Verifiable Trust Community (OpenVTC)')).toBeInTheDocument();
-    expect(screen.queryByText('Solid Protocol & WebID Pod Facade')).not.toBeInTheDocument();
+    expect(
+      within(screen.getByRole('region', { name: 'On (3)' })).getByText(
+        'Verifiable Trust Community (OpenVTC)',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByRole('region', { name: 'Off (6)' })).queryByText(
+        'Verifiable Trust Community (OpenVTC)',
+      ),
+    ).not.toBeInTheDocument();
   });
 
-  it('says beside each unreviewed flag to leave it off, and on no other card', () => {
+  it('keeps the technical detail folded until Details is opened', () => {
+    render(<TrustProtocolsSection />);
+
+    expect(screen.queryByText('POST /vtc/verify, POST /vtc/status-list/evaluate')).not.toBeInTheDocument();
+
+    const toggle = screen.getByRole('button', { name: 'Details for Verifiable Trust Community (OpenVTC)' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+
+    fireEvent.click(toggle);
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('POST /vtc/verify, POST /vtc/status-list/evaluate')).toBeInTheDocument();
+    expect(screen.getByText('ENABLE_VTC_CREDENTIALS=true')).toBeInTheDocument();
+  });
+
+  it('marks each unreviewed flag, and says beside its setting to leave it off', () => {
     render(<TrustProtocolsSection />);
 
     const caveat = 'Leave off until its security review is done';
-    const card = (name: string) => screen.getByText(name).closest<HTMLElement>('[data-slot="settings-row"]')!;
+    const row = (name: string) => screen.getByText(name).closest<HTMLElement>('[data-slot="settings-row"]')!;
     const unreviewed = [
       ['Trust Tasks HTTPS 0.3', 'ENABLE_TRUST_TASKS'],
       ['Portable Web Spaces (PWS)', 'ENABLE_PWS_STORAGE'],
@@ -64,19 +83,28 @@ describe('TrustProtocolsSection', () => {
       ['DIDComm Messaging v2.1', 'ENABLE_DIDCOMM_MESSAGING'],
       ['MCP Protected Resource Metadata (PRM)', 'ENABLE_MCP_PRM'],
     ] as const;
-
-    expect(screen.getAllByText(caveat)).toHaveLength(unreviewed.length);
-    for (const [name, envVar] of unreviewed) {
-      // The caveat sits in the same group as that card's activation line.
-      expect(within(card(name)).getByText(caveat).parentElement).toHaveTextContent(envVar);
-    }
-
-    for (const name of [
+    const reviewed = [
       'Solid Protocol & WebID Pod Facade',
       'Companion Asks & Delegated Consent',
       'Capability Attenuated API Keys & Field Crypto',
-    ]) {
-      expect(within(card(name)).queryByText(caveat)).not.toBeInTheDocument();
+    ];
+
+    expect(screen.getAllByText('Security review pending')).toHaveLength(unreviewed.length);
+
+    for (const name of [...unreviewed.map(([unreviewedName]) => unreviewedName), ...reviewed]) {
+      fireEvent.click(screen.getByRole('button', { name: `Details for ${name}` }));
+    }
+
+    expect(screen.getAllByText(caveat)).toHaveLength(unreviewed.length);
+    for (const [name, envVar] of unreviewed) {
+      expect(within(row(name)).getByText('Security review pending')).toBeInTheDocument();
+      // The caveat sits in the same entry as that standard's setting.
+      expect(within(row(name)).getByText(caveat).parentElement).toHaveTextContent(envVar);
+    }
+
+    for (const name of reviewed) {
+      expect(within(row(name)).queryByText(caveat)).not.toBeInTheDocument();
+      expect(within(row(name)).queryByText('Security review pending')).not.toBeInTheDocument();
     }
   });
 
