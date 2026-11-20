@@ -3,10 +3,11 @@ import fs from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { insideRoot } from './_ai_media';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
-import type { ImportParams } from './timeline';
-import { textContent, timeframeContains } from './timeline';
+import type { AttachmentDescriptor, ImportParams } from './timeline';
+import { mimeForFile, textContent, timeframeContains } from './timeline';
 
 interface TGContact {
   first_name?: string;
@@ -30,6 +31,12 @@ interface TGMessage {
   from_id?: string;
   text?: string | Array<string | TGTextEntity>;
   text_entities?: TGTextEntity[];
+  /** A sent photo: its path relative to the export folder, or a left-out note (see {@link LEFT_OUT_RE}). */
+  photo?: string;
+  /** Any other file (document, video, voice message, sticker), the same way. */
+  file?: string;
+  file_name?: string;
+  mime_type?: string;
 }
 
 interface TGChat {
@@ -65,6 +72,72 @@ function isTelegramExport(obj: unknown): obj is TGExport {
   return hasAbout && (hasPersonal || hasChats);
 }
 
+/**
+ * What Telegram Desktop writes in place of a path when the export left the
+ * bytes out: "(File not included. Change data exporting settings to
+ * download.)", or "(File exceeds maximum size. …)".
+ */
+const LEFT_OUT_RE = /^\(File /;
+
+/**
+ * The photo and the file a message carried, as attachments. `photo` and `file`
+ * are relative to the export folder (`chats/chat_001/photos/photo_1@….jpg`).
+ * One whose bytes are not there (left out of the export, missing, or pointing
+ * outside the folder) is still recorded, without a path, so the message says
+ * what was sent; the upload skips path-less entries.
+ */
+function telegramAttachments(msg: TGMessage, exportDir: string): AttachmentDescriptor[] {
+  const refs = [
+    ...(typeof msg.photo === 'string' ? [{ ref: msg.photo, filename: undefined, mimetype: undefined, photo: true }] : []),
+    ...(typeof msg.file === 'string'
+      ? [{ ref: msg.file, filename: msg.file_name, mimetype: msg.mime_type, photo: false }]
+      : []),
+  ];
+
+  return refs.map(({ ref, filename, mimetype, photo }) => {
+    const abs = LEFT_OUT_RE.test(ref) ? undefined : exportFile(exportDir, ref);
+    const name = filename || (abs ? path.basename(abs) : undefined);
+    const mime = mimetype || (name ? mimeForFile(name) : undefined);
+
+    return {
+      ...(abs && { path: abs }),
+      ...(name && { filename: name }),
+      type: photo ? 'image' : attachmentType(mime),
+      ...(mime && { mimetype: mime }),
+    };
+  });
+}
+
+/** `ref` as a regular file inside `exportDir`, or undefined. */
+function exportFile(exportDir: string, ref: string): string | undefined {
+  const abs = path.resolve(exportDir, ref);
+  if (!insideRoot(exportDir, abs)) {
+    return undefined;
+  }
+
+  try {
+    return fs.lstatSync(abs).isFile() ? abs : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function attachmentType(mimetype: string | undefined): AttachmentDescriptor['type'] {
+  if (mimetype?.startsWith('image/')) {
+    return 'image';
+  }
+
+  if (mimetype?.startsWith('video/')) {
+    return 'video';
+  }
+
+  if (mimetype?.startsWith('audio/')) {
+    return 'audio';
+  }
+
+  return 'file';
+}
+
 export class TelegramFileImporter implements FileImporter {
   async recognize(_ctx: unknown, entry: DirEntry): Promise<Recognition> {
     const root = entry.fullPath || entry.fsRoot || entry.filename;
@@ -95,7 +168,11 @@ export class TelegramFileImporter implements FileImporter {
         if (match) {
           const obj = await this.tryParse(path.join(root, match));
           if (isTelegramExport(obj)) {
-            return { confidence: 0.9 };
+            // As sure as the result.json inside it, so the FOLDER stays the
+            // match: it holds the chats/ media this importer attaches, and a
+            // match on result.json alone left the generic importer to stage
+            // every photo and file there again as a loose, undated item.
+            return { confidence: 0.95 };
           }
         }
       } catch {
@@ -225,7 +302,9 @@ export class TelegramFileImporter implements FileImporter {
         }
 
         const text = this.extractText(msg.text);
-        if (!text) {
+        // A photo or file sent without a caption is still a message.
+        const attachments = telegramAttachments(msg, path.dirname(fpath));
+        if (!text && attachments.length === 0) {
           params.pipeline.drop?.('empty_after_parse');
           continue;
         }
@@ -256,6 +335,10 @@ export class TelegramFileImporter implements FileImporter {
               Conversation: chat.name || undefined,
               Source: 'Telegram',
               Text: text || undefined,
+              // Uploaded with the message and catalogued as content of their
+              // own, as Messenger's are: a photo someone sent is worth finding
+              // by itself, not only by reading the chat.
+              ...(attachments.length > 0 && { MediaAttachments: attachments, AttachmentContent: true }),
             },
           },
         });
