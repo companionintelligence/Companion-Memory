@@ -1476,8 +1476,13 @@ export function toCommunicationInput(rec: CanonicalRecord): CreateCommunicationD
   }
 
   // Pass call duration through so the server stores it on the Communication entity.
-  if (m.Duration != null) {
-    input.duration_seconds = Number(m.Duration);
+  // The column is whole seconds (INTEGER >= 0) and a call log can state a
+  // fraction (macOS CallHistory's ZDURATION is a float, 312.5 failed the whole
+  // call), so round it and leave out anything that is not a number. The exact
+  // value stays in metadata.
+  const duration = m.Duration != null ? Number(m.Duration) : Number.NaN;
+  if (Number.isFinite(duration) && duration >= 0) {
+    input.duration_seconds = Math.round(duration);
   }
 
   const preview = content ? clip(content, 140) : null;

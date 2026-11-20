@@ -492,6 +492,36 @@ describe('toCommunicationInput', () => {
     expect(input.metadata).toMatchObject({ Duration: 90, Subject: 'Weekly sync' });
   });
 
+  it('rounds a fractional call duration to the whole seconds the column holds', () => {
+    // `duration_seconds` is INTEGER. A macOS call of 312.5 s reached it as is
+    // and Postgres refused the whole call; the exact value stays in metadata.
+    const call = recordFor({
+      classification: 'call',
+      dataSource: 'macos_activity',
+      metadata: { Duration: 312.5 },
+    });
+    const input = toCommunicationInput(call);
+
+    expect(input.duration_seconds).toBe(313);
+    expect(input.metadata).toMatchObject({ Duration: 312.5 });
+    expect(
+      toCommunicationInput(recordFor({ classification: 'call', metadata: { Duration: '64.4' } }))
+        .duration_seconds,
+    ).toBe(64);
+    expect(
+      toCommunicationInput(recordFor({ classification: 'call', metadata: { Duration: 0 } })).duration_seconds,
+    ).toBe(0);
+  });
+
+  it('leaves out a call duration that is not a usable number', () => {
+    for (const Duration of ['about a minute', -5]) {
+      const input = toCommunicationInput(recordFor({ classification: 'call', metadata: { Duration } }));
+
+      expect(input.duration_seconds).toBeUndefined();
+      expect(input.metadata).toMatchObject({ Duration });
+    }
+  });
+
   describe('Reddit posts and comments', () => {
     it('files an authored post as outbound, subject = title, thread = subreddit', () => {
       const post = recordFor({
