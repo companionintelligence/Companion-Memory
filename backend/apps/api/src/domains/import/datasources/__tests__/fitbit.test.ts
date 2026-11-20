@@ -435,6 +435,31 @@ describe('Fitbit datasource', () => {
       ]);
     });
 
+    it('does not count a dot file in Global Export Data as an export file', async () => {
+      write('.DS_Store', 'binary');
+      const { drops } = await importRoot();
+      expect(drops.map(([, detail]) => detail)).not.toContain('.DS_Store');
+    });
+
+    it('reads a four-digit year whole and keeps going past a bad exercise record', async () => {
+      write('exercise-0.json', [
+        { logId: 1, activityName: 'Walk', startTime: '09/17/2026 07:02:00', duration: 600000 },
+        { logId: 2, activityName: 'Row', startTime: '09/18/26 07:02:00', distance: 2, distanceUnit: 7 },
+        { logId: 3, activityName: 99, startTime: '09/19/26 07:02:00' },
+      ]);
+      const workouts = (await importRoot()).items.filter((i) => i.classification === 'workout');
+      expect(workouts.map((w) => w.id)).toEqual([
+        'fitbit:exercise:1',
+        'fitbit:exercise:2',
+        'fitbit:exercise:3',
+      ]);
+      expect(workouts[0].timestamp!.getTime()).toBe(new Date('2026-09-17T07:02:00').getTime());
+      expect(workouts[1].metadata.Distance).toBe('2');
+      expect(workouts[2].metadata.Title).toBe('Workout');
+      // Every item's text is readable.
+      await Promise.all(workouts.map((w) => w.content.data!()));
+    });
+
     it('applies the timeframe to the new rows', async () => {
       const { items } = await importRoot({ since: new Date('2026-09-17T00:00:00') });
       expect(items.map((i) => i.metadata.Title).sort()).toEqual(['Bike', 'Run', 'Steps on 2026-09-17: 150']);

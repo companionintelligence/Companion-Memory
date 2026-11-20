@@ -167,12 +167,22 @@ function isRecordArray(parsed: unknown, keys: string[]): boolean {
   return !!first && typeof first === 'object' && keys.every((k) => k in first);
 }
 
-/** "MM/DD/YY HH:MM:SS" (Fitbit's local time, no zone) as "YYYY-MM-DDTHH:MM:SS". */
+/**
+ * "MM/DD/YY HH:MM:SS" (Fitbit's local time, no zone) as "YYYY-MM-DDTHH:MM:SS".
+ * A four-digit year is read whole, not as its first two digits.
+ */
 function fitbitLocal(value: unknown): string | undefined {
   const m =
-    typeof value === 'string' ? /^(\d{2})\/(\d{2})\/(\d{2})(?: (\d{2}:\d{2}:\d{2}))?/.exec(value) : null;
+    typeof value === 'string'
+      ? /^(\d{2})\/(\d{2})\/(\d{4}|\d{2})(?!\d)(?: (\d{2}:\d{2}:\d{2}))?/.exec(value)
+      : null;
+  if (!m) {
+    return undefined;
+  }
 
-  return m ? `20${m[3]}-${m[1]}-${m[2]}T${m[4] ?? '00:00:00'}` : undefined;
+  const year = m[3].length === 2 ? `20${m[3]}` : m[3];
+
+  return `${year}-${m[1]}-${m[2]}T${m[4] ?? '00:00:00'}`;
 }
 
 /**
@@ -366,10 +376,17 @@ export class FitbitFileImporter implements FileImporter {
 
     for (const fpath of await findFitbitFiles(root, (name) => EXERCISE_FILE_RE.test(name))) {
       const parsed = await readJsonFile(fpath, { log });
+      const base = path.basename(fpath);
       if (Array.isArray(parsed)) {
-        parsed.forEach((rec, index) =>
-          this.pushExercise(rec as ExerciseRecord, path.basename(fpath), index, params),
-        );
+        parsed.forEach((rec, index) => {
+          // One bad record must not stop the rest of the export (and the
+          // Google Fit half after it) from importing.
+          try {
+            this.pushExercise(rec as ExerciseRecord, base, index, params);
+          } catch (e) {
+            log?.('error', `Failed to import exercise record in ${base}`, { error: (e as Error).message });
+          }
+        });
       }
     }
 
@@ -444,8 +461,10 @@ export class FitbitFileImporter implements FileImporter {
 
     // Everything else in Global Export Data/ (calories, distance, altitude,
     // active minutes, weight, ...) has no reader yet: say so, one per file.
+    // Dot files (.DS_Store left by unzipping on a Mac) are not export files.
     for (const dir of await globalExportDirs(root)) {
-      for (const fpath of await filesIn(dir, (name) => !READ_FILE_RES.some((re) => re.test(name)))) {
+      const unread = (name: string) => !name.startsWith('.') && !READ_FILE_RES.some((re) => re.test(name));
+      for (const fpath of await filesIn(dir, unread)) {
         params.pipeline.drop?.('unread_export_file', path.basename(fpath));
       }
     }
@@ -464,8 +483,12 @@ export class FitbitFileImporter implements FileImporter {
     const duration = positiveNumber(rec.duration);
     const distance =
       typeof rec.distance === 'number' && Number.isFinite(rec.distance) ? rec.distance : undefined;
-    const factor = KM_PER_FITBIT_UNIT[(rec.distanceUnit ?? '').toLowerCase()];
-    const name = rec.activityName || 'Workout';
+    // Typed fields from untyped JSON: a number here would throw in toLowerCase
+    // now, or in Buffer.from when the content is read.
+    const unit = typeof rec.distanceUnit === 'string' ? rec.distanceUnit : undefined;
+    const activity = typeof rec.activityName === 'string' && rec.activityName ? rec.activityName : undefined;
+    const factor = KM_PER_FITBIT_UNIT[(unit ?? '').toLowerCase()];
+    const name = activity ?? 'Workout';
 
     params.pipeline.push({
       item: {
@@ -476,16 +499,14 @@ export class FitbitFileImporter implements FileImporter {
         content: textContent('workout.txt', name),
         metadata: {
           Title: name,
-          'Activity Type': rec.activityName || undefined,
+          'Activity Type': activity,
           'Duration (min)': duration !== undefined ? Math.round(duration / 6000) / 10 : undefined,
           'Distance (km)':
             distance !== undefined && factor !== undefined
               ? Math.round(distance * factor * 1000) / 1000
               : undefined,
           Distance:
-            distance !== undefined && factor === undefined
-              ? `${distance} ${rec.distanceUnit ?? ''}`.trim()
-              : undefined,
+            distance !== undefined && factor === undefined ? `${distance} ${unit ?? ''}`.trim() : undefined,
           Calories: positiveNumber(rec.calories),
           Steps: positiveNumber(rec.steps),
           'Average Heart Rate': positiveNumber(rec.averageHeartRate),
