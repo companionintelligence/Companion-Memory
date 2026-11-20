@@ -21,6 +21,7 @@ import { extractMediaMetadata } from '@ci/common/media/exif';
 import { listFiles } from './fsWalk';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
+import { readHead } from './sniff';
 import type { ImportParams } from './timeline';
 import { mediaItemFromFile, textContent, timeframeContains } from './timeline';
 
@@ -142,14 +143,23 @@ export class NotionFileImporter implements FileImporter {
         files.push(root);
       }
     } else if (stat.isDirectory()) {
-      for (const fpath of await listFiles(root, { maxDepth: NOTION_IMPORT_DEPTH, sorted: true })) {
+      for (const fpath of await listFiles(root, {
+        maxDepth: NOTION_IMPORT_DEPTH,
+        sorted: true,
+        skipHidden: true,
+      })) {
         const name = path.basename(fpath);
+        // macOS re-zips carry an AppleDouble `._<name>` beside every file (in
+        // __MACOSX/), named like the page itself but holding no page.
+        if (name.startsWith('.') || path.relative(root, fpath).split(path.sep).includes('__MACOSX')) {
+          continue;
+        }
+
         if (isNotionMarkdownName(name)) {
           files.push(fpath);
         } else if (NOTION_CSV_RE.test(name)) {
-          // Its rows are pages of their own in the database's folder.
-          params.pipeline.drop?.('notion_database_csv', name);
-        } else if (NOTION_FOLDER_RE.test(path.basename(path.dirname(fpath))) && !name.startsWith('.')) {
+          await this.dropDatabaseCsv(fpath, params);
+        } else if (NOTION_FOLDER_RE.test(path.basename(path.dirname(fpath)))) {
           embedded.push(fpath);
         }
       }
@@ -176,6 +186,37 @@ export class NotionFileImporter implements FileImporter {
     }
   }
 
+  /**
+   * A database CSV is not imported. Its rows are pages of their own in the
+   * database's folder, unless the export left subpages out: then that folder
+   * is missing, the rows exist only in the CSV, and that is a loss.
+   */
+  private async dropDatabaseCsv(fpath: string, params: ImportParams): Promise<void> {
+    const name = path.basename(fpath);
+    const folder = path.join(path.dirname(fpath), name.replace(/(_all)?\.csv$/i, ''));
+    let hasPages = false;
+    try {
+      hasPages = fs.statSync(folder).isDirectory();
+    } catch {
+      /* no row pages */
+    }
+
+    if (hasPages) {
+      params.pipeline.drop?.('notion_database_csv', name);
+
+      return;
+    }
+
+    // A header with no rows below it is an empty database: nothing is lost.
+    // The first 64 KB settle it; an unreadable file counts as a loss.
+    const head = await readHead(fpath, 64 * 1024);
+    const hasRows = head == null || head.split(/\r?\n/).filter((line) => line.trim()).length > 1;
+
+    if (hasRows) {
+      params.pipeline.drop?.('notion_database_csv_without_pages', name);
+    }
+  }
+
   /** A file embedded in a page: media (or a plain file) named after the page it sits in. */
   private async pushEmbeddedFile(fpath: string, params: ImportParams): Promise<void> {
     const folder = path.basename(path.dirname(fpath));
@@ -195,6 +236,7 @@ export class NotionFileImporter implements FileImporter {
         location: media.location,
         metadata: {
           ...media.metadata,
+          AccuracyMeters: media.accuracyMeters ?? undefined,
           Title: path.basename(fpath),
           Page: folder.replace(NOTION_FOLDER_RE, '').trim() || undefined,
           Source: 'Notion',

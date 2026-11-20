@@ -285,4 +285,25 @@ describe('Notion datasource — nested pages, databases and embedded files', () 
       ]),
     );
   });
+
+  it('counts a database CSV exported without its row pages as a loss', async () => {
+    const RL = 'Reading List 5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b';
+    write(`Export-2c3d4e5f/${RG}/${RL}.csv`, 'Name,Author\nPiranesi,Susanna Clarke\n');
+    // An empty database has nothing to lose.
+    write(`Export-2c3d4e5f/${RG}/Empty 0123456789abcdef0123456789abcdef.csv`, 'Name\n');
+
+    const { drops } = await run();
+    expect(drops.filter(([reason]) => reason === 'notion_database_csv_without_pages')).toEqual([
+      ['notion_database_csv_without_pages', `${RL}.csv`],
+    ]);
+  });
+
+  it('skips the AppleDouble copies a macOS re-zip adds', async () => {
+    write(`__MACOSX/Export-2c3d4e5f/._${RG}.md`, Buffer.from([0x00, 0x05, 0x16, 0x07, 0x41]));
+    write(`__MACOSX/Export-2c3d4e5f/${RG}/._bookshelf.jpg`, Buffer.from([0x00, 0x05, 0x16, 0x07]));
+
+    const { pipeline } = await run();
+    expect(pipeline.some((g) => String(g.item.id).includes('._'))).toBe(false);
+    expect(pipeline.some((g) => g.item.intermediateLocation?.includes('__MACOSX'))).toBe(false);
+  });
 });
