@@ -1540,9 +1540,10 @@ export function toCommunicationInput(rec: CanonicalRecord): CreateCommunicationD
   // the server to resolve. `from` is a raw string; `to` is an array of raw
   // strings (the SHARED CONTRACT shape).
   const from = str(m.Contact) || str(m.Sender) || str(m.From);
-  const to = recipientsFrom(m);
+  const mail = input.communication_type === CommunicationType.EMAIL;
+  const to = recipientsFrom(m, mail);
   // An email's Cc, under the key the mail connections write it to.
-  const cc = recipientsFrom(m, ['Cc']);
+  const cc = recipientsFrom(m, mail, ['Cc']);
   if (from || to.length || cc.length) {
     input.participants_metadata = {
       ...(input.participants_metadata ?? {}),
@@ -1588,11 +1589,18 @@ function attachmentsFor(m: Record<string, unknown>): Array<Record<string, unknow
 // Recipients for participants_metadata.to. Sources record recipients under To /
 // Recipient / Recipients (email To header, SMS To, etc.); an email To header is
 // a comma-separated list, so split + de-dup into the array shape the contract
-// expects. The split skips commas inside a quoted name ("Last, First" <addr>).
+// expects. A mail header (`mail`) splits only between mailboxes, so a quoted
+// "Last, First" <addr> stays whole. Any other source's list is display names
+// joined by commas, where a "(" in one name and a ")" in the next ("Ann :(",
+// "Sam :)") would read as one span, so it splits on every comma.
 // iMessage and other multi-party sources hand us a pre-resolved array
 // of handles, which goes in as-is. Leaves toEntityIds unset — the server
 // resolves these raw strings.
-function recipientsFrom(m: Record<string, unknown>, keys = ['To', 'Recipient', 'Recipients']): string[] {
+function recipientsFrom(
+  m: Record<string, unknown>,
+  mail = false,
+  keys = ['To', 'Recipient', 'Recipients'],
+): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   const pushOne = (raw: string) => {
@@ -1619,7 +1627,7 @@ function recipientsFrom(m: Record<string, unknown>, keys = ['To', 'Recipient', '
       return;
     }
 
-    for (const part of splitAddressList(s)) {
+    for (const part of mail ? splitAddressList(s) : s.split(',')) {
       pushOne(part);
     }
   };

@@ -456,7 +456,17 @@ describe('toCommunicationInput', () => {
     expect(toCommunicationInput(outbound).direction).toBe('outbound');
   });
 
-  it('lists recipients without cutting a quoted "Last, First" name, and keeps Cc as cc', () => {
+  it('splits a chat roster on every comma, whatever brackets its names hold', () => {
+    const chat = recordFor({
+      classification: 'message',
+      dataSource: 'instagram',
+      metadata: { Sender: 'Dagny Velloreaux', To: 'Ann :(, Bob, Sam :)', Text: 'hi' },
+    });
+
+    expect(toCommunicationInput(chat).participants_metadata?.to).toEqual(['Ann :(', 'Bob', 'Sam :)']);
+  });
+
+  it('keeps Cc as cc and lists recipients without cutting a quoted "Last, First" name', () => {
     const mail = recordFor({
       classification: 'email',
       metadata: {
