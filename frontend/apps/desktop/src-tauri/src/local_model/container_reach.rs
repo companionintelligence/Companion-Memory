@@ -320,16 +320,17 @@ fn allow_ranges(appliance_subnets: &[Ipv4Subnet]) -> Vec<String> {
     ranges
 }
 
-/// The rule names the gateway as its destination when it is known: that is the
-/// only address the containers call. A rule for any address would also
-/// open the port to hosts on a LAN that happens to use 172.16.0.0/12.
-fn ufw_allow_command(range: &str, gateway: Option<Ipv4Addr>, port: u16) -> String {
-    let to = gateway.map_or_else(|| "any".to_string(), |gateway| gateway.to_string());
-    format!("sudo ufw allow from {range} to {to} port {port} proto tcp")
+/// The rule names the gateway as its destination: that is the only address the
+/// containers call. A rule for any address would also open the port to hosts
+/// on a LAN that happens to use 172.16.0.0/12.
+fn ufw_allow_command(range: &str, gateway: Ipv4Addr, port: u16) -> String {
+    format!("sudo ufw allow from {range} to {gateway} port {port} proto tcp")
 }
 
 /// What to tell the person about the firewall, or None when it is unlikely to
 /// be the cause. A refused connection is ufw's doing only when ufw rejects.
+/// Without a known gateway there is no ufw command: the only one left to give
+/// would open the port on every address.
 fn firewall_advice(
     reach: &Reach,
     ufw: Option<Ufw>,
@@ -339,28 +340,32 @@ fn firewall_advice(
     let port = target.port;
     let ufw_on = ufw.is_some_and(|ufw| ufw.enabled);
     let ufw_rejects = ufw.is_some_and(|ufw| ufw.enabled && ufw.rejects);
-    let commands = ranges
-        .iter()
-        .map(|range| ufw_allow_command(range, target.gateway, port))
-        .collect::<Vec<_>>()
-        .join("` and `");
+    let commands = |gateway: Ipv4Addr| {
+        ranges
+            .iter()
+            .map(|range| ufw_allow_command(range, gateway, port))
+            .collect::<Vec<_>>()
+            .join("` and `")
+    };
     let destination = match target.gateway {
         Some(gateway) => format!("{gateway} port {port}"),
         None => format!("port {port}"),
     };
 
-    match reach {
-        Reach::TimedOut if ufw_on => Some(format!(
-            "ufw is on. Allow the appliance's networks with `{commands}`."
+    match (reach, target.gateway) {
+        (Reach::TimedOut, Some(gateway)) if ufw_on => Some(format!(
+            "ufw is on. Allow the appliance's networks with `{}`.",
+            commands(gateway)
         )),
-        Reach::TimedOut => Some(format!(
+        (Reach::TimedOut, _) => Some(format!(
             "Allow incoming TCP connections from the appliance's docker networks ({}) to {destination} in this \
              computer's firewall.",
             ranges.join(", ")
         )),
-        Reach::Refused { .. } if ufw_rejects => Some(format!(
+        (Reach::Refused { .. }, Some(gateway)) if ufw_rejects => Some(format!(
             "ufw is on and rejects connections it does not allow, which also looks like this. If Ollama is \
-             running, allow the appliance's networks with `{commands}`."
+             running, allow the appliance's networks with `{}`.",
+            commands(gateway)
         )),
         _ => None,
     }
@@ -474,9 +479,17 @@ pub(super) fn check_and_log(target: &Target) -> bool {
     }
 
     // Asked only when the firewall may be the cause: each read spawns docker.
+    // A gateway Docker could not report at resolution (it was still starting,
+    // say) is asked for again, since the rule needs it.
     let advice = if reach.may_be_firewall() {
         let ranges = allow_ranges(&super::bridge_relay::discover_appliance_subnets());
-        firewall_advice(&reach, read_ufw(), &ranges, target)
+        let target = Target {
+            gateway: target
+                .gateway
+                .or_else(|| super::bridge_relay::discover_host_gateway().ok()),
+            ..*target
+        };
+        firewall_advice(&reach, read_ufw(), &ranges, &target)
     } else {
         None
     };
@@ -772,9 +785,10 @@ mod tests {
         );
     }
 
-    /// Rootless Docker reports no gateway, so the rule cannot name one.
+    /// Rootless Docker reports no gateway. A ufw rule could then only open the
+    /// port on every address, so the advice names the port and range alone.
     #[test]
-    fn without_a_known_gateway_the_rule_is_for_any_address() {
+    fn without_a_known_gateway_no_ufw_command_is_given() {
         let rootless = Target {
             port: 11434,
             gateway: None,
@@ -786,9 +800,21 @@ mod tests {
         });
         let ranges = vec!["172.16.0.0/12".to_string()];
         let advice = firewall_advice(&Reach::TimedOut, ufw, &ranges, &rootless).expect("advice");
-        assert!(
-            advice.contains("`sudo ufw allow from 172.16.0.0/12 to any port 11434 proto tcp`"),
-            "{advice}"
+        assert!(!advice.contains("sudo"), "{advice}");
+        assert!(!advice.contains("any"), "{advice}");
+        assert!(advice.contains("172.16.0.0/12"), "{advice}");
+        assert!(advice.contains("port 11434"), "{advice}");
+
+        let refused = Reach::Refused {
+            detail: REFUSED.to_string(),
+        };
+        let rejecting = Some(Ufw {
+            enabled: true,
+            rejects: true,
+        });
+        assert_eq!(
+            firewall_advice(&refused, rejecting, &ranges, &rootless),
+            None
         );
     }
 
