@@ -185,6 +185,18 @@ working. Resolved once per launch, cheapest option first:
    `com.docker.compose.project` label). Anything else is dropped and logged in
    `desktop.log`.
 
+   A firewall on the host can still drop the containers' connections, and
+   the app cannot see that from the host: its own request to the gateway
+   address goes over loopback, which a firewall always lets through. So once
+   Memory is up, the app runs `curl` inside the `api` container against
+   `host.docker.internal:11434` (`local_model::container_reach`) and logs the
+   outcome in `desktop.log`. A timeout means the connections are being
+   dropped. With ufw on (its default incoming policy drops them), the warning
+   names the rule to add, usually
+   `sudo ufw allow from 172.16.0.0/12 to any port 11434 proto tcp`. The app
+   never changes the firewall itself. This applies to your own Ollama in
+   option 1 as well, including one bound to `0.0.0.0`.
+
    > **Under rootless Docker** no bridge gateway is discoverable (the
    > `host-gateway` alias resolves inside RootlessKit's namespace, moby#47684).
    > The relay is then simply not started and the sidecar stays loopback-only —
