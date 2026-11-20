@@ -24,6 +24,10 @@ describe('POST /import/uploads (multipart)', () => {
   let app: INestApplication;
   let uploadsDir: string;
   let previousUploadsDir: string;
+  // The controller makes `<uploadsDir>/incoming` when the app starts, so the
+  // configured folder points at a temp one before then, not the real one.
+  let initUploadsDir: string;
+  let configuredUploadsDir: string;
 
   const sources = {
     registerUpload: jest.fn(async (_ctx: unknown, input: { dropId: string; originalFilename: string }) => ({
@@ -36,6 +40,10 @@ describe('POST /import/uploads (multipart)', () => {
   };
 
   beforeAll(async () => {
+    initUploadsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-uploads-http-init-'));
+    configuredUploadsDir = config.import.uploadsDir;
+    (config.import as { uploadsDir: string }).uploadsDir = initUploadsDir;
+
     const module = await Test.createTestingModule({
       controllers: [ImportUploadsController],
       providers: [{ provide: StagedSourceService, useValue: sources }],
@@ -54,6 +62,8 @@ describe('POST /import/uploads (multipart)', () => {
 
   afterAll(async () => {
     await app.close();
+    (config.import as { uploadsDir: string }).uploadsDir = configuredUploadsDir;
+    fs.rmSync(initUploadsDir, { recursive: true, force: true });
   });
 
   beforeEach(() => {

@@ -19,6 +19,9 @@ export function sanitizeFilename(filename: string): string {
 // What Windows refuses in a name, beside the separators. The uploads tree can
 // sit on a host folder, so these go even though Linux would take them.
 const WINDOWS_RESERVED = /[<>:"|?*]/g;
+// Device names Windows refuses as a file name, with or without an extension
+// (`CON`, `nul.txt`). An underscore after the device name makes it ordinary.
+const WINDOWS_DEVICE_NAME = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(?=\.|$)/i;
 // A name has to fit NAME_MAX (255 bytes) with room for what the importer adds
 // beside it (`.extracted`, `.unpacked`).
 const MAX_UPLOAD_NAME_BYTES = 200;
@@ -68,7 +71,8 @@ export function sanitizeUploadName(filename: string, fallback = 'upload'): strin
     // Leading dots would hide the file or name `.`/`..`; trailing dots and
     // spaces are dropped by Windows, so two names could land as one.
     .replace(/^[\s.]+/, '')
-    .replace(/[\s.]+$/, '');
+    .replace(/[\s.]+$/, '')
+    .replace(WINDOWS_DEVICE_NAME, '$1_');
 
   if (cleaned.length === 0) {
     return fallback;

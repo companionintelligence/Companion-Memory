@@ -59,6 +59,14 @@ describe('sanitizeUploadName', () => {
     expect(sanitizeUploadName('a<b>c:d"e|f?g*.txt')).toBe('a_b_c_d_e_f_g_.txt');
   });
 
+  it('makes the device names Windows refuses into ordinary names', () => {
+    expect(sanitizeUploadName('CON')).toBe('CON_');
+    expect(sanitizeUploadName('nul.txt')).toBe('nul_.txt');
+    expect(sanitizeUploadName('com1.tar.gz')).toBe('com1_.tar.gz');
+    expect(sanitizeUploadName('console.log')).toBe('console.log');
+    expect(sanitizeUploadName('auxiliary.json')).toBe('auxiliary.json');
+  });
+
   it('refuses dotfiles and trailing dots or spaces', () => {
     expect(sanitizeUploadName('...hidden')).toBe('hidden');
     expect(sanitizeUploadName('  .env')).toBe('env');
