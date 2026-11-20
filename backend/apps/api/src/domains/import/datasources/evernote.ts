@@ -1,10 +1,17 @@
 /* Evernote — notebook export (*.enex). An <en-export> XML document containing
    one or more <note> elements, each with a <title>, <created>/<updated> in
    basic ISO (YYYYMMDDThhmmssZ), zero or more <tag>, and a <content> CDATA block
-   of ENML/HTML. One 'note' event per <note>. */
+   of ENML/HTML. One 'note' event per <note>.
+
+   A note's checkboxes (<en-todo checked="true|false"/>) become "[x] " and
+   "[ ] " in its text. Its <note-attributes> latitude/longitude become the
+   item's location. Every <resource> (an attachment, base64 inline) is
+   written to the run's media store and comes in as a media item of its own,
+   dated with the note. */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 
 import { parseStringPromise } from 'xml2js';
@@ -13,16 +20,69 @@ import { htmlToText } from './htmlToText';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import { readHead } from './sniff';
-import type { ImportParams } from './timeline';
-import { textContent, timeframeContains } from './timeline';
+import type { ImportParams, Location } from './timeline';
+import { isMediaMime, mediaItemFromFile, mimeForFile, textContent, timeframeContains } from './timeline';
 
-// xml2js (default explicitArray: true) wraps every child in an array.
+// xml2js (default explicitArray: true) wraps every child in an array. An
+// element with attributes comes back as { _: text, $: attributes }; an empty
+// one comes back as ''.
+interface EnexResource {
+  data?: Array<string | { _?: string }>;
+  mime?: string[];
+  'resource-attributes'?: Array<{ 'file-name'?: string[] } | string>;
+}
 interface EnexNote {
   title?: string[];
   created?: string[];
   updated?: string[];
   content?: string[];
   tag?: string[];
+  'note-attributes'?: Array<{ latitude?: string[]; longitude?: string[] } | string>;
+  resource?: EnexResource[];
+}
+
+/** Common attachment types, for a resource whose file name has no extension. */
+const EXTENSION_FOR_MIME: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/gif': 'gif',
+  'image/heic': 'heic',
+  'image/webp': 'webp',
+  'application/pdf': 'pdf',
+  'audio/mpeg': 'mp3',
+  'audio/mp4': 'm4a',
+  'audio/wav': 'wav',
+  'video/mp4': 'mp4',
+  'video/quicktime': 'mov',
+};
+
+/** ENML checkboxes as text: `[x] ` for a ticked one, `[ ] ` otherwise. */
+function checkboxesAsText(enml: string): string {
+  return enml.replace(/<en-todo\b([^>]*?)\/?>(?:\s*<\/en-todo>)?/gi, (_m, attrs: string) =>
+    /\bchecked\s*=\s*["']true["']/i.test(attrs) ? '[x] ' : '[ ] ',
+  );
+}
+
+/** The note's geotag, when it has a usable one. */
+function noteLocation(note: EnexNote): Location | undefined {
+  const attrs = note['note-attributes']?.[0];
+  if (!attrs || typeof attrs !== 'object') {
+    return undefined;
+  }
+
+  const latitude = Number(firstString(attrs.latitude));
+  const longitude = Number(firstString(attrs.longitude));
+  if (
+    !Number.isFinite(latitude) ||
+    !Number.isFinite(longitude) ||
+    Math.abs(latitude) > 90 ||
+    Math.abs(longitude) > 180
+  ) {
+    return undefined;
+  }
+
+  // Evernote writes 0,0 for "no location" on some clients.
+  return latitude === 0 && longitude === 0 ? undefined : { latitude, longitude };
 }
 interface EnexExport {
   'en-export'?: { note?: EnexNote[] };
@@ -265,7 +325,7 @@ export class EvernoteFileImporter implements FileImporter {
       : [];
 
     const rawContent = firstString(note.content) || '';
-    const text = htmlToText(rawContent) || title || '';
+    const text = htmlToText(checkboxesAsText(rawContent)) || title || '';
 
     params.pipeline.push({
       item: {
@@ -277,6 +337,7 @@ export class EvernoteFileImporter implements FileImporter {
             .digest('hex'),
         classification: 'note',
         timestamp: ts,
+        location: noteLocation(note),
         content: textContent('note.txt', text),
         metadata: {
           Title: title,
@@ -288,6 +349,70 @@ export class EvernoteFileImporter implements FileImporter {
           // blob attached above never reaches the push path.
           Text: text,
         },
+      },
+    });
+
+    for (const resource of note.resource ?? []) {
+      try {
+        this.pushResource(resource, title, ts, params);
+      } catch (e) {
+        params.log?.('error', 'Failed to import an Evernote attachment', { error: (e as Error).message });
+      }
+    }
+  }
+
+  /**
+   * One attachment: its base64 bytes go to the run's media store under a name
+   * built from their hash (the export's own file name is untrusted and only
+   * ever shown). A media item points at them.
+   */
+  private pushResource(
+    resource: EnexResource,
+    noteTitle: string | undefined,
+    ts: Date | undefined,
+    params: ImportParams,
+  ): void {
+    const raw = resource.data?.[0];
+    const b64 = typeof raw === 'string' ? raw : raw?._;
+    const bytes = b64 ? Buffer.from(b64.replace(/\s+/g, ''), 'base64') : undefined;
+    if (!bytes?.length) {
+      params.pipeline.drop?.('media_asset_missing', noteTitle);
+
+      return;
+    }
+
+    const attrs = resource['resource-attributes']?.[0];
+    const shownName = path
+      .basename(
+        ((attrs && typeof attrs === 'object' && firstString(attrs['file-name'])) || '').replace(/\\/g, '/'),
+      )
+      .replace(/[\u0000-\u001f]/g, '')
+      .trim();
+    const mime = firstString(resource.mime)?.trim().toLowerCase();
+    const nameExt = /^\.[a-z0-9]{1,8}$/i.test(path.extname(shownName))
+      ? path.extname(shownName).slice(1)
+      : undefined;
+    const ext = (nameExt ?? (mime ? EXTENSION_FOR_MIME[mime] : undefined) ?? 'bin').toLowerCase();
+    const hash = crypto.createHash('md5').update(bytes).digest('hex');
+
+    const dir = params.mediaStoreDir ?? os.tmpdir();
+    fs.mkdirSync(dir, { recursive: true });
+    const fpath = path.join(dir, `evernote-${hash}.${ext}`);
+    if (!fs.existsSync(fpath)) {
+      fs.writeFileSync(fpath, bytes);
+    }
+
+    const item = mediaItemFromFile(fpath);
+    const filename = shownName || `attachment.${ext}`;
+    const mediaType = mime || item.content.mediaType || mimeForFile(filename);
+    params.pipeline.push({
+      item: {
+        ...item,
+        id: `evernote:resource:${hash}`,
+        classification: isMediaMime(mediaType) ? 'media' : 'file',
+        timestamp: ts,
+        content: { ...item.content, filename, mediaType },
+        metadata: { Title: filename, Note: noteTitle, Source: 'Evernote' },
       },
     });
   }
