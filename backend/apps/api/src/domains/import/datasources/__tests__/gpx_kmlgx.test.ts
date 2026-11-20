@@ -213,5 +213,22 @@ describe('GPX & KMLGX datasources', () => {
         '2026-08-16T10:00:00.000Z',
       ]);
     });
+
+    it('reads a track under Folders nested deeper than the call stack goes', async () => {
+      const depth = 20_000;
+      const collected = await importKML(
+        kml(
+          [
+            '<Folder>'.repeat(depth),
+            '<Placemark>',
+            track('2026-08-17T07:00:00Z', ['-122.43 37.76 1', '-122.44 37.75 2']),
+            '</Placemark>',
+            '</Folder>'.repeat(depth),
+          ].join('\n'),
+        ),
+      );
+
+      expect(times(collected)).toEqual(['2026-08-17T07:00:00.000Z', '2026-08-17T07:00:30.000Z']);
+    });
   });
 });

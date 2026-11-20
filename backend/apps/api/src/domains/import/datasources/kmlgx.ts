@@ -57,15 +57,36 @@ function isElement(value: unknown): value is object {
   return typeof value === 'object' && value !== null;
 }
 
-function collectTracks(node: KMLNode, out: KMLTrack[] = []): KMLTrack[] {
-  out.push(...(node.Track ?? []).filter(isElement));
-  for (const key of TRACK_CONTAINERS) {
-    for (const child of (node[key] ?? []).filter(isElement)) {
-      collectTracks(child, out);
+function collectTracks(root: KMLNode): KMLTrack[] {
+  const tracks: KMLTrack[] = [];
+  // A stack rather than recursion, and one push per track rather than
+  // `push(...tracks)`: the nesting depth and the number of children are
+  // whatever the file says, and either one could overflow the call stack and
+  // lose every track in the file. Children go on in reverse so tracks come out
+  // in document order.
+  const stack: KMLNode[] = [root];
+  for (let node = stack.pop(); node; node = stack.pop()) {
+    for (const track of node.Track ?? []) {
+      if (isElement(track)) {
+        tracks.push(track);
+      }
+    }
+
+    const children: KMLNode[] = [];
+    for (const key of TRACK_CONTAINERS) {
+      for (const child of node[key] ?? []) {
+        if (isElement(child)) {
+          children.push(child);
+        }
+      }
+    }
+
+    for (let k = children.length - 1; k >= 0; k--) {
+      stack.push(children[k]);
     }
   }
 
-  return out;
+  return tracks;
 }
 
 const GX_NS_PREFIX = 'http://www.google.com/kml/ext/2';
