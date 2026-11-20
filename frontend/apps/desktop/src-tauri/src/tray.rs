@@ -74,7 +74,21 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
                 let _ = window.set_focus();
             }
         }
-        "start" => run_in_background(app, |paths| stack_manager::start_stack(&paths)),
+        "start" => {
+            // A launch whose own start failed leaves the container check owed
+            // (see local_model::container_reach). When this Start is the one
+            // that brings the api up, it runs the check.
+            let handle = app.clone();
+            run_in_background(app, move |paths| {
+                let started = stack_manager::start_stack(&paths);
+                if started.is_ok() {
+                    handle
+                        .state::<local_model::LocalModelHandles>()
+                        .check_container_reach();
+                }
+                started
+            })
+        }
         "stop" => run_in_background(app, |paths| stack_manager::stop_stack(&paths)),
         "logs" => {
             let state = app.state::<StackPathsState>();
