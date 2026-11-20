@@ -7,7 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { parseCSV } from './csv';
+import { parseCSV, parseCSVRows } from './csv';
 import { CsvExportImporter, type CsvExportSpec } from './csvImporter';
 import { registerDataSource } from './registry';
 import { readHead, stripBom } from './sniff';
@@ -116,6 +116,10 @@ export class WithingsFileImporter extends CsvExportImporter {
       raw = raw.slice(1);
     }
 
+    if (readNamedExportFile(base, raw, params)) {
+      return;
+    }
+
     let rows: Record<string, string>[];
     try {
       rows = parseCSV(raw);
@@ -205,6 +209,237 @@ export class WithingsFileImporter extends CsvExportImporter {
       },
     });
   }
+}
+
+// ---------------------------------------------------------------------------
+// The export's files that have no `Date` column. Withings translates the first
+// headers into the account's language (a German sleep.csv starts
+// `von,bis,"leicht (s)"`), so these are read by file name and column position.
+// ---------------------------------------------------------------------------
+
+/** A cell as a number, or undefined when blank or not numeric. */
+function cellNumber(value: string | undefined): number | undefined {
+  if (value === undefined || value.trim() === '') {
+    return undefined;
+  }
+
+  const n = Number(value);
+
+  return Number.isFinite(n) ? n : undefined;
+}
+
+/** Every non-empty cell keyed by its header, numbers as numbers. */
+function cellsAsMetadata(header: string[], row: string[], skip: number[]): Record<string, string | number> {
+  const out: Record<string, string | number> = {};
+  header.forEach((key, i) => {
+    const value = (row[i] ?? '').trim();
+    if (skip.includes(i) || !key || value === '') {
+      return;
+    }
+
+    out[key] = cellNumber(value) ?? value;
+  });
+
+  return out;
+}
+
+/** Undated rows are kept only when no timeframe is set, as for the Date-column files. */
+function inTimeframe(params: ImportParams, ts: Date | undefined): boolean {
+  if (!ts && !timeframeIsEmpty(params.timeframe)) {
+    return false;
+  }
+
+  return timeframeContains(params.timeframe, ts);
+}
+
+/**
+ * sleep.csv: one night per row. Columns 0 and 1 are the start and end, 2 to 5
+ * the seconds of light, deep, REM and awake. `Minutes Asleep` is what the daily
+ * sleep total adds up.
+ */
+function readSleep(base: string, rows: string[][], params: ImportParams): void {
+  const [header, ...body] = rows;
+  body.forEach((row, index) => {
+    const start = parseWithingsDate(row[0] ?? '');
+    if (!inTimeframe(params, start)) {
+      return;
+    }
+
+    const seconds = [2, 3, 4].map((i) => cellNumber(row[i]) ?? 0);
+    const asleep = Math.round(seconds.reduce((a, b) => a + b, 0) / 60);
+    const awake = cellNumber(row[5]);
+    const end = parseWithingsDate(row[1] ?? '');
+    const night = (row[1] || row[0] || '').slice(0, 10);
+    const title = `Slept ${asleep} min` + (night ? ` on ${night}` : '');
+
+    params.pipeline.push({
+      item: {
+        id: `withings:${base}:${(row[0] ?? '').trim()}:${index}`,
+        classification: 'sleep',
+        timestamp: start,
+        timespanEnd: end,
+        content: textContent('sleep.txt', title),
+        metadata: {
+          ...cellsAsMetadata(header, row, [0, 1]),
+          Title: title,
+          'Minutes Asleep': asleep,
+          'Minutes Awake': awake !== undefined ? Math.round(awake / 60) : undefined,
+          File: base,
+          Source: 'Withings',
+        },
+      },
+    });
+  });
+}
+
+interface WithingsActivityData {
+  calories?: number;
+  distance?: number;
+  steps?: number;
+  elevation?: number;
+  hr_average?: number;
+  hr_min?: number;
+  hr_max?: number;
+}
+
+/** A positive number from the activity's Data JSON (Withings writes 0 for "not measured"). */
+function positive(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+/**
+ * activities.csv: one workout per row. Columns: start, end, start and end as
+ * edited by hand, time zone, activity type, a `Data` JSON of totals (distance
+ * in metres), GPS JSON, last modified.
+ */
+function readActivities(base: string, rows: string[][], params: ImportParams): void {
+  const [, ...body] = rows;
+  body.forEach((row, index) => {
+    // A time the person corrected by hand wins over the recorded one.
+    const start = parseWithingsDate(row[2] || row[0] || '');
+    if (!inTimeframe(params, start)) {
+      return;
+    }
+
+    const end = parseWithingsDate(row[3] || row[1] || '');
+    const type = (row[5] ?? '').trim();
+    let data: WithingsActivityData = {};
+    try {
+      const parsed: unknown = JSON.parse(row[6] || '{}');
+      if (parsed && typeof parsed === 'object') {
+        data = parsed as WithingsActivityData;
+      }
+    } catch {
+      // Keep the workout without its totals rather than drop it.
+    }
+
+    const metres = positive(data.distance);
+    const title = type || 'Workout';
+
+    params.pipeline.push({
+      item: {
+        id: `withings:${base}:${(row[0] ?? '').trim()}:${index}`,
+        classification: 'workout',
+        timestamp: start,
+        timespanEnd: end,
+        content: textContent('workout.txt', title),
+        metadata: {
+          Title: title,
+          'Activity Type': type || undefined,
+          'Distance (km)': metres !== undefined ? Math.round(metres) / 1000 : undefined,
+          Calories: positive(data.calories),
+          Steps: positive(data.steps),
+          'Elevation (m)': positive(data.elevation),
+          'Average Heart Rate': positive(data.hr_average),
+          'Min Heart Rate': positive(data.hr_min),
+          'Max Heart Rate': positive(data.hr_max),
+          'Time Zone': (row[4] ?? '').trim() || undefined,
+          File: base,
+          Source: 'Withings',
+        },
+      },
+    });
+  });
+}
+
+/** What each daily aggregates_<name>.csv holds, by <name>. */
+const AGGREGATE_METRICS: Record<string, { key: string; scale?: number }> = {
+  steps: { key: 'Steps' },
+  distance: { key: 'Distance (km)', scale: 1 / 1000 },
+  calories_earned: { key: 'Active Calories' },
+  calories_passive: { key: 'Passive Calories' },
+  elevation: { key: 'Floors Climbed' },
+};
+
+/** aggregates_<name>.csv: `date,value`, one day per row. */
+function readAggregate(base: string, name: string, rows: string[][], params: ImportParams): void {
+  const metric = AGGREGATE_METRICS[name] ?? { key: name.replace(/[_-]+/g, ' ') };
+  rows.slice(1).forEach((row, index) => {
+    const date = (row[0] ?? '').trim();
+    const raw = cellNumber(row[1]);
+    const ts = /^\d{4}-\d{2}-\d{2}$/.test(date) ? new Date(`${date}T00:00:00Z`) : undefined;
+    if (raw === undefined || !inTimeframe(params, ts)) {
+      return;
+    }
+
+    const value = metric.scale ? Math.round(raw * metric.scale * 1000) / 1000 : raw;
+    const title = `${metric.key} on ${date}: ${value}`;
+
+    params.pipeline.push({
+      item: {
+        id: `withings:${base}:${date}:${index}`,
+        classification: 'observation',
+        timestamp: ts,
+        content: textContent('observation.txt', title),
+        metadata: { Title: title, Date: date, [metric.key]: value, File: base, Source: 'Withings' },
+      },
+    });
+  });
+}
+
+/**
+ * Read one of the export's files that the `Date`-column path can't: sleep,
+ * workouts and the daily totals. The per-reading `raw_*.csv` samples are
+ * counted as dropped, by file. Returns false for any other file, which then
+ * goes through the `Date`-column path as before.
+ */
+function readNamedExportFile(base: string, raw: string, params: ImportParams): boolean {
+  const name = base.toLowerCase();
+  if (/^raw_.+\.csv$/.test(name)) {
+    params.pipeline.drop?.('unread_export_file', base);
+
+    return true;
+  }
+
+  const aggregate = /^aggregates_(.+)\.csv$/.exec(name);
+  if (name !== 'sleep.csv' && name !== 'activities.csv' && !aggregate) {
+    return false;
+  }
+
+  const rows = parseCSVRows(raw);
+  const header = (rows[0] ?? []).map((h) => h.trim());
+  if (aggregate && header.length === 2) {
+    readAggregate(base, aggregate[1], rows, params);
+
+    return true;
+  }
+
+  // The columns these files are read by: four stage durations in seconds for
+  // sleep, a time zone before the activity type for workouts. Anything else
+  // with the same name (another service's activities.csv) is left alone.
+  if (name === 'sleep.csv' && header.length >= 6 && header.slice(2, 6).every((h) => h.endsWith('(s)'))) {
+    readSleep(base, rows, params);
+
+    return true;
+  }
+
+  if (name === 'activities.csv' && header.length >= 7 && /^timezone$/i.test(header[4])) {
+    readActivities(base, rows, params);
+
+    return true;
+  }
+
+  return false;
 }
 
 registerDataSource({
