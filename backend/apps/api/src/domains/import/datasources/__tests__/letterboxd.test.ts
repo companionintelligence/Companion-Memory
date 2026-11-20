@@ -170,5 +170,36 @@ describe('Letterboxd datasource', () => {
       ]);
       expect(pipeline[0].item.metadata.Review).toBe('Ninety minutes of a bird standing still.');
     });
+
+    it('gives an unrated latest viewing the rating the film got afterwards', async () => {
+      fs.writeFileSync(
+        path.join(dir, 'diary.csv'),
+        [
+          'Date,Name,Year,Letterboxd URI,Rating,Rewatch,Tags,Watched Date',
+          '2026-09-12,The Lantern Orchard,2025,https://boxd.it/9xKq1p,3,,,2026-09-11',
+          '2026-11-01,The Lantern Orchard,2025,https://boxd.it/a0Nt4s,,Yes,,2026-10-31',
+        ].join('\n') + '\n',
+      );
+      const pipeline = await importDir();
+      const lantern = pipeline.filter((g) => g.item.metadata.Name === 'The Lantern Orchard');
+      expect(lantern.map((g) => [g.item.id, g.item.metadata.Rating])).toEqual([
+        ['https://boxd.it/9xKq1p', '3'],
+        ['https://boxd.it/a0Nt4s', '4.5'],
+      ]);
+    });
+
+    it('puts a review without a URI on the diary row of the same film and day', async () => {
+      fs.writeFileSync(
+        path.join(dir, 'reviews.csv'),
+        [
+          'Date,Name,Year,Letterboxd URI,Rating,Rewatch,Review,Tags,Watched Date',
+          '2026-10-04,A Heron in Winter,2026,,4.5,,Ninety minutes of a bird standing still.,,2026-10-04',
+        ].join('\n') + '\n',
+      );
+      const pipeline = await importDir();
+      const heron = pipeline.filter((g) => g.item.metadata.Name === 'A Heron in Winter');
+      expect(heron).toHaveLength(1);
+      expect(heron[0].item.metadata.Review).toBe('Ninety minutes of a bird standing still.');
+    });
   });
 });

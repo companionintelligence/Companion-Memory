@@ -75,6 +75,10 @@ export class LetterboxdFileImporter extends CsvExportImporter {
   protected override async importFiles(files: string[], _root: string, params: ImportParams): Promise<void> {
     type Row = Record<string, string>;
     const filmKey = (row: Row) => `${row['Name'] || ''}\0${row['Year'] || ''}`;
+    const viewedOn = (row: Row) => row['Watched Date'] || row['Date'] || '';
+    // A review row is matched to its diary row by URI, or by film and day
+    // when it has none.
+    const reviewKeys = (row: Row) => [row['Letterboxd URI'] || '', `${filmKey(row)}\0${viewedOn(row)}`];
     const byKind: Record<'diary' | 'reviews' | 'ratings', Row[]> = { diary: [], reviews: [], ratings: [] };
     for (const fpath of files) {
       const rows = await readCsvFile(fpath, { log: params.log });
@@ -85,30 +89,63 @@ export class LetterboxdFileImporter extends CsvExportImporter {
 
     const reviews = new Map<string, Row>();
     for (const row of byKind.reviews) {
-      if (row['Letterboxd URI']) {
-        reviews.set(row['Letterboxd URI'], row);
+      reviews.set(row['Letterboxd URI'] || reviewKeys(row)[1], row);
+    }
+
+    const takeReview = (row: Row): string | undefined => {
+      for (const key of reviewKeys(row)) {
+        const review = key ? reviews.get(key) : undefined;
+        if (review) {
+          reviews.delete(key);
+
+          return review['Review'];
+        }
+      }
+
+      return undefined;
+    };
+
+    const viewings: Array<{ row: Row; review?: string }> = byKind.diary.map((row) => ({
+      row,
+      review: takeReview(row),
+    }));
+    // A review whose diary row is not in this upload is still a viewing.
+    for (const row of reviews.values()) {
+      viewings.push({ row, review: row['Review'] });
+    }
+
+    // ratings.csv holds the film's current rating. A film logged without a
+    // rating and rated afterwards has it only there, so the latest viewing of
+    // such a film takes it.
+    const filmRating = new Map<string, string>();
+    for (const row of byKind.ratings) {
+      if (row['Rating']) {
+        filmRating.set(filmKey(row), row['Rating']);
+      }
+    }
+
+    const latest = new Map<string, Row>();
+    for (const { row } of viewings) {
+      const seen = latest.get(filmKey(row));
+      if (!seen || viewedOn(row) >= viewedOn(seen)) {
+        latest.set(filmKey(row), row);
       }
     }
 
     const logged = new Set<string>();
-    const push = (row: Row, review?: string) => {
+    const push = (row: Row, review?: string, rating?: string) => {
       logged.add(filmKey(row));
       try {
-        this.pushRow(row, params, review);
+        this.pushRow(row, params, review, rating);
       } catch (e) {
         params.log?.('error', 'Failed to import a Letterboxd row', { error: (e as Error).message });
       }
     };
 
-    for (const row of byKind.diary) {
-      const uri = row['Letterboxd URI'] || '';
-      push(row, reviews.get(uri)?.['Review']);
-      reviews.delete(uri);
-    }
-
-    // A review whose diary row is not in this upload is still a viewing.
-    for (const row of reviews.values()) {
-      push(row, row['Review']);
+    for (const { row, review } of viewings) {
+      const rating =
+        !row['Rating'] && latest.get(filmKey(row)) === row ? filmRating.get(filmKey(row)) : undefined;
+      push(row, review, rating);
     }
 
     for (const row of byKind.ratings) {
@@ -118,7 +155,12 @@ export class LetterboxdFileImporter extends CsvExportImporter {
     }
   }
 
-  private pushRow(row: Record<string, string>, params: ImportParams, review?: string): void {
+  private pushRow(
+    row: Record<string, string>,
+    params: ImportParams,
+    review?: string,
+    filmRating?: string,
+  ): void {
     // diary.csv has "Watched Date"; ratings.csv falls back to "Date"
     const ts = parseYMD(row['Watched Date'] || row['Date'] || '');
     if (!timeframeContains(params.timeframe, ts)) {
@@ -144,7 +186,7 @@ export class LetterboxdFileImporter extends CsvExportImporter {
         metadata: {
           Name: name || undefined,
           Year: row['Year'] || undefined,
-          Rating: row['Rating'] || undefined,
+          Rating: row['Rating'] || filmRating || undefined,
           Rewatch: row['Rewatch'] || undefined,
           Tags: row['Tags'] || undefined,
           LetterboxdURI: row['Letterboxd URI'] || undefined,
