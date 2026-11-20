@@ -449,27 +449,26 @@ export const WIZARD_SOURCES: WizardSource[] = [
   {
     id: 'apple_photos',
     title: 'Apple Photos',
-    blurb: 'Photos + videos with full EXIF, places, and faces (on device).',
+    blurb: 'Photos + videos with their EXIF dates and GPS (on device).',
     ecosystem: 'apple',
     category: 'photos',
     tier: 1,
     acquisition: 'app-export',
     wait: 'minutes',
     steps: [
-      'Easiest: point the Import page directly at ~/Pictures/Photos Library.photoslibrary — the apple_photos importer reads dates, places, and faces straight from its database.',
+      'Easiest: point the Import page directly at ~/Pictures/Photos Library.photoslibrary. The apple_photos importer reads the original photos and videos inside it.',
       UPLOAD_STEP,
       'For a full off-device archive, the Apple privacy export at https://privacy.apple.com is more complete but takes 1–7 days.',
     ],
     expectedFormat:
-      'A `.photoslibrary` package (point the import directly at it) containing `database/Photos.sqlite` and the `originals/` media tree. Exported "Originals" land as plain files handled by the generic importer instead.',
+      'A `.photoslibrary` package (point the import directly at it). The importer reads its `originals/` media tree. Exported "Originals" land as plain files handled by the generic importer instead.',
     whatImported: [
-      'Photos and videos with full EXIF, timestamps, and GPS',
-      'Place names, titles, descriptions, keywords, favorites',
-      'People and pets recognized in the library, linked as entities',
-      'Edit history and album membership',
+      'Photos and videos with their EXIF or video timestamps and GPS',
+      'Live Photo stills and their motion clips, marked as pairs',
     ],
     caveats: [
       'Turn on Photos → Settings → iCloud → "Download Originals to this Mac" first, or cloud-only photos are skipped with warnings.',
+      'Titles, descriptions, keywords, favorites, people and albums live in the library database (`database/Photos.sqlite`), which is not read yet.',
       'Keep the `.photoslibrary` package intact — do not open or modify its contents.',
     ],
     inboxPath: 'apple/photos',
