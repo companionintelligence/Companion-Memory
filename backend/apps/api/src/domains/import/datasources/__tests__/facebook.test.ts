@@ -32,16 +32,16 @@ describe('Facebook datasource', () => {
 
   it('still claims a Facebook export that holds only its messages folder', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-messages-only-'));
-    const thread = path.join(dir, 'messages', 'inbox', 'alice_12345');
-    fs.mkdirSync(thread, { recursive: true });
-    fs.writeFileSync(
-      path.join(thread, 'message_1.json'),
-      JSON.stringify({
-        participants: [{ name: 'Alice' }, { name: 'Me' }],
-        messages: [{ sender_name: 'Alice', timestamp_ms: 1700000000000, content: 'hi' }],
-      }),
-    );
     try {
+      const thread = path.join(dir, 'messages', 'inbox', 'alice_12345');
+      fs.mkdirSync(thread, { recursive: true });
+      fs.writeFileSync(
+        path.join(thread, 'message_1.json'),
+        JSON.stringify({
+          participants: [{ name: 'Alice' }, { name: 'Me' }],
+          messages: [{ sender_name: 'Alice', timestamp_ms: 1700000000000, content: 'hi' }],
+        }),
+      );
       const rec = await new FacebookFileImporter().recognize(
         {},
         { filename: path.basename(dir), fullPath: dir },

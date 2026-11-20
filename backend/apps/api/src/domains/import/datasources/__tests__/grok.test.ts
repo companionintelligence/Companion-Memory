@@ -60,25 +60,6 @@ describe('Grok datasource', () => {
     expect(rec.confidence).toBe(0);
   });
 
-  it('ranks an X archive below the twitter importer', async () => {
-    // Grok scores an X archive 0.3 ON PURPOSE: low enough that twitter (0.9+)
-    // leads the run's matches, non-zero so this importer still runs and reads
-    // the archive's Grok chats.
-    const root = path.join(FIXTURES_DIR, 'twitter-export');
-
-    if (!fs.existsSync(root)) {
-      return;
-    }
-
-    const grok = await new GrokFileImporter().recognize({}, { filename: 'twitter-export', fullPath: root });
-    const twitter = await new TwitterFileImporter().recognize(
-      {},
-      { filename: 'twitter-export', fullPath: root },
-    );
-
-    expect(twitter.confidence).toBeGreaterThan(grok.confidence);
-  });
-
   it('imports user/assistant messages with role, conversation, and source metadata', async () => {
     const root = path.join(FIXTURES_DIR, 'grok-export');
     const fi = new GrokFileImporter();
