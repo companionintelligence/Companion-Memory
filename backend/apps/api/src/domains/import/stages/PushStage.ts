@@ -2452,6 +2452,12 @@ export class PushStage implements ImportStageRunner {
    * for a database that crashed under the write (see {@link linkSharedContent}
    * for why that one fails the stage). Returns how many edges ingest reports
    * processed; 0 when the write failed softly.
+   *
+   * Ingest catches a failed edge write and reports it per edge as text rather
+   * than throwing, so a refusal that is not a crash (a constraint, a server
+   * that was not ready) arrives in `errors`. Those are logged with the same
+   * message as a thrown failure: read alone, they would leave the edges
+   * missing with nothing in the log to say so.
    */
   private async ingestEdges(
     ctx: { userId: string; importRunId?: string },
@@ -2480,6 +2486,13 @@ export class PushStage implements ImportStageRunner {
 
       if (message != null) {
         crashed = new Error(message);
+      } else if (result.errors.length > 0) {
+        this.logger.warn(softFailure, {
+          runId: context.runId,
+          edges: relationships.length,
+          failed: result.errors.length,
+          error: result.errors[0],
+        });
       }
 
       processed = result.relationshipsProcessed ?? 0;

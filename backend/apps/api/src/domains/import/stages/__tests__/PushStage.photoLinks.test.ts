@@ -275,6 +275,30 @@ describe('links between staged items', () => {
     );
   });
 
+  it('say so in the log when ingest reports an edge it could not write', async () => {
+    // Ingest catches a refused edge write and reports it as text, per edge,
+    // instead of throwing: read alone, the edges were missing and nothing said so.
+    const ingest = jest.fn(async () => ({
+      entities: [],
+      errors: ['relationship content:content-03->content:content-01: self-reference not allowed'],
+      relationshipsProcessed: 1,
+    }));
+    const { stage, logger } = makeStage([photo, album, edited], { links, ingest });
+
+    const outcome = await stage.run(context);
+
+    expect(outcome.detail).toEqual(expect.objectContaining({ itemLinks: 1 }));
+    expect(logger.warn).toHaveBeenCalledWith(
+      'Linking staged items to each other failed; importing the export again writes the links',
+      expect.objectContaining({
+        runId: RUN_ID,
+        edges: 2,
+        failed: 1,
+        error: expect.stringContaining('self-reference not allowed'),
+      }),
+    );
+  });
+
   it('cost nothing on a run that staged none', async () => {
     const { stage, ingest, contentLookups } = makeStage([photo]);
 
