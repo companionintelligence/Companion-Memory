@@ -16,17 +16,21 @@
    older exports reference names with nothing on disk. References that resolve
    to an on-disk photo/video become 'media' items attached to their message
    (_ai_media.ts); media-looking names with no file land in the drop ledger,
-   while non-media names (the text-extraction attachments) stay silent.
+   while non-media names (the text-extraction attachments) stay silent. The
+   text Claude extracted from an attachment (`extracted_content`) is added to
+   its message's body under the file name.
 
    Projects ship as a sibling `projects/` directory, one `<uuid>.json` file per
    Claude Project (name, description, prompt_template/custom instructions, and
-   a `docs` array of project-knowledge files). Anthropic publishes no schema
+   a `docs` array of project-knowledge files), or as one `projects.json` array
+   of the same objects. Anthropic publishes no schema
    for this either, so — same as memories — parsing is shape-tolerant and
    never assumes every field is present. The parent directory already
    recognizes at high confidence via conversations.json (or memories.json), so
    `projects/` is never independently offered to an importer by
    findImportRoots; it must be picked up here, as part of importing that
-   already-recognized directory, or it is silently dropped. */
+   already-recognized directory, or it is silently dropped. That only works
+   if recognition hands this importer the DIRECTORY: see recognize(). */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
@@ -146,6 +150,19 @@ function claudeMemoryConfidence(parsed: unknown): number {
   return 0.4;
 }
 
+/** The text Claude extracted from each attachment, under its file name. */
+function extractedSections(attachments: ClaudeAttachment[] | undefined): string[] {
+  if (!Array.isArray(attachments)) {
+    return [];
+  }
+
+  return attachments.flatMap((a) => {
+    const body = a && typeof a === 'object' ? firstText(a.extracted_content) : undefined;
+
+    return body ? [`--- ${firstText(a.file_name) || 'attachment'} ---\n${body}`] : [];
+  });
+}
+
 /** First non-empty trimmed string among the candidates, else undefined. */
 function firstText(...candidates: (string | undefined)[]): string | undefined {
   for (const c of candidates) {
@@ -198,8 +215,12 @@ export class ClaudeFileImporter implements FileImporter {
       if (conv) {
         // conversations.json decides ownership of the whole directory: when it
         // is another vendor's shape the memories file next to it is theirs too.
+        // As confident as conversations.json alone, so recognition keeps the
+        // directory (an equal nested match does not replace it) and the import
+        // reaches projects/ beside it. At 0.9 the file won and the projects
+        // landed as plain files.
         if (isClaudeExport(await readJsonFile(path.join(root, conv)))) {
-          return { confidence: 0.9 };
+          return { confidence: 0.95 };
         }
 
         return { confidence: 0, dir_threshold: 0.7 };
@@ -237,6 +258,7 @@ export class ClaudeFileImporter implements FileImporter {
     let convPath: string | undefined;
     let memPath: string | undefined;
     let projectsDir: string | undefined;
+    let projectsFile: string | undefined;
     if (stat.isFile()) {
       const base = path.basename(root).toLowerCase();
       if (base === 'conversations.json') {
@@ -260,6 +282,11 @@ export class ClaudeFileImporter implements FileImporter {
       const mem = findName(names, isMemoryFilename);
       if (mem) {
         memPath = path.join(root, mem);
+      }
+
+      const projectsJson = findName(names, (n) => n === 'projects.json');
+      if (projectsJson) {
+        projectsFile = path.join(root, projectsJson);
       }
 
       const projects = findName(names, (n) => n === 'projects');
@@ -290,6 +317,25 @@ export class ClaudeFileImporter implements FileImporter {
 
     if (projectsDir) {
       await this.importProjects(projectsDir, params);
+    }
+
+    if (projectsFile) {
+      await this.importProjectsFile(projectsFile, params);
+    }
+  }
+
+  /** A single `projects.json`: an array of the same objects `projects/` holds one per file. */
+  private async importProjectsFile(fpath: string, params: ImportParams): Promise<void> {
+    const parsed = await readJsonFile(fpath, { log: params.log, label: 'Claude projects' });
+    if (!Array.isArray(parsed)) {
+      return;
+    }
+
+    for (const p of parsed) {
+      if (p && typeof p === 'object' && !Array.isArray(p)) {
+        // No file name to fall back on: a project without a uuid is keyed on its content.
+        this.pushProject(p as ClaudeProject, '', params);
+      }
     }
   }
 
@@ -503,7 +549,7 @@ export class ClaudeFileImporter implements FileImporter {
         return;
       }
 
-      const text =
+      const typed =
         msg.text ||
         (Array.isArray(msg.content)
           ? msg.content
@@ -511,6 +557,7 @@ export class ClaudeFileImporter implements FileImporter {
               .map((b) => b.text ?? '')
               .join('\n')
           : '');
+      const text = [typed, ...extractedSections(msg.attachments)].filter(Boolean).join('\n\n');
 
       const ts = msg.created_at ? new Date(msg.created_at) : undefined;
       if (!timeframeContains(params.timeframe, ts)) {
