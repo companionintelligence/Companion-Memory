@@ -255,6 +255,34 @@ describe('SMS Backup & Restore datasource', () => {
     }
   });
 
+  it("does not carry an unclosed MMS's addrs into the next one", async () => {
+    const tmp = path.join(os.tmpdir(), `sbr-mms-unclosed-${Date.now()}.xml`);
+    fs.writeFileSync(
+      tmp,
+      `<?xml version="1.0" encoding="UTF-8"?>
+<smses>
+  <mms date="1786284333000" msg_box="1" address="+12065550199">
+    <parts>
+      <part seq="0" ct="text/plain" chset="106" text="cut off" />
+    </parts>
+    <addrs>
+      <addr address="+12065550199" type="137" charset="106" />
+    </addrs>
+  <mms date="1786284400000" msg_box="1" address="+12065550182">
+    <parts>
+      <part seq="0" ct="text/plain" chset="106" text="from Leopold" />
+    </parts>
+  </mms>
+</smses>`,
+    );
+    try {
+      const pipeline = await runImport({ filename: 'mms-unclosed.xml', fullPath: tmp });
+      expect(pipeline.map((p) => p.item.metadata.Sender)).toEqual(['+12065550182']);
+    } finally {
+      fs.unlinkSync(tmp);
+    }
+  });
+
   it('imports MMS with fallback content when no text part', async () => {
     const tmp = path.join(os.tmpdir(), `sbr-mms-nofallback-${Date.now()}.xml`);
     fs.writeFileSync(

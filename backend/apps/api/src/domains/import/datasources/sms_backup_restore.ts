@@ -674,6 +674,7 @@ export class SmsBackupRestoreFileImporter implements FileImporter {
           textParts = [];
           mediaParts = [];
           mediaSeq = 0;
+          mmsAddrs = [];
           if (tagText.endsWith('/>')) {
             flushMms();
           } // empty self-closed MMS
@@ -857,7 +858,7 @@ export class SmsBackupRestoreFileImporter implements FileImporter {
     let sender: string | undefined;
     const recipients: string[] = [];
     if (msgBox === '1') {
-      // Received MMS — the From <addr>, else the address attribute when it
+      // Received MMS: the From <addr>, else the address attribute when it
       // names one person. In a group the rest of the root list are the other
       // recipients (you are not on it, as on a received SMS).
       const from = addrsOf([PDU_FROM])[0];
