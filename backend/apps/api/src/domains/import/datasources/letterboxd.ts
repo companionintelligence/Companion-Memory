@@ -1,4 +1,12 @@
-/* Letterboxd — diary/ratings CSV export (diary.csv, ratings.csv). */
+/* Letterboxd — diary/ratings/reviews CSV export (diary.csv, ratings.csv,
+   reviews.csv).
+
+   The files overlap. A diary row is one viewing, with the rating given that
+   day. ratings.csv holds the latest rating per FILM, so a film that is in the
+   diary would come in a second time from it; only films the diary never
+   logged are taken from ratings.csv. reviews.csv repeats the diary entry a
+   review was written on (same Letterboxd URI) and adds the Review text, which
+   is put on that diary row. */
 import path from 'node:path';
 
 import { CsvExportImporter, type CsvExportSpec } from './csvImporter';
@@ -8,7 +16,7 @@ import { readHead } from './sniff';
 import type { ImportParams } from './timeline';
 import { timeframeContains } from './timeline';
 
-const LETTERBOXD_FILES = ['diary.csv', 'ratings.csv'];
+const LETTERBOXD_FILES = ['diary.csv', 'ratings.csv', 'reviews.csv'];
 
 function headerHasLetterboxdCols(text: string): boolean {
   const nl = text.indexOf('\n');
@@ -28,6 +36,20 @@ function parseYMD(s: string): Date | undefined {
   return isNaN(d.getTime()) ? undefined : d;
 }
 
+// Which of the export's files this is: by its name, else by its columns (an
+// upload renamed on the way still has diary.csv's Watched Date or
+// reviews.csv's Review column).
+function fileKind(fpath: string, rows: Record<string, string>[]): 'diary' | 'reviews' | 'ratings' {
+  const name = path.basename(fpath).toLowerCase();
+  if (name === 'diary.csv' || name === 'reviews.csv' || name === 'ratings.csv') {
+    return name === 'diary.csv' ? 'diary' : name === 'reviews.csv' ? 'reviews' : 'ratings';
+  }
+
+  const columns = rows.length ? Object.keys(rows[0]) : [];
+
+  return columns.includes('Review') ? 'reviews' : columns.includes('Watched Date') ? 'diary' : 'ratings';
+}
+
 export class LetterboxdFileImporter extends CsvExportImporter {
   protected readonly spec: CsvExportSpec = {
     isNamed: (name) => LETTERBOXD_FILES.includes(name),
@@ -45,22 +67,58 @@ export class LetterboxdFileImporter extends CsvExportImporter {
   }
 
   protected async processFile(fpath: string, params: ImportParams): Promise<void> {
-    const base = path.basename(fpath);
-    const rows = await readCsvFile(fpath, { log: params.log });
-    if (rows == null) {
-      return;
+    await this.importFiles([fpath], fpath, params);
+  }
+
+  // Reviews are indexed first so each can ride its diary row; ratings go last,
+  // so a film the diary (or a review) already logged is not counted twice.
+  protected override async importFiles(files: string[], _root: string, params: ImportParams): Promise<void> {
+    type Row = Record<string, string>;
+    const filmKey = (row: Row) => `${row['Name'] || ''}\0${row['Year'] || ''}`;
+    const byKind: Record<'diary' | 'reviews' | 'ratings', Row[]> = { diary: [], reviews: [], ratings: [] };
+    for (const fpath of files) {
+      const rows = await readCsvFile(fpath, { log: params.log });
+      if (rows != null) {
+        byKind[fileKind(fpath, rows)].push(...rows);
+      }
     }
 
-    for (const row of rows) {
+    const reviews = new Map<string, Row>();
+    for (const row of byKind.reviews) {
+      if (row['Letterboxd URI']) {
+        reviews.set(row['Letterboxd URI'], row);
+      }
+    }
+
+    const logged = new Set<string>();
+    const push = (row: Row, review?: string) => {
+      logged.add(filmKey(row));
       try {
-        this.pushRow(row, params);
+        this.pushRow(row, params, review);
       } catch (e) {
-        params.log?.('error', `Failed to import row in ${base}`, { error: (e as Error).message });
+        params.log?.('error', 'Failed to import a Letterboxd row', { error: (e as Error).message });
+      }
+    };
+
+    for (const row of byKind.diary) {
+      const uri = row['Letterboxd URI'] || '';
+      push(row, reviews.get(uri)?.['Review']);
+      reviews.delete(uri);
+    }
+
+    // A review whose diary row is not in this upload is still a viewing.
+    for (const row of reviews.values()) {
+      push(row, row['Review']);
+    }
+
+    for (const row of byKind.ratings) {
+      if (!logged.has(filmKey(row))) {
+        push(row);
       }
     }
   }
 
-  private pushRow(row: Record<string, string>, params: ImportParams): void {
+  private pushRow(row: Record<string, string>, params: ImportParams, review?: string): void {
     // diary.csv has "Watched Date"; ratings.csv falls back to "Date"
     const ts = parseYMD(row['Watched Date'] || row['Date'] || '');
     if (!timeframeContains(params.timeframe, ts)) {
@@ -90,6 +148,9 @@ export class LetterboxdFileImporter extends CsvExportImporter {
           Rewatch: row['Rewatch'] || undefined,
           Tags: row['Tags'] || undefined,
           LetterboxdURI: row['Letterboxd URI'] || undefined,
+          Review: review || undefined,
+          // The review is the row's body: the content row's text comes from Text.
+          Text: review || undefined,
           Source: 'Letterboxd',
         },
       },
@@ -101,6 +162,7 @@ registerDataSource({
   name: 'letterboxd',
   title: 'Letterboxd',
   icon: '',
-  description: 'Film watch history from a Letterboxd CSV export (diary.csv or ratings.csv).',
+  description:
+    'Film watch history and reviews from a Letterboxd CSV export (diary.csv, ratings.csv, reviews.csv).',
   newFileImporter: () => new LetterboxdFileImporter(),
 });

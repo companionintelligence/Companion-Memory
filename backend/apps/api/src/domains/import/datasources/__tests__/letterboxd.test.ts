@@ -81,4 +81,94 @@ describe('Letterboxd datasource', () => {
       await fs.promises.unlink(fpath).catch(() => {});
     }
   });
+
+  describe('a full export folder', () => {
+    let dir: string;
+
+    beforeEach(() => {
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-letterboxd-export-'));
+      // Diary and review rows carry the diary entry's URI; ratings carry the film's.
+      fs.writeFileSync(
+        path.join(dir, 'diary.csv'),
+        [
+          'Date,Name,Year,Letterboxd URI,Rating,Rewatch,Tags,Watched Date',
+          '2026-09-12,The Lantern Orchard,2025,https://boxd.it/9xKq1p,4,,,2026-09-11',
+          '2026-10-04,A Heron in Winter,2026,https://boxd.it/9yLr2q,4.5,,,2026-10-04',
+          "2026-10-20,The Cartographer's Daughter,2026,https://boxd.it/9zMs3r,3.5,,,2026-10-20",
+          '2026-11-01,The Lantern Orchard,2025,https://boxd.it/a0Nt4s,4.5,Yes,,2026-10-31',
+        ].join('\n') + '\n',
+      );
+      fs.writeFileSync(
+        path.join(dir, 'ratings.csv'),
+        [
+          'Date,Name,Year,Letterboxd URI,Rating',
+          '2026-11-01,The Lantern Orchard,2025,https://boxd.it/aZ91,4.5',
+          '2026-10-04,A Heron in Winter,2026,https://boxd.it/bQ27,4.5',
+          "2026-10-20,The Cartographer's Daughter,2026,https://boxd.it/dS63,3.5",
+          '2026-08-02,Neap Tide,2024,https://boxd.it/cR48,3',
+        ].join('\n') + '\n',
+      );
+      fs.writeFileSync(
+        path.join(dir, 'reviews.csv'),
+        [
+          'Date,Name,Year,Letterboxd URI,Rating,Rewatch,Review,Tags,Watched Date',
+          '2026-10-04,A Heron in Winter,2026,https://boxd.it/9yLr2q,4.5,,Ninety minutes of a bird standing still.,,2026-10-04',
+        ].join('\n') + '\n',
+      );
+    });
+
+    afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+    async function importDir(): Promise<EmittedGraph[]> {
+      const fi = new LetterboxdFileImporter();
+      const pipeline: EmittedGraph[] = [];
+      await fi.fileImport({}, { filename: path.basename(dir), fullPath: dir }, {
+        pipeline,
+        timeframe: {},
+        log: () => {},
+      } as unknown as ImportParams);
+
+      return pipeline;
+    }
+
+    it('counts a rated film once when the diary already logged it', async () => {
+      const pipeline = await importDir();
+      // Four diary viewings, plus the one film that was only ever rated.
+      expect(pipeline.map((g) => g.item.id)).toEqual([
+        'https://boxd.it/9xKq1p',
+        'https://boxd.it/9yLr2q',
+        'https://boxd.it/9zMs3r',
+        'https://boxd.it/a0Nt4s',
+        'https://boxd.it/cR48',
+      ]);
+      const rated = pipeline[4].item;
+      expect(rated.metadata.Name).toBe('Neap Tide');
+      expect(rated.timestamp?.toISOString()).toBe('2026-08-02T00:00:00.000Z');
+    });
+
+    it('puts review text on the diary row it was written on', async () => {
+      const pipeline = await importDir();
+      const heron = pipeline.find((g) => g.item.id === 'https://boxd.it/9yLr2q')!.item;
+      expect(heron.metadata.Review).toBe('Ninety minutes of a bird standing still.');
+      expect(heron.metadata.Text).toBe('Ninety minutes of a bird standing still.');
+      expect(heron.metadata.Rating).toBe('4.5');
+      // No second row for the review itself.
+      expect(pipeline.filter((g) => g.item.id === 'https://boxd.it/9yLr2q')).toHaveLength(1);
+      expect(
+        pipeline.find((g) => g.item.id === 'https://boxd.it/9xKq1p')!.item.metadata.Review,
+      ).toBeUndefined();
+    });
+
+    it('imports a review whose diary row is missing as its own viewing', async () => {
+      fs.rmSync(path.join(dir, 'diary.csv'));
+      const pipeline = await importDir();
+      expect(pipeline.map((g) => g.item.id)).toEqual([
+        'https://boxd.it/9yLr2q',
+        'https://boxd.it/aZ91',
+        'https://boxd.it/dS63',
+        'https://boxd.it/cR48',
+      ]);
+      expect(pipeline[0].item.metadata.Review).toBe('Ninety minutes of a bird standing still.');
+    });
+  });
 });
