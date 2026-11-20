@@ -66,6 +66,45 @@ describe('Spotify datasource', () => {
     }
   });
 
+  it('names the show and episode of podcast plays in the account data export', async () => {
+    const data = [
+      {
+        endTime: '2026-02-06 08:31',
+        podcastName: 'Tidepool Almanac',
+        episodeName: 'Ep. 41: Barnacle Census',
+        msPlayed: 1803000,
+      },
+    ];
+    const tmpFile = path.join(FIXTURES_DIR, 'spotify-export', 'StreamingHistory_podcast_0.json');
+    const fs = await import('node:fs');
+    await fs.promises.writeFile(tmpFile, JSON.stringify(data));
+    try {
+      const fi = new SpotifyFileImporter();
+      const pipeline: EmittedGraph[] = [];
+      await fi.fileImport({}, { filename: 'StreamingHistory_podcast_0.json', fullPath: tmpFile }, {
+        pipeline,
+        timeframe: {},
+        log: () => {},
+      } as unknown as ImportParams);
+      expect(pipeline.length).toBe(1);
+      const play = pipeline[0].item;
+      expect(play.classification).toBe('listen');
+      expect(play.metadata).toEqual({
+        Type: 'podcast',
+        Episode: 'Ep. 41: Barnacle Census',
+        Show: 'Tidepool Almanac',
+        'ms Played': 1803000,
+      });
+      expect(play.content.filename).toBe('episode.txt');
+      expect((await play.content.data()).toString()).toBe('Tidepool Almanac — Ep. 41: Barnacle Census');
+      // The id is the one a track-shaped row with an empty name always had.
+      expect(play.id).toBe('spotify:streaminghistory_podcast_0.json:0:2026-02-06 08:31::1803000');
+      expect(play.timestamp?.toISOString()).toBe('2026-02-06T08:00:57.000Z');
+    } finally {
+      await fs.promises.unlink(tmpFile).catch(() => {});
+    }
+  });
+
   it('imports endsong format', async () => {
     const fi = new SpotifyFileImporter();
     const pipeline: EmittedGraph[] = [];
