@@ -78,6 +78,61 @@ describe('Instagram datasource', () => {
   });
 });
 
+describe('Instagram datasource — where the JSON export keeps posts', () => {
+  // A single-image post keeps its caption and time on media[0]; a carousel
+  // has them at the top level too.
+  const POSTS = JSON.stringify([
+    {
+      media: [
+        {
+          uri: 'media/posts/202609/18034567890123456.jpg',
+          creation_timestamp: 1789920764,
+          title: 'First frost on the ridge',
+          cross_post_source: { source_app: 'FB' },
+        },
+      ],
+    },
+    {
+      title: 'Two from the pond',
+      creation_timestamp: 1791712862,
+      media: [
+        { uri: 'media/posts/202610/18045678901234567.jpg', creation_timestamp: 1791712862, title: '' },
+        { uri: 'media/posts/202610/18045678901234568.jpg', creation_timestamp: 1791712862, title: '' },
+      ],
+    },
+  ]);
+
+  let root: string;
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'ig-posts-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it.each(['media', 'content'])('reads posts_1.json from your_instagram_activity/%s/', async (folder) => {
+    const dir = path.join(root, 'your_instagram_activity', folder);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'posts_1.json'), POSTS);
+    // Other files in media/ are not posts.
+    fs.writeFileSync(path.join(dir, 'profile_photos.json'), '{"ig_profile_picture": []}');
+
+    const pipeline: EmittedGraph[] = [];
+    await new InstagramFileImporter().fileImport({}, { filename: 'ig', fullPath: root }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    const posts = pipeline.filter((p) => p.item.classification === 'social').map((p) => p.item);
+    expect(posts.map((p) => p.metadata.Caption)).toEqual(['First frost on the ridge', 'Two from the pond']);
+    expect(posts[0].timestamp).toEqual(new Date(1789920764 * 1000));
+    expect(posts[1].timestamp).toEqual(new Date(1791712862 * 1000));
+  });
+});
+
 describe('Instagram datasource — Meta HTML format', () => {
   const root = path.join(FIXTURES_DIR, 'instagram-html-export');
 
