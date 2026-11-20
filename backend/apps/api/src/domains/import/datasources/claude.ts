@@ -150,6 +150,25 @@ function claudeMemoryConfidence(parsed: unknown): number {
   return 0.4;
 }
 
+/** Folders a Claude export ships next to its JSON files. */
+const CLAUDE_EXPORT_DIRS = ['projects', 'files', 'attachments'];
+
+/**
+ * Does the folder hold the Claude export and nothing else? Only then may it
+ * claim as confidently as the file inside it. A folder of loose uploads that
+ * happens to include conversations.json would otherwise be claimed whole, and
+ * the photos and documents beside it never reach the catch-all importer. Any
+ * top-level JSON file counts as the export's: Anthropic publishes no list of
+ * them, and one more (say an artifacts file) must not cost the projects.
+ */
+function onlyClaudeExportParts(names: string[]): boolean {
+  return names.every((n) => {
+    const lower = n.toLowerCase();
+
+    return lower.startsWith('.') || lower.endsWith('.json') || CLAUDE_EXPORT_DIRS.includes(lower);
+  });
+}
+
 /** The text Claude extracted from each attachment, under its file name. */
 function extractedSections(attachments: ClaudeAttachment[] | undefined): string[] {
   if (!Array.isArray(attachments)) {
@@ -211,6 +230,7 @@ export class ClaudeFileImporter implements FileImporter {
         names = [];
       }
 
+      const exportOnly = onlyClaudeExportParts(names);
       const conv = findName(names, (n) => n === 'conversations.json');
       if (conv) {
         // conversations.json decides ownership of the whole directory: when it
@@ -218,12 +238,19 @@ export class ClaudeFileImporter implements FileImporter {
         // As confident as conversations.json alone, so recognition keeps the
         // directory (an equal nested match does not replace it) and the import
         // reaches projects/ beside it. At 0.9 the file won and the projects
-        // landed as plain files.
-        if (isClaudeExport(await readJsonFile(path.join(root, conv)))) {
-          return { confidence: 0.95 };
+        // landed as plain files. A folder holding more than the export stays
+        // at 0.9, so the file wins there and the rest of the folder is left
+        // to the catch-all importer.
+        const parsed = await readJsonFile(path.join(root, conv));
+        if (isClaudeExport(parsed)) {
+          return { confidence: exportOnly ? 0.95 : 0.9 };
         }
 
-        return { confidence: 0, dir_threshold: 0.7 };
+        // An account with no conversations still exports `[]`; its memories
+        // and projects decide below. Any other shape is another vendor's.
+        if (!Array.isArray(parsed) || parsed.length > 0) {
+          return { confidence: 0, dir_threshold: 0.7 };
+        }
       }
 
       const mem = findName(names, isMemoryFilename);
@@ -232,7 +259,9 @@ export class ClaudeFileImporter implements FileImporter {
         if (conf > 0) {
           const marked = !!findName(names, (n) => CLAUDE_SIBLINGS.includes(n));
 
-          return { confidence: marked ? 0.85 : Math.min(conf, 0.85) };
+          // A marked export folder ties the memories file (0.9) so recognition
+          // keeps the folder and the import reaches projects beside it.
+          return { confidence: marked ? (exportOnly ? 0.9 : 0.85) : Math.min(conf, 0.85) };
         }
       }
 

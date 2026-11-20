@@ -670,4 +670,53 @@ describe('Claude: a whole export reaches the importer', () => {
     const pipeline = await run({ filename: path.basename(root), fullPath: root });
     expect(pipeline.map((p) => p.item.metadata.Text)).toEqual(['--- notes.txt ---\nBuy lime mortar.']);
   });
+
+  const recognizeTree = () =>
+    dataSourcesRecognize(
+      undefined,
+      { filename: path.basename(root), fullPath: root, fsRoot: root },
+      {},
+      { descend: true },
+    );
+
+  it('leaves loose files beside conversations.json to the catch-all importer', async () => {
+    write('conversations.json', [conversation()]);
+    fs.writeFileSync(path.join(root, 'holiday.jpg'), 'not really a photo');
+
+    const matches = await recognizeTree();
+    // The file, not the folder: a claim on the folder would drop holiday.jpg.
+    expect(matches.filter((m) => m.data_source.name === 'claude').map((m) => m.matchedPath)).toEqual([
+      path.join(root, 'conversations.json'),
+    ]);
+  });
+
+  it('keeps the export folder when it carries a JSON file the importer does not know', async () => {
+    write('conversations.json', [conversation()]);
+    write('artifacts.json', []);
+    write('projects.json', [project]);
+
+    const matches = await recognizeTree();
+    expect(matches.filter((m) => m.data_source.name === 'claude').map((m) => m.matchedPath)).toEqual([root]);
+  });
+
+  it('reads projects beside memories when the export has no conversations', async () => {
+    const exportDir = path.join(root, 'data-2026-11-19-batch-0000');
+    write('data-2026-11-19-batch-0000/conversations.json', []);
+    write('data-2026-11-19-batch-0000/memories.json', [
+      { conversations_memory: '**Top of mind**\n\nFinishing the talk.', account_uuid: 'acct-1' },
+    ]);
+    write('data-2026-11-19-batch-0000/projects.json', [project]);
+    write('data-2026-11-19-batch-0000/users.json', [{ uuid: 'acct-1' }]);
+
+    const matches = await recognizeTree();
+    expect(matches.filter((m) => m.data_source.name === 'claude').map((m) => m.matchedPath)).toEqual([
+      exportDir,
+    ]);
+
+    const pipeline = await run({ filename: path.basename(exportDir), fullPath: exportDir });
+    expect(
+      pipeline.filter((p) => p.item.metadata.Kind === 'project').map((p) => p.item.metadata.Title),
+    ).toEqual(['Garden wall ferns']);
+    expect(pipeline.filter((p) => p.item.metadata.Kind === 'memory')).toHaveLength(1);
+  });
 });
