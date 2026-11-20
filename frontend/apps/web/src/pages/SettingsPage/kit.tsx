@@ -389,8 +389,12 @@ export function SettingsFooter({ status, children }: { status?: ReactNode; child
       data-slot="settings-footer"
       className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 bg-foreground/[0.03] px-5 py-3"
     >
-      <div className="min-w-0 flex-1">{status}</div>
-      {children ? <div className="flex flex-wrap items-center justify-end gap-2">{children}</div> : null}
+      {/* The status starts at 15rem, so when it and the buttons don't fit side by side the
+          buttons wrap below it rather than squeezing a long error down to a word per line. */}
+      {status ? <div className="min-w-0 grow basis-60">{status}</div> : null}
+      {children ? (
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">{children}</div>
+      ) : null}
     </div>
   );
 }
