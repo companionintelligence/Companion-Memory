@@ -393,5 +393,26 @@ describe('GeoJSON datasource', () => {
       expect(items.map((i) => i.timestamp)).toEqual([undefined, undefined]);
       expect(drops).toEqual([]);
     });
+
+    it('does not count up to a length the coordinates only claim to have', async () => {
+      // Objects, not arrays: nothing to read, however large `length` says it is.
+      const { items, drops, consumed } = await importDoc([
+        { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: { length: 1e6 } } },
+        {
+          type: 'Feature',
+          properties: { time: '2026-05-06T10:00:00Z' },
+          geometry: { type: 'MultiLineString', coordinates: [{ length: 1e6 }] },
+        },
+        walk,
+      ]);
+
+      expect(items.map((i) => i.id)).toEqual([
+        'geojson:track.geojson:2:0',
+        'geojson:track.geojson:2:1',
+        'geojson:track.geojson:2:2',
+      ]);
+      expect(drops).toEqual([]);
+      expect(consumed).toBe(3);
+    });
   });
 });

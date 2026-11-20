@@ -246,19 +246,23 @@ export class GeoJSONFileImporter implements FileImporter {
     const hasSharedTime = toDate(sharedTime) !== undefined;
     let sharedTimeTaken = false;
     let i = 0;
-    for (let l = 0; l < lines.length; l++) {
-      const lineTimes = times?.[l];
-      for (let j = 0; j < lines[l].length; j++) {
+    let l = 0;
+    // for...of rather than counting to `.length`: the coordinates are whatever
+    // the file says, and `"coordinates": {"length": 1e15}` would spin here
+    // without reading a point. Not iterable throws, and the caller logs it.
+    for (const line of lines) {
+      const lineTimes = times?.[l++];
+      let j = 0;
+      for (const pos of line) {
         const posIdx = i++;
+        const own = Array.isArray(lineTimes) ? lineTimes[j] : undefined;
+        j++;
         if (times) {
-          const own = Array.isArray(lineTimes) ? lineTimes[j] : undefined;
-          this.emitPosition(params, sourcePath, lines[l][j], props, featureIdx, posIdx, own);
+          this.emitPosition(params, sourcePath, pos, props, featureIdx, posIdx, own);
         } else if (hasSharedTime && sharedTimeTaken) {
           params.pipeline.consumed?.(1);
           params.pipeline.drop?.('position_shared_time');
-        } else if (
-          this.emitPosition(params, sourcePath, lines[l][j], props, featureIdx, posIdx, sharedTime)
-        ) {
+        } else if (this.emitPosition(params, sourcePath, pos, props, featureIdx, posIdx, sharedTime)) {
           sharedTimeTaken = true;
         }
       }
