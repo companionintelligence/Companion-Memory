@@ -7,8 +7,9 @@
  * (comments_and_reactions/) and Events (events/ — the ones the person joined,
  * was interested in, or created; not invitations they declined or never
  * answered), liked Pages (pages/), comments (comments_and_reactions/ and
- * groups/), posts in groups (groups/) and Marketplace listings
- * (facebook_marketplace/). Does NOT cover friends/connections, saved items
+ * groups/), posts in groups (groups/), Marketplace listings
+ * (facebook_marketplace/) and friends (connections/friends/). Does NOT cover
+ * other connections (followers, removed friends, requests), saved items
  * (the export records only "saved a product from X's post" — nothing to link
  * to), or logged_information/personal_information/preferences (location
  * history, search history, off-Facebook activity, ads). */
@@ -570,6 +571,54 @@ export class FacebookFileImporter implements FileImporter {
     await this.processGroupPosts(root, params);
     await this.processMarketplace(root, params);
     await this.processEvents(root, params);
+    await this.processFriends(root, params);
+  }
+
+  // Friends → a contact per friend (typed, like LinkedIn connections, so it
+  // reaches the graph as a Person with no address to match on) and a 'social'
+  // item on the day the friendship started. Current exports keep the list in
+  // connections/friends/; older ones in friends_and_followers/ or friends/.
+  private async processFriends(root: string, params: ImportParams): Promise<void> {
+    const file = [
+      path.join(root, 'connections', 'friends', 'your_friends.json'),
+      path.join(root, 'friends_and_followers', 'friends.json'),
+      path.join(root, 'friends', 'friends.json'),
+    ].find((f) => fs.existsSync(f));
+    if (!file) {
+      return;
+    }
+
+    const parsed = await this.readExportJson<Record<string, unknown>>(file, params);
+    const friends = parsed?.friends_v2 ?? parsed?.friends;
+    if (!Array.isArray(friends)) {
+      return;
+    }
+
+    for (const friend of friends as Array<{ name?: string; timestamp?: number }>) {
+      const name = friend?.name?.trim();
+      if (!name) {
+        params.pipeline.drop?.('malformed_entry', 'friend without a name');
+        continue;
+      }
+
+      params.pipeline.push({ entity: { type: 'contact', name, metadata: { Source: 'Facebook' } } });
+
+      const ts = friend.timestamp ? new Date(friend.timestamp * 1000) : undefined;
+      if (!timeframeContains(params.timeframe, ts)) {
+        continue;
+      }
+
+      const title = `Became friends with ${name}`;
+      params.pipeline.push({
+        item: {
+          id: `facebook:friend:${friend.timestamp ?? ''}:${crypto.createHash('sha1').update(name).digest('hex').slice(0, 16)}`,
+          classification: 'social',
+          timestamp: ts,
+          content: textContent('friend.txt', title),
+          metadata: { Title: title, Kind: 'friend', Person: name, Source: 'Facebook' },
+        },
+      });
+    }
   }
 
   /** Parse one JSON file of the export, reporting an unreadable one to the drop ledger. */
