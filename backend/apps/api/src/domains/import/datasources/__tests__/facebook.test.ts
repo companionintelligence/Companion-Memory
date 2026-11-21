@@ -1303,3 +1303,76 @@ describe('Facebook datasource — comments, group posts and Marketplace listings
     expect(listings[1].id).toMatch(/^facebook:listing:1791230000:[0-9a-f]{16}$/);
   });
 });
+
+describe('Facebook datasource — friends (JSON)', () => {
+  let root: string;
+
+  const write = (rel: string, body: unknown): void => {
+    const fpath = path.join(root, rel);
+    fs.mkdirSync(path.dirname(fpath), { recursive: true });
+    fs.writeFileSync(fpath, typeof body === 'string' ? body : JSON.stringify(body));
+  };
+
+  const run = async (): Promise<{ pipeline: EmittedGraph[]; drops: string[] }> => {
+    const pipeline: EmittedGraph[] = [];
+    const drops: string[] = [];
+    (pipeline as unknown as { drop: (reason: string) => void }).drop = (reason) => drops.push(reason);
+    await new FacebookFileImporter().fileImport({}, { filename: 'facebook', fullPath: root }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    return { pipeline, drops };
+  };
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-friends-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('imports each friend as a contact with the day the friendship started', async () => {
+    // Meta escapes every UTF-8 byte of an accented name as its own \u00XX.
+    write(
+      'connections/friends/your_friends.json',
+      '{"friends_v2": [{"name": "Ottilie Br\\u00c3\\u00a6ndgaard", "timestamp": 1770818400},' +
+        ' {"name": "Casimir Thornwhistle", "timestamp": 1772357400}, {"name": "", "timestamp": 1772357401}]}',
+    );
+
+    const { pipeline, drops } = await run();
+    const contacts = pipeline.filter((p) => p.entity).map((p) => p.entity!);
+    const friendships = pipeline.filter((p) => p.item?.metadata.Kind === 'friend').map((p) => p.item!);
+
+    expect(contacts.map((c) => [c.type, c.name])).toEqual([
+      ['contact', 'Ottilie Brændgaard'],
+      ['contact', 'Casimir Thornwhistle'],
+    ]);
+    expect(friendships.map((i) => i.metadata.Title)).toEqual([
+      'Became friends with Ottilie Brændgaard',
+      'Became friends with Casimir Thornwhistle',
+    ]);
+    expect(friendships[0].classification).toBe('social');
+    expect(friendships[0].timestamp).toEqual(new Date(1770818400 * 1000));
+    expect(friendships[0].metadata.Person).toBe('Ottilie Brændgaard');
+    expect(drops).toEqual(['unnamed_connection']);
+
+    // Stable across a re-import.
+    const again = (await run()).pipeline.filter((p) => p.item).map((p) => p.item!.id);
+    expect(again).toEqual(friendships.map((i) => i.id));
+  });
+
+  it('reads the older friends_and_followers layout', async () => {
+    write('friends_and_followers/friends.json', {
+      friends_v2: [{ name: 'Dagny Velloreaux', timestamp: 1773600300 }],
+    });
+
+    const { pipeline } = await run();
+    expect(pipeline.filter((p) => p.entity).map((p) => p.entity!.name)).toEqual(['Dagny Velloreaux']);
+    expect(pipeline.filter((p) => p.item).map((p) => p.item!.metadata.Title)).toEqual([
+      'Became friends with Dagny Velloreaux',
+    ]);
+  });
+});

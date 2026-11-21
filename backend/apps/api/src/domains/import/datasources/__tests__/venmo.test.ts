@@ -74,10 +74,11 @@ describe('Venmo datasource', () => {
     // Quoted field with an embedded comma is preserved.
     expect(pipeline[1].item.metadata.Note).toBe('Concert tickets, row 5');
     expect(pipeline[1].item.metadata.Amount).toBe('+$120.00');
-    // 'Charge' is outside the known Type × sign set: falls back to the generic
-    // classification, links no person.
-    expect(pipeline[1].item.classification).toBe('transaction');
-    expect(pipeline[1].edges).toBeUndefined();
+    // A Charge Jane sent Alex that he paid: money in, from the person charged.
+    expect(pipeline[1].item.classification).toBe('credit');
+    expect(pipeline[1].edges).toEqual([
+      { relation: 'from', to: { entity: { type: 'person', name: 'Alex Kim' } } },
+    ]);
 
     // Quoted field with an embedded newline is preserved.
     expect(pipeline[2].item.metadata.Note).toBe('Rent\nMarch');
@@ -115,6 +116,51 @@ describe('Venmo datasource', () => {
       ]);
       expect(pipeline[2].edges).toBeUndefined();
       expect(pipeline[3].edges).toBeUndefined();
+    } finally {
+      await fs.promises.unlink(tmp).catch(() => {});
+    }
+  });
+
+  it('maps Charges by who sent the request and keeps the fee on an Instant Transfer', async () => {
+    const header =
+      ',ID,Datetime,Type,Status,Note,From,To,Amount (total),Amount (tip),Amount (tax),Amount (fee),Funding Source,Destination\n';
+    const csv =
+      'Account Statement - (@jane-doe)\nAccount Activity\n' +
+      header +
+      ',4101,2026-04-21T23:02:18,Charge,Complete,utilities April,Sam Reyes,Jane Doe,- $63.12,,0,,Bank *2291,\n' +
+      ',4102,2026-06-03T12:30:55,Charge,Complete,concert tickets,Jane Doe,Lee Park,+ $45.00,,0,,,Venmo balance\n' +
+      ',4103,2026-09-27T15:51:33,Instant Transfer,Complete,,,,- $50.00,,0,- $0.88,,Bank *2291\n';
+    const tmp = path.join(os.tmpdir(), `charges-venmo-${Date.now()}.csv`);
+    await fs.promises.writeFile(tmp, csv);
+    try {
+      const fi = new VenmoFileImporter();
+      const pipeline: EmittedGraph[] = [];
+      await fi.fileImport({}, { filename: path.basename(tmp), fullPath: tmp }, {
+        pipeline,
+        timeframe: {},
+        log: () => {},
+      } as unknown as ImportParams);
+
+      expect(pipeline.map((g) => g.item.classification)).toEqual(['payment', 'credit', 'transfer']);
+
+      // Sam charged Jane and she paid: money out to the person who asked, with
+      // a receipt line like any outgoing payment.
+      const [paid, received, transfer] = pipeline;
+      expect(paid.edges).toEqual([{ relation: 'to', to: { entity: { type: 'person', name: 'Sam Reyes' } } }]);
+      expect(paid.item.metadata.Merchant).toBe('Sam Reyes');
+      expect(paid.item.metadata.LineItems).toEqual([
+        { LineNumber: 1, Product: 'utilities April', Quantity: 1, Total: 63.12, IsDigital: undefined },
+      ]);
+
+      // Jane charged Lee and he paid: money in from the person charged.
+      expect(received.edges).toEqual([
+        { relation: 'from', to: { entity: { type: 'person', name: 'Lee Park' } } },
+      ]);
+      expect(received.item.metadata.LineItems).toBeUndefined();
+
+      expect(transfer.edges).toBeUndefined();
+      expect(transfer.item.metadata.Amount).toBe('-$50.00');
+      expect(transfer.item.metadata.Fee).toBe('-$0.88');
     } finally {
       await fs.promises.unlink(tmp).catch(() => {});
     }

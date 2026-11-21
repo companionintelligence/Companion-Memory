@@ -375,7 +375,7 @@ export const WIZARD_SOURCES: WizardSource[] = [
       UPLOAD_STEP,
     ],
     expectedFormat:
-      'Takeout `YouTube and YouTube Music/history/watch-history.json` (and `watch-later`/playlist JSON). Choose JSON, not HTML.',
+      'Takeout `YouTube and YouTube Music/history/watch-history.json`, `subscriptions/subscriptions.csv` and the `playlists/` folder (`playlists.csv` plus one `<title>-videos.csv` per playlist). Choose JSON, not HTML.',
     inboxPath: 'google-takeout/YouTube and YouTube Music',
     importer: 'youtube',
     importerReady: true,
