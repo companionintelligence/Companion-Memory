@@ -234,4 +234,36 @@ describe('Generic Email datasource', () => {
     // (c) the descriptor points at the attachment's own extracted bytes.
     expect(fs.readFileSync(atts[0].path, 'utf8')).toBe('Hello');
   });
+
+  it('keeps Outlook "Last, First" names whole in From, To and Cc', async () => {
+    const eml = [
+      'From: "Wexley-Thorne, Ambrose" <ambrose.wt@example.com>',
+      'To: "Quillfeather, Zephyrine" <zephyrine.q@example.com>,',
+      ' "Pembury-Vale, Thaddeus" <thaddeus.pv@example.com>,',
+      ' Corvina Haskett <corvina.haskett@example.org>',
+      'Cc: "Marchbanks, Isolde" <isolde.m@example.org>',
+      'Subject: Guild workshop rota for October',
+      'Date: Mon, 28 Sep 2026 20:11:40 -0700',
+      'Message-ID: <rota1@example.com>',
+      'Content-Type: text/plain; charset="utf-8"',
+      '',
+      'Rota attached inline.',
+    ].join('\r\n');
+    const emlPath = makeTempFile('lastfirst.eml', eml);
+    const pipeline: EmittedGraph[] = [];
+    await new EmailFileImporter().fileImport({}, { filename: path.basename(emlPath), fullPath: emlPath }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    const edges = pipeline.find((p) => p.item)?.edges ?? [];
+    expect(edges.map((e: Relationship) => [e.relation, e.to?.entity?.name])).toEqual([
+      ['from', 'Wexley-Thorne, Ambrose'],
+      ['to', 'Quillfeather, Zephyrine'],
+      ['to', 'Pembury-Vale, Thaddeus'],
+      ['to', 'Corvina Haskett'],
+      ['cc', 'Marchbanks, Isolde'],
+    ]);
+  });
 });

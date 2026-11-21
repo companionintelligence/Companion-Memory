@@ -221,6 +221,56 @@ describe('Reddit datasource', () => {
     expect(pipeline[0].item.metadata.ThreadId).toBeUndefined();
   });
 
+  it("marks the account's own messages sent, from the account name in statistics.csv", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'reddit-owner-'));
+    fs.writeFileSync(
+      path.join(dir, 'statistics.csv'),
+      'statistic,value\naccount name,zquillfeather\nexport time,2026-11-17 06:40:12 UTC\n',
+    );
+    fs.writeFileSync(
+      path.join(dir, 'messages_archive.csv'),
+      'id,permalink,thread_id,date,ip,from,to,subject,body\n' +
+        'm1,/message/messages/m1,,2026-09-22 10:15:00 UTC,,dagny_v,zquillfeather,Ridge photos,Which lens?\n' +
+        'm2,/message/messages/m2,t4_m1,2026-09-22 11:02:31 UTC,,ZQuillfeather,dagny_v,re: Ridge photos,Just the phone.\n',
+    );
+    fs.writeFileSync(
+      path.join(dir, 'chat_history.csv'),
+      'message_id,created_at,updated_at,username,message,thread_parent_message_id,channel_url,subreddit,channel_name,conversation_type\n' +
+        'c1,2026-10-03 20:11:05 UTC,,casimir_thorn,Joining on Sunday?,,sendbird_1,,,direct\n' +
+        'c2,2026-10-03 20:13:40 UTC,,zquillfeather,Yes,,sendbird_1,,,direct\n',
+    );
+
+    const run = async () => {
+      const pipeline: EmittedGraph[] = [];
+      await new RedditFileImporter().fileImport({}, { filename: 'export', fullPath: dir }, {
+        pipeline,
+        timeframe: {},
+        log: () => {},
+      } as unknown as ImportParams);
+
+      return Object.fromEntries(
+        pipeline
+          .filter((p) => p.item.classification === 'message')
+          .map((p) => [p.item.id, p.item.metadata.Direction]),
+      );
+    };
+
+    try {
+      expect(await run()).toEqual({
+        'reddit:message:m1': 'received',
+        'reddit:message:m2': 'sent',
+        'reddit:message:c1': 'received',
+        'reddit:message:c2': 'sent',
+      });
+
+      // Without statistics.csv nothing says whose messages these are.
+      fs.rmSync(path.join(dir, 'statistics.csv'));
+      expect(Object.values(await run())).toEqual([undefined, undefined, undefined, undefined]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   // Regression: announcements.csv ("official communication about your account
   // from Reddit in your inbox" per Reddit's export docs) was missing from
   // REDDIT_FILES entirely, so a real 38-file export's admin notification was
