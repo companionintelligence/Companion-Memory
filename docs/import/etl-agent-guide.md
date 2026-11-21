@@ -592,6 +592,16 @@ status column to say "this is a credit" with: the lifecycle it carries
 Modelling refunds honestly needs that column and a migration. The amount is not
 dropped on the floor — it stays on the row as `metadata.NegativeTotalRefused`.
 
+**A currency with no ISO code writes no money.** Both `currency` columns CHECK
+`^[A-Z]{3}$`, and one refused row loses the whole purchase (receipts are written
+before things). `toReceiptInput` and `lineFrom` trim and upper-case the code;
+anything still not three letters (Roblox's `Robux`) is written as no currency,
+and every money column on that receipt or line stays empty, because an amount
+with no currency reads as dollars in the web app. The unit is kept as
+`metadata.UnsupportedCurrency` on the receipt (and on a line whose own unit it
+is), and the amounts stay under the parser's own keys. The thing row keeps the
+price and the unit as the source gave them: `ci.objects.currency` has no CHECK.
+
 **WHERE the purchase happened** is `ci.receipts.place_entity_id`, the `place_prior`
 rung `ObjectResolutionService` leans on and the only thing that puts an imported
 purchase on a map. It was populated by no import path at all. `PushStage.receiptPlacesFor`
