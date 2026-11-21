@@ -99,3 +99,7 @@ frontend/packages/*/android/build/
 
 # Playwright output for the desktop-appliance suite (playwright.desktop.config.ts)
 test-results-desktop/
+
+# local beta1 API runtime files
+api-beta1.log
+api-beta1.pid
