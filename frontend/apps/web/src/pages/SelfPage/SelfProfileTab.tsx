@@ -222,11 +222,15 @@ export function SelfProfileTab() {
 
         {rawEntityId && <ConnectionsSection entityId={rawEntityId} />}
 
-        <AboutYouSection refreshToken={answersVersion} />
+        {/* Each of these is a section with its own groups 24px apart, so they sit further
+            apart than that, or a section's heading reads as one more group of the one above. */}
+        <div className="mt-6 flex flex-col gap-10">
+          <AboutYouSection refreshToken={answersVersion} />
 
-        <InvitesSection />
+          <InvitesSection />
 
-        <AccountSection />
+          <AccountSection />
+        </div>
       </div>
     </PageContent>
   );

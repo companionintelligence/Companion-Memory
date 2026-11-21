@@ -112,7 +112,7 @@ const BASE_PROVIDERS: ProviderFixture[] = [
 
 /** Scope queries to one provider's card, since every card repeats the same field labels. */
 function providerCard(name: string): HTMLElement {
-  const card = screen.getByText(name).closest('[data-slot="card"]');
+  const card = screen.getByText(name).closest('[data-slot="settings-row"]');
 
   if (!card) {
     throw new Error(`no card found for ${name}`);
@@ -129,7 +129,7 @@ describe('OAuthSection', () => {
     const google = providerCard('Google');
 
     expect(within(google).getByLabelText('Client ID')).toHaveAttribute('type', 'password');
-    expect(within(google).getByLabelText('Client Secret')).toHaveAttribute('type', 'password');
+    expect(within(google).getByLabelText('Client secret')).toHaveAttribute('type', 'password');
   });
 
   it('toggles a field between masked and visible independently per field', async () => {
@@ -141,7 +141,7 @@ describe('OAuthSection', () => {
     fireEvent.click(within(google).getByRole('button', { name: /show client id/i }));
     expect(within(google).getByLabelText('Client ID')).toHaveAttribute('type', 'text');
     // The secret field is untouched by revealing the client ID.
-    expect(within(google).getByLabelText('Client Secret')).toHaveAttribute('type', 'password');
+    expect(within(google).getByLabelText('Client secret')).toHaveAttribute('type', 'password');
 
     fireEvent.click(within(google).getByRole('button', { name: /hide client id/i }));
     expect(within(google).getByLabelText('Client ID')).toHaveAttribute('type', 'password');
@@ -158,7 +158,7 @@ describe('OAuthSection', () => {
     fireEvent.change(within(google).getByLabelText('Client ID'), { target: { value: 'client-abc' } });
     expect(within(google).queryByRole('button', { name: /save credentials/i })).not.toBeInTheDocument();
 
-    fireEvent.change(within(google).getByLabelText('Client Secret'), { target: { value: 'secret-xyz' } });
+    fireEvent.change(within(google).getByLabelText('Client secret'), { target: { value: 'secret-xyz' } });
     expect(within(google).getByRole('button', { name: /save credentials/i })).toBeInTheDocument();
   });
 
@@ -216,7 +216,7 @@ describe('OAuthSection', () => {
     const google = providerCard('Google');
 
     fireEvent.change(within(google).getByLabelText('Client ID'), { target: { value: 'client-abc' } });
-    fireEvent.change(within(google).getByLabelText('Client Secret'), { target: { value: 'secret-xyz' } });
+    fireEvent.change(within(google).getByLabelText('Client secret'), { target: { value: 'secret-xyz' } });
     fireEvent.click(within(google).getByRole('button', { name: /save credentials/i }));
 
     await waitFor(() => expect(createVariables).toBeDefined());
@@ -318,14 +318,14 @@ describe('OAuthSection', () => {
 
     fireEvent.click(within(google).getByRole('button', { name: /delete stored credentials/i }));
 
-    expect(screen.getByText('Delete OAuth Keys')).toBeInTheDocument();
-    expect(screen.getByText(/delete the oauth keys for google/i)).toBeInTheDocument();
+    expect(screen.getByText('Delete OAuth credentials?')).toBeInTheDocument();
+    expect(screen.getByText(/delete the oauth credentials for google/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
 
-    await waitFor(() => expect(screen.queryByText('Delete OAuth Keys')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText('Delete OAuth credentials?')).not.toBeInTheDocument());
     expect(within(providerCard('Google')).getByLabelText('Client ID')).toHaveValue('');
-    expect(within(providerCard('Google')).getByLabelText('Client Secret')).toHaveValue('');
+    expect(within(providerCard('Google')).getByLabelText('Client secret')).toHaveValue('');
     expect(
       within(providerCard('Google')).queryByRole('button', { name: /delete stored credentials/i }),
     ).not.toBeInTheDocument();
@@ -362,7 +362,7 @@ describe('OAuthSection', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
 
-    expect(screen.queryByText('Delete OAuth Keys')).not.toBeInTheDocument();
+    expect(screen.queryByText('Delete OAuth credentials?')).not.toBeInTheDocument();
     expect(within(providerCard('Google')).getByLabelText('Client ID')).toHaveValue('the-id');
   });
 
@@ -390,7 +390,7 @@ describe('OAuthSection', () => {
       expect(within(providerCard('Google')).getByLabelText('Client ID')).toHaveValue('the-id'),
     );
     const google = providerCard('Google');
-    const secret = within(google).getByLabelText('Client Secret');
+    const secret = within(google).getByLabelText('Client secret');
 
     expect(secret).toHaveValue('');
     expect(secret).toHaveAttribute('placeholder', '••••••••cret');
@@ -453,7 +453,7 @@ describe('OAuthSection', () => {
     );
     const google = providerCard('Google');
 
-    fireEvent.change(within(google).getByLabelText('Client Secret'), {
+    fireEvent.change(within(google).getByLabelText('Client secret'), {
       target: { value: 'brand-new-secret' },
     });
     fireEvent.click(within(google).getByRole('button', { name: /save credentials/i }));
@@ -461,7 +461,7 @@ describe('OAuthSection', () => {
     await waitFor(() => expect(updateCalled).toBeDefined());
     // The typed secret is cleared from the field after saving; the hint takes over again.
     await waitFor(() =>
-      expect(within(providerCard('Google')).getByLabelText('Client Secret')).toHaveValue(''),
+      expect(within(providerCard('Google')).getByLabelText('Client secret')).toHaveValue(''),
     );
   });
 

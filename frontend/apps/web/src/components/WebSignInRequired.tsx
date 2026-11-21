@@ -38,7 +38,7 @@ export function WebSignInRequired({ title = 'Needs a web sign-in', className, ch
   return (
     <div
       role="note"
-      className={`flex items-start gap-3 rounded-md border bg-muted/40 px-4 py-3 text-sm ${className ?? ''}`}
+      className={`flex items-start gap-3 rounded-lg border bg-muted/40 px-4 py-3 text-sm ${className ?? ''}`}
     >
       <Globe className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
       <div className="space-y-1">

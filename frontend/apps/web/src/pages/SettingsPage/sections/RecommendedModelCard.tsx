@@ -6,11 +6,13 @@ import {
   getDesktopRecommendedModel,
   type DesktopRecommendedModel,
 } from '@ci/common';
-import { Button, Card, Progress } from '@ci/shadcn';
+import { Button, Progress } from '@ci/shadcn';
 import { Download } from '@ci/shadcn/icons';
 
 import type { LlmEndpointConfig } from '@/hooks/useLlmEndpoint';
 import { listOf, recommendedModelOffer, usesDesktopOllama } from '@/lib/recommendedModel';
+
+import { SettingsGroup, SettingsRow, SettingsStatus } from '../kit';
 
 /** How often a running download is asked how far it has got. */
 const POLL_MS = 1000;
@@ -181,12 +183,12 @@ export function RecommendedModelCard({
     );
   } else if (download.state === 'done') {
     body = (
-      <p className="text-sm text-teal-700 dark:text-teal-300" role="status">
+      <SettingsStatus tone="success">
         {download.downloaded.length > 0 ? `Downloaded ${listOf(download.downloaded)}. ` : ''}
         {download.waitsForStart
           ? `Memory will use ${download.chatModel} the next time it starts.`
           : `Memory now runs on ${download.chatModel}.`}
-      </p>
+      </SettingsStatus>
     );
   } else {
     const nothingMissing = missing?.length === 0;
@@ -194,7 +196,7 @@ export function RecommendedModelCard({
     body = (
       <div className="space-y-3">
         {chatMissing ? (
-          <p className="text-sm text-muted-foreground leading-snug">
+          <p className="text-sm text-muted-foreground leading-relaxed">
             Memory Desktop recommends {recommended}, a small model that keeps chat and background work quick.{' '}
             {runsOnOther
               ? `Your Ollama doesn't have it, so Memory runs on ${chatModel} for now.`
@@ -204,27 +206,21 @@ export function RecommendedModelCard({
                   "Your Ollama doesn't have it."}
           </p>
         ) : nothingMissing && runsOnOther ? (
-          <p className="text-sm text-muted-foreground leading-snug">
+          <p className="text-sm text-muted-foreground leading-relaxed">
             Your Ollama has {recommended} now, but Memory still runs on {chatModel}.
           </p>
         ) : null}
         {othersMissing.length > 0 ? (
-          <p className="text-sm text-muted-foreground leading-snug">
+          <p className="text-sm text-muted-foreground leading-relaxed">
             {chatMissing ? 'Search also needs' : 'Search needs'} {listOf(othersMissing)}, which your Ollama
             doesn&apos;t have{chatMissing ? ' either' : ''}.
           </p>
         ) : null}
 
         {download.state === 'failed' ? (
-          <p className="text-sm text-destructive" role="alert">
-            {download.message}
-          </p>
+          <SettingsStatus tone="error">{download.message}</SettingsStatus>
         ) : null}
-        {startError ? (
-          <p className="text-sm text-destructive" role="alert">
-            {startError}
-          </p>
-        ) : null}
+        {startError ? <SettingsStatus tone="error">{startError}</SettingsStatus> : null}
 
         {canDownload ? (
           <div className="space-y-2">
@@ -253,18 +249,12 @@ export function RecommendedModelCard({
   }
 
   return (
-    <Card className="mb-6" data-testid="recommended-model">
-      <Card.Content className="space-y-3 pt-6">
-        <div className="flex items-start gap-3">
-          <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-teal-500/15 text-teal-700 dark:text-teal-300">
-            <Download className="h-4 w-4" />
-          </div>
-          <div className="min-w-0 flex-1 space-y-3">
-            <h3 className="text-base font-semibold text-foreground">Recommended model</h3>
-            {body}
-          </div>
-        </div>
-      </Card.Content>
-    </Card>
+    <SettingsGroup
+      title="Recommended model"
+      help="Memory Desktop downloads it into the Ollama on port 11434 and restarts Memory on it."
+      testId="recommended-model"
+    >
+      <SettingsRow>{body}</SettingsRow>
+    </SettingsGroup>
   );
 }

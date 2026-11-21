@@ -1,10 +1,19 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { apiKeyHeaders, fetchJson, FetchJsonError } from '@ci/common';
-import { Button, Card } from '@ci/shadcn';
+import { Button } from '@ci/shadcn';
 import { Copy } from '@ci/shadcn/icons';
 
 import { useAuth } from '@/hooks';
+
+import {
+  SettingsEmpty,
+  SettingsFooter,
+  SettingsGroup,
+  SettingsRow,
+  SettingsSection,
+  SettingsStatus,
+} from '../kit';
 
 interface SignupCode {
   /** Absent from a server older than invitation expiry; withdrawing needs it. */
@@ -123,38 +132,34 @@ export function InvitesSection() {
   };
 
   return (
-    <Card>
-      <Card.Header>
-        <Card.Title>Invitations</Card.Title>
-        <Card.Description>
-          Anyone signing in to this Memory after you needs an invitation. Each one works once, and for a week.
-        </Card.Description>
-      </Card.Header>
-
-      <Card.Content className="flex flex-col gap-3">
-        {error && <p className="text-sm text-destructive">{error}</p>}
+    <SettingsSection
+      title="Invitations"
+      description="Anyone signing in to this Memory after you needs an invitation. Each one works once, and for a week."
+    >
+      <SettingsGroup>
+        {error ? (
+          <SettingsRow>
+            <SettingsStatus tone="error">{error}</SettingsStatus>
+          </SettingsRow>
+        ) : null}
 
         {codes.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No unused invitations.</p>
+          <SettingsEmpty title="No unused invitations." />
         ) : (
-          <ul className="flex flex-col gap-2">
-            {codes.map((code) => (
-              <li key={code.signup_code} className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex min-w-0 flex-col gap-0.5">
-                  <code className="rounded bg-muted px-2 py-1 font-mono text-sm">{code.signup_code}</code>
-                  {expiryLabel(code.expires_at) && (
-                    <span className="text-xs text-muted-foreground">{expiryLabel(code.expires_at)}</span>
-                  )}
-                </div>
-                <div className="flex items-center gap-1">
-                  <Button variant="ghost" size="sm" onClick={() => void copy(code.signup_code)}>
-                    <Copy className="mr-1.5 size-3.5" />
+          codes.map((code) => (
+            <SettingsRow
+              key={code.signup_code}
+              label={<code className="font-mono">{code.signup_code}</code>}
+              hint={expiryLabel(code.expires_at) || undefined}
+              control={
+                <>
+                  <Button variant="ghost" onClick={() => void copy(code.signup_code)}>
+                    <Copy aria-hidden="true" />
                     {copied === code.signup_code ? 'Copied' : 'Copy'}
                   </Button>
                   {code.id && (
                     <Button
                       variant="ghost"
-                      size="sm"
                       onClick={() => void revoke(code.id!)}
                       disabled={busy}
                       aria-label={`Withdraw invitation ${code.signup_code}`}
@@ -162,18 +167,18 @@ export function InvitesSection() {
                       Withdraw
                     </Button>
                   )}
-                </div>
-              </li>
-            ))}
-          </ul>
+                </>
+              }
+            />
+          ))
         )}
 
-        <div>
+        <SettingsFooter>
           <Button onClick={() => void mint()} disabled={busy}>
             {busy ? 'Creating…' : 'Create an invitation'}
           </Button>
-        </div>
-      </Card.Content>
-    </Card>
+        </SettingsFooter>
+      </SettingsGroup>
+    </SettingsSection>
   );
 }
