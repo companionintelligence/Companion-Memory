@@ -96,7 +96,10 @@ export class StravaFileImporter implements FileImporter {
       return;
     }
 
-    const rows = parseCSV(raw);
+    // Strava repeats some column names: the first `Distance` is the summary
+    // figure in a unit that depends on the sport, the second (`Distance.1`
+    // here) is always metres.
+    const rows = parseCSV(raw, { suffixDuplicateHeaders: true });
     for (let index = 0; index < rows.length; index++) {
       const row = rows[index];
       const actDate = row['Activity Date'] ? new Date(row['Activity Date']) : undefined;
@@ -107,7 +110,18 @@ export class StravaFileImporter implements FileImporter {
       const actName = row['Activity Name'] || '';
       const actType = row['Activity Type'] || '';
       const elapsed = row['Elapsed Time'] ? parseInt(row['Elapsed Time'], 10) : undefined;
-      const distance = row['Distance'] ? parseFloat(row['Distance']) : undefined;
+      const hasMetres = 'Distance.1' in row;
+      const metresRaw = hasMetres && row['Distance.1'] ? parseFloat(row['Distance.1']) : undefined;
+      const metres = metresRaw !== undefined && Number.isFinite(metresRaw) ? metresRaw : undefined;
+      // Only an export without the metres column falls back to the summary
+      // figure, whose unit the file does not state. A blank metres cell in an
+      // export that has the column is no distance, not a cue to store a number
+      // with no unit.
+      const distance = !hasMetres && row['Distance'] ? parseFloat(row['Distance']) : undefined;
+      const end =
+        actDate && !isNaN(actDate.getTime()) && elapsed !== undefined && elapsed > 0
+          ? new Date(actDate.getTime() + elapsed * 1000)
+          : undefined;
 
       // Give the activity summary a map point by reading the first GPS fix from
       // its track file (the full track is still imported as trackpoints below).
@@ -124,6 +138,7 @@ export class StravaFileImporter implements FileImporter {
             ? `strava:${row['Activity ID']}`
             : `strava:${path.basename(csvPath)}:${index}`,
           timestamp: actDate,
+          timespanEnd: end,
           ...(start && { location: start }),
           content: textContent('activity.txt', actName || actType),
           metadata: {
@@ -131,6 +146,7 @@ export class StravaFileImporter implements FileImporter {
             Name: actName || actType || 'Strava Activity',
             'Activity Type': actType || undefined,
             'Elapsed Time (s)': elapsed,
+            'Distance (km)': metres !== undefined ? Math.round(metres) / 1000 : undefined,
             Distance: distance,
             ...(start && { Location: `${start.latitude}, ${start.longitude}` }),
             Source: 'Strava',

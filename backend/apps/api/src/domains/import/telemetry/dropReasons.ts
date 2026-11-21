@@ -265,6 +265,9 @@ export const DROP_SLUG_REASONS: Readonly<Record<string, DropReason>> = {
 
   // Shape.
   unsupported_entity_type: 'unsupported_shape',
+  // fitbit.ts, withings.ts: a whole file of the export this importer does not
+  // read (per-reading samples, metrics with no reader yet), one per file.
+  unread_export_file: 'unsupported_shape',
   // A Spotify play row with none of the track/episode/audiobook fields set —
   // the source recorded a play but not what was played.
   unresolvable_playback_stub: 'unsupported_shape',
