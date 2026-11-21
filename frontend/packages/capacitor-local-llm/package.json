@@ -22,10 +22,10 @@
     "litert-lm"
   ],
   "peerDependencies": {
-    "@capacitor/core": "^8.6.0"
+    "@capacitor/core": "^8.6.2"
   },
   "devDependencies": {
-    "@capacitor/core": "^8.6.0",
+    "@capacitor/core": "^8.6.2",
     "typescript": "^5.8.3"
   },
   "capacitor": {
