@@ -17,11 +17,16 @@ import { readHead } from './sniff';
 import type { ImportParams } from './timeline';
 import { textContent, timeframeContains } from './timeline';
 
-// A Garmin Activities.csv header has "Activity Type" AND "Distance" (case-insensitive),
-// plus at least one Garmin-distinctive column. The extra column is what keeps this from
-// matching a Strava activities.csv, which also carries Activity Type/Distance but lacks
-// these fields (Strava uses "Activity Date", "Activity ID", "Max Heart Rate", etc.).
-const GARMIN_MARKERS = ['favorite', 'calories', 'avg hr', 'aerobic te'];
+// A Garmin Activities.csv header has the columns "Activity Type", "Date" and "Distance"
+// (whole cells, case-insensitive), plus at least one column only Garmin writes.
+//
+// Strava's activities.csv also carries Activity Type and Distance, and its full header
+// has a "Calories" column too, so a substring test with Calories as a marker claimed it:
+// every Strava activity came in a second time as an undated "Garmin Connect" workout,
+// because the parser reads "Date" and Strava's column is "Activity Date". Requiring the
+// "Date" cell this parser reads, and only markers Strava lacks, keeps the two apart.
+const GARMIN_REQUIRED = ['activity type', 'date', 'distance'];
+const GARMIN_MARKERS = ['favorite', 'avg hr', 'aerobic te'];
 function headerIsGarmin(text: string): boolean {
   let header = text;
   const nl = header.indexOf('\n');
@@ -33,12 +38,14 @@ function headerIsGarmin(text: string): boolean {
     header = header.slice(1);
   }
 
-  const lower = header.toLowerCase();
-  if (!lower.includes('activity type') || !lower.includes('distance')) {
+  const cells = new Set(
+    header.split(',').map((cell) => cell.trim().replace(/^"|"$/g, '').trim().toLowerCase()),
+  );
+  if (!GARMIN_REQUIRED.every((c) => cells.has(c))) {
     return false;
   }
 
-  return GARMIN_MARKERS.some((m) => lower.includes(m));
+  return GARMIN_MARKERS.some((m) => cells.has(m));
 }
 
 export class GarminFileImporter extends CsvExportImporter {

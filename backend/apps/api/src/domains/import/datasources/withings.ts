@@ -40,12 +40,16 @@ function isMeasurementColumn(column: string): boolean {
     return false;
   }
 
-  return name.includes('(kg)') || name.includes('Weight');
+  // Withings writes the unit into the column name: "Weight (kg)", "Weight (lb)".
+  // A bare "Weight" is another app's column. MyFitnessPal's measurement export
+  // is "Date,Weight", and counting it let Withings claim that whole export and
+  // import every one of its CSVs as Withings measurements.
+  return name.includes('(kg)') || /^"?weight\s*\(/i.test(name);
 }
 
 // A Withings CSV header begins with "Date," and carries a body-measurement
-// column such as "(kg)" or "Weight". This is specific enough to avoid matching
-// other CSV importers (e.g. Netflix's "Start Time,...").
+// column with its unit, such as "Weight (kg)". This is specific enough to avoid
+// matching other CSV importers (e.g. Netflix's "Start Time,...").
 function headerLooksLikeWithings(header: string): boolean {
   if (!header.startsWith('Date,') && header.trim() !== 'Date') {
     return false;
