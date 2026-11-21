@@ -37,6 +37,10 @@ The licence texts named below are in [`LICENSES/`](LICENSES/).
   (commit `ed033eb`), MIT licence, Copyright (c) 2026 Digital Credentials Consortium. The licence text
   with that notice is in `LICENSES/MIT-portable-web-spaces-spec.txt`. The specification text is also
   published under the W3C Software and Document License 2023.
+- **CLDR Windows time zone mapping.** The table in `backend/apps/api/src/common/time/windowsZones.ts`
+  is the `territory="001"` rows of `common/supplemental/windowsZones.xml` from
+  [unicode-org/cldr](https://github.com/unicode-org/cldr) (commit `c4bb2c199c53`), Copyright © 1991-2013
+  Unicode, Inc., under the Unicode License V3 (`LICENSES/Unicode-3.0.txt`).
 <!-- end hand-authored -->
 
 ## Copyleft and reciprocal-licence dependencies
