@@ -259,6 +259,11 @@ function makeStage(rows: StagedItem[], options: Options = {}) {
         return [];
       }
 
+      // The links between two staged items (a photo and its album): none here.
+      if (sql.includes('related_item_id IS NOT NULL')) {
+        return [];
+      }
+
       if (sql.includes('staged_relationships')) {
         const ids = (params[0] as string[] | undefined) ?? [];
 

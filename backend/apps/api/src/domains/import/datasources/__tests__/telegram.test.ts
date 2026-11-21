@@ -2,10 +2,13 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
+import '..';
+import { dataSourcesRecognize } from '../registry';
 import { TelegramFileImporter } from '../telegram';
 import type { ImportParams } from '../timeline';
 
-import type { EmittedGraph } from './support/emitted';
+import { metaAttachments } from './support/emitted';
+import type { EmittedGraph, TestPipeline } from './support/emitted';
 
 const FIXTURES_DIR = path.join(__dirname, 'fixtures');
 
@@ -160,5 +163,226 @@ describe('Telegram datasource', () => {
     } as unknown as ImportParams);
     expect(pipeline.length).toBe(0);
     fs.rmSync(tmp, { recursive: true, force: true });
+  });
+});
+
+describe('Telegram media messages', () => {
+  // Telegram Desktop's JSON export: `photo` and `file` are paths relative to
+  // the folder holding result.json, or a note when the export left them out.
+  let root: string;
+
+  /** A file beside the export folder, which a crafted reference could reach with `../`. */
+  const outsideName = () => `${path.basename(root)}-outside.pdf`;
+
+  const message = (id: number, extra: Record<string, unknown>) => ({
+    id,
+    type: 'message',
+    date: '2026-07-14T19:22:05',
+    date_unixtime: String(1784056925 + id),
+    from: 'Ivo Brackenridge',
+    from_id: 'user7311982204',
+    text: '',
+    text_entities: [],
+    ...extra,
+  });
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'tg-media-'));
+    fs.mkdirSync(path.join(root, 'chats', 'chat_001', 'files'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'chats', 'chat_002', 'photos'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'chats', 'chat_001', 'files', 'ferry_timetable.pdf'), '%PDF-1.4');
+    fs.writeFileSync(
+      path.join(root, 'chats', 'chat_002', 'photos', 'photo_1@14-07-2026_19-22-05.jpg'),
+      'jpeg',
+    );
+    fs.writeFileSync(
+      path.join(root, 'chats', 'chat_002', 'photos', 'photo_2@14-07-2026_19-30-00.jpg'),
+      'jpeg',
+    );
+    fs.mkdirSync(path.join(root, 'chats', 'chat_002', 'video_files'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'chats', 'chat_002', 'video_files', 'IMG_2231.MP4'), 'mp4');
+    fs.writeFileSync(path.join(root, 'chats', 'chat_002', 'video_files', 'IMG_2231.MP4_thumb.jpg'), 'jpeg');
+    fs.writeFileSync(
+      path.join(root, 'result.json'),
+      JSON.stringify({
+        about: 'Here is the data you requested.',
+        personal_information: { user_id: 6120034581, first_name: 'Owner', last_name: 'Person' },
+        chats: {
+          list: [
+            {
+              name: 'Allotment Committee',
+              type: 'private_group',
+              id: 2002,
+              messages: [
+                message(1, {
+                  text: 'plot 7 squash photo',
+                  photo: 'chats/chat_002/photos/photo_1@14-07-2026_19-22-05.jpg',
+                  width: 64,
+                  height: 48,
+                }),
+                message(2, { photo: 'chats/chat_002/photos/photo_2@14-07-2026_19-30-00.jpg' }),
+                message(3, {
+                  text: 'timetable attached',
+                  file: 'chats/chat_001/files/ferry_timetable.pdf',
+                  file_name: 'ferry_timetable.pdf',
+                  mime_type: 'application/pdf',
+                }),
+                message(4, {
+                  file: '(File not included. Change data exporting settings to download.)',
+                  media_type: 'sticker',
+                  sticker_emoji: '👍',
+                  mime_type: 'image/webp',
+                }),
+                message(5, {
+                  file: `../${outsideName()}`,
+                  file_name: 'outside.pdf',
+                  mime_type: 'application/pdf',
+                }),
+                message(6, {}),
+                message(7, {
+                  file: 'chats/chat_002/video_files/IMG_2231.MP4',
+                  thumbnail: 'chats/chat_002/video_files/IMG_2231.MP4_thumb.jpg',
+                  media_type: 'video_file',
+                  mime_type: 'video/mp4',
+                }),
+              ],
+            },
+          ],
+        },
+      }),
+    );
+  });
+
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  /** Import the export through its result.json, or through the folder when `folder` is set. */
+  const run = async (folder = false) => {
+    const drops: string[] = [];
+    const pipeline: TestPipeline = Object.assign([] as EmittedGraph[], {
+      drop: (reason: string) => {
+        drops.push(reason);
+      },
+    });
+    const entry = folder
+      ? { filename: path.basename(root), fullPath: root }
+      : { filename: 'result.json', fullPath: path.join(root, 'result.json') };
+    await new TelegramFileImporter().fileImport({}, entry, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    const byId = new Map(pipeline.filter((p) => p.item).map((p) => [p.item.id, p.item]));
+    // Files staged on their own rather than as a message: they carry no id.
+    const loose = pipeline
+      .filter((p) => p.item && !p.item.id)
+      .map((p) => path.relative(root, p.item.intermediateLocation!));
+
+    return { byId, drops, loose };
+  };
+
+  it('attaches the photo and the file to the messages they came with', async () => {
+    const { byId } = await run();
+
+    const photo = byId.get('telegram:2002:1')!;
+    expect(photo.metadata.Text).toBe('plot 7 squash photo');
+    expect(metaAttachments(photo.metadata.MediaAttachments)).toEqual([
+      {
+        path: path.join(root, 'chats', 'chat_002', 'photos', 'photo_1@14-07-2026_19-22-05.jpg'),
+        filename: 'photo_1@14-07-2026_19-22-05.jpg',
+        type: 'image',
+        mimetype: 'image/jpeg',
+      },
+    ]);
+    expect(photo.metadata.AttachmentContent).toBe(true);
+
+    const pdf = byId.get('telegram:2002:3')!;
+    expect(metaAttachments(pdf.metadata.MediaAttachments)).toEqual([
+      {
+        path: path.join(root, 'chats', 'chat_001', 'files', 'ferry_timetable.pdf'),
+        filename: 'ferry_timetable.pdf',
+        type: 'file',
+        mimetype: 'application/pdf',
+      },
+    ]);
+  });
+
+  it('keeps a photo sent without a caption, and a sticker the export left out', async () => {
+    const { byId, drops } = await run();
+
+    const uncaptioned = byId.get('telegram:2002:2')!;
+    expect(uncaptioned.metadata.Text).toBeUndefined();
+    expect(metaAttachments(uncaptioned.metadata.MediaAttachments)[0]?.path).toBe(
+      path.join(root, 'chats', 'chat_002', 'photos', 'photo_2@14-07-2026_19-30-00.jpg'),
+    );
+
+    // No bytes to upload, but the message says what was sent. Kept apart from
+    // the attachments: the export's settings left it out, so nothing is missing
+    // and the upload must not count it as a gap in the import.
+    const sticker = byId.get('telegram:2002:4')!;
+    expect(sticker.metadata.MediaAttachments).toBeUndefined();
+    expect(sticker.metadata.MediaLeftOut).toEqual([
+      { type: 'image', mimetype: 'image/webp', kind: 'sticker' },
+    ]);
+
+    // Only the message with neither text nor media is dropped.
+    expect(byId.has('telegram:2002:6')).toBe(false);
+    expect(drops).toEqual(['empty_after_parse']);
+  });
+
+  it('never points an attachment outside the export folder', async () => {
+    const outside = path.join(root, '..', outsideName());
+    fs.writeFileSync(outside, '%PDF-1.4');
+    try {
+      const { byId } = await run();
+
+      expect(metaAttachments(byId.get('telegram:2002:5')!.metadata.MediaAttachments)).toEqual([
+        { filename: 'outside.pdf', type: 'file', mimetype: 'application/pdf' },
+      ]);
+    } finally {
+      fs.rmSync(outside, { force: true });
+    }
+  });
+
+  it('still brings in the files no message points at when it imports the whole folder', async () => {
+    // Telegram claims the folder, so the folder walk no longer stages what is
+    // in it. Profile pictures and the like are in no message, and used to come
+    // in through that walk.
+    fs.mkdirSync(path.join(root, 'profile_pictures'));
+    fs.writeFileSync(path.join(root, 'profile_pictures', 'photo_1@01-03-2026_10-00-00.jpg'), 'jpeg');
+    fs.mkdirSync(path.join(root, 'profile_pictures', '@eaDir'));
+    fs.writeFileSync(path.join(root, 'profile_pictures', '@eaDir', 'SYNOPHOTO_THUMB_M.jpg'), 'jpeg');
+
+    const fromFolder = await run(true);
+
+    expect(fromFolder.loose).toEqual([path.join('profile_pictures', 'photo_1@01-03-2026_10-00-00.jpg')]);
+    expect(metaAttachments(fromFolder.byId.get('telegram:2002:7')!.metadata.MediaAttachments)[0]?.path).toBe(
+      path.join(root, 'chats', 'chat_002', 'video_files', 'IMG_2231.MP4'),
+    );
+
+    // Matched on result.json alone, the folder walk still covers the rest.
+    expect((await run()).loose).toEqual([]);
+  });
+
+  it('is recognized as the whole export folder, so its media are not imported again as loose files', async () => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'tg-upload-'));
+    try {
+      fs.renameSync(root, path.join(parent, 'DataExport_2026-11-18'));
+      root = path.join(parent, 'DataExport_2026-11-18');
+
+      const matches = await dataSourcesRecognize(
+        undefined,
+        { filename: path.basename(parent), fullPath: parent, fsRoot: parent },
+        {},
+        { descend: true },
+      );
+      const telegram = matches.filter((m) => m.data_source.name === 'telegram');
+
+      expect(telegram.map((m) => m.matchedPath)).toEqual([root]);
+    } finally {
+      fs.rmSync(parent, { recursive: true, force: true });
+    }
   });
 });

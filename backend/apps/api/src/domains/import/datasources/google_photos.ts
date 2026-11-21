@@ -652,7 +652,12 @@ class GooglePhotosFileImporter implements FileImporter {
         const ext2 = path.extname(f.name);
         const editedCandidate = path.join(albumPath, `${path.basename(f.name, ext2)}-edited${ext2}`);
         if (fs.existsSync(editedCandidate)) {
-          graph.edges!.push({ relation: 'edit', to: { item: mediaItemFromFile(editedCandidate) } });
+          // Takeout gives the edited copy no sidecar of its own: it was taken
+          // when the original was, so it takes the original's time, like the
+          // motion clip below. Without it the copy was stored undated.
+          const editedItem = mediaItemFromFile(editedCandidate);
+          editedItem.timestamp = item.timestamp;
+          graph.edges!.push({ relation: 'edit', to: { item: editedItem } });
         }
 
         // Motion photo: a still paired with a short video sharing the base name.

@@ -33,6 +33,7 @@ import {
   ContentService,
   type CreateCommunicationDto,
   type CreateContentDto,
+  type CreateEventDto,
   ItemService,
   ObjectObservationService,
   ProductModelService,
@@ -329,6 +330,44 @@ export function directionAfterSender<D extends string | undefined>(
   );
 
   return senderIsSomeoneElse && ownerIsRecipient ? 'inbound' : direction;
+}
+
+/**
+ * The links between two staged items that the push writes as graph edges, and
+ * the edge each becomes between the two items' content rows. `reverse` when
+ * the staged link points from the original to what was made from it, which the
+ * graph reads the other way round.
+ */
+const ITEM_LINKS: Record<string, { type: 'PART_OF' | 'DERIVED_FROM'; reverse: boolean }> = {
+  // A photo `in_collection` its album (Google Photos, Flickr): the photo is PART_OF the album.
+  in_collection: { type: 'PART_OF', reverse: false },
+  // An original's `edit` (Google Photos `-edited` copy): the copy is DERIVED_FROM the original.
+  edit: { type: 'DERIVED_FROM', reverse: true },
+  // A motion photo's `motion_photo` clip (Live Photo video): the clip is DERIVED_FROM the still.
+  motion_photo: { type: 'DERIVED_FROM', reverse: true },
+};
+
+/**
+ * The participants-map key for the people a record DEPICTS: an `includes` edge
+ * to a `person` entity, which is how the photo importers stage a face tagged in
+ * a picture (Google Photos `people`, Flickr `people`). Kept apart from plain
+ * `includes` because other parsers use that relation for things that are not
+ * people (an Uber Eats order `includes` its dishes). Those must not become an
+ * event's participants. Not a relation any parser stages.
+ */
+const DEPICTED_PEOPLE = 'includes:person';
+
+/**
+ * The event with the people its record depicts as participants. Before this the
+ * events lane never read the participants it was handed, so a photo's tagged
+ * people were staged, resolved to Persons and then left off the photo: the
+ * graph projection turns `participant_entity_ids` into Person -PARTICIPATED_IN->
+ * Event. That column was always empty for photos.
+ */
+function withDepictedPeople(input: CreateEventDto, participants: Map<string, string[]>): CreateEventDto {
+  const people = participants.get(DEPICTED_PEOPLE);
+
+  return people?.length ? { ...input, participant_entity_ids: [...new Set(people)] } : input;
 }
 
 /** One staged row's journey through a batch: what it is, where it goes, what happened. */
@@ -733,6 +772,10 @@ export class PushStage implements ImportStageRunner {
       );
     }
 
+    // Every row is in ci.*, so the links the parser staged between two of them
+    // can be written: a photo and its album, an edited copy and its original.
+    const itemLinks = await this.linkStagedItems(context);
+
     // Everything is in ci.* now; make it searchable. Bulk-pushed rows emit no
     // per-row *CreatedEvent, so without this kick they wait for the pipeline's
     // hourly index sweeps.
@@ -823,6 +866,9 @@ export class PushStage implements ImportStageRunner {
         // Same, for link previews. Absent when no content rows were written.
         ...(unfurl ? { unfurl } : {}),
         ...(personStubs ? { personStubs } : {}),
+        // Graph edges written between staged items (albums, edits, motion
+        // photos). Absent when the run staged no such links.
+        ...(itemLinks > 0 ? { itemLinks } : {}),
         // Additive. `pushed`, `deduped`, `failed`, `destinations` and
         // `entities` above are read by RunPipeline and ImportRunService and
         // keep their exact meaning; this is the per-data-source, reconciled
@@ -1876,17 +1922,19 @@ export class PushStage implements ImportStageRunner {
     }
 
     const rows = await this.dataSource.query<
-      Array<{ item_id: string; relation: string | null; server_entity_id: string }>
+      Array<{ item_id: string; relation: string | null; server_entity_id: string; depicts?: boolean }>
     >(
-      `SELECT r.item_id, r.relation, m.server_entity_id
+      `SELECT r.item_id, r.relation, m.server_entity_id,
+              (r.relation = 'includes' AND s.type = 'person') AS depicts
          FROM ci_import.staged_relationships r
          JOIN ci_import.entity_mappings m ON m.staged_entity_id = r.entity_id
+         JOIN ci_import.staged_entities s ON s.id = r.entity_id
         WHERE r.item_id = ANY($1::uuid[])`,
       [stagedItemIds],
     );
 
     for (const row of rows) {
-      const relation = row.relation ?? 'participant';
+      const relations = [row.relation ?? 'participant', ...(row.depicts ? [DEPICTED_PEOPLE] : [])];
       let byRelation = byItem.get(row.item_id);
 
       if (!byRelation) {
@@ -1894,12 +1942,14 @@ export class PushStage implements ImportStageRunner {
         byItem.set(row.item_id, byRelation);
       }
 
-      const existing = byRelation.get(relation);
+      for (const relation of relations) {
+        const existing = byRelation.get(relation);
 
-      if (existing) {
-        existing.push(row.server_entity_id);
-      } else {
-        byRelation.set(relation, [row.server_entity_id]);
+        if (existing) {
+          existing.push(row.server_entity_id);
+        } else {
+          byRelation.set(relation, [row.server_entity_id]);
+        }
       }
     }
 
@@ -2388,8 +2438,45 @@ export class PushStage implements ImportStageRunner {
       return;
     }
 
-    const operation = `linking ${relationships.length} shared content row(s) to their events`;
+    await this.ingestEdges(
+      ctx,
+      context,
+      relationships,
+      `linking ${relationships.length} shared content row(s) to their events`,
+      'Linking shared content rows to their events failed; the edge sweep will retry',
+    );
+  }
+
+  /**
+   * Write graph edges between rows this push already wrote, fail-soft except
+   * for a database that crashed under the write (see {@link linkSharedContent}
+   * for why that one fails the stage). Returns how many edges ingest reports
+   * processed; 0 when the write failed softly.
+   *
+   * Ingest catches a failed edge write and reports it per edge as text rather
+   * than throwing, so a refusal that is not a crash (a constraint, a server
+   * that was not ready) arrives in `errors`. Those are logged with the same
+   * message as a thrown failure: read alone, they would leave the edges
+   * missing with nothing in the log to say so.
+   */
+  private async ingestEdges(
+    ctx: { userId: string; importRunId?: string },
+    context: StageRunContext,
+    relationships: Array<{
+      fromKey: string;
+      toKey: string;
+      fromEntityId: string;
+      fromEntityType: string;
+      toEntityId: string;
+      toEntityType: string;
+      type: string;
+      properties: Record<string, unknown>;
+    }>,
+    operation: string,
+    softFailure: string,
+  ): Promise<number> {
     let crashed: unknown = null;
+    let processed = 0;
 
     try {
       const result = await this.graph.ingest(ctx, { entities: [], relationships });
@@ -2399,12 +2486,21 @@ export class PushStage implements ImportStageRunner {
 
       if (message != null) {
         crashed = new Error(message);
+      } else if (result.errors.length > 0) {
+        this.logger.warn(softFailure, {
+          runId: context.runId,
+          edges: relationships.length,
+          failed: result.errors.length,
+          error: result.errors[0],
+        });
       }
+
+      processed = result.relationshipsProcessed ?? 0;
     } catch (err) {
       if (isDatabaseCrashError(err)) {
         crashed = err;
       } else {
-        this.logger.warn('Linking shared content rows to their events failed; the edge sweep will retry', {
+        this.logger.warn(softFailure, {
           runId: context.runId,
           edges: relationships.length,
           error: (err as Error).message,
@@ -2415,6 +2511,150 @@ export class PushStage implements ImportStageRunner {
     if (crashed != null) {
       throw new DatabaseCrashedDuringPushError(context.runId, operation, crashed);
     }
+
+    return processed;
+  }
+
+  /**
+   * The links a parser staged between two ITEMS, written as graph edges between
+   * the content rows the two became: a photo `PART_OF` its album, an edited copy
+   * `DERIVED_FROM` its original, a motion photo's clip `DERIVED_FROM` its still
+   * ({@link ITEM_LINKS}).
+   *
+   * The photo importers have always staged these. Nothing read them back:
+   * {@link participantsForMany} joins only the edges that point at an entity, so
+   * every album membership, edit and Live Photo pair stopped in staging.
+   *
+   * Run once after the last batch, because the two ends of a link can be pushed
+   * in different batches (an album is staged once, beside the first of its
+   * photos). Each end is found under the identity its content row is written
+   * with ({@link toContentInput}), so an end that an earlier import already
+   * wrote (and this push deduped) is found too. An end with no content row
+   * (failed, or routed nowhere) leaves its link out. Keyset-paged by edge id.
+   */
+  private async linkStagedItems(context: StageRunContext): Promise<number> {
+    const ctx = { userId: context.userId, importRunId: context.runId };
+    let after = '00000000-0000-0000-0000-000000000000';
+    let linked = 0;
+
+    for (;;) {
+      const cursor = after;
+      const edges = await this.retrying(context, 'reading the links between staged items', () =>
+        this.dataSource.query<Array<{ id: string; itemId: string; relatedItemId: string; relation: string }>>(
+          `SELECT id, item_id AS "itemId", related_item_id AS "relatedItemId", relation
+             FROM ci_import.staged_relationships
+            WHERE run_id = $1::uuid AND related_item_id IS NOT NULL AND relation = ANY($2::text[])
+              AND id > $3::uuid
+            ORDER BY id
+            LIMIT $4`,
+          [context.runId, Object.keys(ITEM_LINKS), cursor, PUSH_BATCH],
+        ),
+      );
+
+      const linkable = edges.filter((edge) => edge.itemId && edge.relatedItemId && ITEM_LINKS[edge.relation]);
+
+      if (linkable.length > 0) {
+        const contentIds = await this.contentRowsFor(context, [
+          ...new Set(linkable.flatMap((edge) => [edge.itemId, edge.relatedItemId])),
+        ]);
+        const relationships = linkable.flatMap((edge) => {
+          const link = ITEM_LINKS[edge.relation];
+          const [from, to] = link.reverse
+            ? [edge.relatedItemId, edge.itemId]
+            : [edge.itemId, edge.relatedItemId];
+          const fromId = contentIds.get(from);
+          const toId = contentIds.get(to);
+
+          // A content row keys on its file's hash, so two ends with the same
+          // bytes are one row. Ingest refuses a self-edge, which the log would
+          // then report as a failed write.
+          return fromId && toId && fromId !== toId
+            ? [
+                {
+                  fromKey: `content:${fromId}`,
+                  toKey: `content:${toId}`,
+                  fromEntityId: fromId,
+                  fromEntityType: 'Content',
+                  toEntityId: toId,
+                  toEntityType: 'Content',
+                  type: link.type,
+                  properties: { derived_from: 'import_push', relation: edge.relation },
+                },
+              ]
+            : [];
+        });
+
+        if (relationships.length > 0) {
+          linked += await this.ingestEdges(
+            ctx,
+            context,
+            relationships,
+            `linking ${relationships.length} staged item(s) to the items they belong to`,
+            'Linking staged items to each other failed; importing the export again writes the links',
+          );
+        }
+      }
+
+      if (edges.length < PUSH_BATCH) {
+        break;
+      }
+
+      after = edges[edges.length - 1].id;
+    }
+
+    return linked;
+  }
+
+  /**
+   * The `ci.content` row each staged item became, by staged item id. Rows that
+   * reached no content row (failed, routed nowhere, or routed elsewhere) are
+   * absent.
+   */
+  private async contentRowsFor(
+    context: StageRunContext,
+    stagedItemIds: string[],
+  ): Promise<Map<string, string>> {
+    const rows = await this.retrying(context, 'reading the linked staged items', () =>
+      this.dataSource.query<StagedItem[]>(
+        `SELECT ${STAGED_ITEM_COLUMNS}
+           FROM ci_import.staged_items
+          WHERE run_id = $1::uuid AND id = ANY($2::uuid[]) AND push_status IN ('pushed', 'skipped')`,
+        [context.runId, stagedItemIds],
+      ),
+    );
+
+    const identities = rows.flatMap((row) => {
+      const record = toCanonical(row);
+
+      if (!destinationsFor(record).includes('content')) {
+        return [];
+      }
+
+      const { source_system: system, source_id: sourceId } = toContentInput(record);
+
+      return system && sourceId ? [{ stagedId: row.id, system, sourceId }] : [];
+    });
+
+    if (identities.length === 0) {
+      return new Map();
+    }
+
+    const found = await this.retrying(context, 'finding the linked content rows', () =>
+      this.dataSource.query<Array<{ staged_id: string; content_id: string }>>(
+        `SELECT t.staged_id, c.id AS content_id
+           FROM unnest($2::text[], $3::text[], $4::text[]) AS t(staged_id, source_system, source_id)
+           JOIN ci.content c
+             ON c.user_id = $1::uuid AND c.source_system = t.source_system AND c.source_id = t.source_id`,
+        [
+          context.userId,
+          identities.map((identity) => identity.stagedId),
+          identities.map((identity) => identity.system),
+          identities.map((identity) => identity.sourceId),
+        ],
+      ),
+    );
+
+    return new Map(found.map((row) => [row.staged_id, row.content_id]));
   }
 
   /**
@@ -2939,7 +3179,7 @@ export class PushStage implements ImportStageRunner {
       case 'events': {
         const results = await this.events.createDetailed(
           ctx,
-          group.map((plan) => toEventInput(plan.record)),
+          group.map((plan) => withDepictedPeople(toEventInput(plan.record), plan.participants)),
         );
         group.forEach((plan, index) => {
           plan.eventId = results[index]?.entity?.id;
@@ -3170,7 +3410,9 @@ export class PushStage implements ImportStageRunner {
         // An ARRAY, deliberately: `createDetailed` is the batched path, and only
         // the batched path is idempotent. A bare object takes `createOne`, which
         // inserts unconditionally.
-        return wroteAnything(await this.events.createDetailed(ctx, [toEventInput(record)]));
+        return wroteAnything(
+          await this.events.createDetailed(ctx, [withDepictedPeople(toEventInput(record), participants)]),
+        );
       case 'things':
         return wroteAnything(await this.items.createManyDetailed(ctx, [toThingInput(record)]));
       case 'product_models': {
