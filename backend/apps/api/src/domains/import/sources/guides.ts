@@ -991,12 +991,12 @@ export const WIZARD_SOURCES: WizardSource[] = [
       UPLOAD_STEP,
     ],
     expectedFormat:
-      'A Garmin `Activities.csv` (Activity Type / Distance + Garmin-specific columns). The export also bundles `.fit`/`.gpx` activity files importable via the GPX guide.',
+      'The account export zip: activities from `DI_CONNECT/DI-Connect-Fitness/*_summarizedActivities.json` and sleep from `DI-Connect-Wellness/*_sleepData.json`. An `Activities.csv` from the Activities list (Export CSV) works too.',
     inboxPath: 'garmin',
     importer: 'garmin',
     importerReady: true,
     notes: [
-      'Export includes .fit and .gpx activity files plus JSON health summaries. Individual .gpx files can also be imported via the generic importer.',
+      'Daily summaries, the profile and personal records in the export are kept as plain files for now. The original activity files are mostly .fit, which are not read; a .gpx among them imports as a GPS track.',
     ],
   },
   {
@@ -2755,7 +2755,7 @@ export const WIZARD_SOURCES: WizardSource[] = [
     url: 'https://github.com/settings/admin',
     steps: [
       'Open GitHub → Settings → Account → "Export account data" and request your archive (emailed in a few minutes).',
-      'Unzip and find `starred_repositories.json`.',
+      'Download the `.tar.gz` the email links to.',
       'Alternatively, use a stars exporter (e.g. ghstars) to produce a `ghstars.json`.',
       UPLOAD_STEP,
     ],

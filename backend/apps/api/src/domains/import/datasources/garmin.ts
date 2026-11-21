@@ -2,16 +2,18 @@
    Header: "Activity Type,Date,Favorite,Title,Distance,Calories,Time,Avg HR,..."
    with Date "2023-01-15 10:30:00". One 'workout' event per row.
 
-   Garmin also ships a complex DI_CONNECT JSON archive; this importer targets the
-   simple Activities.csv only. Recognition is hardened so it does not collide with
+   Garmin's full account export (a DI_CONNECT JSON archive) is read through
+   _garmin_connect_export.ts. Recognition is hardened so it does not collide with
    the Strava export, whose activities.csv also carries "Activity Type"/"Distance"
    columns — we additionally require a Garmin-distinctive column.
 */
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { garminExportFileKind, importGarminExportFile, isRegularFile } from './_garmin_connect_export';
 import { parseCSV } from './csv';
-import { CsvExportImporter, type CsvExportSpec } from './csvImporter';
+import { CsvExportImporter, type CsvExportSpec, entryRoot } from './csvImporter';
+import type { DirEntry, Recognition } from './registry';
 import { registerDataSource } from './registry';
 import { readHead } from './sniff';
 import type { ImportParams } from './timeline';
@@ -48,6 +50,31 @@ export class GarminFileImporter extends CsvExportImporter {
     namedNeedsHeader: true,
     confidence: { named: 0.95, sniffed: 0.85 },
   };
+
+  // The account export's activity and sleep files are claimed one by one, so
+  // the rest of its DI_CONNECT folder is left to the other importers.
+  async recognize(ctx: unknown, entry: DirEntry): Promise<Recognition> {
+    const root = entryRoot(entry);
+
+    if (root && garminExportFileKind(root) && (await isRegularFile(root))) {
+      return { confidence: 0.95 };
+    }
+
+    return super.recognize(ctx, entry);
+  }
+
+  async fileImport(ctx: unknown, entry: DirEntry, params: ImportParams): Promise<void> {
+    const root = entryRoot(entry);
+    const kind = root ? garminExportFileKind(root) : undefined;
+
+    if (root && kind && (await isRegularFile(root))) {
+      await importGarminExportFile(root, kind, params);
+
+      return;
+    }
+
+    await super.fileImport(ctx, entry, params);
+  }
 
   // Read only the first ~4KB to inspect the CSV header row.
   private async headerMatches(fpath: string): Promise<boolean> {
@@ -136,6 +163,6 @@ registerDataSource({
   name: 'garmin',
   title: 'Garmin Connect',
   icon: '',
-  description: 'Activities from a Garmin Connect export (Activities.csv).',
+  description: 'Activities and sleep from a Garmin Connect export (Activities.csv or the account export).',
   newFileImporter: () => new GarminFileImporter(),
 });
