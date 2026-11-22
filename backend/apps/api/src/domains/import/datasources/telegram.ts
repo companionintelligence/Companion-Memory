@@ -3,10 +3,13 @@ import fs from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { insideRoot } from './_ai_media';
+import { JUNK_NAMES, walkFiles } from './fsWalk';
+import { stageLooseFile } from './generic';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
-import type { ImportParams } from './timeline';
-import { textContent, timeframeContains } from './timeline';
+import type { AttachmentDescriptor, ImportParams } from './timeline';
+import { mimeForFile, textContent, timeframeContains } from './timeline';
 
 interface TGContact {
   first_name?: string;
@@ -30,6 +33,16 @@ interface TGMessage {
   from_id?: string;
   text?: string | Array<string | TGTextEntity>;
   text_entities?: TGTextEntity[];
+  /** A sent photo: its path relative to the export folder, or a left-out note (see {@link LEFT_OUT_RE}). */
+  photo?: string;
+  /** Any other file (document, video, voice message, sticker), the same way. */
+  file?: string;
+  file_name?: string;
+  mime_type?: string;
+  /** What `file` is when it is not a plain document: `sticker`, `voice_message`, `video_file`, … */
+  media_type?: string;
+  /** The preview Telegram writes beside a video or sticker. Not attached, but not a file of its own either. */
+  thumbnail?: string;
 }
 
 interface TGChat {
@@ -65,6 +78,126 @@ function isTelegramExport(obj: unknown): obj is TGExport {
   return hasAbout && (hasPersonal || hasChats);
 }
 
+/**
+ * What Telegram Desktop writes in place of a path when the export left the
+ * bytes out: "(File not included. Change data exporting settings to
+ * download.)", or "(File exceeds maximum size. …)".
+ */
+const LEFT_OUT_RE = /^\(File /;
+
+/** A file the export left out: what it was, with Telegram's `media_type` as `kind` (`sticker`). */
+type LeftOutMedia = Omit<AttachmentDescriptor, 'path'> & { kind?: string };
+
+/**
+ * The photo and the file a message carried. `photo` and `file` are relative to
+ * the export folder (`chats/chat_001/photos/photo_1@….jpg`).
+ *
+ * `attached` are uploaded with the message. One that should be in the folder
+ * and is not (missing, or pointing outside the folder) stays there without a
+ * path, so the upload counts it as a gap in the import. `leftOut` are the ones
+ * the export's own settings left out ({@link LEFT_OUT_RE}): nothing is
+ * missing, so they only say what was sent and the import does not count them
+ * as a gap. An export leaves out every kind of media its settings did not ask
+ * for, so most exports have some.
+ */
+function telegramAttachments(
+  msg: TGMessage,
+  exportDir: string,
+): { attached: AttachmentDescriptor[]; leftOut: LeftOutMedia[] } {
+  const refs = [
+    ...(typeof msg.photo === 'string'
+      ? [{ ref: msg.photo, filename: undefined, mimetype: undefined, kind: undefined, photo: true }]
+      : []),
+    ...(typeof msg.file === 'string'
+      ? [
+          {
+            ref: msg.file,
+            filename: msg.file_name,
+            mimetype: msg.mime_type,
+            kind: msg.media_type,
+            photo: false,
+          },
+        ]
+      : []),
+  ];
+  const attached: AttachmentDescriptor[] = [];
+  const leftOut: LeftOutMedia[] = [];
+
+  for (const { ref, filename, mimetype, kind, photo } of refs) {
+    const left = LEFT_OUT_RE.test(ref);
+    const abs = left ? undefined : exportFile(exportDir, ref);
+    const name = filename || (abs ? path.basename(abs) : undefined);
+    const mime = mimetype || (name ? mimeForFile(name) : undefined);
+    const described = {
+      ...(name && { filename: name }),
+      type: photo ? ('image' as const) : attachmentType(mime),
+      ...(mime && { mimetype: mime }),
+    };
+
+    if (left) {
+      leftOut.push({ ...described, ...(typeof kind === 'string' && kind && { kind }) });
+    } else {
+      attached.push({ ...(abs && { path: abs }), ...described });
+    }
+  }
+
+  return { attached, leftOut };
+}
+
+/** `ref` as a regular file inside `exportDir`, or undefined. */
+function exportFile(exportDir: string, ref: string): string | undefined {
+  const abs = path.resolve(exportDir, ref);
+  if (!insideRoot(exportDir, abs)) {
+    return undefined;
+  }
+
+  try {
+    return fs.lstatSync(abs).isFile() ? abs : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Every file the chats' messages point at (photos, files and their
+ * thumbnails), as paths inside the export folder. What is left over in the
+ * folder is staged as loose files ({@link TelegramFileImporter.fileImport}).
+ */
+function referencedFiles(data: TGExport, exportDir: string): Set<string> {
+  const found = new Set<string>();
+
+  for (const chat of data.chats?.list ?? []) {
+    for (const msg of chat?.messages ?? []) {
+      for (const ref of [msg?.photo, msg?.file, msg?.thumbnail]) {
+        const abs =
+          typeof ref === 'string' && !LEFT_OUT_RE.test(ref) ? exportFile(exportDir, ref) : undefined;
+
+        if (abs) {
+          found.add(abs);
+        }
+      }
+    }
+  }
+
+  return found;
+}
+
+function attachmentType(mimetype: string | undefined): AttachmentDescriptor['type'] {
+  if (mimetype?.startsWith('image/')) {
+    return 'image';
+  }
+
+  if (mimetype?.startsWith('video/')) {
+    return 'video';
+  }
+
+  if (mimetype?.startsWith('audio/')) {
+    return 'audio';
+  }
+
+  return 'file';
+}
+
 export class TelegramFileImporter implements FileImporter {
   async recognize(_ctx: unknown, entry: DirEntry): Promise<Recognition> {
     const root = entry.fullPath || entry.fsRoot || entry.filename;
@@ -95,7 +228,11 @@ export class TelegramFileImporter implements FileImporter {
         if (match) {
           const obj = await this.tryParse(path.join(root, match));
           if (isTelegramExport(obj)) {
-            return { confidence: 0.9 };
+            // As sure as the result.json inside it, so the FOLDER stays the
+            // match: it holds the chats/ media this importer attaches. A match
+            // on result.json alone left the generic importer to stage every
+            // photo and file there again as a loose, undated item.
+            return { confidence: 0.95 };
           }
         }
       } catch {
@@ -228,7 +365,9 @@ export class TelegramFileImporter implements FileImporter {
         }
 
         const text = this.extractText(msg.text);
-        if (!text) {
+        // A photo or file sent without a caption is still a message.
+        const { attached, leftOut } = telegramAttachments(msg, path.dirname(fpath));
+        if (!text && attached.length === 0 && leftOut.length === 0) {
           params.pipeline.drop?.('empty_after_parse');
           continue;
         }
@@ -259,9 +398,36 @@ export class TelegramFileImporter implements FileImporter {
               Conversation: chat.name || undefined,
               Source: 'Telegram',
               Text: text || undefined,
+              // Uploaded with the message and catalogued as content of their
+              // own, as Messenger's are: a photo someone sent is worth finding
+              // by itself, not only by reading the chat.
+              ...(attached.length > 0 && { MediaAttachments: attached, AttachmentContent: true }),
+              ...(leftOut.length > 0 && { MediaLeftOut: leftOut }),
             },
           },
         });
+      }
+    }
+
+    // A folder match claims the whole export, so the folder walk no longer
+    // reaches it. The files no message points at (profile pictures, stories,
+    // the media of chats the owner left) still come in as loose files, as they
+    // did when the folder walk staged them. So does anything else in a folder
+    // that merely holds a result.json. The depth bound is far past any export.
+    if (stat.isDirectory()) {
+      const exportDir = path.dirname(fpath);
+      const referenced = referencedFiles(data, exportDir);
+
+      for await (const found of walkFiles(exportDir, { maxDepth: 32, skipHidden: true })) {
+        const file = path.resolve(found);
+        const inJunk = path
+          .relative(exportDir, file)
+          .split(path.sep)
+          .some((part) => JUNK_NAMES.has(part));
+
+        if (file !== path.resolve(fpath) && !inJunk && !referenced.has(file)) {
+          await stageLooseFile(file, params);
+        }
       }
     }
   }
