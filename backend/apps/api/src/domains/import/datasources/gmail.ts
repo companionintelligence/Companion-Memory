@@ -8,6 +8,7 @@ import readline from 'node:readline';
 import { messageIdFromHeaders, normalizeMessageId } from '@ci/domains/memory';
 
 import { extractAttachmentToFile, attachmentMediaKind } from './attachment_extract';
+import { ADDRESS_HEADERS, decodeAddressList, parseEmailAddress, splitAddressList } from './email_address';
 import { mboxFromLineDate, receivedDate } from './email_date';
 import { emailDirection, emailDirectionBasis, isDraft, keepTrustedGmailLabels } from './email_direction';
 import { decodeHeaderField, parseMime, readableBody, type ParsedMimeResult } from './email_mime';
@@ -344,7 +345,7 @@ export class GmailFileImporter implements FileImporter {
         return;
       }
 
-      for (const addr of line.split(/,/)) {
+      for (const addr of splitAddressList(line)) {
         const parsed = parseEmailAddress(addr.trim());
         // Bare addresses use the address as the name: entity dedup in persistence
         // keys on (type, name), so nameless participants would all merge into one
@@ -519,7 +520,8 @@ function parseHeaders(raw: string): Record<string, string> {
     // encodes this way, and nothing else legitimately contains the marker, so
     // decoding unconditionally is safe and keeps this one map correct
     // end-to-end rather than requiring every reader to remember to decode.
-    const val = decodeHeaderField(line.slice(idx + 1).trim());
+    const value = line.slice(idx + 1).trim();
+    const val = ADDRESS_HEADERS.has(key.toLowerCase()) ? decodeAddressList(value) : decodeHeaderField(value);
     if (!map[key]) {
       map[key] = val;
     } else {
@@ -528,31 +530,6 @@ function parseHeaders(raw: string): Record<string, string> {
   }
 
   return map;
-}
-
-function parseEmailAddress(raw: string): { name?: string; email?: string } {
-  // Formats: Name <email@domain>, "Name" <email@domain>, bare email@domain.
-  // Linear indexOf/slice — NOT a regex. The previous
-  // /^(?:"?([^"<]+)"?\s*)?<([^>]+)>$/ overlaps [^"<]+ and \s* on whitespace and
-  // backtracks quadratically: a 120k-char address header took 8.5s, and a longer
-  // one hung the ENTIRE mbox import on a single pathological message (CPU-spun at
-  // 94% with zero progress, no way to skip it).
-  const lt = raw.indexOf('<');
-  if (lt !== -1) {
-    const gt = raw.indexOf('>', lt + 1);
-    if (gt !== -1) {
-      const email = raw.slice(lt + 1, gt).trim();
-      const name = raw.slice(0, lt).trim().replace(/^"|"$/g, '').trim() || undefined;
-
-      return { name, email };
-    }
-  }
-
-  if (/^[^@]+@[^@]+$/.test(raw)) {
-    return { email: raw };
-  }
-
-  return { name: raw };
 }
 
 registerDataSource({

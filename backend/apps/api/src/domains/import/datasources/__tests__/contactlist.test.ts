@@ -872,6 +872,88 @@ describe('Outlook desktop export', () => {
  * push moves that row onto the new key instead of minting a second Person
  * (push/legacyKeys.ts).
  */
+describe('Outlook contacts: the fields a person record reads', () => {
+  it('keeps the name "First Last" and stores the birthday, middle name, job title and company', async () => {
+    const { entities } = await importCsv(
+      csvOf(OUTLOOK_HEADER, [
+        {
+          ...OUTLOOK_BLANKS,
+          'First Name': 'Ambrose',
+          'Last Name': 'Wexley-Thorne',
+          Company: 'Wexley Strings',
+          'Job Title': 'Luthier',
+          'E-mail Address': 'ambrose.wt@example.com',
+          'Mobile Phone': '+1 503 555 0142',
+          Birthday: '3/21/1987',
+        },
+        {
+          ...OUTLOOK_BLANKS,
+          'First Name': 'Thaddeus',
+          'Middle Name': 'Orrin',
+          'Last Name': 'Pembury-Vale',
+          'Home Phone': '503-555-0171',
+        },
+      ]),
+    );
+
+    expect(entities.map((e) => e.name)).toEqual(['Ambrose Wexley-Thorne', 'Thaddeus Pembury-Vale']);
+    expect(entities[0].metadata).toMatchObject({
+      first_name: 'Ambrose',
+      last_name: 'Wexley-Thorne',
+      job_title: 'Luthier',
+      organization: 'Wexley Strings',
+      birth_date: '1987-03-21',
+    });
+    expect(entities[1].metadata).toMatchObject({
+      first_name: 'Thaddeus',
+      middle_name: 'Orrin',
+      last_name: 'Pembury-Vale',
+    });
+    // Outlook's "no birthday" is not a date.
+    expect(entities[1].metadata).not.toHaveProperty('birth_date');
+  });
+
+  it.each([
+    ['1987-03-21', '1987-03-21'],
+    ['19870321', '1987-03-21'],
+    ['3/21/1987', '1987-03-21'],
+    ['21/3/1987', '1987-03-21'],
+    // Ambiguous: read month first, as English Outlook writes it.
+    ['3/4/1987', '1987-03-04'],
+    ['0/0/00', undefined],
+    ['--03-21', undefined],
+    ['2/30/1987', undefined],
+    ['3/21/87', undefined],
+  ])('reads the birthday %s as %s', async (cell, expected) => {
+    const { entities } = await importCsv(
+      csvOf(OUTLOOK_HEADER, [
+        { ...OUTLOOK_BLANKS, 'First Name': 'Ann', 'Mobile Phone': '555-010-0150', Birthday: cell },
+      ]),
+    );
+
+    expect(entities[0].metadata?.birth_date).toBe(expected);
+  });
+
+  it("names a card with no person's name after its company, not its phone number", async () => {
+    const { entities, dropped } = await importCsv(
+      csvOf(OUTLOOK_HEADER, [
+        {
+          ...OUTLOOK_BLANKS,
+          Company: 'Larkspur Credit Union',
+          'E-mail Address': 'support@larkspurcu.example.com',
+          'Business Phone': '(800) 555-0199',
+        },
+        // Nothing to key on but the company: still too thin to import.
+        { ...OUTLOOK_BLANKS, Company: 'Brindle Bakery' },
+      ]),
+    );
+
+    expect(dropped).toEqual(['insufficient_attributes']);
+    expect(entities.map((e) => e.name)).toEqual(['Larkspur Credit Union']);
+    expect(entities.map(entityIdentityKey)).toEqual(['8005550199']);
+  });
+});
+
 describe('Fax numbers', () => {
   /**
    * Google writes each number's kind in the label column beside it. Read as an

@@ -54,6 +54,51 @@ function looksRoblox(name: string): boolean {
   return name.toLowerCase().includes('roblox');
 }
 
+/** An account-information file is one row; anything far bigger is not one. */
+const MAX_ACCOUNT_FILE_BYTES = 1024 * 1024;
+
+/**
+ * A file about the account itself (`AccountInformation`, `Account_Info`,
+ * `AccountDetails`), not a list of other accounts (`BlockedAccounts`,
+ * `LinkedAccounts`) or the account's transactions.
+ */
+const ACCOUNT_FILE_RE = /^(user[\s_-]*)?account([\s_-]*(info(rmation)?|details?|profile|settings))?$/i;
+
+/**
+ * The report owner's username, from a file named like `AccountInformation`
+ * with a `Username` column or field, holding one row. Best-effort like the rest
+ * of this importer: the report's layout is undocumented.
+ */
+async function reportOwner(files: string[]): Promise<string | undefined> {
+  for (const f of files) {
+    if (!ACCOUNT_FILE_RE.test(path.basename(f, path.extname(f)))) {
+      continue;
+    }
+
+    try {
+      if ((await fsStat(f)).size > MAX_ACCOUNT_FILE_BYTES) {
+        continue;
+      }
+
+      const raw = await fs.promises.readFile(f, 'utf8');
+      const rows: unknown[] =
+        path.extname(f).toLowerCase() === '.csv' ? parseCSV(raw) : [JSON.parse(raw)].flat();
+      const row = rows.length === 1 ? rows[0] : undefined;
+      if (row && typeof row === 'object') {
+        const key = Object.keys(row).find((k) => /^user_?name$/i.test(k));
+        const value = key ? (row as Record<string, unknown>)[key] : undefined;
+        if (typeof value === 'string' && value.trim()) {
+          return value.trim();
+        }
+      }
+    } catch {
+      // unreadable: no owner from this file
+    }
+  }
+
+  return undefined;
+}
+
 export class RobloxFileImporter implements FileImporter {
   async recognize(_ctx: unknown, entry: DirEntry): Promise<Recognition> {
     const root = entry.fullPath || entry.fsRoot || entry.filename;
@@ -117,12 +162,13 @@ export class RobloxFileImporter implements FileImporter {
       this.collect(root, files);
     }
 
+    const owner = await reportOwner(files);
     for (const f of files) {
       const ext = path.extname(f).toLowerCase();
       if (ext === '.csv') {
-        await this.processCSV(f, params);
+        await this.processCSV(f, params, owner);
       } else if (ext === '.json') {
-        await this.processJSON(f, params);
+        await this.processJSON(f, params, owner);
       }
     }
   }
@@ -149,7 +195,7 @@ export class RobloxFileImporter implements FileImporter {
     }
   }
 
-  private async processCSV(fpath: string, params: ImportParams): Promise<void> {
+  private async processCSV(fpath: string, params: ImportParams, owner?: string): Promise<void> {
     let raw: string;
     try {
       raw = await fs.promises.readFile(fpath, 'utf8');
@@ -170,10 +216,10 @@ export class RobloxFileImporter implements FileImporter {
     }
 
     const kind = path.basename(fpath, path.extname(fpath));
-    rows.forEach((row, i) => this.push(row, kind, fpath, params, i));
+    rows.forEach((row, i) => this.push(row, kind, fpath, params, i, owner));
   }
 
-  private async processJSON(fpath: string, params: ImportParams): Promise<void> {
+  private async processJSON(fpath: string, params: ImportParams, owner?: string): Promise<void> {
     let raw: string;
     try {
       raw = await fs.promises.readFile(fpath, 'utf8');
@@ -211,7 +257,7 @@ export class RobloxFileImporter implements FileImporter {
 
     arr.forEach((rec, i) => {
       if (rec && typeof rec === 'object' && !Array.isArray(rec)) {
-        this.push(rec as Record<string, unknown>, kind, fpath, params, i);
+        this.push(rec as Record<string, unknown>, kind, fpath, params, i, owner);
       }
     });
   }
@@ -222,6 +268,7 @@ export class RobloxFileImporter implements FileImporter {
     fpath: string,
     params: ImportParams,
     idx: number,
+    owner?: string,
   ): void {
     const ts = findDate(rec);
     if (!timeframeContains(params.timeframe, ts)) {
@@ -247,6 +294,16 @@ export class RobloxFileImporter implements FileImporter {
       if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
         metadata[key] = v;
         n++;
+      }
+    }
+
+    // A chat row names its sender; whether that is the account holder only the
+    // report's account file says. Roblox usernames ignore case.
+    if (owner && metadata.Direction === undefined && classify(path.basename(fpath)) === 'message') {
+      const senderKey = Object.keys(rec).find((k) => /^(sender|from)(_?user_?name)?$/i.test(k));
+      const sender = senderKey ? rec[senderKey] : undefined;
+      if (typeof sender === 'string' && sender.trim()) {
+        metadata.Direction = sender.trim().toLowerCase() === owner.toLowerCase() ? 'sent' : 'received';
       }
     }
 
