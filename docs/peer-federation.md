@@ -303,7 +303,7 @@ On the **receiver**:
 | | |
 |---|---|
 | `CI_PEER_AUDIENCE` | REQUIRED for Portal-token asks — without it every Portal-token ask is `503`, indistinguishable from no peer surface. A signed `did:key` / `did:keri:D<x>` ask does not consult it |
-| `peers.requireHttpSignature` (config file, no env var) | ships `true` since 2026-11-19, which refuses any ask without a valid signature; turned off, it still refuses an unsigned ask from a peer whose link records a key. The runs below predate that and had it `false` |
+| `peers.requireHttpSignature` (config file, no env var) | ships `true` since 2026-11-19, which refuses any ask without a valid signature; turned off, it still refuses an unsigned ask from a peer whose link records a key. The runs below predate that and had it `false` The runs below predate that and had it `false` |
 | `CI_PEER_MEMORY_ENDPOINT` | the `/agent/v1` base peers store on their link to this box: `https://<host>/api/agent/v1` behind the packaged gateway (as in `docker-compose.production.yml`), which strips `/api`; a bare `https://<host>/agent/v1` there is served by the web app, which answers a POST with `405` (see [Where peers can reach this box](#where-peers-can-reach-this-box)). Signed requests are checked against `<this value>/ask`, so peers must link exactly this address. REQUIRED for a signed `did:key` / `did:keri:D<x>` ask: without it every signed ask is `503` |
 | `PORTAL_OIDC_ENABLED` / `PORTAL_OIDC_ISSUER` / `PORTAL_OIDC_JWKS_URI` | the trust anchor the peer's token is verified against |
 | the `ask` feature flag | ships `true` |
