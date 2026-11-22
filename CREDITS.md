@@ -188,6 +188,7 @@ The frameworks and libraries that define how this repository is built.
 | <img src="https://github.com/emilkowalski.png?size=40" width="20" height="20" alt=""> | [`sonner`](https://sonner.emilkowal.ski/) | MIT | An opinionated toast component for React. |
 | <img src="https://github.com/thetarnav.png?size=40" width="20" height="20" alt=""> | [`streaming-markdown`](https://thetarnav.github.io/streaming-markdown) | MIT | Streaming Markdown parser, à la ChatGPT |
 | <img src="https://github.com/dcastil.png?size=40" width="20" height="20" alt=""> | [`tailwind-merge`](https://github.com/dcastil/tailwind-merge) | MIT | Merge Tailwind CSS classes without style conflicts |
+| <img src="https://github.com/isaacs.png?size=40" width="20" height="20" alt=""> | [`tar`](https://github.com/isaacs/node-tar) | BlueOak-1.0.0 | tar for node |
 | <img src="https://github.com/composefs.png?size=40" width="20" height="20" alt=""> | [`tar`](https://github.com/composefs/tar-rs) | MIT OR Apache-2.0 | A Rust implementation of a TAR file reader and writer. This library does not currently handl |
 | <img src="https://github.com/tauri-apps.png?size=40" width="20" height="20" alt=""> | [`tauri-build`](https://tauri.app/) | Apache-2.0 OR MIT | build time code to pair with https://crates.io/crates/tauri |
 | <img src="https://github.com/tauri-apps.png?size=40" width="20" height="20" alt=""> | [`tauri-plugin-deep-link`](https://github.com/tauri-apps/plugins-workspace) | Apache-2.0 OR MIT | Set your Tauri application as the default handler for an URL |
