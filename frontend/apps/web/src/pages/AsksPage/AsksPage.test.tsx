@@ -18,11 +18,13 @@ import {
   ASK_OUTBOX,
   CREATE_ASK,
   CREATE_ASK_GRANT,
+  COLLECT_PEER_ANSWER,
   CREATE_PEER_LINK,
   MY_ASK_GRANTS,
   MY_PEER_LINKS,
   REVOKE_PEER_LINK,
   RUN_ASK,
+  SEND_PEER_ASK,
   UPDATE_ASK_GRANT,
   UPDATE_PEER_LINK,
 } from './asksOperations';
@@ -90,6 +92,8 @@ function peerRow(overrides: Record<string, unknown> = {}) {
     status: 'active',
     revokedAt: null,
     createdAt: '2026-08-01T00:00:00.000Z',
+    linkedByKey: false,
+    safetyCode: null,
     ...overrides,
   };
 }
@@ -988,7 +992,101 @@ describe('AsksPage', () => {
     // Dropping them silently would render "you have no relationship with this
     // person", which is a claim and not a loading state.
     expect(await screen.findByText(/cannot ask from here/i)).toBeInTheDocument();
+    expect(screen.getByText(/link again with an invite/i)).toBeInTheDocument();
     expect(screen.getByText(/ada/)).toBeInTheDocument();
+  });
+
+  it('asks a peer linked by key across boxes, as a signed peer ask with no token', async () => {
+    const sent: Record<string, unknown>[] = [];
+
+    renderPage([
+      ...repeated(inboxOk([])),
+      ...repeated(outboxOk),
+      ...repeated(grantsOk([])),
+      ...repeated(peersOk([peerRow({ linkedByKey: true, displayName: 'Ada' })])),
+      ...repeated(historyOk([])),
+      {
+        request: {
+          query: SEND_PEER_ASK,
+          variables: {
+            input: {
+              handle: 'ada',
+              archetype: 'relationship',
+              subject: 'Do you know Carol?',
+              dataClass: undefined,
+              prompt: 'Do you know Carol?',
+            },
+          },
+        },
+        result: (variables: Record<string, unknown>) => {
+          sent.push(variables);
+
+          return {
+            data: {
+              sendPeerAsk: {
+                __typename: 'SendPeerAskPayload',
+                success: true,
+                status: 'delivered',
+                reason: 'Peer unreachable',
+                ask: { __typename: 'AskType', id: 'ask-new', status: 'delivered' },
+              },
+            },
+          };
+        },
+      },
+    ]);
+
+    await screen.findByText(/No one is waiting on you/i);
+    openTab('Ask someone');
+
+    // A peer is offered only what the peer protocol can carry.
+    expect(await screen.findByRole('radio', { name: /Do you know…\?/ })).toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: /Are you free/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: /What is…\?/ })).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText(/lake trip/i), { target: { value: 'Do you know Carol?' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send ask' }));
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).not.toHaveProperty('input.peerAccessToken');
+    expect(await screen.findByText(/did not take it yet \(Peer unreachable\)/)).toBeInTheDocument();
+  });
+
+  it('offers to check for an answer on a sent peer ask that has none yet', async () => {
+    const collected: Record<string, unknown>[] = [];
+
+    renderPage([
+      ...repeated(inboxOk([])),
+      ...repeated(outboxAsks([askRow({ id: 'ask-out', peerHandle: 'ada', responderId: null })])),
+      ...repeated(grantsOk([])),
+      ...repeated(peersOk([peerRow({ linkedByKey: true })])),
+      ...repeated(historyOk([])),
+      {
+        request: { query: COLLECT_PEER_ANSWER, variables: { askId: 'ask-out' } },
+        result: (variables: Record<string, unknown>) => {
+          collected.push(variables);
+
+          return {
+            data: {
+              collectPeerAnswer: {
+                __typename: 'SendPeerAskPayload',
+                success: true,
+                status: 'delivered',
+                reason: null,
+                ask: { __typename: 'AskType', id: 'ask-out', status: 'delivered' },
+              },
+            },
+          };
+        },
+      },
+    ]);
+
+    await screen.findByText(/No one is waiting on you/i);
+    openTab('Sent');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Check for an answer' }));
+
+    await waitFor(() => expect(collected).toEqual([{ askId: 'ask-out' }]));
   });
 
   // ── Reading an answer ─────────────────────────────────────────────────────

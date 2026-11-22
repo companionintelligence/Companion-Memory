@@ -29,6 +29,12 @@ export interface ComposerRecipient {
   why: string;
   /** Whether a standing grant would answer without interrupting them. */
   autoAnswers?: boolean;
+  /**
+   * Set for a person on ANOTHER Companion, linked by their key: the ask goes
+   * out as `sendPeerAsk` to this handle instead of `createAsk` to `id`, and only
+   * the shapes marked `peer` can be sent.
+   */
+  peerHandle?: string;
 }
 
 export interface UnreachableRecipient {
@@ -50,6 +56,12 @@ export interface ComposerShape {
   dataClass?: string;
   /** What the responder's box can answer at most, given this shape. */
   ceiling: string;
+  /**
+   * Whether this shape can be sent to a person on another Companion. The peer
+   * protocol has three archetypes, and `availability` needs a time window this
+   * composer does not collect, so only relationship and content go across.
+   */
+  peer?: boolean;
 }
 
 interface Props {
@@ -60,7 +72,14 @@ interface Props {
    */
   unreachable?: readonly UnreachableRecipient[];
   shapes: readonly ComposerShape[];
-  onSend: (ask: { responderId: string; queryType: string; dataClass?: string; prompt: string }) => void;
+  onSend: (ask: {
+    responderId: string;
+    queryType: string;
+    dataClass?: string;
+    prompt: string;
+    /** Present when the recipient is a linked peer; see {@link ComposerRecipient.peerHandle}. */
+    peerHandle?: string;
+  }) => void;
   busy?: boolean;
 }
 
@@ -109,7 +128,8 @@ export function AskComposer({ recipients, unreachable = [], shapes, onSend, busy
   const [prompt, setPrompt] = useState('');
 
   const recipient = recipients.find((candidate) => candidate.id === recipientId) ?? null;
-  const shape = shapes.find((candidate) => candidate.id === shapeId) ?? shapes[0];
+  const offered = recipient?.peerHandle ? shapes.filter((candidate) => candidate.peer) : shapes;
+  const shape = offered.find((candidate) => candidate.id === shapeId) ?? offered[0];
   const trimmed = prompt.trim();
   const canSend = recipient != null && shape != null && trimmed.length > 0 && !busy;
 
@@ -190,7 +210,7 @@ export function AskComposer({ recipients, unreachable = [], shapes, onSend, busy
       <div className="flex flex-col gap-1">
         <span className="text-muted-foreground text-sm">What kind of question is it?</span>
         <div role="radiogroup" aria-label="Kind of question" className="flex flex-wrap gap-2">
-          {shapes.map((candidate) => (
+          {offered.map((candidate) => (
             <Button
               key={candidate.id}
               size="sm"
@@ -228,11 +248,20 @@ export function AskComposer({ recipients, unreachable = [], shapes, onSend, busy
             {recipient.name} will see exactly this, and nothing else
           </span>
           <dl className="bg-muted flex flex-col gap-1 rounded-md px-3 py-2 text-xs">
-            {[
-              { label: 'queryType', value: shape.queryType },
-              { label: 'dataClass', value: shape.dataClass ?? '(none)' },
-              { label: 'prompt', value: trimmed || '(empty)' },
-            ].map((row) => (
+            {(recipient.peerHandle
+              ? // What `sendPeerAsk` puts on the wire: the question is also the subject.
+                [
+                  { label: 'archetype', value: shape.queryType },
+                  { label: 'subject', value: trimmed || '(empty)' },
+                  { label: 'dataClass', value: shape.dataClass ?? '(none)' },
+                  { label: 'prompt', value: trimmed || '(empty)' },
+                ]
+              : [
+                  { label: 'queryType', value: shape.queryType },
+                  { label: 'dataClass', value: shape.dataClass ?? '(none)' },
+                  { label: 'prompt', value: trimmed || '(empty)' },
+                ]
+            ).map((row) => (
               <div key={row.label} className="flex gap-2">
                 <dt className="text-muted-foreground w-20 shrink-0">{row.label}</dt>
                 <dd className="min-w-0 flex-1 break-words">{row.value}</dd>
@@ -259,6 +288,7 @@ export function AskComposer({ recipients, unreachable = [], shapes, onSend, busy
               queryType: shape.queryType,
               dataClass: shape.dataClass,
               prompt: trimmed,
+              ...(recipient.peerHandle ? { peerHandle: recipient.peerHandle } : {}),
             });
             setPrompt('');
           }}
