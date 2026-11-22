@@ -40,6 +40,7 @@ interface VenmoTxn {
   from: string;
   to: string;
   amountTotal: string;
+  amountFee: string;
 }
 
 // Locate the header row, then map each subsequent data row by header name.
@@ -68,6 +69,7 @@ function parseVenmo(text: string): VenmoTxn[] {
   const fromIdx = col('From');
   const toIdx = col('To');
   const amtIdx = col('Amount (total)');
+  const feeIdx = col('Amount (fee)');
 
   const txns: VenmoTxn[] = [];
   for (let i = headerIdx + 1; i < rows.length; i++) {
@@ -93,6 +95,7 @@ function parseVenmo(text: string): VenmoTxn[] {
       from: cell(fromIdx),
       to: cell(toIdx),
       amountTotal: cell(amtIdx),
+      amountFee: cell(feeIdx),
     });
   }
 
@@ -161,7 +164,21 @@ export class VenmoFileImporter extends CsvExportImporter {
       return undefined;
     }
 
-    if (t.type === 'Standard Transfer') {
+    // A Charge is a request one person sent another; the amount's sign still
+    // says which way the money moved for the account holder.
+    if (t.type === 'Charge') {
+      if (sign === '-') {
+        return 'payment';
+      }
+
+      if (sign === '+') {
+        return 'credit';
+      }
+
+      return undefined;
+    }
+
+    if (t.type === 'Standard Transfer' || t.type === 'Instant Transfer') {
       return 'transfer';
     }
 
@@ -186,22 +203,13 @@ export class VenmoFileImporter extends CsvExportImporter {
       );
     }
 
-    // The counterparty person: the To name on an outgoing Payment, the From
-    // name on an incoming one. Only Payments name a real person — Standard
-    // Transfers carry no names and Card Payments put the card scheme in From.
+    const counterparty = this.counterpartyFor(t);
     const edges: Relationship[] = [];
-    if (t.type === 'Payment') {
-      const counterparty = t.amountTotal.startsWith('-')
-        ? { relation: 'to', name: t.to }
-        : t.amountTotal.startsWith('+')
-          ? { relation: 'from', name: t.from }
-          : undefined;
-      if (counterparty?.name) {
-        edges.push({
-          relation: counterparty.relation,
-          to: { entity: { type: 'person', name: counterparty.name } },
-        });
-      }
+    if (counterparty?.name) {
+      edges.push({
+        relation: counterparty.relation,
+        to: { entity: { type: 'person', name: counterparty.name } },
+      });
     }
 
     const amount = t.amountTotal.replace(/^([+-])\s+/, '$1');
@@ -217,7 +225,7 @@ export class VenmoFileImporter extends CsvExportImporter {
         ? [
             {
               LineNumber: 1,
-              Product: t.note || `Venmo payment${t.to ? ` to ${t.to}` : ''}`,
+              Product: t.note || `Venmo payment${counterparty?.name ? ` to ${counterparty.name}` : ''}`,
               Quantity: 1,
               Total: lineTotal,
               IsDigital: undefined,
@@ -242,12 +250,13 @@ export class VenmoFileImporter extends CsvExportImporter {
           From: t.from || undefined,
           To: t.to || undefined,
           Amount: amount || undefined,
+          Fee: t.amountFee ? t.amountFee.replace(/^([+-])\s+/, '$1') : undefined,
           'Transaction ID': t.id,
           // CANONICAL commerce keys (push/commerceKeys.ts). Venmo has no order
           // id — its transaction id is the reference — and on an outgoing
           // payment the counterparty is who was paid.
           'Order ID': t.id,
-          Merchant: classification === 'payment' ? t.to || undefined : undefined,
+          Merchant: classification === 'payment' ? counterparty?.name || undefined : undefined,
           Total: lineTotal,
           LineItems: lineItems,
           Source: 'Venmo',
@@ -255,6 +264,25 @@ export class VenmoFileImporter extends CsvExportImporter {
       },
       edges: edges.length ? edges : undefined,
     });
+  }
+
+  // The other person on a Payment or a Charge. A Payment's From pays its To.
+  // A Charge's From is the person who sent the request and its To the person
+  // asked to pay, so the roles swap: money out on a Charge went to From, money
+  // in came from To. Transfers carry no names and Card Payments put the card
+  // scheme in From, so neither names a person.
+  private counterpartyFor(t: VenmoTxn): { relation: 'to' | 'from'; name: string } | undefined {
+    const out = t.amountTotal.startsWith('-');
+    const into = t.amountTotal.startsWith('+');
+    if (t.type === 'Payment') {
+      return out ? { relation: 'to', name: t.to } : into ? { relation: 'from', name: t.from } : undefined;
+    }
+
+    if (t.type === 'Charge') {
+      return out ? { relation: 'to', name: t.from } : into ? { relation: 'from', name: t.to } : undefined;
+    }
+
+    return undefined;
   }
 }
 

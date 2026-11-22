@@ -4,16 +4,26 @@
    "# Title" heading. Notion markdown does not embed a reliable created date, so
    the timestamp is omitted unless a "Created: <date>" property line appears near
    the top of the body. One 'note' event per .md file.
+
+   A subpage sits in a folder named like its parent page (`<Title> <id>/`), so
+   the export is as deep as its deepest page. The import walks all of it.
+   Files embedded in a page (images, PDFs) sit in that page's folder and come
+   in as media. A database exports as `<Name> <id>.csv` (plus an `_all.csv`
+   copy) with one page per row in its folder; those row pages carry the same
+   properties, so the CSVs are counted as represented by them, not imported.
 */
 import fs from 'node:fs';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { extractMediaMetadata } from '@ci/common/media/exif';
+
 import { listFiles } from './fsWalk';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
+import { readHead } from './sniff';
 import type { ImportParams } from './timeline';
-import { textContent, timeframeContains } from './timeline';
+import { mediaItemFromFile, textContent, timeframeContains } from './timeline';
 
 /**
  * Notion's exporter names every page `<Title> <32-hex-id>.md` — that suffix is
@@ -25,6 +35,13 @@ const NOTION_MD_RE = /\s[0-9a-f]{32}\.md$/i;
 function isNotionMarkdownName(name: string): boolean {
   return NOTION_MD_RE.test(name);
 }
+
+/** A page's (or database's) own folder: `<Title> <32-hex id>`. */
+const NOTION_FOLDER_RE = /\s[0-9a-f]{32}$/i;
+/** A database export: `<Name> <32-hex id>.csv`, and the `_all.csv` copy newer exports add. */
+const NOTION_CSV_RE = /\s[0-9a-f]{32}(_all)?\.csv$/i;
+/** How many folders deep a page can sit. Recognition still only looks two levels down. */
+const NOTION_IMPORT_DEPTH = 32;
 
 // Recurse a directory up to `depth` levels, returning absolute paths of Notion-named *.md files.
 async function findMarkdownFiles(dir: string, depth: number, out: string[]): Promise<void> {
@@ -120,12 +137,32 @@ export class NotionFileImporter implements FileImporter {
     }
 
     const files: string[] = [];
+    const embedded: string[] = [];
     if (stat.isFile()) {
       if (path.extname(root).toLowerCase() === '.md') {
         files.push(root);
       }
     } else if (stat.isDirectory()) {
-      await findMarkdownFiles(root, 2, files);
+      for (const fpath of await listFiles(root, {
+        maxDepth: NOTION_IMPORT_DEPTH,
+        sorted: true,
+        skipHidden: true,
+      })) {
+        const name = path.basename(fpath);
+        // macOS re-zips carry an AppleDouble `._<name>` beside every file (in
+        // __MACOSX/), named like the page itself but holding no page.
+        if (name.startsWith('.') || path.relative(root, fpath).split(path.sep).includes('__MACOSX')) {
+          continue;
+        }
+
+        if (isNotionMarkdownName(name)) {
+          files.push(fpath);
+        } else if (NOTION_CSV_RE.test(name)) {
+          await this.dropDatabaseCsv(fpath, params);
+        } else if (NOTION_FOLDER_RE.test(path.basename(path.dirname(fpath)))) {
+          embedded.push(fpath);
+        }
+      }
     }
 
     for (const fpath of files) {
@@ -137,6 +174,75 @@ export class NotionFileImporter implements FileImporter {
         });
       }
     }
+
+    for (const fpath of embedded) {
+      try {
+        await this.pushEmbeddedFile(fpath, params);
+      } catch (e) {
+        params.log?.('error', `Failed to import Notion file ${path.basename(fpath)}`, {
+          error: (e as Error).message,
+        });
+      }
+    }
+  }
+
+  /**
+   * A database CSV is not imported. Its rows are pages of their own in the
+   * database's folder, unless the export left subpages out: then that folder
+   * is missing, the rows exist only in the CSV, and that is a loss.
+   */
+  private async dropDatabaseCsv(fpath: string, params: ImportParams): Promise<void> {
+    const name = path.basename(fpath);
+    const folder = path.join(path.dirname(fpath), name.replace(/(_all)?\.csv$/i, ''));
+    let hasPages = false;
+    try {
+      hasPages = fs.statSync(folder).isDirectory();
+    } catch {
+      /* no row pages */
+    }
+
+    if (hasPages) {
+      params.pipeline.drop?.('notion_database_csv', name);
+
+      return;
+    }
+
+    // A header with no rows below it is an empty database: nothing is lost.
+    // The first 64 KB settle it; an unreadable file counts as a loss.
+    const head = await readHead(fpath, 64 * 1024);
+    const hasRows = head == null || head.split(/\r?\n/).filter((line) => line.trim()).length > 1;
+
+    if (hasRows) {
+      params.pipeline.drop?.('notion_database_csv_without_pages', name);
+    }
+  }
+
+  /** A file embedded in a page: media (or a plain file) named after the page it sits in. */
+  private async pushEmbeddedFile(fpath: string, params: ImportParams): Promise<void> {
+    const folder = path.basename(path.dirname(fpath));
+    const item = mediaItemFromFile(fpath);
+    const media = await extractMediaMetadata(fpath, item.content.mediaType);
+    if (!timeframeContains(params.timeframe, media.timestamp)) {
+      return;
+    }
+
+    params.pipeline.push({
+      item: {
+        ...item,
+        // The folder carries the page's id, so the same file in another page
+        // keeps its own row.
+        id: `notion:${folder}/${path.basename(fpath)}`,
+        timestamp: media.timestamp,
+        location: media.location,
+        metadata: {
+          ...media.metadata,
+          AccuracyMeters: media.accuracyMeters ?? undefined,
+          Title: path.basename(fpath),
+          Page: folder.replace(NOTION_FOLDER_RE, '').trim() || undefined,
+          Source: 'Notion',
+        },
+      },
+    });
   }
 
   private async processFile(fpath: string, params: ImportParams): Promise<void> {

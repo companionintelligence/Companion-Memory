@@ -269,8 +269,15 @@ export const DROP_SLUG_REASONS: Readonly<Record<string, DropReason>> = {
   whatsapp_attachment_unsupported: 'media_unsupported',
   retweet_media_not_imported: 'media_unsupported',
 
+  // Carried by other records of the same export.
+  // notion.ts: a database CSV, whose rows Notion also exports as pages.
+  notion_database_csv: 'represented_elsewhere',
+
   // Shape.
   unsupported_entity_type: 'unsupported_shape',
+  // notion.ts: a database CSV exported without its row pages (subpages left
+  // out of the export). The rows exist only in the CSV, which is not read.
+  notion_database_csv_without_pages: 'unsupported_shape',
   // fitbit.ts, withings.ts: a whole file of the export this importer does not
   // read (per-reading samples, metrics with no reader yet), one per file.
   unread_export_file: 'unsupported_shape',

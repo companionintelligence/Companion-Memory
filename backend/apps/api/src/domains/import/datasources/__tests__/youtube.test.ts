@@ -1,5 +1,9 @@
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'path';
 
+import '..';
+import { dataSourcesRecognize } from '../registry';
 import type { ImportParams } from '../timeline';
 import { YouTubeFileImporter } from '../youtube';
 
@@ -358,5 +362,181 @@ describe('YouTube datasource', () => {
         fs.rmSync(dir, { recursive: true, force: true });
       }
     });
+  });
+});
+
+describe('YouTube datasource — playlists', () => {
+  let root: string;
+  const YT = 'Takeout/YouTube and YouTube Music';
+
+  const write = (rel: string, body: string): void => {
+    const fpath = path.join(root, rel);
+    fs.mkdirSync(path.dirname(fpath), { recursive: true });
+    fs.writeFileSync(fpath, body);
+  };
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'yt-playlists-'));
+    write(
+      `${YT}/history/watch-history.json`,
+      JSON.stringify([
+        {
+          header: 'YouTube',
+          title: 'Watched Blowing a brass lantern globe',
+          titleUrl: 'https://www.youtube.com/watch?v=Qx81LmP0ra1',
+          time: '2026-09-01T19:42:11.512Z',
+        },
+      ]),
+    );
+    write(
+      `${YT}/subscriptions/subscriptions.csv`,
+      'Channel Id,Channel Url,Channel Title\nUCq7Fh3Zr2LmXbWkKp9VtYzA,http://www.youtube.com/channel/UCq7Fh3Zr2LmXbWkKp9VtYzA,Glassworks\n',
+    );
+    write(
+      `${YT}/playlists/playlists.csv`,
+      'Playlist ID,Add new videos to top,Playlist Title (Original),Playlist Title (Original) Language,' +
+        'Playlist Create Timestamp,Playlist Update Timestamp,Playlist Video Order,Playlist Visibility\n' +
+        'PLz4Qm8Rt2Kda,False,Lantern references,,2026-09-02T10:00:00+00:00,2026-09-10T10:00:00+00:00,Manual,Private\n',
+    );
+    write(
+      `${YT}/playlists/Lantern references-videos.csv`,
+      'Video ID,Playlist Video Creation Timestamp\nQx81LmP0ra1,2026-09-02T10:01:00+00:00\nTm9Rv2KcLa3,2026-09-10T10:02:00+00:00\n',
+    );
+    write(
+      `${YT}/playlists/Watch later-videos.csv`,
+      'Video ID,Playlist Video Creation Timestamp\nWc3sNt7Uba2,2026-09-03T06:00:00+00:00\n',
+    );
+  });
+
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  const importFrom = async (dir: string): Promise<EmittedGraph[]> => {
+    const pipeline: EmittedGraph[] = [];
+    await new YouTubeFileImporter().fileImport({}, { filename: path.basename(dir), fullPath: dir }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    return pipeline;
+  };
+
+  it('keeps playlists/ as a match of its own and leaves the rest of the Takeout folder to the catch-all', async () => {
+    // Without subscriptions.csv nothing claims the folders above the Takeout
+    // folder, so which matches survive does not depend on readdir order.
+    fs.rmSync(path.join(root, YT, 'subscriptions'), { recursive: true });
+    write(`${YT}/videos/Glassblowing at dawn.mp4`, 'not really a video');
+    const matches = await dataSourcesRecognize(
+      undefined,
+      { filename: path.basename(root), fullPath: root, fsRoot: root },
+      {},
+      { descend: true },
+    );
+    const youtube = matches.filter((m) => m.data_source.name === 'youtube').map((m) => m.matchedPath!);
+    expect(youtube.sort()).toEqual([path.join(root, YT, 'history'), path.join(root, YT, 'playlists')]);
+    // The uploaded videos stay with the catch-all importer: no YouTube match covers them.
+    const videos = path.join(root, YT, 'videos');
+    expect(youtube.some((m) => videos === m || videos.startsWith(m + path.sep))).toBe(false);
+
+    const pipeline = (await Promise.all(youtube.map((m) => importFrom(m)))).flat();
+    expect(pipeline.map((g) => g.item.classification).sort()).toEqual([
+      'saved_media',
+      'saved_media',
+      'watch',
+    ]);
+  });
+
+  it('reads history, subscriptions and playlists when handed the whole Takeout folder', async () => {
+    const pipeline = await importFrom(path.join(root, YT));
+    expect(pipeline.map((g) => g.item.classification).sort()).toEqual([
+      'saved_media',
+      'saved_media',
+      'subscription',
+      'watch',
+    ]);
+  });
+
+  it('imports each playlist with its videos, keyed on the playlist id', async () => {
+    const playlists = (await importFrom(path.join(root, YT)))
+      .filter((g) => g.item.classification === 'saved_media')
+      .map((g) => g.item);
+    const lantern = playlists.find((p) => p.metadata.Title === 'Lantern references')!;
+    expect(lantern.id).toBe('playlist:PLz4Qm8Rt2Kda');
+    expect(lantern.timestamp).toEqual(new Date('2026-09-02T10:00:00Z'));
+    expect(lantern.metadata).toMatchObject({
+      URL: 'https://www.youtube.com/playlist?list=PLz4Qm8Rt2Kda',
+      PlaylistId: 'PLz4Qm8Rt2Kda',
+      Visibility: 'Private',
+      Source: 'YouTube',
+      Videos: [
+        {
+          VideoId: 'Qx81LmP0ra1',
+          URL: 'https://www.youtube.com/watch?v=Qx81LmP0ra1',
+          Added: '2026-09-02T10:01:00.000Z',
+        },
+        {
+          VideoId: 'Tm9Rv2KcLa3',
+          URL: 'https://www.youtube.com/watch?v=Tm9Rv2KcLa3',
+          Added: '2026-09-10T10:02:00.000Z',
+        },
+      ],
+    });
+    expect(lantern.metadata.Text).toBe(
+      'https://www.youtube.com/watch?v=Qx81LmP0ra1 (added 2026-09-02)\nhttps://www.youtube.com/watch?v=Tm9Rv2KcLa3 (added 2026-09-10)',
+    );
+
+    // Watch later is not in playlists.csv: no id to key on, so its title is.
+    const later = playlists.find((p) => p.metadata.Title === 'Watch later')!;
+    expect(later.id).toMatch(/^youtube:playlist-title:[0-9a-f]{40}$/);
+    expect(later.metadata.URL).toBeUndefined();
+    expect(later.metadata.Videos).toEqual([
+      {
+        VideoId: 'Wc3sNt7Uba2',
+        URL: 'https://www.youtube.com/watch?v=Wc3sNt7Uba2',
+        Added: '2026-09-03T06:00:00.000Z',
+      },
+    ]);
+  });
+
+  it('recognizes and imports a playlists folder uploaded on its own', async () => {
+    const dir = path.join(root, YT, 'playlists');
+    const rec = await new YouTubeFileImporter().recognize({}, { filename: 'playlists', fullPath: dir });
+    expect(rec.confidence).toBe(0.9);
+    expect((await importFrom(dir)).map((g) => g.item.metadata.Title).sort()).toEqual([
+      'Lantern references',
+      'Watch later',
+    ]);
+  });
+
+  it('keys a playlist on its id when its file name lost the punctuation of its title', async () => {
+    write(
+      `${YT}/playlists/playlists.csv`,
+      'Playlist ID,Playlist Title (Original),Playlist Create Timestamp\n' +
+        'PLk2Rt7Uc9Mz,Lanterns: brass/copper,2026-09-04T10:00:00+00:00\n',
+    );
+    fs.rmSync(path.join(root, YT, 'playlists', 'Lantern references-videos.csv'));
+    write(
+      `${YT}/playlists/Lanterns_ brass_copper-videos.csv`,
+      'Video ID,Playlist Video Creation Timestamp\nQx81LmP0ra1,2026-09-04T10:01:00+00:00\n',
+    );
+
+    const playlist = (await importFrom(path.join(root, YT, 'playlists'))).find(
+      (g) => g.item.metadata.Title === 'Lanterns: brass/copper',
+    )!.item;
+    expect(playlist.id).toBe('playlist:PLk2Rt7Uc9Mz');
+    expect(playlist.timestamp).toEqual(new Date('2026-09-04T10:00:00Z'));
+  });
+
+  it('still reads the video lists when playlists.csv has a header it does not know', async () => {
+    write(`${YT}/playlists/playlists.csv`, 'Something else entirely\n');
+    const dir = path.join(root, YT, 'playlists');
+    const rec = await new YouTubeFileImporter().recognize({}, { filename: 'playlists', fullPath: dir });
+    expect(rec.confidence).toBe(0.9);
+    expect((await importFrom(dir)).map((g) => g.item.metadata.Title).sort()).toEqual([
+      'Lantern references',
+      'Watch later',
+    ]);
   });
 });

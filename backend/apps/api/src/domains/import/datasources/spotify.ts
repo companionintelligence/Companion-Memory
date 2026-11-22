@@ -16,6 +16,10 @@ interface StreamingEntry {
   artistName?: string;
   trackName?: string;
   msPlayed?: number;
+  // The account data export's StreamingHistory_podcast_*.json rows name the
+  // show and episode instead of a track and artist.
+  podcastName?: string;
+  episodeName?: string;
 }
 
 interface EndsongEntry {
@@ -314,22 +318,41 @@ export class SpotifyFileImporter implements FileImporter {
 
     const track = e.trackName ?? '';
     const artist = e.artistName ?? '';
+    const show = e.podcastName ?? '';
+    const episode = e.episodeName ?? '';
+    const isEpisode = !track && !!(show || episode);
     const g: Graph = {
       item: {
+        // `track` is empty on a podcast row and stays in the id, so the id
+        // matches what earlier imports of the same row produced.
         id: `spotify:${file}:${idx}:${e.endTime ?? ''}:${track}:${e.msPlayed ?? ''}`,
         classification: 'listen',
         timestamp: ts,
         timespanEnd: played !== undefined ? end : undefined,
         content: {
-          filename: 'track.txt',
+          filename: isEpisode ? 'episode.txt' : 'track.txt',
           mediaType: 'audio/ogg',
-          data: async () => Buffer.from(`${artist} — ${track}`),
+          data: async () =>
+            Buffer.from(
+              isEpisode
+                ? show && episode
+                  ? `${show} — ${episode}`
+                  : show || episode
+                : `${artist} — ${track}`,
+            ),
         },
-        metadata: {
-          Track: track || undefined,
-          Artist: artist || undefined,
-          'ms Played': e.msPlayed,
-        },
+        metadata: isEpisode
+          ? {
+              Type: 'podcast',
+              Episode: episode || undefined,
+              Show: show || undefined,
+              'ms Played': e.msPlayed,
+            }
+          : {
+              Track: track || undefined,
+              Artist: artist || undefined,
+              'ms Played': e.msPlayed,
+            },
       },
     };
     params.pipeline.push(g);

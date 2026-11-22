@@ -550,8 +550,13 @@ export class InstagramFileImporter implements FileImporter {
       }
     }
 
-    const postsDir = path.join(actRoot, 'posts');
-    if (fs.existsSync(postsDir)) {
+    // Current exports keep posts_<n>.json in media/, the ones before that in
+    // content/; posts/ is the oldest layout.
+    for (const postsDir of ['posts', 'media', 'content'].map((d) => path.join(actRoot, d))) {
+      if (!fs.existsSync(postsDir)) {
+        continue;
+      }
+
       let postFiles: string[] = [];
       try {
         postFiles = fs.readdirSync(postsDir).filter((f) => /^(post_\d+|posts_\d+)\.json$/i.test(f));
@@ -559,7 +564,7 @@ export class InstagramFileImporter implements FileImporter {
         /* ignore */
       }
 
-      for (const pf of postFiles) {
+      for (const pf of postFiles.sort()) {
         await this.processPosts(path.join(postsDir, pf), params);
       }
     }
