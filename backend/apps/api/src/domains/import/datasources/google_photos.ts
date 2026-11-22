@@ -511,6 +511,7 @@ class GooglePhotosFileImporter implements FileImporter {
       } catch {
         continue;
       }
+
       // Real names in this folder. Motion clips are matched against these, not
       // with existsSync, which is case-insensitive on macOS.
       const albumNames = new Set(files.map((x) => x.name));
