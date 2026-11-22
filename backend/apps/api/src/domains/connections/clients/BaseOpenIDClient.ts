@@ -2,6 +2,7 @@ import type { Connection } from '../entities/ConnectionEntity';
 import { type CallbackRequestOrigin, openIdCallbackUrl } from '../utils/callbackUrls';
 
 import { BaseClient } from './BaseClient';
+import { providerApiUrl } from './providerApiUrl';
 import type { TokenExchange } from './types';
 
 /**
@@ -40,7 +41,8 @@ export abstract class BaseOpenIDClient extends BaseClient {
       throw new Error('API key not configured on connection');
     }
 
-    const url = endpoint.startsWith('http') ? endpoint : `${this.baseUrl}${endpoint}`;
+    // Only the provider's own API gets the key (see `providerApiUrl`).
+    const url = providerApiUrl(this.baseUrl, endpoint);
 
     const separator = url.includes('?') ? '&' : '?';
     const fullUrl = `${url}${separator}key=${apiKey}`;

@@ -64,10 +64,10 @@ function whatsAppRow(sender: string, text: string): StagedItem {
   });
 }
 
-function messengerRow(sender: string, text: string): StagedItem {
+function messengerRow(sender: string, text: string, extra: Record<string, unknown> = {}): StagedItem {
   return stagedRow({
     dataSource: 'facebook',
-    metadata: { Sender: sender, To: 'Alice Example', Conversation: 'Alice Example', Text: text },
+    metadata: { Sender: sender, To: 'Alice Example', Conversation: 'Alice Example', Text: text, ...extra },
   });
 }
 
@@ -116,6 +116,11 @@ function makeStage(
       }
 
       if (sql.trimStart().startsWith('UPDATE')) {
+        return [];
+      }
+
+      // The links between two staged items (a photo and its album): none here.
+      if (sql.includes('related_item_id IS NOT NULL')) {
         return [];
       }
 
@@ -456,6 +461,19 @@ describe('Facebook Messenger communications', () => {
     await stage.run(context);
 
     expect(sent[0].direction).toBe('inbound');
+  });
+
+  it("takes the export's own word over the account name", async () => {
+    // The importer stamps `From Me` from the export's profile. The owner's
+    // Facebook name need not be the name on their Memory account.
+    const { stage, sent } = makeStage([
+      messengerRow('Zephyrine Quillfeather', 'see you there', { 'From Me': true }),
+      messengerRow('Liam Broza', 'not me after all', { 'From Me': false }),
+    ]);
+
+    await stage.run(context);
+
+    expect(sent.map((input) => input.direction)).toEqual(['outbound', 'inbound']);
   });
 });
 

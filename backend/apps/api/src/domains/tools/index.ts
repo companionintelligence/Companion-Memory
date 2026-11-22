@@ -74,6 +74,7 @@ import { ImportRecognizePathTool } from './tools/ImportRecognizePathTool';
 import { ImportRunStatusTool } from './tools/ImportRunStatusTool';
 import { ImportScanInboxTool } from './tools/ImportScanInboxTool';
 import { InsightsExplainTool } from './tools/InsightsExplainTool';
+import { KnowledgeGetTool } from './tools/KnowledgeGetTool';
 import { MediaFindPhotosTool } from './tools/MediaFindPhotosTool';
 import { MessagingListChatsTool } from './tools/MessagingListChatsTool';
 import { MessagingListMessagesTool } from './tools/MessagingListMessagesTool';
@@ -107,6 +108,7 @@ const nativeToolInstances = [
   GetEntertainmentPreferencesTool,
   GetStreamingAvailabilityTool,
   DatabaseSearchTool,
+  KnowledgeGetTool,
   PeopleFindTool,
   PlacesFindTool,
   PlacesNextTool,

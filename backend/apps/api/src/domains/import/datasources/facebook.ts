@@ -7,8 +7,9 @@
  * (comments_and_reactions/) and Events (events/ — the ones the person joined,
  * was interested in, or created; not invitations they declined or never
  * answered), liked Pages (pages/), comments (comments_and_reactions/ and
- * groups/), posts in groups (groups/) and Marketplace listings
- * (facebook_marketplace/). Does NOT cover friends/connections, saved items
+ * groups/), posts in groups (groups/), Marketplace listings
+ * (facebook_marketplace/) and friends (connections/friends/). Does NOT cover
+ * other connections (followers, removed friends, requests), saved items
  * (the export records only "saved a product from X's post" — nothing to link
  * to), or logged_information/personal_information/preferences (location
  * history, search history, off-Facebook activity, ads). */
@@ -411,6 +412,73 @@ function attachmentMetadata(root: string, uris: string[]): Metadata {
  */
 const RECORD_FILE_RE = /\.(?:json|html)$/i;
 
+/**
+ * Where the export states its owner's name: `profile_information.json`, under
+ * `personal_information/` in exports since 2024 and at the root before that.
+ * Its key was `profile` before Meta renamed it `profile_v2`.
+ */
+const PROFILE_FILES = [
+  path.join('personal_information', 'profile_information', 'profile_information.json'),
+  path.join('profile_information', 'profile_information.json'),
+];
+/** A profile file is a few kilobytes; anything far bigger is not one. */
+const MAX_PROFILE_BYTES = 1024 * 1024;
+
+/**
+ * The export owner's display name, the one their Messenger messages carry as
+ * `sender_name`, or undefined when the export does not include its profile.
+ */
+async function readOwnerName(root: string): Promise<string | undefined> {
+  for (const rel of PROFILE_FILES) {
+    const fpath = path.join(root, rel);
+    try {
+      const st = await fs.promises.lstat(fpath);
+      if (!st.isFile() || st.size > MAX_PROFILE_BYTES) {
+        continue;
+      }
+
+      const profile = parseMetaJson<{
+        profile_v2?: { name?: { full_name?: string } };
+        profile?: { name?: { full_name?: string } };
+      }>(await fs.promises.readFile(fpath, 'utf8'));
+      const name = (profile?.profile_v2 ?? profile?.profile)?.name?.full_name?.trim();
+      if (name) {
+        return name;
+      }
+    } catch {
+      // not in this export
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Who in this thread is the export's owner: the profile's name when someone in
+ * the thread goes by it, else, in a two-person thread named after one of them,
+ * the other one (Meta titles a one-to-one thread with the other person's name).
+ * Undefined when neither tells, which leaves the push to match the sender
+ * against the Memory account's name. A profile name nobody in the thread uses
+ * (a name changed since, a different spelling) says nothing about it, so it
+ * must not mark every message there as received. Nor does the owner's name
+ * say anything about a sender who is not on the thread's roster (a former
+ * name, a member who left): those messages also go to the push's name match.
+ */
+function threadOwner(
+  owner: string | undefined,
+  names: ReadonlySet<string>,
+  participants: string[],
+  isTitle: (name: string) => boolean,
+): string | undefined {
+  if (owner && names.has(owner)) {
+    return owner;
+  }
+
+  return participants.length === 2 && participants.filter(isTitle).length === 1
+    ? participants.find((name) => !isTitle(name))
+    : undefined;
+}
+
 export class FacebookFileImporter implements FileImporter {
   /**
    * False for a tree that is media and nothing else. That is what a Meta
@@ -432,6 +500,14 @@ export class FacebookFileImporter implements FileImporter {
     try {
       st = await stat(root);
     } catch {
+      return { confidence: 0 };
+    }
+
+    // Instagram's export keeps its DMs in your_instagram_activity/messages/, in
+    // the same message_N.json layout Messenger uses, so the bare `messages` rule
+    // below matched it. That folder is Instagram's and instagram.ts reads it;
+    // claiming it here imported every Instagram DM a second time as Messenger.
+    if (path.basename(root) === 'your_instagram_activity') {
       return { confidence: 0 };
     }
 
@@ -484,6 +560,8 @@ export class FacebookFileImporter implements FileImporter {
       return;
     }
 
+    const owner = await readOwnerName(root);
+
     // Messages — JSON format lives directly under messages/<lane>/<thread>/.
     // The HTML ("Download Your Information" HTML) format nests the same tree
     // under your_facebook_activity/messages/. Try both roots; per thread,
@@ -520,12 +598,12 @@ export class FacebookFileImporter implements FileImporter {
         const jsonFiles = files.filter((f) => /^message_\d+\.json$/i.test(f)).sort();
         if (jsonFiles.length) {
           for (const mf of jsonFiles) {
-            await this.processThread(path.join(threadDir, mf), thread, root, params, seen);
+            await this.processThread(path.join(threadDir, mf), thread, root, params, seen, owner);
           }
         } else {
           const htmlFiles = files.filter((f) => /^message_\d+\.html$/i.test(f)).sort();
           for (const mf of htmlFiles) {
-            await this.processThreadHtml(path.join(threadDir, mf), thread, root, params, seen);
+            await this.processThreadHtml(path.join(threadDir, mf), thread, root, params, seen, owner);
           }
         }
       }
@@ -570,6 +648,54 @@ export class FacebookFileImporter implements FileImporter {
     await this.processGroupPosts(root, params);
     await this.processMarketplace(root, params);
     await this.processEvents(root, params);
+    await this.processFriends(root, params);
+  }
+
+  // Friends → a contact per friend (typed, like LinkedIn connections, so it
+  // reaches the graph as a Person with no address to match on) and a 'social'
+  // item on the day the friendship started. Current exports keep the list in
+  // connections/friends/; older ones in friends_and_followers/ or friends/.
+  private async processFriends(root: string, params: ImportParams): Promise<void> {
+    const file = [
+      path.join(root, 'connections', 'friends', 'your_friends.json'),
+      path.join(root, 'friends_and_followers', 'friends.json'),
+      path.join(root, 'friends', 'friends.json'),
+    ].find((f) => fs.existsSync(f));
+    if (!file) {
+      return;
+    }
+
+    const parsed = await this.readExportJson<Record<string, unknown>>(file, params);
+    const friends = parsed?.friends_v2 ?? parsed?.friends;
+    if (!Array.isArray(friends)) {
+      return;
+    }
+
+    for (const friend of friends as Array<{ name?: string; timestamp?: number }>) {
+      const name = friend?.name?.trim();
+      if (!name) {
+        params.pipeline.drop?.('unnamed_connection', 'friend without a name');
+        continue;
+      }
+
+      params.pipeline.push({ entity: { type: 'contact', name, metadata: { Source: 'Facebook' } } });
+
+      const ts = friend.timestamp ? new Date(friend.timestamp * 1000) : undefined;
+      if (!timeframeContains(params.timeframe, ts)) {
+        continue;
+      }
+
+      const title = `Became friends with ${name}`;
+      params.pipeline.push({
+        item: {
+          id: `facebook:friend:${friend.timestamp ?? ''}:${crypto.createHash('sha1').update(name).digest('hex').slice(0, 16)}`,
+          classification: 'social',
+          timestamp: ts,
+          content: textContent('friend.txt', title),
+          metadata: { Title: title, Kind: 'friend', Person: name, Source: 'Facebook' },
+        },
+      });
+    }
   }
 
   /** Parse one JSON file of the export, reporting an unreadable one to the drop ledger. */
@@ -1267,6 +1393,7 @@ export class FacebookFileImporter implements FileImporter {
     root: string,
     params: ImportParams,
     seen: Map<string, number>,
+    owner?: string,
   ): Promise<void> {
     let html: string;
     try {
@@ -1295,6 +1422,10 @@ export class FacebookFileImporter implements FileImporter {
       }
     }
 
+    // The thread name here is the folder name, so compare letters and digits only.
+    const fold = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+    const names = new Set([...participants, ...sections.map((section) => extractHeading(section) || '')]);
+    const self = threadOwner(owner, names, participants, (n) => !!thread && fold(n) === fold(thread));
     let idx = 0;
     for (const section of sections) {
       const i = idx++;
@@ -1305,6 +1436,9 @@ export class FacebookFileImporter implements FileImporter {
         const context: Metadata = {
           Sender: sender,
           To: to.length ? to.join(', ') : undefined,
+          ...(self && sender && (sender === self || participants.includes(sender))
+            ? { 'From Me': sender === self }
+            : {}),
           Thread: thread,
         };
         const text = extractEntryBodyText(section);
@@ -1426,6 +1560,7 @@ export class FacebookFileImporter implements FileImporter {
     root: string,
     params: ImportParams,
     seen: Map<string, number>,
+    owner?: string,
   ): Promise<void> {
     let raw: string;
     try {
@@ -1442,6 +1577,8 @@ export class FacebookFileImporter implements FileImporter {
     const rel = exportRelPath(root, fpath);
     // Thread roster, so each message can derive recipients (To = participants minus sender).
     const participants = (thread.participants ?? []).map((p) => p.name).filter(Boolean) as string[];
+    const names = new Set([...participants, ...(thread.messages ?? []).map((msg) => msg.sender_name ?? '')]);
+    const self = threadOwner(owner, names, participants, (n) => n === thread.title);
     let idx = 0;
     for (const msg of thread.messages ?? []) {
       const i = idx++;
@@ -1454,6 +1591,9 @@ export class FacebookFileImporter implements FileImporter {
       const context: Metadata = {
         Sender: msg.sender_name || undefined,
         To: to.length ? to.join(', ') : undefined,
+        ...(self && msg.sender_name && (msg.sender_name === self || participants.includes(msg.sender_name))
+          ? { 'From Me': msg.sender_name === self }
+          : {}),
         Conversation: thread.title || undefined,
       };
       if (!timeframeContains(params.timeframe, ts)) {

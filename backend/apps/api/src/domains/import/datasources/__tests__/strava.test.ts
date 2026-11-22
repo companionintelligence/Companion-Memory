@@ -73,6 +73,43 @@ describe('Strava datasource', () => {
     expect(workout!.item.metadata.Source).toBe('Strava');
   });
 
+  // Strava's header repeats `Elapsed Time` and `Distance`. The second Distance
+  // is metres; the first is a summary figure whose unit depends on the sport.
+  // Keyed by name alone the second overwrote the first, and the bare metres
+  // number was stored with no unit (a 5 km run read as `Distance: 5012.3`).
+  it('stores distance in kilometres from the metres column, with the unit in the key', async () => {
+    const root = path.join(FIXTURES_DIR, 'strava-export');
+    const fi = new StravaFileImporter();
+    const pipeline: EmittedGraph[] = [];
+    await fi.fileImport({}, { filename: 'strava-export', fullPath: root }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    const byName = (name: string) =>
+      pipeline.find((p) => p.item.classification === 'workout' && p.item.metadata?.Name === name)!.item;
+    expect(byName('Morning Run').metadata['Distance (km)']).toBe(5.012);
+    expect(byName('Evening Ride').metadata['Distance (km)']).toBe(25.3);
+    expect(byName('Morning Run').metadata.Distance).toBeUndefined();
+  });
+
+  it('ends each workout after its elapsed time', async () => {
+    const root = path.join(FIXTURES_DIR, 'strava-export');
+    const fi = new StravaFileImporter();
+    const pipeline: EmittedGraph[] = [];
+    await fi.fileImport({}, { filename: 'strava-export', fullPath: root }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    const run = pipeline.find(
+      (p) => p.item.classification === 'workout' && p.item.metadata?.Name === 'Morning Run',
+    )!;
+    expect(run.item.timespanEnd!.getTime() - run.item.timestamp!.getTime()).toBe(1823 * 1000);
+  });
+
   // Regression: activities.csv's "Evening Ride" row points at a .gpx.gz file.
   // Both the coordinate-peek (firstCoordFromActivity) and the full-import
   // gunzip path (processGpxFile) check fs.existsSync first, so if the .gz
@@ -142,6 +179,10 @@ describe('Strava datasource', () => {
       // the Activity Type rather than the bare 'activity.txt' filename.
       expect(workout!.item.metadata.Name).toBe('Hike');
       expect(workout!.item.content.filename).toBe('activity.txt');
+      // One Distance column and no metres column: the figure is kept, but
+      // nothing claims a unit for it.
+      expect(workout!.item.metadata.Distance).toBe(3.2);
+      expect(workout!.item.metadata['Distance (km)']).toBeUndefined();
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

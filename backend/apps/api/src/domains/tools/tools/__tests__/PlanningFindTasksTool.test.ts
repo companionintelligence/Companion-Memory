@@ -4,6 +4,8 @@ import type { Task, TaskService } from '@ci/domains/planning/task.module';
 
 import { PlanningFindTasksTool } from '../PlanningFindTasksTool';
 
+import { losAngelesPlanningTime } from './losAngelesPlanningTime';
+
 const CONTEXT = { userId: '00000000-0000-0000-0000-0000000000aa' } as RequestContext;
 
 function logger(): LoggerService {
@@ -46,7 +48,7 @@ function task(overrides: Partial<Task> = {}): Task {
 }
 
 function makeTool(findAll: jest.Mock) {
-  return new PlanningFindTasksTool({ findAll } as unknown as TaskService, logger());
+  return new PlanningFindTasksTool({ findAll } as unknown as TaskService, losAngelesPlanningTime(), logger());
 }
 
 describe('PlanningFindTasksTool', () => {
@@ -99,6 +101,20 @@ describe('PlanningFindTasksTool', () => {
     const result = await tool.execute(CONTEXT, { dueBefore: '2026-09-30T00:00:00.000Z' });
 
     expect(result.data?.map((t) => t.id)).toEqual(['a']);
+  });
+
+  it("reads a bare-date bound as the start of that day in the owner's zone", async () => {
+    const tool = makeTool(
+      jest.fn().mockResolvedValue([
+        // 11 PM on 16 November in Los Angeles: due on the 16th there, the 17th in UTC.
+        task({ id: 'late', dueAt: new Date('2026-11-17T07:00:00.000Z') }),
+        task({ id: 'next', dueAt: new Date('2026-11-17T09:00:00.000Z') }),
+      ]),
+    );
+
+    const result = await tool.execute(CONTEXT, { dueBefore: '2026-11-17' });
+
+    expect(result.data?.map((t) => t.id)).toEqual(['late']);
   });
 
   it('applies dueAfter as an inclusive lower bound', async () => {

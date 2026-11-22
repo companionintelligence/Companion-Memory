@@ -148,6 +148,31 @@ describe('ImportUploadsController.upload', () => {
     expect(fs.readFileSync(path.join(sourcePath, 'chat.html'), 'utf8')).toBe('<html></html>');
   });
 
+  it('keeps the name a loose export file is recognized by', async () => {
+    const { controller, sources } = makeController();
+
+    await controller.upload(ctx, [incomingUpload('My Clippings.txt', '==========')]);
+
+    const sourcePath = sources.registerUpload.mock.calls[0][1].sourcePath as string;
+
+    expect(path.basename(sourcePath)).toBe('My Clippings.txt');
+    expect(path.dirname(path.dirname(sourcePath))).toBe(uploadsDir);
+  });
+
+  it('keeps folder and file names with spaces in a folder upload', async () => {
+    const { controller, sources } = makeController();
+
+    await controller.upload(ctx, [incomingUpload('Saved Places.json', '{}')], {
+      paths: ['Takeout/Maps (your places)/Saved Places.json'],
+    });
+
+    const sourcePath = sources.registerUpload.mock.calls[0][1].sourcePath as string;
+
+    expect(fs.readFileSync(path.join(sourcePath, 'Maps (your places)', 'Saved Places.json'), 'utf8')).toBe(
+      '{}',
+    );
+  });
+
   it('refuses a folder upload whose path count does not match the files', async () => {
     const { controller, sources } = makeController();
 

@@ -402,6 +402,43 @@ describe('extractMediaMetadata dispatcher', () => {
     expect(result.metadata.Codec).toBe('h264');
   });
 
+  it('routes audio/* through ffprobe and keeps the recording, not its cover art', async () => {
+    // An mp3/m4a with album art reports the picture as a video stream; its
+    // size and codec describe the cover, so only the container's own fields stay.
+    mockFfprobe(
+      JSON.stringify({
+        streams: [
+          { codec_type: 'audio', codec_name: 'aac' },
+          { codec_type: 'video', codec_name: 'mjpeg', width: 600, height: 600, avg_frame_rate: '90000/1' },
+        ],
+        format: { duration: '41.2', tags: { creation_time: '2026-09-28T01:15:00.000000Z' } },
+      }),
+    );
+    const result = await extractMediaMetadata('Temple bells.m4a', 'audio/mp4');
+    expect(mockExecFile).toHaveBeenCalledTimes(1);
+    expect(result.timestamp?.toISOString()).toBe('2026-09-28T01:15:00.000Z');
+    expect(result.metadata).toEqual({ Duration: 41.2, AudioCodec: 'aac' });
+  });
+
+  it('takes no date from a music track, whose container time is when it was encoded', async () => {
+    mockFfprobe(
+      JSON.stringify({
+        streams: [{ codec_type: 'audio', codec_name: 'aac' }],
+        format: {
+          duration: '214.6',
+          tags: {
+            creation_time: '2011-03-04T19:02:11.000000Z',
+            ARTIST: 'The Tidewater Band',
+            album: 'Low Water',
+          },
+        },
+      }),
+    );
+    const result = await extractMediaMetadata('01 Harbour Lights.m4a', 'audio/mp4');
+    expect(result.timestamp).toBeUndefined();
+    expect(result.metadata).toEqual({ Duration: 214.6, AudioCodec: 'aac' });
+  });
+
   it('returns an empty result for unknown MIME', async () => {
     const result = await extractMediaMetadata('blob.bin', undefined);
     expect(result).toEqual({ metadata: {} });

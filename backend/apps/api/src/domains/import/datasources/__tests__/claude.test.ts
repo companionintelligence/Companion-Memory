@@ -2,8 +2,10 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
+import '..';
 import { ChatGPTFileImporter } from '../chatgpt';
 import { ClaudeFileImporter } from '../claude';
+import { dataSourcesRecognize } from '../registry';
 import type { Graph, ImportParams, Relationship } from '../timeline';
 
 import type { EmittedGraph, TestPipeline } from './support/emitted';
@@ -547,5 +549,174 @@ describe('Claude project extraction', () => {
     expect(text).not.toContain('empty.md');
 
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('Claude: a whole export reaches the importer', () => {
+  let root: string;
+
+  const write = (rel: string, body: unknown): void => {
+    const fpath = path.join(root, rel);
+    fs.mkdirSync(path.dirname(fpath), { recursive: true });
+    fs.writeFileSync(fpath, JSON.stringify(body));
+  };
+
+  const conversation = (attachments: unknown[] = []) => ({
+    uuid: 'conv-1',
+    name: 'Fern on the north wall',
+    chat_messages: [
+      {
+        uuid: 'msg-1',
+        text: 'And this planting plan, does it make sense?',
+        sender: 'human',
+        created_at: '2026-10-06T08:31:30.000000Z',
+        attachments,
+        files: [],
+      },
+    ],
+  });
+
+  const project = {
+    uuid: 'proj-1',
+    name: 'Garden wall ferns',
+    description: 'What grows on the north wall',
+    prompt_template: 'Keep answers short.',
+    created_at: '2026-10-06T08:40:00.000000Z',
+    updated_at: '2026-10-06T08:40:00.000000Z',
+    docs: [{ uuid: 'doc-1', filename: 'fern-list.txt', content: "hart's-tongue, wall rue" }],
+  };
+
+  beforeEach(() => {
+    // The export unzips into a folder named after the archive.
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-whole-export-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('recognizes the export folder, not conversations.json inside it, so projects/ is read', async () => {
+    const exportDir = path.join(root, 'data-2026-11-19-21-41-07-batch-0000');
+    write('data-2026-11-19-21-41-07-batch-0000/conversations.json', [conversation()]);
+    write('data-2026-11-19-21-41-07-batch-0000/memories.json', [
+      { conversations_memory: '**Top of mind**\n\nFinishing the talk.', account_uuid: 'acct-1' },
+    ]);
+    write('data-2026-11-19-21-41-07-batch-0000/projects/proj-1.json', project);
+
+    const matches = await dataSourcesRecognize(
+      undefined,
+      { filename: path.basename(root), fullPath: root, fsRoot: root },
+      {},
+      { descend: true },
+    );
+    const claude = matches.filter((m) => m.data_source.name === 'claude');
+
+    // One match, on the folder: conversations.json and memories.json are inside it.
+    expect(claude.map((m) => m.matchedPath)).toEqual([exportDir]);
+
+    const pipeline = await run({ filename: path.basename(exportDir), fullPath: exportDir });
+    expect(
+      pipeline.filter((p) => p.item.metadata.Kind === 'project').map((p) => p.item.metadata.Title),
+    ).toEqual(['Garden wall ferns']);
+    expect(pipeline.filter((p) => p.item.metadata.Kind === 'memory')).toHaveLength(1);
+  });
+
+  it('imports Projects from a single projects.json array', async () => {
+    write('conversations.json', [conversation()]);
+    write('projects.json', [
+      project,
+      { name: 'No uuid project', docs: [{ filename: 'a.md', content: 'alpha' }] },
+      7,
+    ]);
+
+    const first = (await run({ filename: path.basename(root), fullPath: root })).filter(
+      (p) => p.item.metadata.Kind === 'project',
+    );
+    expect(first.map((p) => p.item.metadata.Title)).toEqual(['Garden wall ferns', 'No uuid project']);
+    expect(first[0].item.id).toBe('claude:project:proj-1');
+    expect(first[0].item.metadata.Text).toContain('fern-list.txt');
+    // A project without a uuid is keyed on its content, the same on every import.
+    expect(first[1].item.id).toMatch(/^claude:project:[0-9a-f]{24}$/);
+    const again = (await run({ filename: path.basename(root), fullPath: root })).filter(
+      (p) => p.item.metadata.Kind === 'project',
+    );
+    expect(again.map((p) => p.item.id)).toEqual(first.map((p) => p.item.id));
+  });
+
+  it('adds the text Claude extracted from an attachment to the message', async () => {
+    write('conversations.json', [
+      conversation([
+        {
+          file_name: 'planting-plan.txt',
+          file_type: 'text/plain',
+          extracted_content: "North wall: hart's-tongue x3, maidenhair spleenwort x5, wall rue x2.",
+        },
+        { file_name: 'empty.txt', file_type: 'text/plain', extracted_content: '' },
+      ]),
+    ]);
+
+    const [message] = await run({ filename: path.basename(root), fullPath: root });
+    expect(message.item.id).toBe('msg-1');
+    expect(message.item.metadata.Text).toBe(
+      "And this planting plan, does it make sense?\n\n--- planting-plan.txt ---\nNorth wall: hart's-tongue x3, maidenhair spleenwort x5, wall rue x2.",
+    );
+  });
+
+  it('keeps a message that has only an attachment', async () => {
+    const conv = conversation([{ file_name: 'notes.txt', extracted_content: 'Buy lime mortar.' }]);
+    conv.chat_messages[0].text = '';
+    write('conversations.json', [conv]);
+
+    const pipeline = await run({ filename: path.basename(root), fullPath: root });
+    expect(pipeline.map((p) => p.item.metadata.Text)).toEqual(['--- notes.txt ---\nBuy lime mortar.']);
+  });
+
+  const recognizeTree = () =>
+    dataSourcesRecognize(
+      undefined,
+      { filename: path.basename(root), fullPath: root, fsRoot: root },
+      {},
+      { descend: true },
+    );
+
+  it('leaves loose files beside conversations.json to the catch-all importer', async () => {
+    write('conversations.json', [conversation()]);
+    fs.writeFileSync(path.join(root, 'holiday.jpg'), 'not really a photo');
+
+    const matches = await recognizeTree();
+    // The file, not the folder: a claim on the folder would drop holiday.jpg.
+    expect(matches.filter((m) => m.data_source.name === 'claude').map((m) => m.matchedPath)).toEqual([
+      path.join(root, 'conversations.json'),
+    ]);
+  });
+
+  it('keeps the export folder when it carries a JSON file the importer does not know', async () => {
+    write('conversations.json', [conversation()]);
+    write('artifacts.json', []);
+    write('projects.json', [project]);
+
+    const matches = await recognizeTree();
+    expect(matches.filter((m) => m.data_source.name === 'claude').map((m) => m.matchedPath)).toEqual([root]);
+  });
+
+  it('reads projects beside memories when the export has no conversations', async () => {
+    const exportDir = path.join(root, 'data-2026-11-19-batch-0000');
+    write('data-2026-11-19-batch-0000/conversations.json', []);
+    write('data-2026-11-19-batch-0000/memories.json', [
+      { conversations_memory: '**Top of mind**\n\nFinishing the talk.', account_uuid: 'acct-1' },
+    ]);
+    write('data-2026-11-19-batch-0000/projects.json', [project]);
+    write('data-2026-11-19-batch-0000/users.json', [{ uuid: 'acct-1' }]);
+
+    const matches = await recognizeTree();
+    expect(matches.filter((m) => m.data_source.name === 'claude').map((m) => m.matchedPath)).toEqual([
+      exportDir,
+    ]);
+
+    const pipeline = await run({ filename: path.basename(exportDir), fullPath: exportDir });
+    expect(
+      pipeline.filter((p) => p.item.metadata.Kind === 'project').map((p) => p.item.metadata.Title),
+    ).toEqual(['Garden wall ferns']);
+    expect(pipeline.filter((p) => p.item.metadata.Kind === 'memory')).toHaveLength(1);
   });
 });

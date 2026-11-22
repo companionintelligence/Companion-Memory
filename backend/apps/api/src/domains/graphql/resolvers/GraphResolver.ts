@@ -1,6 +1,8 @@
+import { UseGuards } from '@nestjs/common';
 import { Args, Int, Query, Resolver } from '@nestjs/graphql';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
+import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { GraphQueryService } from '@ci/domains/memory';
 
 import { GraphEdgeType, GraphNodeType, GraphType } from '../types/GraphType';
@@ -9,7 +11,13 @@ import { GraphEdgeType, GraphNodeType, GraphType } from '../types/GraphType';
  * GraphQL entry for the knowledge graph (#1941). Reads the same spine as the
  * REST graph controller (`ci.entities` / `ci.relationships`) so ForceGraph can
  * cut over without a second data path.
+ *
+ * Guarded like every other resolver. It was the one without a guard: it failed closed only because
+ * no strategy ran to set `context.userId`, so `toServiceContext` threw, which skipped the checks the
+ * guard makes (a deleted account, a key's capability) and left the answer to whatever else in the
+ * same operation had filled the request context first.
  */
+@UseGuards(JwtOrApiKeyAuthGuard)
 @Resolver(() => GraphType)
 export class GraphResolver {
   constructor(private readonly graphQuery: GraphQueryService) {}

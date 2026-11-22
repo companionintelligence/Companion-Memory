@@ -194,3 +194,134 @@ describe('Evernote datasource', () => {
     }
   });
 });
+
+describe('Evernote datasource — checkboxes, locations and attachments', () => {
+  // A 1x1 PNG, as Evernote inlines it.
+  const PNG_B64 =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  const ENEX = `<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE en-export SYSTEM "http://xml.evernote.com/pub/evernote-export4.dtd">
+<en-export export-date="20261120T101500Z" application="Evernote" version="10.105.4">
+  <note>
+    <title>Ferry to Hvar</title>
+    <created>20260704T081500Z</created>
+    <updated>20260704T093000Z</updated>
+    <tag>travel</tag>
+    <note-attributes><author>someone</author></note-attributes>
+    <content><![CDATA[<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE en-note SYSTEM "http://xml.evernote.com/pub/enml2.dtd">
+<en-note><div>Ferry ticket and receipt.</div><div><en-media hash="x" type="image/png" /></div></en-note>]]></content>
+    <resource>
+      <data encoding="base64">
+${PNG_B64.slice(0, 40)}
+${PNG_B64.slice(40)}
+      </data>
+      <mime>image/png</mime><width>1</width><height>1</height>
+      <resource-attributes><file-name>../../ferry-receipt.png</file-name></resource-attributes>
+    </resource>
+  </note>
+  <note>
+    <title>Packing checklist</title>
+    <created>20260628T190000Z</created>
+    <note-attributes></note-attributes>
+    <content><![CDATA[<en-note><div>Things to pack</div><div><en-todo checked="true"/>Sunscreen</div><div><en-todo checked="false"/>Snorkel</div><div><en-todo/>Hat</div></en-note>]]></content>
+  </note>
+  <note>
+    <title>Dinner in Stari Grad</title>
+    <created>20260706T201000Z</created>
+    <note-attributes><latitude>43.18418</latitude><longitude>16.59814</longitude><altitude>3.0</altitude></note-attributes>
+    <content><![CDATA[<en-note><div>Grilled fish by the water.</div></en-note>]]></content>
+  </note>
+</en-export>`;
+
+  let dir: string;
+  let store: string;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'evernote-extras-'));
+    store = fs.mkdtempSync(path.join(os.tmpdir(), 'evernote-store-'));
+    fs.writeFileSync(path.join(dir, 'Travel Journal.enex'), ENEX);
+  });
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(store, { recursive: true, force: true });
+  });
+
+  const run = async (): Promise<EmittedGraph[]> => {
+    const pipeline: EmittedGraph[] = [];
+    await new EvernoteFileImporter().fileImport({}, { filename: path.basename(dir), fullPath: dir }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+      mediaStoreDir: store,
+    } as unknown as ImportParams);
+
+    return pipeline;
+  };
+
+  const note = (pipeline: EmittedGraph[], title: string) =>
+    pipeline.find((g) => g.item.classification === 'note' && g.item.metadata.Title === title)!.item;
+
+  it('writes ticked and unticked checkboxes into the note text', async () => {
+    const text = note(await run(), 'Packing checklist').metadata.Text as string;
+    expect(text).toContain('[x] Sunscreen');
+    expect(text).toContain('[ ] Snorkel');
+    expect(text).toContain('[ ] Hat');
+  });
+
+  it("puts the note's geotag on the item", async () => {
+    const pipeline = await run();
+    expect(note(pipeline, 'Dinner in Stari Grad').location).toEqual({
+      latitude: 43.18418,
+      longitude: 16.59814,
+    });
+    expect(note(pipeline, 'Packing checklist').location).toBeUndefined();
+  });
+
+  it('imports an attachment as media written inside the media store', async () => {
+    const pipeline = await run();
+    const media = pipeline.filter((g) => g.item.classification === 'media').map((g) => g.item);
+    expect(media).toHaveLength(1);
+    const [png] = media;
+    expect(png.id).toMatch(/^evernote:resource:[0-9a-f]{32}$/);
+    expect(png.timestamp).toEqual(new Date('2026-07-04T08:15:00Z'));
+    expect(png.metadata).toEqual({ Title: 'ferry-receipt.png', Note: 'Ferry to Hvar', Source: 'Evernote' });
+    expect(png.content.filename).toBe('ferry-receipt.png');
+    expect(png.content.mediaType).toBe('image/png');
+    // The export's file name never reaches the path: the bytes sit in the store under their hash.
+    expect(path.dirname(png.intermediateLocation!)).toBe(store);
+    expect(fs.readFileSync(png.intermediateLocation!)).toEqual(Buffer.from(PNG_B64, 'base64'));
+
+    // A re-import yields the same id and reuses the stored file.
+    const again = (await run()).filter((g) => g.item.classification === 'media').map((g) => g.item.id);
+    expect(again).toEqual([png.id]);
+    expect(fs.readdirSync(store)).toHaveLength(1);
+  });
+
+  it('reads an empty coordinate as missing and types an octet-stream image by its name', async () => {
+    fs.writeFileSync(
+      path.join(dir, 'Travel Journal.enex'),
+      `<?xml version="1.0" encoding="UTF-8"?>
+<en-export>
+  <note>
+    <title>Harbour</title>
+    <created>20260705T100000Z</created>
+    <note-attributes><latitude></latitude><longitude>16.59814</longitude></note-attributes>
+    <content><![CDATA[<en-note><div>Boats.</div></en-note>]]></content>
+    <resource>
+      <data encoding="base64">${PNG_B64}</data>
+      <mime>application/octet-stream</mime>
+      <resource-attributes><file-name>harbour.png</file-name></resource-attributes>
+    </resource>
+  </note>
+</en-export>`,
+    );
+
+    const pipeline = await run();
+    expect(note(pipeline, 'Harbour').location).toBeUndefined();
+    const attachment = pipeline.find((g) => g.item.metadata.Title === 'harbour.png')!.item;
+    expect(attachment.classification).toBe('media');
+    expect(attachment.content.mediaType).toBe('image/png');
+  });
+});

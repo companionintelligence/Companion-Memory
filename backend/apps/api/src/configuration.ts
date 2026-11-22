@@ -1433,14 +1433,16 @@ export const ConfigSchema = z.object({
     /**
      * REQUIRE a valid RFC 9421 message signature on the inbound peer surface.
      *
-     * Off by default, and deliberately a separate knob from having a key: a box
-     * that starts signing must not immediately stop talking to peers that have
-     * not yet upgraded. The rollout is (1) both sides configure a key and sign,
-     * (2) both sides turn this on. Turning it on with peers that do not sign
-     * refuses them -- which is the point, but it is the operator's call and not
-     * a side effect of setting a key.
+     * ON by default since every person got a key of their own
+     * (`PeerIdentityService`) and every outbound ask and collect is signed with
+     * it. Off was a rollout setting, for the time when only a hand-configured
+     * box key could sign; with it off a leaked Portal token was a complete
+     * impersonation of a peer for its lifetime, and a replay went undetected.
+     * Turning it off again accepts unsigned Portal-token asks from peers whose
+     * link records no key, for a peer running a release from before per-person
+     * keys; a link that records a key always needs a signature either way.
      */
-    requireHttpSignature: z.coerce.boolean().default(false),
+    requireHttpSignature: z.coerce.boolean().default(true),
     /**
      * This box's Ed25519 signing key, as a PRIVATE JWK (JSON string or object).
      *
@@ -1926,8 +1928,9 @@ if (parsed.peers.allowCgnatEndpoints) {
  * message signature: `peers.audience` is bound (so Portal-token asks are served
  * at all, see `PeerAskController`) and `peers.requireHttpSignature` is off.
  *
- * That is the shipped default once an operator binds an audience. The bearer
- * token alone then authenticates the ask, so a leaked token works for its whole
+ * Not the shipped default (the requirement ships on); an operator who turns it off gets it. The bearer
+ * token alone then authenticates an ask from a peer whose link records no key
+ * (a link that records one always needs a signature, see `PeerAskController`), so a leaked token works for its whole
  * lifetime and replay is not detected; only a signature binds the token to one
  * request. The default stays off for interoperability with peers that do not
  * sign yet, so this is surfaced rather than refused.
@@ -1941,8 +1944,8 @@ export function acceptsUnsignedPeerAsks(
 if (acceptsUnsignedPeerAsks()) {
   console.warn(
     '[configuration] peers.audience is set and peers.requireHttpSignature is off — inbound peer asks ' +
-      'that carry only a Portal token are accepted without an HTTP message signature, so a leaked ' +
-      'token is enough to ask as that peer and a replayed request is not detected. Turn on ' +
+      'that carry only a Portal token are accepted without an HTTP message signature from any peer ' +
+      'whose link records no key, so a leaked token is enough to ask as such a peer and a replayed request is not detected. Turn on ' +
       'peers.requireHttpSignature once every linked peer signs (see docs/peer-federation.md).',
   );
 }

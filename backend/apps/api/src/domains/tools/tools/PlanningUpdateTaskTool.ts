@@ -3,14 +3,18 @@ import { z } from 'zod/v3';
 
 import { type RequestContext, toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { TaskService, type Task } from '@ci/domains/planning/task.module';
+import { PlanningTimeService, TaskService, type Task } from '@ci/domains/planning/task.module';
 
 import { BaseTool } from '../core/BaseTool';
 import type { IntentDefinition, IntentPrivacy, ToolExecutionContext } from '../core/types';
 
-function isValidIsoInstant(value: string): boolean {
-  return !Number.isNaN(Date.parse(value));
-}
+import {
+  LOCAL_TIME_FORM,
+  localTime,
+  resolveLocalTime,
+  timeZoneInput,
+  timeZoneParameter,
+} from './ownerLocalTime';
 
 const PlanningUpdateTaskInputSchema = z
   .object({
@@ -21,7 +25,7 @@ const PlanningUpdateTaskInputSchema = z
     // Mirrors ci.tasks' `tasks_priority_check` (see TaskResolver.assertTaskFields).
     priority: z.number().int().min(0).max(5).optional(),
     parentId: z.string().uuid().optional(),
-    dueAt: z.string().refine(isValidIsoInstant, 'dueAt must be a valid ISO 8601 date/time').optional(),
+    dueAt: localTime('dueAt').optional(),
     // Owner-local `YYYY-MM-DD` — an input to PlanningTimeService, never its output.
     scheduledFor: z
       .string()
@@ -39,6 +43,10 @@ const PlanningUpdateTaskInputSchema = z
       .optional(),
     estimatedMinutes: z.number().int().min(1).optional(),
     actualMinutes: z.number().int().min(0).optional(),
+    timeZone: timeZoneInput,
+  })
+  .refine((data) => !(data.timeZone && !data.dueAt), {
+    message: 'timeZone only applies with dueAt',
   })
   .refine((data) => Object.keys(data).length > 1, {
     message: 'At least one field to update must be provided',
@@ -95,7 +103,7 @@ export class PlanningUpdateTaskTool extends BaseTool<PlanningUpdateTaskInput, Ta
       'Update fields on an existing task in the personal to-do list. Only the fields provided ' +
       'are changed. Does not accept status — use planning.acceptProposedTask or ' +
       'planning.declineProposedTask to review a proposed task, and planning.completeTask to mark a task done. ' +
-      'dueAt is an instant (ISO 8601); scheduledFor/deferUntil are owner-local calendar dates ' +
+      'dueAt is a local date and time (YYYY-MM-DDTHH:MM, no offset); scheduledFor/deferUntil are owner-local calendar dates ' +
       '(YYYY-MM-DD); taskTime is a zoneless wall-clock time (HH:MM).',
     privacy: { access: 'write', sensitivity: 'personal', destructive: false, external: false },
     // Every field here is the user's own data, freely re-editable by another call — the same
@@ -112,7 +120,7 @@ export class PlanningUpdateTaskTool extends BaseTool<PlanningUpdateTaskInput, Ta
         notes: { type: 'string', description: 'Freeform notes.', maxLength: 10000 },
         priority: { type: 'integer', minimum: 0, maximum: 5, description: '0 (highest) to 5 (lowest).' },
         parentId: { type: 'string', format: 'uuid', description: 'New parent task id, to nest this task.' },
-        dueAt: { type: 'string', description: 'ISO 8601 instant this task is due by.' },
+        dueAt: { type: 'string', description: `When this task is due by: ${LOCAL_TIME_FORM}.` },
         scheduledFor: {
           type: 'string',
           description: 'Owner-local calendar date (YYYY-MM-DD) to work on this.',
@@ -124,6 +132,7 @@ export class PlanningUpdateTaskTool extends BaseTool<PlanningUpdateTaskInput, Ta
         },
         estimatedMinutes: { type: 'integer', minimum: 1, description: 'Estimated effort in minutes.' },
         actualMinutes: { type: 'integer', minimum: 0, description: 'Actual time spent, in minutes.' },
+        timeZone: timeZoneParameter('dueAt'),
       },
       required: ['taskId'],
       additionalProperties: false,
@@ -133,7 +142,7 @@ export class PlanningUpdateTaskTool extends BaseTool<PlanningUpdateTaskInput, Ta
         input: {
           taskId: '11111111-1111-1111-1111-111111111111',
           priority: 0,
-          dueAt: '2026-09-25T17:00:00.000Z',
+          dueAt: '2026-09-25T17:00',
         },
         output: { id: '11111111-1111-1111-1111-111111111111', priority: 0 },
         description: 'Raise a task to top priority and push its due date',
@@ -143,6 +152,7 @@ export class PlanningUpdateTaskTool extends BaseTool<PlanningUpdateTaskInput, Ta
 
   constructor(
     private readonly taskService: TaskService,
+    private readonly planningTime: PlanningTimeService,
     protected readonly logger: LoggerService,
   ) {
     super();
@@ -194,11 +204,13 @@ export class PlanningUpdateTaskTool extends BaseTool<PlanningUpdateTaskInput, Ta
     input: PlanningUpdateTaskInput,
   ): Promise<Task> {
     const serviceContext = toServiceContext(context);
-    const { taskId, dueAt, ...rest } = input;
+    const { taskId, dueAt, timeZone, ...rest } = input;
 
     const task = await this.taskService.update(serviceContext, taskId, {
       ...rest,
-      ...(dueAt !== undefined ? { dueAt: new Date(dueAt) } : {}),
+      ...(dueAt !== undefined
+        ? { dueAt: await resolveLocalTime(this.planningTime, serviceContext, dueAt, timeZone) }
+        : {}),
     });
 
     if (task == null) {

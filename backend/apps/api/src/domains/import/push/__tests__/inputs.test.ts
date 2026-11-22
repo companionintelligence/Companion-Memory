@@ -456,6 +456,33 @@ describe('toCommunicationInput', () => {
     expect(toCommunicationInput(outbound).direction).toBe('outbound');
   });
 
+  it('splits a chat roster on every comma, whatever brackets its names hold', () => {
+    const chat = recordFor({
+      classification: 'message',
+      dataSource: 'instagram',
+      metadata: { Sender: 'Dagny Velloreaux', To: 'Ann :(, Bob, Sam :)', Text: 'hi' },
+    });
+
+    expect(toCommunicationInput(chat).participants_metadata?.to).toEqual(['Ann :(', 'Bob', 'Sam :)']);
+  });
+
+  it('keeps Cc as cc and lists recipients without cutting a quoted "Last, First" name', () => {
+    const mail = recordFor({
+      classification: 'email',
+      metadata: {
+        From: '"Wexley-Thorne, Ambrose" <ambrose.wt@example.com>',
+        To: '"Quillfeather, Zephyrine" <z.q@example.com>, Corvina Haskett <c.h@example.org>',
+        Cc: '"Marchbanks, Isolde" <isolde.m@example.org>',
+      },
+    });
+
+    expect(toCommunicationInput(mail).participants_metadata).toEqual({
+      from: '"Wexley-Thorne, Ambrose" <ambrose.wt@example.com>',
+      to: ['"Quillfeather, Zephyrine" <z.q@example.com>', 'Corvina Haskett <c.h@example.org>'],
+      cc: ['"Marchbanks, Isolde" <isolde.m@example.org>'],
+    });
+  });
+
   // ci.communications had no metadata column at all, so a field a parser set
   // that has no dedicated one was silently dropped at push — a tweet's
   // permalink, likes, retweets, language and reply-parent, concretely.
@@ -490,6 +517,36 @@ describe('toCommunicationInput', () => {
     expect(input.duration_seconds).toBe(90);
     expect(input.subject).toBe('Weekly sync');
     expect(input.metadata).toMatchObject({ Duration: 90, Subject: 'Weekly sync' });
+  });
+
+  it('rounds a fractional call duration to the whole seconds the column holds', () => {
+    // `duration_seconds` is INTEGER. A macOS call of 312.5 s reached it as is
+    // and Postgres refused the whole call; the exact value stays in metadata.
+    const call = recordFor({
+      classification: 'call',
+      dataSource: 'macos_activity',
+      metadata: { Duration: 312.5 },
+    });
+    const input = toCommunicationInput(call);
+
+    expect(input.duration_seconds).toBe(313);
+    expect(input.metadata).toMatchObject({ Duration: 312.5 });
+    expect(
+      toCommunicationInput(recordFor({ classification: 'call', metadata: { Duration: '64.4' } }))
+        .duration_seconds,
+    ).toBe(64);
+    expect(
+      toCommunicationInput(recordFor({ classification: 'call', metadata: { Duration: 0 } })).duration_seconds,
+    ).toBe(0);
+  });
+
+  it('leaves out a call duration that is not a usable number', () => {
+    for (const Duration of ['about a minute', -5, -0.4, '', '  ', false, 3e9]) {
+      const input = toCommunicationInput(recordFor({ classification: 'call', metadata: { Duration } }));
+
+      expect(input.duration_seconds).toBeUndefined();
+      expect(input.metadata).toMatchObject({ Duration });
+    }
   });
 
   describe('Reddit posts and comments', () => {

@@ -50,8 +50,8 @@ export type ConsentSource =
  * The lock's four states, weakest first.
  *
  * `open` is deliberately NOT alarming and `sealed` is deliberately not the
- * default: signatures ship off (`peers.requireHttpSignature`), and a local ask
- * never crosses a network boundary at all, so most disclosures are honestly
+ * default: a local ask never crosses a network boundary at all (and a box may
+ * turn `peers.requireHttpSignature` off), so most disclosures are honestly
  * `consented`. A UI that painted the common case as a warning would train
  * people to ignore the warning.
  */

@@ -19,6 +19,14 @@ import config from '@ci/configuration';
 import type { AskChannelProvenance } from '@ci/domains/asks';
 
 import { SignatureFormatError, parseSignatureHeaders } from '../httpSignature';
+import {
+  claimedKeyId,
+  extractBearer,
+  header,
+  parseRawJson,
+  publishedBase,
+  signedTargetUri,
+} from '../peerRequest';
 import { PEER_ASK_ID_PATTERN, peerAskBodySchema, type PeerAskResponse } from '../protocol';
 import {
   isSelfCertifyingIssuer,
@@ -208,11 +216,14 @@ export class PeerAskController {
    * same link, over a digest of this exact body, with a nonce that makes a
    * replay detectable.
    *
-   * On the shipped defaults that is optional. `peers.requireHttpSignature` is
-   * off, so a request with no signature headers returns early below and the
-   * Portal token alone authenticates it: a leaked token is enough to ask as
-   * that peer, and a replay is not detected. Only with the flag on does every
-   * request have to carry a valid signature, and an unsigned one is refused.
+   * `peers.requireHttpSignature` ships on, so by default every request has to
+   * carry a valid signature. With it turned off, that is optional only for a
+   * peer whose link records NO key: an unsigned request from such a peer
+   * returns early below and the Portal token alone
+   * authenticates it: a leaked token is enough to ask as that peer, and a
+   * replay is not detected. An unsigned request from a peer whose link DOES
+   * record a key is refused whatever the flag says. With the flag on, every
+   * request has to carry a valid signature, keyless links included.
    * The boot-time warning in `configuration.ts` reports the default state.
    *
    * Making the KEY the primary identity (and the Portal token an optional
@@ -246,10 +257,22 @@ export class PeerAskController {
   ): Promise<AskChannelProvenance | null> {
     const hasSignatureHeaders = request.headers['signature-input'] != null;
 
-    // Not required and not offered: nothing to check. A box that has not yet
-    // turned the requirement on must keep talking to peers that do not sign.
+    // Not required and not offered: nothing to check, UNLESS the owner has
+    // recorded a key for this peer. A box that has not yet turned the
+    // requirement on must keep talking to peers that cannot sign, but a peer
+    // whose key is on its link can, and `PeerAskClient` signs every call once
+    // a key is configured. An unsigned request naming that peer is therefore
+    // a bearer token without the key behind it: refusing it here is what stops
+    // a leaked or replayed token from asking as a peer that signs, while the
+    // box-wide switch is still off for the peers that do not.
     if (!this.signatureService.required && !hasSignatureHeaders) {
-      return null;
+      const links = await this.peerLinkService.findActiveByPeerIdentity(identity.issuer, identity.subject);
+      if (!links.some((candidate) => candidate.peerKeyJwk != null)) {
+        return null;
+      }
+
+      this.logger.warn(`peer ask refused: unsigned, but the peer's link records a key (${identity.issuer})`);
+      throw new UnauthorizedException(SIGNATURE_REFUSED);
     }
 
     if (!hasSignatureHeaders) {
@@ -357,125 +380,4 @@ export class PeerAskController {
 }
 
 /** The ONE refusal a signature failure ever produces. See {@link PeerAskController.assertSignature}. */
-const SIGNATURE_REFUSED = 'Invalid token';
-
-/** The path every peer route is served under, as this process receives it. */
-const PEER_ROUTE_PREFIX = '/agent/v1';
-
-/**
- * This box's published `/agent/v1` base: the origin and path of
- * `peers.memoryEndpoint`, with no trailing slash, query or fragment.
- *
- * Peers sign `${memoryEndpoint}/ask` (and `${memoryEndpoint}/ask/<correlation>`
- * to collect): `PeerAskClient` signs the very URL it dials. Behind Companion
- * Memory's gateway the base is `https://<host>/api/agent/v1`, and the gateway
- * strips `/api` before proxying, so this process sees `/agent/v1/...` and the
- * prefix survives only in config. The authority and any path prefix therefore
- * come from config, never from `Host` or a forwarded header: a server behind a
- * reverse proxy has to know the original request URI to use `@target-uri`
- * (RFC 9421 section 1.4), and a header says whatever the caller wrote.
- *
- * Returns null for anything empty or unparseable, and for a URL with no origin
- * of its own (`mailto:` and the like), which the caller turns into a refusal
- * rather than a guess.
- */
-function publishedBase(endpoint: string | undefined): string | null {
-  const trimmed = endpoint?.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  let url: URL;
-  try {
-    url = new URL(trimmed);
-  } catch {
-    return null;
-  }
-
-  // `URL.origin` is the string 'null' for a scheme with an opaque origin.
-  if (url.origin === 'null') {
-    return null;
-  }
-
-  return `${url.origin}${url.pathname.replace(/\/+$/, '')}`;
-}
-
-/**
- * The `@target-uri` a peer signed, rebuilt from this box's {@link publishedBase}
- * and the path the route `received`; null when that path is outside
- * `/agent/v1`.
- *
- * A base that ends in `/agent/v1` (`https://<host>/api/agent/v1` behind the
- * gateway, `https://<host>/agent/v1` in front of the API itself) is followed by
- * whatever was received after `/agent/v1`. Any other base, such as an endpoint
- * published at the bare origin, is read as its origin plus the path received,
- * as before.
- */
-function signedTargetUri(base: string, received: string): string | null {
-  const onPeerRoute =
-    received === PEER_ROUTE_PREFIX ||
-    received.startsWith(`${PEER_ROUTE_PREFIX}/`) ||
-    received.startsWith(`${PEER_ROUTE_PREFIX}?`);
-  if (!onPeerRoute) {
-    return null;
-  }
-
-  const url = new URL(base);
-  if (url.pathname.endsWith(PEER_ROUTE_PREFIX)) {
-    return `${base}${received.slice(PEER_ROUTE_PREFIX.length)}`;
-  }
-
-  return `${url.origin}${received}`;
-}
-
-/**
- * The JSON value in the bytes this box kept for the request; undefined when it
- * kept none, or they are empty or not JSON, which the ask schema then refuses
- * as a malformed ask.
- */
-function parseRawJson(raw: string | undefined): unknown {
-  if (raw == null || raw.length === 0) {
-    return undefined;
-  }
-
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return undefined;
-  }
-}
-
-/** The keyid a request's signature names, unverified; null when there is none to read. */
-function claimedKeyId(request: RawBodyRequest): string | null {
-  if (request.headers['signature-input'] == null) {
-    return null;
-  }
-
-  try {
-    return parseSignatureHeaders(header(request, 'signature-input'), header(request, 'signature')).params
-      .keyid;
-  } catch (error) {
-    if (error instanceof SignatureFormatError) {
-      return null;
-    }
-
-    throw error;
-  }
-}
-
-/** Read a single-valued header, dropping the array form express allows. */
-function header(request: RawBodyRequest, name: string): string | undefined {
-  const value = request.headers[name];
-
-  return typeof value === 'string' ? value : undefined;
-}
-
-function extractBearer(header: string | undefined): string | null {
-  if (!header) {
-    return null;
-  }
-
-  const [scheme, value] = header.split(' ');
-
-  return scheme?.toLowerCase() === 'bearer' && value ? value.trim() : null;
-}
+export const SIGNATURE_REFUSED = 'Invalid token';

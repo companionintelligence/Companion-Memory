@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import { z } from 'zod/v3';
 
 import { Context, type RequestContext } from '@ci/common/context/';
@@ -7,7 +7,7 @@ import { ApplianceAdminGuard, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { ValidationPipe } from '@ci/common/pipes';
 
 import { JobControlsDto, JobControlsService } from '../services/JobControlsService';
-import { JobDashboardDto, JobMonitorService } from '../services/JobMonitorService';
+import { JobDashboardDto, type JobFailureViewer, JobMonitorService } from '../services/JobMonitorService';
 import {
   JobCategoryHistoryDto,
   JobHistoryDto,
@@ -71,12 +71,18 @@ const jobControlsSchema = z.object({
 
 type JobControlsBody = z.infer<typeof jobControlsSchema>;
 
+/** The parts of the request `ApplianceAdminGuard.admits` reads. */
+type JobsRequest = { user?: { role?: string }; portalPrincipal?: { admin: boolean } };
+
 /**
  * The Jobs dashboard's REST surface.
  *
  * Everything here is APPLIANCE-WIDE rather than per-account: `JobMonitorService`
  * and `JobQueryService` read `pgboss.job` / `ci.job_metrics` with no tenancy
  * predicate, so any authenticated principal sees every account's job metadata.
+ * Not its failures: a failure's message and stack name what the job was working
+ * on, so only an administrator or the job's own account reads one
+ * (`JobFailureViewer`).
  * On the single-owner appliance this ships as that is the intended view, but it
  * is not confined to one — and no guard here can confine it, because the scoping
  * that would has to happen in the queries.
@@ -119,13 +125,32 @@ export class JobsController {
     private readonly jobMonitorService: JobMonitorService,
     private readonly jobQueryService: JobQueryService,
     private readonly jobControlsService: JobControlsService,
+    private readonly applianceAdminGuard: ApplianceAdminGuard,
   ) {}
+
+  /**
+   * Who is reading, for the failures in a response: an administrator sees every job's, anyone else
+   * only their own (`JobFailureViewer`). The admin probe fails closed.
+   */
+  private async viewerOf(context: RequestContext, request: JobsRequest): Promise<JobFailureViewer> {
+    let admin = false;
+    try {
+      admin = await this.applianceAdminGuard.admits(request.user, request);
+    } catch {
+      // Unknown means "no".
+    }
+
+    return { userId: context.userId ?? '', admin };
+  }
 
   @UseGuards(JwtOrApiKeyAuthGuard)
   @RequireCapability(READ_CAPABILITY)
   @Get('dashboard')
-  getDashboard(@Context() context: RequestContext): Promise<JobDashboardDto> {
-    return this.jobMonitorService.getDashboard(context);
+  async getDashboard(
+    @Context() context: RequestContext,
+    @Req() request: JobsRequest,
+  ): Promise<JobDashboardDto> {
+    return this.jobMonitorService.getDashboard(context, await this.viewerOf(context, request));
   }
 
   /**
@@ -209,8 +234,9 @@ export class JobsController {
   @UseGuards(JwtOrApiKeyAuthGuard)
   @RequireCapability(READ_CAPABILITY)
   @Get()
-  list(
+  async list(
     @Context() context: RequestContext,
+    @Req() request: JobsRequest,
     @Query('state') state?: string,
     @Query('queue') queue?: string,
     @Query('category') category?: string,
@@ -219,15 +245,19 @@ export class JobsController {
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
   ): Promise<JobListDto> {
-    return this.jobQueryService.list(context, {
-      state,
-      queue,
-      category,
-      type,
-      search,
-      limit: limit ? Number(limit) : undefined,
-      offset: offset ? Number(offset) : undefined,
-    });
+    return this.jobQueryService.list(
+      context,
+      {
+        state,
+        queue,
+        category,
+        type,
+        search,
+        limit: limit ? Number(limit) : undefined,
+        offset: offset ? Number(offset) : undefined,
+      },
+      await this.viewerOf(context, request),
+    );
   }
 
   /**

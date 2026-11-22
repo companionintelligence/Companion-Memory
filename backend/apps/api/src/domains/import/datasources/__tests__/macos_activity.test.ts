@@ -153,6 +153,27 @@ it('routes Safari visits and call durations to existing summary sources', async 
   });
 });
 
+it('stores a call with a fractional ZDURATION in whole seconds', async () => {
+  // ZDURATION is a float column. 312.5 reached the INTEGER duration column
+  // unrounded and the call was never saved.
+  await manifest([{ name: 'calls', status: 'ok' }]);
+  database(
+    'calls',
+    `CREATE TABLE ZCALLRECORD (Z_PK INTEGER, ZDATE REAL, ZDURATION REAL,
+    ZORIGINATED INTEGER, ZANSWERED INTEGER, ZADDRESS TEXT);
+    INSERT INTO ZCALLRECORD VALUES (4, ${START}, 312.5, 1, 1, '+15550100000');`,
+  );
+  const { items, params } = capture();
+  await importer.fileImport(null, { filename: root }, params);
+  expect(items).toHaveLength(1);
+  expect(items[0].metadata).toMatchObject({ Duration: 312.5 });
+  expect(toCommunicationInput(canonical(items[0]))).toMatchObject({
+    communication_type: 'call',
+    direction: 'outbound',
+    duration_seconds: 313,
+  });
+});
+
 it('reports invalid dates, unknown streams, and timeframe exclusions without inventing events', async () => {
   await manifest();
   knowledge();

@@ -4,7 +4,7 @@ Account Activity
 ,ID,Datetime,Type,Status,Note,From,To,Amount (total),Amount (tip),Amount (fee),Funding Source,Destination
 ,,2023-01-01T00:00:00,,,,,,,,,,
 ,3201234567890123456,2023-01-15T10:30:00,Payment,Complete,Dinner split,Jane Doe,John Smith,- $24.50,,,Venmo balance,
-,3209876543210987654,2023-02-03T18:05:12,Charge,Complete,"Concert tickets, row 5",Alex Kim,Jane Doe,+ $120.00,,,,Venmo balance
+,3209876543210987654,2023-02-03T18:05:12,Charge,Complete,"Concert tickets, row 5",Jane Doe,Alex Kim,+ $120.00,,,,Venmo balance
 ,3205555544443333222,2023-03-22T09:12:45,Payment,Complete,"Rent
 March",Jane Doe,Maria Lopez,- $850.00,,,Bank ****1234,
 ,,,,,,,,,,,,

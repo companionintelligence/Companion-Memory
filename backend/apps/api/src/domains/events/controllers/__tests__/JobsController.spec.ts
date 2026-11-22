@@ -86,6 +86,9 @@ async function buildApp(
       { provide: JobMonitorService, useValue: monitor },
       { provide: JobQueryService, useValue: query },
       { provide: JobControlsService, useValue: controls },
+      // Injected as well as applied: the read routes ask it whether the caller may read every
+      // job's failure (`viewerOf`). A stand-in without `admits` reads as "not an admin".
+      { provide: ApplianceAdminGuard, useValue: {} },
     ],
   })
     .overrideGuard(JwtOrApiKeyAuthGuard)

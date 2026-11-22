@@ -1,6 +1,6 @@
 # Peer federation: asking questions across Companion memories
 
-> Two Companion Memory boxes exchanging questions over links their owners enter by hand. Discovery through CI-Portal is designed but not wired (see [The shape of it](#the-shape-of-it)).
+> Two Companion Memory boxes exchanging questions over links their owners make with an invite code (see [Linking by invite](#linking-by-invite)), or enter by hand. Discovery through CI-Portal is designed but not wired (see [The shape of it](#the-shape-of-it)).
 > Feature flag: **`ask`** — **on** by default since 2026-08-17 (commit `793e618c0`), so the
 > local ask/grant GraphQL surface is live out of the box. The *inbound peer* route stays
 > dark for Portal-token asks for a separate reason: it also requires `peers.audience`, and 503s
@@ -33,9 +33,54 @@ The human stays in the loop exactly where they add value (consent, redaction) an
   * planned: nothing calls the directory today
 ```
 
-Today nothing calls the directory, and Companion Memory publishes nothing to it. The owner enters each peer's handle and address by hand: the **Link someone new** form on the `/asks` page, `ci peers add`, or `createPeerLink`. The diagram shows the Portal-directory design. Nor could a box call the directory as it is built: it answers only a signed-in Portal browser session, and the Portal does not accept on `/api/peers` the Portal OAuth access token that `PeerDirectoryService` sends. In a directory entry, only `issuer` and `subject` (the person's Portal user id) are set by the Portal. `memoryEndpoint` and `displayName` are whatever the registrant typed: the Portal checks the URL's shape, not that the registrant controls the host. Never create a peer link from a directory entry without an identity proof served by the endpoint itself.
+Today nothing calls the directory, and Companion Memory publishes nothing to it. Owners link by **invite** ([Linking by invite](#linking-by-invite)), which needs no directory at all; a link can also be entered by hand (the **Link by address instead** form on the `/asks` page, `ci peers add`, or `createPeerLink`), but such a link names no key, so neither side can ask the other through it. The diagram shows the Portal-directory design. Nor could a box call the directory as it is built: it answers only a signed-in Portal browser session, and the Portal does not accept on `/api/peers` the Portal OAuth access token that `PeerDirectoryService` sends. In a directory entry, only `issuer` and `subject` (the person's Portal user id) are set by the Portal. `memoryEndpoint` and `displayName` are whatever the registrant typed: the Portal checks the URL's shape, not that the registrant controls the host. Never create a peer link from a directory entry without an identity proof served by the endpoint itself.
 
 **In the design, CI-Portal is a phone book, not a social network.** Its directory answers *"who is `@handle`, where does their Companion listen, and what OIDC identity will they present?"*, and offers a search by handle prefix over entries that opted in. It stores **no** relationships, grants, asks, or answers. Those live only on the two boxes involved, so the cloud plane never accumulates the social graph.
+
+## Linking by invite
+
+**Added 2026-11-19.** The supported way for two people to link their Companions. It needs no Portal, no directory and no token: each person has their own signing key, the two boxes check each other's keys, and both links are made by key.
+
+### Each person has their own key
+
+`ci.peer_identity_keys` holds one live Ed25519 key per user, made the first time they need one (`PeerIdentityService`; a partial unique index keeps it to one under a race), the private half encrypted with `AUTH_FIELD_ENCRYPTION_KEY`. Its `did:key` is that person's identity to other boxes. Every outbound ask and collect is signed with the **sender's** key ([Message signatures](#message-signatures)), so anyone on the box can link and ask as themselves, and the other box knows which person asked. The box key, `peers.signingKeyJwk`, is no longer used for asks; it still signs Trust Task responses.
+
+### The exchange
+
+```
+A (inviter)                                     B (accepts)
+createPeerInvite → code {A's address, A's did:key, secret, A's name}
+                       ── handed over by the people ──▶  acceptPeerInvite(code)
+                                                  GET <A>/identity/<A's did:key>?challenge=…
+                                                  (A's address holds A's key, right now)
+  ◀── POST <A>/invites/accept {secret, B's did:key, B's address, B's name}, signed by B's key
+verify the signature against B's did:key
+check the secret names a live invite (before dialing anything)
+GET <B>/identity/<B's did:key>?challenge=…
+claim the invite once; link B by did:key at stranger
+  ── {A's did:key, A's name} ──────────────────▶  link A by did:key at stranger
+```
+
+- **The code** (`inviteCode.ts`) is `cmi1.` + base64url JSON. It is a capability: whoever holds it can link to the inviter once, at `stranger`, for 24 hours. Only a SHA-256 of the secret is stored (`ci.peer_invites`), so the code is shown once and cannot be read back. An owner may have 20 waiting; any can be withdrawn. A failed link on the inviting side gives the invite back.
+- **The identity proof** (`GET /agent/v1/identity/<did:key>?challenge=<nonce>`, `identityProof.ts`) is signed by that key over the key, the box's published `peers.memoryEndpoint` and the caller's challenge. It shows the key is held at that address now, and that the address is the box's own, so nobody can pair someone else's address with their key. An unknown or retired `did:key` is a `404`, which tells the caller only whether a key it already holds the name of lives here.
+- **Handles** are made from the name and never reuse one the owner had before, ended links included.
+- **Portal is never involved**, so it never learns who is linked to whom.
+
+### Checking the link: safety codes
+
+An invite proves a box holds a key, not that the code came from who it seemed to. Each `did:key` link carries `safetyCode` on `PeerLinkType` (`safetyCode.ts`): twelve digits from SHA-256 over both `did:key`s, sorted, so each side computes the same number from its own link, and a swapped code gives different ones. The UI shows it after accepting and on every such link, and tells the owner to compare it on a call or in person.
+
+### New keys, and ending a link
+
+- `rotatePeerKey` retires the caller's key and makes a new one, then posts `POST /agent/v1/key-rotation` to everyone they are linked to by key. The request is signed by the **old** key (the one the other side's link names) and carries a proof signed by the **new** one; the receiver moves only the named recipient's link, keeping its tier, name and grants. `resendPeerKeyRotation` re-sends, signed by the key retired last, for anyone unreachable the first time. Waiting invites stop working.
+- `revokePeerLink` ends the link here, then posts `POST /agent/v1/unlink` (signed, naming the recipient) so the other box ends its link too; `peerNotified` on the payload says whether it was heard.
+- Both answer the same whether or not a link matched.
+
+All four exchange routes share the ask surface's gates (`ask` on, `peers.memoryEndpoint` published), have their own rate-limit bucket (20 a minute per named identity), and dial only through `peerEgressFetch`.
+
+### Answers that arrive later
+
+`PeerAnswerCollectionCron` collects open outbound asks every ten minutes (at most 200 a run, 10 per peer link, inside the peer's collect budget), and `collectPeerAnswer(askId)` does it on demand: the **Check for an answer** button on the Sent tab. This closes gap 2 under [What a real operator still cannot do](#what-a-real-operator-still-cannot-do).
 
 ## The three archetypes
 
@@ -123,7 +168,7 @@ The route deliberately does **not** use `JwtOrApiKeyAuthGuard`: its portal path 
 | **A non-answer says nothing about why** | The wire carries `answered` or `pending`, and one constant reason. A block grant, an ask in the owner's review inbox, an ask that expired, and an `askId` this box has never seen are the SAME reply. `declined` vs `pending_review` was a one-bit read on the grant matrix, mappable at 10 probes a minute — the same oracle #2210/#2216 closed for a local asker, which this had been cited as the precedent for. The collapse is made at the **responder**: hiding it on receipt would bind only a well-behaved asker while the word stayed on the wire. |
 | **No SSRF** | Every server-side fetch goes through `peerEgressFetch()`, which is the only dialer in the domain. Three guards, not one: (1) `checkEgressUrl()` on the URL — https only, no credentials, no non-standard ports, no private/loopback/link-local/CGNAT/metadata/documentation address, no `.local`/`.internal`/bare-label name — including IPv4-mapped IPv6 in **both** spellings, since `URL` normalizes `::ffff:10.0.0.1` to hex, and every decimal/octal/hex/short IPv4 spelling, which `URL` folds to a dotted quad; (2) the resolved address is checked **at connect time** through the dispatcher's `lookup`, so there is no rebind window (see below); (3) **redirects are refused, not followed** — a peer answering `307 Location: http://127.0.0.1:11434/api/pull` used to have this box re-issue the POST, body intact, inside its own network. CGNAT specifically is opt-in-permittable ([below](#peering-over-a-private-network-tailscale--cgnat)); everything else in that list is unconditional. |
 | **Token can't be replayed at another box** | The peer surface verifies a Portal token against **this box's own `peers.audience`**, not the broad first-party list. It refuses a Portal-token ask until that is configured. A signed `did:key` / `did:keri:D<x>` ask carries no token and needs `peers.memoryEndpoint` instead (see [Keyids that name themselves](#keyids-that-name-themselves-didkey-and-didkeridx)). |
-| **A leaked token is enough by default** | With the shipped default (`peers.requireHttpSignature` off), a **Portal token alone authenticates a peer ask**: a request with no signature headers is not checked for a signature, so whoever holds a leaked token can ask as that peer for the token's lifetime, and a replayed request is not detected (only the `askId` idempotency key limits it). A signature that *is* offered is always verified. Turning `peers.requireHttpSignature` on refuses every peer ask without a valid **RFC 9421 HTTP message signature** over `@method`, `@target-uri` and an RFC 9530 `Content-Digest` of the body, with a nonce and a bounded window, from a key on the sender's link. The signature is the property that binds a request to *one* request and makes replay detectable; a bearer token structurally cannot. The box logs a warning at startup while `peers.audience` is set and the requirement is off. See [Message signatures](#message-signatures). |
+| **A leaked token is enough only if signatures are turned off** | `peers.requireHttpSignature` ships **on** since 2026-11-19, so every peer ask needs a valid signature from a key on the sender's link. Turned off, a **Portal token alone authenticates a peer ask** from a peer whose link records no key: a request with no signature headers is not checked for a signature, so whoever holds a leaked token can ask as that peer for the token's lifetime, and a replayed request is not detected (only the `askId` idempotency key limits it). A signature that *is* offered is always verified, and a peer whose link **does** record a key is always held to it: an unsigned request naming that peer is refused whatever the switch says, because a box with a key signs every call. Turning `peers.requireHttpSignature` on refuses every peer ask without a valid **RFC 9421 HTTP message signature** over `@method`, `@target-uri` and an RFC 9530 `Content-Digest` of the body, with a nonce and a bounded window, from a key on the sender's link. The signature is the property that binds a request to *one* request and makes replay detectable; a bearer token structurally cannot. The box logs a warning at startup while `peers.audience` is set and the requirement is off. See [Message signatures](#message-signatures). |
 | **Inbound flooding is bounded** | `PeerRateLimitService` limits on the verified `(issuer, subject)` of a Portal token **before** the peer-link lookup, so an unknown Portal caller is limited too. A signed `did:key` / `did:keri:D<x>` ask is the exception: its identity comes from the signature header, so the link is read first (one indexed read) and a signer nobody linked is refused with a `401` **before** the limiter is consulted. The limiter therefore bounds only linked signers: anyone who can reach the route can send unlimited well-formed signed requests from fresh keys, at the cost of one parse and one read each. |
 | **Timezone-independent availability** | All-day events expand on **UTC** day boundaries, so two boxes in different zones compute identical busy spans. |
 
@@ -147,7 +192,7 @@ The route deliberately does **not** use `JwtOrApiKeyAuthGuard`: its portal path 
   "handle": "",            // REQUIRED to send asks: sent as askerHandle, and a receiver refuses an empty one. Memory does not register it in the CI-Portal directory or check it against the Portal's handle rules
   "audience": "",          // REQUIRED for Portal-token inbound asks: the audience Portal mints for THIS box
   "timeoutMs": 10000,      // bound on every outbound peer/directory call
-  "requireHttpSignature": false // off: a Portal token alone authenticates an inbound ask (see below)
+  "requireHttpSignature": true  // on: every inbound peer ask needs a valid signature (see below)
 }
 ```
 
@@ -159,7 +204,7 @@ from a box with no peer surface at all.
 
 > **`peers.audience` is not optional for Portal-token asks.** Without it, a token issued for *any* first-party client would verify here — including one minted for a different Companion. The peer route refuses every Portal-token request until it is set, rather than falling back to the broad list. A signed `did:key` / `did:keri:D<x>` ask carries no token and does not consult it: it needs `ask` on, `peers.memoryEndpoint` set and a link the owner made (see [Keyids that name themselves](#keyids-that-name-themselves-didkey-and-didkeridx)).
 
-> **Setting `peers.audience` opens the surface to unsigned Portal-token asks.** `peers.requireHttpSignature` ships `false`, so once an audience is bound a valid Portal token for this box is all an inbound ask needs: a leaked token is a complete impersonation of that peer until it expires, and a replay is not detected. The box logs one warning at startup in that state. Turn `peers.requireHttpSignature` on once every linked peer signs; from then on an ask without a valid signature is refused with a `401` (see [Message signatures](#message-signatures)).
+> **Turning `peers.requireHttpSignature` off reopens unsigned Portal-token asks.** It ships `true` (since 2026-11-19, when every person got a key and every ask became signed). Off, with an audience bound, a valid Portal token for this box is all an inbound ask needs from a peer whose link records no key: a leaked token is a complete impersonation of that peer until it expires, and a replay is not detected. The box logs one warning at startup in that state. A link that records a key needs a signature either way. Turn it off only for a peer running a release from before per-person keys.
 
 ### Peering over a private network (Tailscale / CGNAT)
 
@@ -221,11 +266,12 @@ A peer dials the `memoryEndpoint` on its link to this box over `https` on port 4
 
 **Behind the gateway, set `peers.memoryEndpoint` to that same address.** The gateway removes `/api` from the path before the API sees it, so the API rebuilds the signed `@target-uri` from `peers.memoryEndpoint` (its authority and its path up to `/agent/v1`) and the rest of the path it received, never from `Host`. With `CI_PEER_MEMORY_ENDPOINT=https://<host>/api/agent/v1`, and peers linking exactly that address, a signed ask is checked against the URL the peer signed. That holds since Companion-Memory#3542. Releases before the one that ships Companion-Memory#3542 (none does yet; v2026.11.11 is the latest today) rebuild the target from the endpoint's origin alone, so behind the gateway they refuse every signed ask with `401`: a `did:keri:D<x>` or `did:key` ask, and a Portal-token ask from a box that has a signing key. An unsigned Portal-token ask carries no signed URL, so the rebuild does not affect it. A Trust Task document does not depend on the URL at all: its proof covers the document, not the address it is posted to (`<memoryEndpoint>/trust-tasks`).
 
-**A Companion Memory installed from Companion Hub cannot take peer asks yet.**
+**A Companion Memory installed from Companion Hub can take peer asks once its Public Web address is on** (since the 2026-11-19 ci-hub and ci-marketplace changes on `feat/peer-key-exchange`):
 
-- The Hub sign-in sits in front of its Public Web address by default. It exempts none of the peer routes, and lets a request through only with a Hub session, one of this Memory's API keys, or a Portal token for a member of the Hub's organization. A peer's ask normally carries none of these, so the Hub answers it (`401`, `403` or a redirect to the sign-in) before Memory sees it.
+- The Hub's edge sign-in hands `/api/agent/v1/*` to the official Memory install unauthenticated, as it does `/powersync` and `/static`; Memory checks every such request itself.
+- The listing sets `CI_PEER_MEMORY_ENDPOINT` to `${APP_PUBLIC_URL}/api/agent/v1`. With no public address the value is not a URL, and the peer surface stays closed.
 - Its Private VPN address is on the app's own port, which a peer box cannot dial: it dials port 443 only.
-- The Hub has no setting for the peer options. The listing passes none of the `CI_PEER_*` settings or `ENABLE_TRUST_TASKS`, the Hub rebuilds the app's environment file on every install, start and update, and `peers.signingKeyJwk` and `peers.requireHttpSignature` have no environment variable at all. The non-secret settings can go in the app's compose override in the Hub's user-config folder (`environment:` on the `api` service). **Do not put `peers.signingKeyJwk` there**: that file is ordinary app configuration, not a secret store. The Hub's app-configuration API and its MCP tools return it, and Hub backups copy it.
+- `peers.signingKeyJwk` and `peers.requireHttpSignature` still have no environment variable, and neither is needed for linking by invite. **Do not put `peers.signingKeyJwk` in the app's compose override**: that file is ordinary app configuration, not a secret store. The Hub's app-configuration API and its MCP tools return it, and Hub backups copy it.
 
 ## Federating two REAL boxes, end to end
 
@@ -250,14 +296,14 @@ On the **sender**:
 | `CI_PEER_ALLOW_CGNAT_ENDPOINTS=true` | only if the peer is on a tailnet — see [above](#peering-over-a-private-network-tailscale--cgnat) |
 | a peer link naming the peer's `/agent/v1` base (for a peer behind its own gateway, `https://<host>/api/agent/v1`) | `createPeerLink`, or the **People I'm linked to** tab |
 | `CI_PEER_HANDLE` | REQUIRED. It is sent as `askerHandle`, and a receiver refuses an empty one with `400 Malformed ask`; the send still returns `delivered`, with reason `Peer error 400` |
-| a credential for each send | a `peerAccessToken` whose audience is the peer box's `peers.audience` (nothing issues one yet: gap 1 in [What a real operator still cannot do](#what-a-real-operator-still-cannot-do)). Or, from the box's administrator account only, an empty token, with `peers.signingKeyJwk` set (config file, no env var) and its `kid` set to this box's own `did:key` or `did:keri:D<x>`. Without such a `kid` the keyid is the key's thumbprint, and the receiver refuses a no-token ask with `401`. The key and its `kid` change every signed ask this box sends, Portal-token asks included: read [Message signatures](#message-signatures) and [Keyids that name themselves](#keyids-that-name-themselves-didkey-and-didkeridx) first |
+| a credential for each send | none, since 2026-11-19: every ask is signed with the sender's own key ([Linking by invite](#linking-by-invite)), and a peer linked by invite answers on that alone. Before then: a `peerAccessToken` whose audience is the peer box's `peers.audience` (nothing issues one: gap 1 in [What a real operator still cannot do](#what-a-real-operator-still-cannot-do)), or, from the box's administrator account only, an empty token, with `peers.signingKeyJwk` set (config file, no env var) and its `kid` set to this box's own `did:key` or `did:keri:D<x>`. Without such a `kid` the keyid is the key's thumbprint, and the receiver refuses a no-token ask with `401`. The key and its `kid` change every signed ask this box sends, Portal-token asks included: read [Message signatures](#message-signatures) and [Keyids that name themselves](#keyids-that-name-themselves-didkey-and-didkeridx) first |
 
 On the **receiver**:
 
 | | |
 |---|---|
 | `CI_PEER_AUDIENCE` | REQUIRED for Portal-token asks — without it every Portal-token ask is `503`, indistinguishable from no peer surface. A signed `did:key` / `did:keri:D<x>` ask does not consult it |
-| `peers.requireHttpSignature` (config file, no env var) | ships `false`, which accepts a Portal-token ask with no signature. Set `true` once the peer signs, so a leaked or replayed token is refused |
+| `peers.requireHttpSignature` (config file, no env var) | ships `true` since 2026-11-19, which refuses any ask without a valid signature; turned off, it still refuses an unsigned ask from a peer whose link records a key. The runs below predate that and had it `false` The runs below predate that and had it `false` |
 | `CI_PEER_MEMORY_ENDPOINT` | the `/agent/v1` base peers store on their link to this box: `https://<host>/api/agent/v1` behind the packaged gateway (as in `docker-compose.production.yml`), which strips `/api`; a bare `https://<host>/agent/v1` there is served by the web app, which answers a POST with `405` (see [Where peers can reach this box](#where-peers-can-reach-this-box)). Signed requests are checked against `<this value>/ask`, so peers must link exactly this address. REQUIRED for a signed `did:key` / `did:keri:D<x>` ask: without it every signed ask is `503` |
 | `PORTAL_OIDC_ENABLED` / `PORTAL_OIDC_ISSUER` / `PORTAL_OIDC_JWKS_URI` | the trust anchor the peer's token is verified against |
 | the `ask` feature flag | ships `true` |
@@ -451,8 +497,14 @@ Four things about this surface are deliberate:
   `PeerLinkIdentityBinding.integration.spec.ts` for the proof.
 
 Two members of the same box may still each link the same peer. That collision is
-reachable on purpose: `findActiveByPeerIdentity` is box-wide, and `resolveLink`
-refuses two matches as an *"Ambiguous peer link"* rather than answering as an
+reachable on purpose: `findActiveByPeerIdentity` is box-wide. Since 2026-11-19 an
+ask names its **recipient**, the `did:key` of the person it is for, as the
+sender's link records it, and `resolveLink` keeps only that person's link: two
+matches become one, and an ask naming someone not linked to the sender is refused
+as `No peer link`, never answered through another member's link. A collect needs
+no recipient, because the correlation was recorded against exactly one link. With
+no recipient (a sender from before this, or a Portal-identity link), two matches
+are still refused as an *"Ambiguous peer link"* rather than answered as an
 arbitrary member.
 
 **Verified against a live box on 2026-09-07.** The binding above was written to
@@ -483,7 +535,14 @@ not a blocker. Nothing calls it, and the directory is not ready to be called
 
 ### What a real operator still cannot do
 
-Three gaps remain, and none is a policy hole: all three are missing plumbing.
+> **Δ 2026-11-19 — gaps 1 and 2 are closed for links made by invite.** No token
+> is needed: every ask is signed with the sender's own key, and the other side
+> answers through the `did:key` link the invite made. Answers that arrive later
+> are collected by `PeerAnswerCollectionCron` and `collectPeerAnswer`. See
+> [Linking by invite](#linking-by-invite). Gap 1 still holds for the Portal-token
+> path, and gap 3 is unchanged and no longer in the way.
+
+Three gaps remained, and none is a policy hole: all three are missing plumbing.
 The first two survived the 2026-09-07 run and were worked around by hand; the
 third is why the directory is not used at all.
 
@@ -632,7 +691,7 @@ The bearer token answers "who is asking". It cannot answer "is this the request 
 - **Nothing binds it to the body.** Anything on the path can rewrite the question and the token still verifies.
 - **Replay is undetectable.** Only the `askId` idempotency key limits the damage, and it limits it per-key, not per-request.
 
-**All three apply to this box by default.** `peers.requireHttpSignature` ships `false`, and with it off a request that carries no signature headers is served on the token alone. The signature below closes these gaps only for requests that carry one, or for every request once the requirement is on.
+**None of the three applies by default since 2026-11-19.** `peers.requireHttpSignature` ships `true`, so every peer request must carry a valid signature. With it turned off, a request with no signature headers is served on the token alone unless the sender's link records a key, and all three apply to it.
 
 UMA-for-agents makes retiring bearer RPTs its recommendation #4 for exactly this. Both peer routes now accept an RFC 9421 signature:
 
@@ -653,7 +712,7 @@ Details that are load-bearing rather than incidental:
 - **The key and the token must agree.** A signature is accepted only when a live link holds that key *and* names the same `(issuer, subject)` the token asserts. Accepting any link that merely holds the key would let peer A's signature authorize a request carrying peer B's token. The key may be named by its thumbprint or, since Companion-Memory#3542, by the `did:key` or `did:keri:D<x>` that spells it.
 - **One refusal for every failure.** Missing, malformed, unknown key, bad digest, replayed, wrong peer — all raise the identical 401. Which check failed is a fact about this box's configuration and the owner's links; the reason is logged where the operator sees it and the caller does not.
 
-**Rollout is two switches, deliberately.** Setting `peers.signingKeyJwk` makes this box *sign*; setting `peers.requireHttpSignature` makes it *demand* signatures. An offered signature is always verified even when not required, which is what lets an operator confirm both sides interoperate before flipping the second switch. **The second switch ships off**, so until an operator turns it on a Portal-token ask with no signature is accepted, and none of the properties above holds for it; the box logs a warning at startup while `peers.audience` is set and the switch is off. Turning it on refuses (with the same `401`) every ask that has no valid signature from a key on the sender's link, including asks from peers that do not sign yet. Generate a key with:
+**Δ 2026-11-19: asks are signed with the sender's own key, not this one, and the second switch ships on.** What follows describes the box key, which now signs only Trust Task responses and asks sent through `signOutbound` without a signer (tests). Rollout was two switches, deliberately. Setting `peers.signingKeyJwk` makes this box *sign*; setting `peers.requireHttpSignature` makes it *demand* signatures. An offered signature is always verified even when not required, which is what lets an operator confirm both sides interoperate before flipping the second switch. **The second switch shipped off** until 2026-11-19; with it off a Portal-token ask with no signature is accepted from a peer whose link records no key, and none of the properties above holds for it (recording a peer's key on its link is a per-peer version of the switch: from then on that peer's unsigned asks are refused); the box logs a warning at startup while `peers.audience` is set and the switch is off. Turning it on refuses (with the same `401`) every ask that has no valid signature from a key on the sender's link, including asks from peers that do not sign yet. Generate a key with:
 
 ```bash
 node -e "const {generateKeyPairSync}=require('node:crypto');console.log(JSON.stringify(generateKeyPairSync('ed25519').privateKey.export({format:'jwk'})))"
@@ -702,7 +761,7 @@ To sign as a `did:key`, put the key's own `did:key` in `kid` of `peers.signingKe
 node -e "const {generateKeyPairSync}=require('node:crypto');const A='123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';const k=generateKeyPairSync('ed25519');const pub=Buffer.from(k.publicKey.export({format:'jwk'}).x,'base64url');let n=BigInt('0x'+Buffer.concat([Buffer.from([0xed,1]),pub]).toString('hex')),s='';for(;n>0n;n/=58n)s=A[Number(n%58n)]+s;console.log(JSON.stringify({...k.privateKey.export({format:'jwk'}),kid:'did:key:z'+s}))"
 ```
 
-A `did:key` or `did:keri:D<x>` keyid names this box's signing key, so it identifies the Companion box, not one person on it. An ask sent with no Portal token is authenticated by that key alone and carries the box's `peers.handle`, so only the box's administrator account may send one; anyone else on the box passes a Portal token of their own. Link a self-certifying identifier only for a box one person uses. A `kid` changes the keyid of every signed ask the box sends, Portal-token asks included. Since Companion-Memory#3542 a receiver also finds a Portal link that records the key the keyid spells; an older receiver refuses such an ask with `401`.
+Since 2026-11-19 the `did:key` an ask is signed under is the **sender's own** ([Linking by invite](#linking-by-invite)), so it identifies one person, and anyone on the box may send a token-less ask. What follows applies to a box key configured by hand: a `did:key` or `did:keri:D<x>` keyid of `peers.signingKeyJwk` names the box, not one person on it. Link a self-certifying identifier only for a box one person uses. A `kid` changes the keyid of every signed ask the box sends, Portal-token asks included. Since Companion-Memory#3542 a receiver also finds a Portal link that records the key the keyid spells; an older receiver refuses such an ask with `401`.
 
 The peer's owner links you with `createPeerLink`, passing your `did:key` as the subject:
 
@@ -784,9 +843,11 @@ Full protocol reference, with the verification-order chart and the threat table:
 
 ### The token
 
-`sendPeerAsk` takes a `peerAccessToken` — a Portal-issued token whose audience is the **peer** box. It is a **non-nullable** field on `SendPeerAskInput`: until Portal token exchange (RFC 8693) lands, the *caller* must supply it, and this box never mints, exchanges or caches one. The peer verifies that binding on receipt, which is what stops a token for one box being replayed at another. An empty or blank `peerAccessToken`, or one that starts with the word `keri` in any case (the word a peer reads as no token), is sent as no token: the ask goes out signed with this box's key alone (`peers.signingKeyJwk`), which only the box's administrator may do. On a box with no signing key such a send is refused with `A peer access token or signing key is required`; on a box with one, a send from any account but the administrator is refused with `A peer access token is required`.
+**Since 2026-11-19 `peerAccessToken` is optional,** and the web app sends none: every ask is signed with the sender's own key, which is all a peer linked by invite needs. The rest of this section describes a token when one is given. `sendPeerAsk` takes a `peerAccessToken` — a Portal-issued token whose audience is the **peer** box. It was a **non-nullable** field on `SendPeerAskInput`: until Portal token exchange (RFC 8693) lands, the *caller* must supply it, and this box never mints, exchanges or caches one. The peer verifies that binding on receipt, which is what stops a token for one box being replayed at another. An empty or blank `peerAccessToken`, or one that starts with the word `keri` in any case (the word a peer reads as no token), is sent as no token: the ask goes out signed with this box's key alone (`peers.signingKeyJwk`), which only the box's administrator may do. On a box with no signing key such a send is refused with `A peer access token or signing key is required`; on a box with one, a send from any account but the administrator is refused with `A peer access token is required`.
 
 ## Status
+
+**Δ 2026-11-19 — linking by invite.** Each person has their own key; two people link with one code; both sides check each other's keys; safety codes, key rotation and unlink notices keep both ends in step; answers that arrive later are collected on their own; signatures are required by default; and a Memory behind a Hub can take part once its Public Web address is on. See [Linking by invite](#linking-by-invite). Not yet run between two real boxes.
 
 **Both directions work, including the return trip — given a link and a token.** A box can receive, gate, and answer a federated ask; can compose and send one; and the responder serves an approved answer on the collect route. Peer-link management and the ask UI's route both landed (see the Δ note under Known limitations). The *asker's* half of that return trip exists as a service method with no caller — see the Δ below.
 

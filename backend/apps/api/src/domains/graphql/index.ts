@@ -98,6 +98,7 @@ import { LocalPubPeerResolver } from './resolvers/LocalPubPeerResolver';
 import { NodeResolver } from './resolvers/NodeResolver';
 import { NoteResolver } from './resolvers/NoteResolver';
 import { ObjectObservationResolver } from './resolvers/ObjectObservationResolver';
+import { PeerInviteResolver } from './resolvers/PeerInviteResolver';
 import { PeerLinkResolver } from './resolvers/PeerLinkResolver';
 import { PersonResolver } from './resolvers/PersonResolver';
 import { PlaceResolver } from './resolvers/PlaceResolver';
@@ -237,6 +238,7 @@ import { UserResolver } from './resolvers/UserResolver';
     PersonIdentifiersLoader,
     PersonInteractionStatsLoader,
     PersonLoader,
+    PeerInviteResolver,
     PeerLinkResolver,
     PersonResolver,
     PlaceLoader,

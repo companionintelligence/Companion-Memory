@@ -7,6 +7,7 @@ import { type PeerLink } from '../entities/PeerLinkEntity';
 import type { AskerVisiblePeerReply, PeerAskBody, PeerAskResponse } from '../protocol';
 import { EgressBlockedError, peerEgressFetch } from '../urlPolicy';
 
+import type { PeerSigner } from './PeerIdentityService';
 import { PeerSignatureService } from './PeerSignatureService';
 
 /**
@@ -37,8 +38,13 @@ export class PeerAskClient {
     this.logger.setContext(PeerAskClient.name);
   }
 
-  async send(peer: PeerLink, body: PeerAskBody, accessToken?: string): Promise<AskerVisiblePeerReply> {
-    return this.call(peer, `/ask`, body.askId, accessToken, {
+  async send(
+    peer: PeerLink,
+    body: PeerAskBody,
+    accessToken?: string,
+    signer?: PeerSigner,
+  ): Promise<AskerVisiblePeerReply> {
+    return this.call(peer, `/ask`, body.askId, accessToken, signer, {
       method: 'POST',
       body: JSON.stringify(body),
     });
@@ -55,8 +61,13 @@ export class PeerAskClient {
    * concatenation is exactly the shape that stops being safe when the field's
    * bounds are relaxed by someone else later.
    */
-  async poll(peer: PeerLink, correlationId: string, accessToken?: string): Promise<AskerVisiblePeerReply> {
-    return this.call(peer, `/ask/${encodeURIComponent(correlationId)}`, correlationId, accessToken, {
+  async poll(
+    peer: PeerLink,
+    correlationId: string,
+    accessToken?: string,
+    signer?: PeerSigner,
+  ): Promise<AskerVisiblePeerReply> {
+    return this.call(peer, `/ask/${encodeURIComponent(correlationId)}`, correlationId, accessToken, signer, {
       method: 'GET',
     });
   }
@@ -66,6 +77,7 @@ export class PeerAskClient {
     path: string,
     askId: string,
     accessToken: string | undefined,
+    signer: PeerSigner | undefined,
     init: { method: string; body?: string },
   ): Promise<AskerVisiblePeerReply> {
     const url = `${peer.memoryEndpoint.replace(/\/+$/, '')}${path}`;
@@ -79,11 +91,14 @@ export class PeerAskClient {
     // rebuilt one. Two spellings of the target here would produce a signature
     // over an authority the request never went to, and the peer would refuse
     // every honest call.
-    const signature = this.signatureService.signOutbound({
-      method: init.method,
-      targetUri: url,
-      body: init.body,
-    });
+    const signature = this.signatureService.signOutbound(
+      {
+        method: init.method,
+        targetUri: url,
+        body: init.body,
+      },
+      signer,
+    );
 
     // ═══ SSRF GUARD — AND IT IS THE DIALER, NOT A PRECHECK ═══
     //

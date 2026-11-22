@@ -74,12 +74,13 @@ import { TaskService } from './services/TaskService';
     PersonalizationService,
     PlannedBlockService,
   ],
-  exports: [TaskService, PlannedBlockService],
+  exports: [TaskService, PlannedBlockService, PlanningTimeService],
 })
 export class TaskModule {}
 
 export { TaskService } from './services/TaskService';
 export { PlannedBlockService } from './services/PlannedBlockService';
+export { PlanningTimeService } from './services/PlanningTimeService';
 export type { PlaceOutcome } from './services/PlannedBlockService';
 export type { Task, TaskStatus } from './entities/TaskEntity';
 export { ACTIVE_TASK_STATUSES, TASK_STATUSES } from './taskStatus';

@@ -40,6 +40,7 @@ import {
 } from '@ci/domains/memory';
 import type { CreatePositionDto } from '@ci/domains/position';
 
+import { splitAddressList } from '../datasources/email_address';
 import { mimeForFile } from '../datasources/timeline';
 
 import {
@@ -571,9 +572,12 @@ export function toThingInput(rec: CanonicalRecord): CreateItemDto {
     input.purchasePrice = price;
   }
 
+  // Upper-cased like the receipt's own code (`usd` is USD) so a thing and its
+  // receipt name the same unit. A unit with no ISO code (Robux) is kept as the
+  // source wrote it: `ci.objects.currency` has no CHECK.
   const currency = str(readCommerceField(m, 'CURRENCY'));
   if (currency) {
-    input.currency = currency;
+    input.currency = isoCurrency(currency) ?? currency;
   }
 
   if (rec.startTime) {
@@ -693,7 +697,28 @@ function toCostMinorUnits(
     return undefined;
   }
 
+  // An amount in a unit with no ISO code (Roblox's Robux) is not minor units of
+  // anything. Written beside an empty currency, every reader would take it for
+  // dollars, so it stays in the metadata instead. See toReceiptInput.
+  if (currency != null && isoCurrency(currency) == null) {
+    return undefined;
+  }
+
   return toMinorUnits(amount, currency);
+}
+
+/**
+ * `raw` as the ISO-4217 code a receipt stores, or null.
+ *
+ * `ci.receipts.currency` and `ci.receipt_line_items.currency` CHECK
+ * `^[A-Z]{3}$`, and one row that breaks it fails the whole purchase, so the
+ * code is trimmed and upper-cased (`usd` is USD) and anything still not three
+ * letters is no code at all. Same rule as `ObjectPromoteStage.parseCurrency`.
+ */
+function isoCurrency(raw: string | null | undefined): string | null {
+  const upper = raw?.trim().toUpperCase();
+
+  return upper != null && /^[A-Z]{3}$/.test(upper) ? upper : null;
 }
 
 /**
@@ -882,8 +907,13 @@ function lineFrom(
     line.quantity = quantity;
   }
 
-  if (currency) {
-    line.currency = currency;
+  const currencyCode = isoCurrency(currency);
+  if (currencyCode) {
+    line.currency = currencyCode;
+  } else if (currency) {
+    // The line's prices stay empty below (see toCostMinorUnits). Say why on the
+    // line itself, since its unit can differ from the header's.
+    line.metadata = { UnsupportedCurrency: currency };
   }
 
   // Cost columns, so a negative is refused rather than written — see
@@ -1032,7 +1062,15 @@ export function toReceiptInput(
   links: ReceiptEntityLinks = {},
 ): ReceiptExtraction {
   const m = rec.metadata;
-  const currency = str(readCommerceField(m, 'CURRENCY'));
+  // The header's own unit. When the header names none, a line priced in a unit
+  // with no ISO code (Robux) still decides it: otherwise the header's stated
+  // total would be written with no currency and read as dollars.
+  const currency =
+    str(readCommerceField(m, 'CURRENCY')) ??
+    commerceLineItems(rec)
+      .map((entry) => str(readCommerceField(entry, 'CURRENCY')))
+      .find((code) => code != null && isoCurrency(code) == null) ??
+    null;
   const extraction: ReceiptExtraction = {
     purchasedAt: new Date(rec.startTime),
     metadata: m,
@@ -1073,20 +1111,30 @@ export function toReceiptInput(
     extraction.placeEntityId = links.placeEntityId;
   }
 
-  if (currency) {
-    extraction.currency = currency;
+  const currencyCode = isoCurrency(currency);
+  const unsupportedCurrency = currency != null && currencyCode == null;
+  if (currencyCode) {
+    extraction.currency = currencyCode;
+  } else if (unsupportedCurrency) {
+    // Priced in something with no ISO code (Robux). The money columns stay
+    // empty (see toCostMinorUnits) and the receipt names the unit; the amounts
+    // are still in the metadata under the parser's own keys.
+    extraction.metadata = { ...extraction.metadata, UnsupportedCurrency: currency };
   }
 
   // A NEGATIVE stated total is a refund or a credit, not a cost, and it is
   // refused outright — including the line-sum fallback below, which would
   // otherwise answer with whatever positive lines survived the same guard and
   // report a credit as a purchase. See toCostMinorUnits for why this lane
-  // refuses rather than models.
+  // refuses rather than models. A header in an unsupported unit skips the
+  // fallback too: a line that states its own ISO code would otherwise hand the
+  // header a total in that code, written with no currency beside it.
   const stated = num(readCommerceField(m, 'TOTAL'));
   const refusedTotal = stated != null && Number.isFinite(stated) && stated < 0;
-  const total = refusedTotal
-    ? undefined
-    : (toCostMinorUnits(stated, currency) ?? sumLines(lines, (l) => l.totalPriceMinor));
+  const total =
+    refusedTotal || unsupportedCurrency
+      ? undefined
+      : (toCostMinorUnits(stated, currency) ?? sumLines(lines, (l) => l.totalPriceMinor));
   if (total != null) {
     extraction.totalMinor = total;
   }
@@ -1095,7 +1143,7 @@ export function toReceiptInput(
     // Refused, not lost. The amount stays legible on the receipt — a later
     // pass that grows a real credit/refund model has the number it needs, and
     // nobody reading the row has to guess why the total is empty.
-    extraction.metadata = { ...m, NegativeTotalRefused: stated };
+    extraction.metadata = { ...extraction.metadata, NegativeTotalRefused: stated };
   }
 
   // The money BREAKDOWN. All four are COST columns, so a negative is refused
@@ -1352,6 +1400,9 @@ export function toObservationInput(rec: CanonicalRecord): CreateObjectObservatio
   return input;
 }
 
+/** The largest value a Postgres INTEGER column (`duration_seconds`) holds. */
+const MAX_INTEGER_COLUMN = 2_147_483_647;
+
 const COMMUNICATION_TYPE_BY_KIND: Record<string, CommunicationType> = {
   'communication.email': CommunicationType.EMAIL,
   'communication.call': CommunicationType.CALL,
@@ -1448,8 +1499,21 @@ export function toCommunicationInput(rec: CanonicalRecord): CreateCommunicationD
   }
 
   // Pass call duration through so the server stores it on the Communication entity.
-  if (m.Duration != null) {
-    input.duration_seconds = Number(m.Duration);
+  // The column is whole seconds (INTEGER >= 0) and a call log can state a
+  // fraction (macOS CallHistory's ZDURATION is a float, 312.5 failed the whole
+  // call), so round it and leave out anything that is not a number. The exact
+  // value stays in metadata.
+  //
+  // Only a number or a numeric string counts: `Number('')` and `Number(false)`
+  // are 0, which would record a blank duration as a zero-second call. Anything
+  // past the INTEGER column's ceiling is left out as well, since it would fail
+  // the insert just like the fraction did.
+  const duration =
+    typeof m.Duration === 'number' || (typeof m.Duration === 'string' && m.Duration.trim() !== '')
+      ? Number(m.Duration)
+      : Number.NaN;
+  if (Number.isFinite(duration) && duration >= 0 && Math.round(duration) <= MAX_INTEGER_COLUMN) {
+    input.duration_seconds = Math.round(duration);
   }
 
   const preview = content ? clip(content, 140) : null;
@@ -1539,12 +1603,16 @@ export function toCommunicationInput(rec: CanonicalRecord): CreateCommunicationD
   // the server to resolve. `from` is a raw string; `to` is an array of raw
   // strings (the SHARED CONTRACT shape).
   const from = str(m.Contact) || str(m.Sender) || str(m.From);
-  const to = recipientsFrom(m);
-  if (from || to.length) {
+  const mail = input.communication_type === CommunicationType.EMAIL;
+  const to = recipientsFrom(m, mail);
+  // An email's Cc, under the key the mail connections write it to.
+  const cc = recipientsFrom(m, mail, ['Cc']);
+  if (from || to.length || cc.length) {
     input.participants_metadata = {
       ...(input.participants_metadata ?? {}),
       ...(from ? { from } : {}),
       ...(to.length ? { to } : {}),
+      ...(cc.length ? { cc } : {}),
     };
   }
 
@@ -1584,10 +1652,18 @@ function attachmentsFor(m: Record<string, unknown>): Array<Record<string, unknow
 // Recipients for participants_metadata.to. Sources record recipients under To /
 // Recipient / Recipients (email To header, SMS To, etc.); an email To header is
 // a comma-separated list, so split + de-dup into the array shape the contract
-// expects. iMessage and other multi-party sources hand us a pre-resolved array
+// expects. A mail header (`mail`) splits only between mailboxes, so a quoted
+// "Last, First" <addr> stays whole. Any other source's list is display names
+// joined by commas, where a "(" in one name and a ")" in the next ("Ann :(",
+// "Sam :)") would read as one span, so it splits on every comma.
+// iMessage and other multi-party sources hand us a pre-resolved array
 // of handles, which goes in as-is. Leaves toEntityIds unset — the server
 // resolves these raw strings.
-function recipientsFrom(m: Record<string, unknown>): string[] {
+function recipientsFrom(
+  m: Record<string, unknown>,
+  mail = false,
+  keys = ['To', 'Recipient', 'Recipients'],
+): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   const pushOne = (raw: string) => {
@@ -1614,14 +1690,14 @@ function recipientsFrom(m: Record<string, unknown>): string[] {
       return;
     }
 
-    for (const part of s.split(',')) {
+    for (const part of mail ? splitAddressList(s) : s.split(',')) {
       pushOne(part);
     }
   };
 
-  push(m.To);
-  push(m.Recipient);
-  push(m.Recipients);
+  for (const key of keys) {
+    push(m[key]);
+  }
 
   return out;
 }
@@ -1711,7 +1787,9 @@ export function toFacebookMessengerCommunicationInput(
     communication_type: CommunicationType.CHAT,
     time: new Date(rec.startTime),
     content,
-    direction: sender && isSelf(sender) ? 'outbound' : 'inbound',
+    // The importer's `From Me`, read off the export's own profile, wins; the
+    // account-name match is for exports that do not say.
+    direction: directionFor(m) ?? (sender && isSelf(sender) ? 'outbound' : 'inbound'),
     source_type: FACEBOOK_MESSENGER_SOURCE_TYPE,
     ...(() => {
       const identity = platformIdentity(FACEBOOK_MESSENGER_SOURCE_SYSTEM, rec.sourceId);

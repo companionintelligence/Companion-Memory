@@ -78,6 +78,61 @@ describe('Instagram datasource', () => {
   });
 });
 
+describe('Instagram datasource — where the JSON export keeps posts', () => {
+  // A single-image post keeps its caption and time on media[0]; a carousel
+  // has them at the top level too.
+  const POSTS = JSON.stringify([
+    {
+      media: [
+        {
+          uri: 'media/posts/202609/18034567890123456.jpg',
+          creation_timestamp: 1789920764,
+          title: 'First frost on the ridge',
+          cross_post_source: { source_app: 'FB' },
+        },
+      ],
+    },
+    {
+      title: 'Two from the pond',
+      creation_timestamp: 1791712862,
+      media: [
+        { uri: 'media/posts/202610/18045678901234567.jpg', creation_timestamp: 1791712862, title: '' },
+        { uri: 'media/posts/202610/18045678901234568.jpg', creation_timestamp: 1791712862, title: '' },
+      ],
+    },
+  ]);
+
+  let root: string;
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'ig-posts-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it.each(['media', 'content'])('reads posts_1.json from your_instagram_activity/%s/', async (folder) => {
+    const dir = path.join(root, 'your_instagram_activity', folder);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'posts_1.json'), POSTS);
+    // Other files in media/ are not posts.
+    fs.writeFileSync(path.join(dir, 'profile_photos.json'), '{"ig_profile_picture": []}');
+
+    const pipeline: EmittedGraph[] = [];
+    await new InstagramFileImporter().fileImport({}, { filename: 'ig', fullPath: root }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    const posts = pipeline.filter((p) => p.item.classification === 'social').map((p) => p.item);
+    expect(posts.map((p) => p.metadata.Caption)).toEqual(['First frost on the ridge', 'Two from the pond']);
+    expect(posts[0].timestamp).toEqual(new Date(1789920764 * 1000));
+    expect(posts[1].timestamp).toEqual(new Date(1791712862 * 1000));
+  });
+});
+
 describe('Instagram datasource — Meta HTML format', () => {
   const root = path.join(FIXTURES_DIR, 'instagram-html-export');
 
@@ -513,5 +568,91 @@ describe('Instagram datasource — mojibake repair (emoji/accents)', () => {
       .filter((p) => p.item.classification !== 'message')
       .map((p) => p.item.metadata.Caption);
     expect(captions).toEqual(['Beautiful sunset at the beach 🌅', 'Morning coffee ☕']);
+  });
+});
+
+describe('Instagram datasource: photo DMs', () => {
+  // A DM that is only a photo has no `content`: the photo is the message.
+  // Its `uri` is relative to the export root, which is the folder holding
+  // your_instagram_activity/ in current exports and the one holding messages/
+  // in older ones.
+  const importThread = async (
+    root: string,
+    threadDir: string,
+    uri: string,
+    extra: string[] = [],
+    log: ImportParams['log'] = () => {},
+  ) => {
+    fs.mkdirSync(path.join(threadDir, 'photos'), { recursive: true });
+    fs.writeFileSync(path.join(threadDir, 'photos', '18012345678901234.jpg'), 'jpeg');
+    fs.writeFileSync(
+      path.join(threadDir, 'message_1.json'),
+      JSON.stringify({
+        participants: [{ name: 'Ottoline Varga' }, { name: 'testuser' }],
+        messages: [
+          {
+            sender_name: 'Ottoline Varga',
+            timestamp_ms: 1791232180000,
+            photos: [uri, ...extra].map((u) => ({ uri: u, creation_timestamp: 1791232180 })),
+          },
+        ],
+        title: 'Ottoline Varga',
+        thread_type: 'Regular',
+      }),
+    );
+
+    const pipeline: EmittedGraph[] = [];
+    await new InstagramFileImporter().fileImport({}, { filename: 'ig', fullPath: root }, {
+      pipeline,
+      timeframe: {},
+      log,
+    } as unknown as ImportParams);
+
+    return pipeline.find((p) => p.item.classification === 'message')!.item;
+  };
+
+  it('attaches the photo of a photo-only DM (current layout)', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ig-photo-dm-'));
+    try {
+      const thread = 'your_instagram_activity/messages/inbox/ottoline_17841400000000001';
+      const log = jest.fn();
+      const msg = await importThread(
+        root,
+        path.join(root, thread),
+        `${thread}/photos/18012345678901234.jpg`,
+        // Outside the export, and a file Meta put in another download: neither is attached.
+        ['../../etc/passwd', `${thread}/photos/not-in-this-download.jpg`],
+        log,
+      );
+
+      expect(msg.metadata.Text).toBeUndefined();
+      expect(msg.metadata.MediaFilePaths).toEqual([
+        path.join(root, thread, 'photos', '18012345678901234.jpg'),
+      ]);
+      expect(msg.metadata.AttachmentContent).toBe(true);
+      // One line for the thread, not one per file: a split export misses thousands.
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(log).toHaveBeenCalledWith(
+        'warn',
+        'Instagram message attachments referenced but missing on disk',
+        expect.objectContaining({ thread: 'ottoline_17841400000000001', count: 2 }),
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('attaches the photo in an older export with messages/ at the top', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ig-photo-dm-old-'));
+    try {
+      const thread = 'messages/inbox/ottoline_17841400000000001';
+      const msg = await importThread(root, path.join(root, thread), `${thread}/photos/18012345678901234.jpg`);
+
+      expect(msg.metadata.MediaFilePaths).toEqual([
+        path.join(root, thread, 'photos', '18012345678901234.jpg'),
+      ]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });

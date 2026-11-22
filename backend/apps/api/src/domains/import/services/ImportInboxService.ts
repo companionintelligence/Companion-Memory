@@ -8,6 +8,7 @@ import type { UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { UserService } from '@ci/domains/user';
 
+import { JUNK_NAMES } from '../datasources/fsWalk';
 import { allDataSources, dataSourcesRecognize, type DirEntry } from '../datasources/registry';
 import type { ImportRunSource } from '../entities/ImportRunEntity';
 import {
@@ -116,9 +117,6 @@ const AGGREGATE_STAT_CONCURRENCY = 64;
  * asked for everything.
  */
 export const MAX_INBOX_BATCH_UNITS = 100;
-
-/** Desktop litter that is never an export. */
-const JUNK_NAMES = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini']);
 
 /** The walk's running tallies and ceilings, threaded through every level. */
 interface WalkState {

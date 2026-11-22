@@ -16,7 +16,7 @@ import {
   UNCLASSIFIED_CATEGORY,
 } from '../taxonomy';
 
-import { jobFailure } from './JobMonitorService';
+import { type JobFailureViewer, jobFailureFor } from './JobMonitorService';
 
 export interface JobListItemDto {
   readonly id: string;
@@ -325,7 +325,11 @@ export class JobQueryService {
     return { scope: 'failed', deleted: result.affected ?? 0, retained: 0 };
   }
 
-  async list(context: RequestContext, query: JobQuery): Promise<JobListDto> {
+  async list(
+    context: RequestContext,
+    query: JobQuery,
+    viewer: JobFailureViewer = { userId: context.userId ?? '', admin: false },
+  ): Promise<JobListDto> {
     if (!context.userId) {
       throw new UnauthorizedException('A user context is required.');
     }
@@ -352,7 +356,7 @@ export class JobQueryService {
     const [queues, counts] = await Promise.all([this.distinctQueues(), this.facetCounts(query, userId)]);
 
     return {
-      items: rows.map((row) => this.toListItem(row)),
+      items: rows.map((row) => this.toListItem(row, viewer)),
       total,
       limit,
       offset,
@@ -878,7 +882,7 @@ export class JobQueryService {
     return rows.map((row) => row.queue);
   }
 
-  private toListItem(job: PgBossJobEntity): JobListItemDto {
+  private toListItem(job: PgBossJobEntity, viewer: JobFailureViewer): JobListItemDto {
     const data = job.data ?? {};
     const event = typeof data['name'] === 'string' ? data['name'] : null;
     const workType = typeof data['workType'] === 'string' ? data['workType'] : null;
@@ -908,7 +912,7 @@ export class JobQueryService {
       retryCount: job.retryCount,
       retryLimit: job.retryLimit,
       payloadBytes: this.byteLength(data),
-      failure: jobFailure(job),
+      failure: jobFailureFor(job, viewer),
       deadLettered: job.name === DEAD_LETTER_QUEUE,
     };
   }

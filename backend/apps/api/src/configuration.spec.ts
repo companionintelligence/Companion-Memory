@@ -241,17 +241,17 @@ describe('auth.hubForwardAuth.requireAudience', () => {
 
 /**
  * The boot-time warning for token-only peer asks. With an audience bound and the signature
- * requirement off (its shipped default), `PeerAskController` serves a Portal-token ask that carries
- * no signature, so the token alone authenticates it. The default is kept for peers that do not sign
- * yet; the warning is what tells the operator.
+ * requirement turned off (it ships on), `PeerAskController` serves a Portal-token ask that carries
+ * no signature from a peer whose link records no key, so the token alone authenticates it. The
+ * warning is what tells the operator who turned it off.
  */
 describe('acceptsUnsignedPeerAsks', () => {
-  it('ships with the signature requirement off', () => {
+  it('ships with the signature requirement on', () => {
     const contents = JSON.parse(readFileSync(join(__dirname, '..', 'config', 'default.json'), 'utf8')) as {
       peers: { requireHttpSignature: unknown };
     };
 
-    expect(contents.peers.requireHttpSignature).toBe(false);
+    expect(contents.peers.requireHttpSignature).toBe(true);
   });
 
   it('is true once an audience is bound and signatures are not required', () => {

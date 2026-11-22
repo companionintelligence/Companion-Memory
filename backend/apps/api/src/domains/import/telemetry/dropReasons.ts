@@ -241,9 +241,15 @@ export const DROP_SLUG_REASONS: Readonly<Record<string, DropReason>> = {
   position_without_time: 'no_timestamp',
   trip_without_start_time: 'no_timestamp',
   undated_retweet: 'no_timestamp',
+  // _garmin_connect_export.ts: an activity or night with no start time.
+  garmin_undated_record: 'no_timestamp',
   // A GPS sample with no fix is a row with a time and no coordinates, which is
   // the same hole in the other axis.
   position_without_fix: 'empty_record',
+  // geojson.ts: a later point of a line or multipoint whose feature has one
+  // time for all of them. `ci.position` holds one fix per instant, so only the
+  // first point can land; the rest are lost without proof they are the same.
+  position_shared_time: 'collapsed_ambiguous',
 
   // Referenced bytes that are not in the archive.
   grok_attachment_missing: 'media_missing',
@@ -263,14 +269,27 @@ export const DROP_SLUG_REASONS: Readonly<Record<string, DropReason>> = {
   whatsapp_attachment_unsupported: 'media_unsupported',
   retweet_media_not_imported: 'media_unsupported',
 
+  // Carried by other records of the same export.
+  // notion.ts: a database CSV, whose rows Notion also exports as pages.
+  notion_database_csv: 'represented_elsewhere',
+
   // Shape.
   unsupported_entity_type: 'unsupported_shape',
+  // notion.ts: a database CSV exported without its row pages (subpages left
+  // out of the export). The rows exist only in the CSV, which is not read.
+  notion_database_csv_without_pages: 'unsupported_shape',
+  // fitbit.ts, withings.ts: a whole file of the export this importer does not
+  // read (per-reading samples, metrics with no reader yet), one per file.
+  unread_export_file: 'unsupported_shape',
   // A Spotify play row with none of the track/episode/audiobook fields set —
   // the source recorded a play but not what was played.
   unresolvable_playback_stub: 'unsupported_shape',
   // A Robinhood transaction row whose "Trans Code" is a real code this build
   // does not have a handler for — recognized as a transaction, not a home for it.
   unrecognized_trans_code: 'unsupported_shape',
+  // snapchat.ts: a history array that is neither a "Received/Sent ... History"
+  // list nor a conversation whose records carry IsSender.
+  snapchat_unknown_layout: 'unsupported_shape',
 
   // Read failures.
   no_end_marker: 'unreadable_source',
