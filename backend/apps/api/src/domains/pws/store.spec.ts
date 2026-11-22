@@ -115,7 +115,8 @@ describe('MemoryPwsStore: limits', () => {
   });
 
   it('ships with ceilings that leave room for real use', () => {
-    const limits = (new MemoryPwsStore() as unknown as { limits: { maxBytes: number; maxRecords: number } }).limits;
+    const limits = (new MemoryPwsStore() as unknown as { limits: { maxBytes: number; maxRecords: number } })
+      .limits;
 
     expect(limits.maxBytes).toBe(256 * 1024 * 1024);
     expect(limits.maxRecords).toBe(100_000);

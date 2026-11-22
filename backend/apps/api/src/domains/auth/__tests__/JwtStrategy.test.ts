@@ -104,7 +104,10 @@ describe('JwtStrategy and tokens minted for a purpose', () => {
 
   it.each([
     ['HBPE Me', 'query Me { me { id } }'],
-    ['HBPE Summaries', 'query Summaries($after: String) { summaries(first: 100, after: $after) { edges { node { id } } } }'],
+    [
+      'HBPE Summaries',
+      'query Summaries($after: String) { summaries(first: 100, after: $after) { edges { node { id } } } }',
+    ],
     ['HBPE ContentsExists', 'query ContentsExists { contents(first: 1) { edges { node { id } } } }'],
   ])('lets a run token read %s', async (_label, query) => {
     await expect(strategy.validate(graphql(query), RUN)).resolves.toEqual(USER);
@@ -112,15 +115,43 @@ describe('JwtStrategy and tokens minted for a purpose', () => {
 
   it.each([
     ['POST /keys (a permanent key)', { method: 'POST', originalUrl: '/keys', body: { name: 'x' } }],
-    ['POST /mcp/test-connection (spawns a command)', { method: 'POST', originalUrl: '/mcp/test-connection', body: { transport: 'stdio', command: 'sh' } }],
+    [
+      'POST /mcp/test-connection (spawns a command)',
+      { method: 'POST', originalUrl: '/mcp/test-connection', body: { transport: 'stdio', command: 'sh' } },
+    ],
     ['DELETE /account', { method: 'DELETE', originalUrl: '/account', body: {} }],
-    ['a REST route sent an allowlisted query', { method: 'POST', originalUrl: '/keys', body: { query: 'query { me { id } }' } }],
-    ['a mutation', { method: 'POST', originalUrl: '/graphql', body: { query: 'mutation { deleteAccount }' } }],
-    ['a query and a mutation in one document', { method: 'POST', originalUrl: '/graphql', body: { query: 'query A { me { id } } mutation B { x }' } }],
-    ['a root field off the list', { method: 'POST', originalUrl: '/graphql', body: { query: 'query { apiKeys { id } }' } }],
-    ['an allowlisted field next to one off the list', { method: 'POST', originalUrl: '/graphql', body: { query: 'query { me { id } apiKeys { id } }' } }],
-    ['a root fragment spread', { method: 'POST', originalUrl: '/graphql', body: { query: 'query { ...F } fragment F on Query { me { id } }' } }],
-    ['a subscription', { method: 'POST', originalUrl: '/graphql', body: { query: 'subscription { me { id } }' } }],
+    [
+      'a REST route sent an allowlisted query',
+      { method: 'POST', originalUrl: '/keys', body: { query: 'query { me { id } }' } },
+    ],
+    [
+      'a mutation',
+      { method: 'POST', originalUrl: '/graphql', body: { query: 'mutation { deleteAccount }' } },
+    ],
+    [
+      'a query and a mutation in one document',
+      { method: 'POST', originalUrl: '/graphql', body: { query: 'query A { me { id } } mutation B { x }' } },
+    ],
+    [
+      'a root field off the list',
+      { method: 'POST', originalUrl: '/graphql', body: { query: 'query { apiKeys { id } }' } },
+    ],
+    [
+      'an allowlisted field next to one off the list',
+      { method: 'POST', originalUrl: '/graphql', body: { query: 'query { me { id } apiKeys { id } }' } },
+    ],
+    [
+      'a root fragment spread',
+      {
+        method: 'POST',
+        originalUrl: '/graphql',
+        body: { query: 'query { ...F } fragment F on Query { me { id } }' },
+      },
+    ],
+    [
+      'a subscription',
+      { method: 'POST', originalUrl: '/graphql', body: { query: 'subscription { me { id } }' } },
+    ],
     ['a batched body', { method: 'POST', originalUrl: '/graphql', body: [{ query: 'query { me { id } }' }] }],
     ['an unparseable document', { method: 'POST', originalUrl: '/graphql', body: { query: 'query {' } }],
   ])('refuses a run token for %s', async (_label, req) => {
@@ -130,10 +161,14 @@ describe('JwtStrategy and tokens minted for a purpose', () => {
 
   it('refuses any other purpose, even on a request a run token may make', async () => {
     const req = graphql('query { me { id } }');
-    await expect(strategy.validate(req, { sub: USER.id, purpose: 'signup_intent' } as never)).resolves.toBeNull();
+    await expect(
+      strategy.validate(req, { sub: USER.id, purpose: 'signup_intent' } as never),
+    ).resolves.toBeNull();
   });
 
   it('still accepts a session token anywhere', async () => {
-    await expect(strategy.validate({ method: 'POST', originalUrl: '/keys', body: {} } as never, { sub: USER.id })).resolves.toEqual(USER);
+    await expect(
+      strategy.validate({ method: 'POST', originalUrl: '/keys', body: {} } as never, { sub: USER.id }),
+    ).resolves.toEqual(USER);
   });
 });

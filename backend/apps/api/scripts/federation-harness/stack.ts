@@ -121,7 +121,10 @@ export function apiEnv(
     // it goes through NODE_CONFIG, merged over anything the caller set there.
     NODE_CONFIG: JSON.stringify({
       ...parseNodeConfig(process.env.NODE_CONFIG),
-      peers: { ...(parseNodeConfig(process.env.NODE_CONFIG).peers as object | undefined), requireHttpSignature: false },
+      peers: {
+        ...(parseNodeConfig(process.env.NODE_CONFIG).peers as object | undefined),
+        requireHttpSignature: false,
+      },
     }),
 
     // ── the data-safety pin ────────────────────────────────────────────────
