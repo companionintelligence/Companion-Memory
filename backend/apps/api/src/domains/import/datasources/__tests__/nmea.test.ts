@@ -5,7 +5,7 @@ import path from 'node:path';
 import { NMEAFileImporter } from '../nmea';
 import type { ImportParams } from '../timeline';
 
-import type { EmittedGraph } from './support/emitted';
+import type { EmittedGraph, TestPipeline } from './support/emitted';
 
 function makeNMEAFile(name: string, lines: string[]): string {
   const dir = path.join(os.tmpdir(), 'ci-import-tests');
@@ -178,5 +178,103 @@ describe('NMEA datasource', () => {
       '2079-12-31T00:00:00.000Z',
       '2000-01-01T00:00:00.000Z',
     ]);
+  });
+
+  describe('talker ids other than $GP', () => {
+    // What a u-blox multi-GNSS receiver logs from power-on: a banner of $GNTXT
+    // lines, a void fix while it acquires, then $GN fixes.
+    const banner = [
+      '$GNTXT,01,01,02,u-blox AG - www.u-blox.com*4E',
+      '$GNTXT,01,01,02,HW UBX-M8030 00080000*60',
+      '$GNTXT,01,01,02,ROM CORE 3.01 (107888)*2B',
+      '$GNTXT,01,01,02,FWVER=SPG 3.01*46',
+      '$GNTXT,01,01,02,PROTVER=18.00*11',
+      '$GNTXT,01,01,02,GPS;GLO;GAL;BDS*77',
+      '$GNTXT,01,01,02,SBAS;IMES;QZSS*49',
+      '$GNTXT,01,01,02,GNSS OTP=GPS;GLO*37',
+      '$GNTXT,01,01,02,ANTSUPERV=AC SD PDoS SR*3E',
+      '$GNTXT,01,01,02,ANTSTATUS=OK*25',
+      '$GNTXT,01,01,02,PF=3FF*4B',
+    ];
+    const gnLog = [
+      ...banner,
+      '$GNRMC,071500.00,V,,,,,,,130926,,,N*6F',
+      '$GNRMC,071510.00,A,4736.3906,N,12219.9008,W,2.4,51.3,130926,,,A*6C',
+      '$GNGGA,071510.00,4736.3906,N,12219.9008,W,1,09,0.92,54.6,M,-17.3,M,,*4D',
+      '$GNGSA,A,3,02,05,12,13,15,18,24,25,29,,,,1.61,0.92,1.32*10',
+      '$GNVTG,51.3,T,,M,2.4,N,4.4,K,A*22',
+    ];
+
+    async function importLines(name: string, lines: string[]) {
+      const f = makeNMEAFile(name, lines);
+      const fi = new NMEAFileImporter();
+      const rec = await fi.recognize({}, { filename: path.basename(f), fullPath: f });
+      const pipeline = [] as unknown as TestPipeline;
+      const drops: string[] = [];
+      pipeline.drop = (reason) => drops.push(reason);
+      await fi.fileImport({}, { filename: path.basename(f), fullPath: f }, {
+        pipeline,
+        timeframe: {},
+        log: () => {},
+      } as unknown as ImportParams);
+
+      return { confidence: rec.confidence, items: pipeline.map((g) => g.item), drops };
+    }
+
+    it('recognizes and imports a $GN log that opens with a start-up banner', async () => {
+      const { confidence, items, drops } = await importLines('gn-ublox', gnLog);
+
+      expect(confidence).toBe(0.8);
+      expect(items.map((i) => [i.id, i.timestamp?.toISOString()])).toEqual([
+        ['nmea:gn-ublox.nmea:12:RMC', '2026-09-13T07:15:10.000Z'],
+        ['nmea:gn-ublox.nmea:13:GGA', '2026-09-13T07:15:10.000Z'],
+      ]);
+      expect(items[0].location!.latitude).toBeCloseTo(47 + 36.3906 / 60, 6);
+      expect(items[0].location!.longitude).toBeCloseTo(-(122 + 19.9008 / 60), 6);
+      expect(items[1].metadata.Altitude).toBe(54.6);
+      // The void $GNRMC is counted like a void $GPRMC.
+      expect(drops).toEqual(['position_without_fix']);
+    });
+
+    it('reads RMC and GGA from every single-system talker and skips other sentences', async () => {
+      const { confidence, items } = await importLines('talkers', [
+        '$GLRMC,071520.00,A,4736.4092,N,12219.8756,W,2.4,51.3,130926,,,A*63',
+        '$GARMC,071530.00,A,4736.4278,N,12219.8504,W,2.4,51.3,130926,,,A*6C',
+        '$GBRMC,071540.00,A,4736.4464,N,12219.8252,W,2.4,51.3,130926,,,A*67',
+        '$BDGGA,071540.00,4736.4464,N,12219.8252,W,1,09,0.92,55.8,M,-17.3,M,,*4A',
+        '$GQRMC,071550.00,A,4736.4650,N,12219.8000,W,2.4,51.3,130926,,,A*75',
+        '$GIRMC,071600.00,A,4736.4836,N,12219.7748,W,2.4,51.3,130926,,,A*61',
+        '$PUBX,00,071600.00,4736.4836,N,12219.7748,W,55.8,G3,2.1,2.0,0.007,77.52,0.007,,0.92,1.19,0.77,9,0,0*7D',
+        '$GNGSA,A,3,02,05,12,13,15,18,24,25,29,,,,1.61,0.92,1.32*10',
+      ]);
+
+      expect(confidence).toBe(0.8);
+      expect(items.map((i) => [i.id, i.timestamp?.toISOString()])).toEqual([
+        ['nmea:talkers.nmea:0:RMC', '2026-09-13T07:15:20.000Z'],
+        ['nmea:talkers.nmea:1:RMC', '2026-09-13T07:15:30.000Z'],
+        ['nmea:talkers.nmea:2:RMC', '2026-09-13T07:15:40.000Z'],
+        // GGA has no date of its own and takes the $GBRMC one before it.
+        ['nmea:talkers.nmea:3:GGA', '2026-09-13T07:15:40.000Z'],
+        ['nmea:talkers.nmea:4:RMC', '2026-09-13T07:15:50.000Z'],
+        ['nmea:talkers.nmea:5:RMC', '2026-09-13T07:16:00.000Z'],
+      ]);
+    });
+
+    it('looks for a fix in the first 50 lines and no further', async () => {
+      const filler = (n: number) =>
+        Array.from({ length: n }, () => '$GNGSA,A,1,,,,,,,,,,,,,99.99,99.99,99.99*2E');
+
+      expect((await importLines('fix-line-50', [...filler(49), ...gnLog.slice(-4)])).confidence).toBe(0.8);
+      expect((await importLines('fix-line-51', [...filler(50), ...gnLog.slice(-4)])).confidence).toBe(0);
+    });
+
+    it('stops looking for a fix after the first 8 KiB', async () => {
+      // 30 lines, well under the line bound, but long enough that the fix
+      // starts past 8 KiB: a text file that is not NMEA is not read whole.
+      const filler = Array.from({ length: 30 }, (_, i) => `line ${i} ${'x'.repeat(300)}`);
+      const { confidence } = await importLines('late-bytes', [...filler, ...gnLog.slice(-4)]);
+
+      expect(confidence).toBe(0);
+    });
   });
 });

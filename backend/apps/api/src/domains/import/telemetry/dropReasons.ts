@@ -244,6 +244,10 @@ export const DROP_SLUG_REASONS: Readonly<Record<string, DropReason>> = {
   // A GPS sample with no fix is a row with a time and no coordinates, which is
   // the same hole in the other axis.
   position_without_fix: 'empty_record',
+  // geojson.ts: a later point of a line or multipoint whose feature has one
+  // time for all of them. `ci.position` holds one fix per instant, so only the
+  // first point can land; the rest are lost without proof they are the same.
+  position_shared_time: 'collapsed_ambiguous',
 
   // Referenced bytes that are not in the archive.
   grok_attachment_missing: 'media_missing',

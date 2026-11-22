@@ -1,14 +1,31 @@
 /* NMEA GPS sentences datasource (MVP) */
 import fs from 'node:fs';
-import { readFile, stat } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { FileImporter, DirEntry, Recognition } from './registry';
 import { registerDataSource } from './registry';
+import { readHead } from './sniff';
 import type { ImportParams, Graph } from './timeline';
 import { timeframeContains } from './timeline';
 
 type NMEAOptions = Record<string, never>;
+
+/**
+ * An RMC or GGA sentence from any satellite system. The talker id says which
+ * system the fix came from: GP (GPS), GL (GLONASS), GA (Galileo), GB or BD
+ * (BeiDou), GQ (QZSS), GI (NavIC) and GN for a fix that combines several
+ * (what current multi-GNSS receivers write). The fields are the same for all
+ * of them. Group 1 is the sentence type.
+ */
+const FIX_SENTENCE = /^\$(?:GP|GN|GL|GA|GB|BD|GQ|GI)(RMC|GGA),/;
+
+// Receivers can print a start-up banner before the first fix (u-blox chips
+// write several $GxTXT lines), so recognition looks past the first few. Both
+// bounds keep the peek cheap on a large .log or .txt that is not NMEA at all:
+// a NMEA sentence is at most 82 characters, so 8 KiB holds the 50 lines.
+const RECOGNIZE_LINES = 50;
+const RECOGNIZE_BYTES = 8192;
 
 export class NMEAFileImporter implements FileImporter {
   async recognize(_ctx: unknown, entry: DirEntry): Promise<Recognition> {
@@ -21,8 +38,9 @@ export class NMEAFileImporter implements FileImporter {
       if ((await stat(full)).isFile()) {
         const ext = path.extname(full).toLowerCase();
         if (ext === '.nmea' || ext === '.log' || ext === '.txt') {
-          const first = (await readFile(full, 'utf8')).split(/\n/).slice(0, 5).join('\n');
-          if (/^\$GP(RMC|GGA)/m.test(first)) {
+          const head = (await readHead(full, RECOGNIZE_BYTES)) ?? '';
+          const lines = head.split(/\r?\n/).slice(0, RECOGNIZE_LINES);
+          if (lines.some((line) => FIX_SENTENCE.test(line))) {
             return { confidence: 0.8 };
           }
         }
@@ -45,24 +63,25 @@ export class NMEAFileImporter implements FileImporter {
     }
 
     const lines = fs.readFileSync(start, 'utf8').split(/\r?\n/);
-    // Track last-seen RMC date so GPGGA sentences (which carry no date) can
+    // Track last-seen RMC date so GGA sentences (which carry no date) can
     // inherit it. In a GGA-only file there is nothing to inherit and the fix
     // stays undated — see parseDateTimeUTC for why that beats today's date.
     let lastRmcDate: string | undefined;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
-      if (!line.startsWith('$GP')) {
+      const sentence = FIX_SENTENCE.exec(line)?.[1];
+      if (!sentence) {
         continue;
       }
 
       const parts = line.split(',');
-      if (parts[0] === '$GPRMC') {
+      if (sentence === 'RMC') {
         if (parts[9]?.length === 6) {
           lastRmcDate = parts[9];
         }
 
         this.parseGPRMC(parts, params, start, i);
-      } else if (parts[0] === '$GPGGA') {
+      } else {
         this.parseGPGGA(parts, params, start, i, lastRmcDate);
       }
     }
@@ -257,7 +276,7 @@ registerDataSource({
   name: 'nmea',
   title: 'NMEA GPS',
   icon: 'nmea.svg',
-  description: 'NMEA sentence logs ($GPRMC/$GPGGA) to location items (MVP)',
+  description: 'NMEA sentence logs (RMC/GGA from $GP, $GN and other talkers) to location items (MVP)',
   newOptions: () => ({}) as NMEAOptions,
   newFileImporter: () => new NMEAFileImporter(),
 });
