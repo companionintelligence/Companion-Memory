@@ -1,3 +1,3 @@
-Activity ID,Activity Date,Activity Name,Activity Type,Activity Description,Elapsed Time,Distance,Max Heart Rate,Relative Effort,Commute,Activity Private Note,Activity Gear,Filename,Athlete Weight,Bike Weight,Elapsed Time.1,Moving Time,Distance.1,Max Speed,Average Speed,Elevation Gain,Elevation Loss
-12345678901,"Jan 1, 2021, 7:00:00 AM",Morning Run,Run,New year new miles,1823,5.01,175,42,false,,Asics Gel,activities/morning_run.gpx,72.0,,1823,1650,5.01,4.2,3.0,45,42
-98765432109,"Jan 2, 2021, 8:30:00 AM",Evening Ride,Ride,,3600,25.3,165,65,false,,,activities/evening_ride.gpx.gz,72.0,,3600,3400,25.3,12.5,7.0,120,115
+Activity ID,Activity Date,Activity Name,Activity Type,Activity Description,Elapsed Time,Distance,Max Heart Rate,Relative Effort,Commute,Activity Private Note,Activity Gear,Filename,Athlete Weight,Bike Weight,Elapsed Time,Moving Time,Distance,Max Speed,Average Speed,Elevation Gain,Elevation Loss
+12345678901,"Jan 1, 2021, 7:00:00 AM",Morning Run,Run,New year new miles,1823,5.01,175,42,false,,Asics Gel,activities/morning_run.gpx,72.0,,1823.0,1650.0,5012.3,4.2,3.0,45,42
+98765432109,"Jan 2, 2021, 8:30:00 AM",Evening Ride,Ride,,3600,25.3,165,65,false,,,activities/evening_ride.gpx.gz,72.0,,3600.0,3400.0,25300.0,12.5,7.0,120,115

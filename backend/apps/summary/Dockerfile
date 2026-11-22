@@ -9,7 +9,7 @@
 ARG UV_VERSION
 FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
 
-FROM python:3.15.0-slim-bookworm
+FROM python:3.15.2-slim-bookworm
 
 WORKDIR /app
 

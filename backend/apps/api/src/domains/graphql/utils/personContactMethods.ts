@@ -44,6 +44,7 @@ export function contactMethodsFromPersonProperties(person: {
   const props = person.properties ?? {};
   const out: PersonIdentifierType[] = [];
   const seen = new Set<string>();
+  const written = writtenPhones(props);
 
   const push = (kind: 'email' | 'phone', raw: string, label: string | null) => {
     const normalized =
@@ -61,7 +62,9 @@ export function contactMethodsFromPersonProperties(person: {
     out.push({
       kind,
       value: normalized,
-      rawValue: raw.trim(),
+      // The written form only stands in for a bare join key: a number the
+      // person's record states with its own formatting is shown as stated.
+      rawValue: (kind === 'phone' && raw.trim() === normalized && written.get(normalized)) || raw.trim(),
       label,
       isPrimary: false,
       source: 'properties',
@@ -93,17 +96,46 @@ export function contactMethodsFromPersonProperties(person: {
 }
 
 /**
+ * Each phone number the import kept as the source wrote it (`Phones`: the
+ * card's own words, which the form never edits), by its join key. A phone is
+ * stored and matched under its last ten digits, so without this a Telegram
+ * contact's "+44 20 7946 0321" shows as 2079460321. Only ever the shown form of
+ * a number the person already has: a typed number that is not one of its
+ * contacts stays off the card.
+ */
+function writtenPhones(props: Record<string, unknown>): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const entry of readContactEntries(props.Phones)) {
+    const key = normalizeIdentifier('phone', entry.value);
+    if (key != null && key !== entry.value && !out.has(key)) {
+      out.set(key, entry.value);
+    }
+  }
+
+  return out;
+}
+
+/**
  * Index rows win when the same mailbox is stored both ways; property-only
- * contacts fill the gaps the Details card used to leave blank.
+ * contacts fill the gaps the Details card used to leave blank. An indexed phone
+ * stored without its written form takes the person's own copy of it.
  */
 export function mergePersonIdentifiers(
   fromIndex: PersonIdentifierType[],
   fromProperties: PersonIdentifierType[],
 ): PersonIdentifierType[] {
+  const byKey = new Map(fromProperties.map((row) => [`${row.kind}:${row.value}`, row]));
+  const indexed = fromIndex.map((row) => {
+    const written = byKey.get(`${row.kind}:${row.value}`)?.rawValue;
+
+    return row.kind === 'phone' && !row.rawValue && written && written !== row.value
+      ? { ...row, rawValue: written }
+      : row;
+  });
   const seen = new Set(fromIndex.map((row) => `${row.kind}:${row.value}`));
   const extras = fromProperties.filter((row) => !seen.has(`${row.kind}:${row.value}`));
 
-  return [...fromIndex, ...extras];
+  return [...indexed, ...extras];
 }
 
 /**

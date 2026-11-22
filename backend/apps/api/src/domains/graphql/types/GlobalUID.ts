@@ -22,6 +22,7 @@ type ResourceType =
   | 'message'
   | 'note'
   | 'observation'
+  | 'peer-invite'
   | 'peer-link'
   | 'person'
   | 'place'

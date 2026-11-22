@@ -86,6 +86,57 @@ describe('Withings datasource', () => {
     expect((await fi.recognize({}, { filename: 'roblox-export', fullPath: roblox })).confidence).toBe(0);
   });
 
+  // The MyFitnessPal fixture above holds only the nutrition file. A real export
+  // also carries a measurement file, "Date,Weight" with no unit, and a bare
+  // "Weight" column used to be enough: Withings claimed the export's folder and
+  // imported every row of all three files as Withings measurements.
+  it('does not claim a MyFitnessPal export by its unit-less "Date,Weight" measurement file', async () => {
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'withings-mfp-'));
+    const range = '2026-10-12-to-2026-10-14';
+    const fi = new WithingsFileImporter();
+    try {
+      await fs.promises.writeFile(
+        path.join(dir, `Nutrition-Summary-${range}.csv`),
+        'Date,Meal,Calories,Fat (g),Carbohydrates (g),Protein (g),Note\n2026-10-12,Breakfast,412.5,13.1,51.2,21.4,\n',
+      );
+      await fs.promises.writeFile(
+        path.join(dir, `Measurement-Summary-${range}.csv`),
+        'Date,Weight\n2026-10-12,71.4\n2026-10-14,71.1\n',
+      );
+      await fs.promises.writeFile(
+        path.join(dir, `Exercise-Summary-${range}.csv`),
+        'Date,Exercise,Type,Exercise Calories,Exercise Minutes,Sets,Reps Per Set,Kilograms,Steps,Note\n' +
+          '2026-10-13,Bench Press,Strength,,,4,8,60,,\n',
+      );
+      const measurement = path.join(dir, `Measurement-Summary-${range}.csv`);
+      expect(
+        (await fi.recognize({}, { filename: path.basename(measurement), fullPath: measurement })).confidence,
+      ).toBe(0);
+      expect((await fi.recognize({}, { filename: path.basename(dir), fullPath: dir })).confidence).toBe(0);
+    } finally {
+      await fs.promises.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('still recognizes a quoted weight column with a unit other than kg', async () => {
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'withings-lb-'));
+    const fpath = path.join(dir, 'measurements.csv');
+    try {
+      await fs.promises.writeFile(fpath, 'Date,"Weight (lb)",Comments\n"2024-01-15 08:30:00",181.7,\n');
+      const rec = await new WithingsFileImporter().recognize(
+        {},
+        { filename: 'measurements.csv', fullPath: fpath },
+      );
+      expect(rec.confidence).toBeGreaterThan(0.8);
+    } finally {
+      await fs.promises.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('drops undated rows when a timeframe filter is active', async () => {
     const fs = await import('node:fs');
     const tmp = path.join(FIXTURES_DIR, 'withings-export', 'undated.csv');
@@ -246,5 +297,192 @@ describe('Withings datasource', () => {
     } finally {
       await fs.promises.unlink(tmp).catch(() => {});
     }
+  });
+
+  // sleep.csv, activities.csv and the aggregates_*.csv files have no `Date`
+  // column, so the reader skipped them without counting anything: an export
+  // with three nights, two workouts and daily step totals arrived as its
+  // weight and blood-pressure readings alone.
+  describe('files without a Date column', () => {
+    const SLEEP =
+      'from,to,"light (s)","deep (s)","rem (s)","awake (s)","wake up","Duration to sleep (s)","Duration to wake up (s)","Snoring (s)","Snoring episodes","Average heart rate","Heart rate (min)","Heart rate (max)"\n' +
+      '2026-10-28 23:04:00,2026-10-29 06:51:00,14220,5460,6120,1020,2,540,300,420,4,56,49,71\n' +
+      '2026-10-30T22:47:00+01:00,2026-10-31T07:12:00+01:00,15360,6000,6540,1320,3,540,300,420,4,55,48,74\n';
+    const ACTIVITIES =
+      'from,to,"from (manual)","to (manual)",Timezone,"Activity type",Data,GPS,Modified\n' +
+      '2026-10-28T08:01:00+00:00,2026-10-28T09:58:31+00:00,,,Europe/London,Running,"{""calories"":1210,""distance"":21097,""hr_average"":158,""hr_min"":96,""hr_max"":181,""steps"":19840,""elevation"":88}","{""latitude"":[51.3812],""longitude"":[-2.359]}",2026-10-28T10:05:12+00:00\n' +
+      '2026-11-03T18:20:00+00:00,2026-11-03T19:05:00+00:00,,,Europe/London,Swimming,"{""calories"":402,""distance"":1500,""hr_average"":0,""pool_laps"":60}",,2026-11-03T19:10:00+00:00\n';
+
+    async function importDir(files: Record<string, string>, timeframe: Record<string, unknown> = {}) {
+      const fs = await import('node:fs');
+      const os = await import('node:os');
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'withings-'));
+      for (const [name, body] of Object.entries(files)) {
+        fs.writeFileSync(path.join(dir, name), body);
+      }
+
+      const pipeline: EmittedGraph[] = [];
+      const drops: Array<[string, string | undefined]> = [];
+      Object.assign(pipeline, { drop: (reason: string, detail?: string) => drops.push([reason, detail]) });
+      try {
+        await new WithingsFileImporter().fileImport({}, { filename: 'withings', fullPath: dir }, {
+          pipeline,
+          timeframe,
+          log: () => {},
+        } as unknown as ImportParams);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+
+      return { items: pipeline.map((g) => g.item), drops };
+    }
+
+    it('imports sleep.csv nights as sleep with the minutes the daily total adds up', async () => {
+      const { items } = await importDir({
+        'weight.csv': 'Date,"Weight (kg)"\n"2026-10-28 07:41:12",74.32\n',
+        'sleep.csv': SLEEP,
+      });
+      const sleep = items.filter((i) => i.classification === 'sleep');
+      expect(sleep).toHaveLength(2);
+      expect(sleep[0].timestamp!.toISOString()).toBe('2026-10-28T23:04:00.000Z');
+      expect(sleep[0].timespanEnd!.toISOString()).toBe('2026-10-29T06:51:00.000Z');
+      // light 14220 + deep 5460 + REM 6120 seconds
+      expect(sleep[0].metadata['Minutes Asleep']).toBe(430);
+      expect(sleep[0].metadata['Minutes Awake']).toBe(17);
+      expect(sleep[0].metadata['Average heart rate']).toBe(56);
+      expect(sleep[0].metadata.Title).toBe('Slept 430 min on 2026-10-29');
+      expect(sleep[0].metadata.Source).toBe('Withings');
+      // Real exports write times with an offset.
+      expect(sleep[1].timestamp!.toISOString()).toBe('2026-10-30T21:47:00.000Z');
+    });
+
+    // Nights recorded before a device tracked stages carry blank or zero stage
+    // columns and only the time awake. 0 minutes asleep would count each one
+    // as a night without sleep in the daily total.
+    it('counts a night without sleep stages as its length less the time awake', async () => {
+      const { items } = await importDir({
+        'sleep.csv':
+          'from,to,"light (s)","deep (s)","rem (s)","awake (s)","wake up"\n' +
+          '2019-03-02T23:30:00+00:00,2019-03-03T07:00:00+00:00,,,,1800,1\n' +
+          '2019-03-03T23:00:00+00:00,2019-03-04T06:00:00+00:00,0,0,0,,0\n' +
+          '2019-03-05T23:00:00+00:00,,,,,600,0\n',
+      });
+      expect(items.map((i) => i.metadata['Minutes Asleep'])).toEqual([420, 420, undefined]);
+      expect(items.map((i) => i.metadata.Title)).toEqual([
+        'Slept 420 min on 2019-03-03',
+        'Slept 420 min on 2019-03-04',
+        'Slept ? min on 2019-03-05',
+      ]);
+    });
+
+    it('reads a sleep.csv whose headers are translated', async () => {
+      const { items } = await importDir({
+        'sleep.csv':
+          'von,bis,"leicht (s)","tief (s)","rem (s)","wach (s)",Aufwachen\n' +
+          '2020-07-14T22:09:00+02:00,2020-07-15T08:08:00+02:00,24660,2640,6480,2160,3\n',
+      });
+      expect(items).toHaveLength(1);
+      expect(items[0].classification).toBe('sleep');
+      expect(items[0].metadata['Minutes Asleep']).toBe(563);
+      expect(items[0].metadata.Aufwachen).toBe(3);
+    });
+
+    it('imports activities.csv rows as workouts with their totals', async () => {
+      const { items } = await importDir({ 'activities.csv': ACTIVITIES });
+      expect(items).toHaveLength(2);
+      const [run, swim] = items;
+      expect(run.classification).toBe('workout');
+      expect(run.metadata.Title).toBe('Running');
+      expect(run.timespanEnd!.getTime() - run.timestamp!.getTime()).toBe((60 + 57) * 60_000 + 31_000);
+      expect(run.metadata['Distance (km)']).toBe(21.097);
+      expect(run.metadata.Calories).toBe(1210);
+      expect(run.metadata.Steps).toBe(19840);
+      expect(run.metadata['Average Heart Rate']).toBe(158);
+      expect(run.metadata['Floors Climbed']).toBe(88);
+      expect(run.metadata['Max Heart Rate']).toBe(181);
+      expect(run.metadata['Time Zone']).toBe('Europe/London');
+      expect(swim.metadata['Distance (km)']).toBe(1.5);
+      // Withings writes 0 for a heart rate it did not measure.
+      expect(swim.metadata['Average Heart Rate']).toBeUndefined();
+    });
+
+    it('reads an activities.csv whose headers are translated', async () => {
+      const { items } = await importDir({
+        'activities.csv':
+          'von,bis,"von (manuell)","bis (manuell)",Zeitzone,Aktivitätstyp,Daten,GPS,Geändert\n' +
+          '2026-10-28T08:01:00+00:00,2026-10-28T09:58:31+00:00,,,Europe/Berlin,Laufen,"{""calories"":1210,""distance"":21097}",,2026-10-28T10:05:12+00:00\n',
+      });
+      expect(items).toHaveLength(1);
+      expect(items[0].classification).toBe('workout');
+      expect(items[0].metadata['Distance (km)']).toBe(21.097);
+      expect(items[0].metadata['Time Zone']).toBe('Europe/Berlin');
+    });
+
+    it('keeps the recorded length when only the start was moved by hand', async () => {
+      const { items } = await importDir({
+        'activities.csv':
+          'from,to,"from (manual)","to (manual)",Timezone,"Activity type",Data,GPS,Modified\n' +
+          '2026-10-28T08:00:00+00:00,2026-10-28T09:00:00+00:00,2026-10-29T18:00:00+00:00,,Europe/London,Running,{},,\n',
+      });
+      expect(items[0].timestamp!.toISOString()).toBe('2026-10-29T18:00:00.000Z');
+      expect(items[0].timespanEnd!.toISOString()).toBe('2026-10-29T19:00:00.000Z');
+    });
+
+    it('keeps a workout whose Data cell is not JSON, without totals', async () => {
+      const { items } = await importDir({
+        'activities.csv':
+          'from,to,"from (manual)","to (manual)",Timezone,"Activity type",Data,GPS,Modified\n' +
+          '2026-11-03T18:20:00+00:00,2026-11-03T19:05:00+00:00,,,Europe/London,Yoga,not json,,\n',
+      });
+      expect(items).toHaveLength(1);
+      expect(items[0].metadata.Title).toBe('Yoga');
+      expect(items[0].metadata.Calories).toBeUndefined();
+    });
+
+    it('imports each day of the aggregates files', async () => {
+      const { items } = await importDir({
+        'aggregates_steps.csv': 'date,value\n2026-10-28,24310\n2026-10-29,6120\n',
+        'aggregates_distance.csv': 'date,value\n2026-10-28,25310.4\n',
+        'aggregates_calories_earned.csv': 'date,value\n2026-10-28,1630.5\n',
+      });
+      const steps = items.filter((i) => i.metadata.File === 'aggregates_steps.csv');
+      expect(steps.map((i) => i.metadata.Steps)).toEqual([24310, 6120]);
+      expect(steps[0].classification).toBe('observation');
+      expect(steps[0].timestamp!.toISOString()).toBe('2026-10-28T00:00:00.000Z');
+      expect(steps[0].metadata.Title).toBe('Steps on 2026-10-28: 24310');
+      const distance = items.find((i) => i.metadata.File === 'aggregates_distance.csv')!;
+      expect(distance.metadata['Distance (km)']).toBe(25.31);
+      const calories = items.find((i) => i.metadata.File === 'aggregates_calories_earned.csv')!;
+      expect(calories.metadata['Active Calories']).toBe(1630.5);
+      expect(new Set(items.map((i) => i.id)).size).toBe(items.length);
+    });
+
+    it('applies the timeframe to the new files', async () => {
+      const { items } = await importDir(
+        {
+          'sleep.csv': SLEEP,
+          'activities.csv': ACTIVITIES,
+          'aggregates_steps.csv': 'date,value\n2026-10-28,24310\n2026-11-04,9000\n',
+        },
+        { since: new Date('2026-11-01T00:00:00Z') },
+      );
+      expect(items.map((i) => i.metadata.Title).sort()).toEqual(['Steps on 2026-11-04: 9000', 'Swimming']);
+    });
+
+    it('counts each per-reading raw_*.csv as dropped instead of skipping it silently', async () => {
+      const { items, drops } = await importDir({
+        'raw_tracker_steps.csv': 'start,duration,value\n2026-10-28T08:00:00+00:00,[60],[112]\n',
+      });
+      expect(items).toHaveLength(0);
+      expect(drops).toEqual([['unread_export_file', 'raw_tracker_steps.csv']]);
+    });
+
+    it("leaves another service's activities.csv alone", async () => {
+      const { items } = await importDir({
+        'activities.csv':
+          'Activity ID,Activity Date,Activity Name,Activity Type,Elapsed Time,Distance\n1,"Mar 14, 2026, 7:05:12 AM",Run,Run,1980,6.12\n',
+      });
+      expect(items).toHaveLength(0);
+    });
   });
 });

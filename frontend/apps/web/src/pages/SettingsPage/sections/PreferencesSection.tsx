@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { useMutation } from '@apollo/client/react';
-import { Button, Card, Label, Select } from '@ci/shadcn';
-import { Check, Clock, Globe } from '@ci/shadcn/icons';
+import { Button, Select } from '@ci/shadcn';
 
 import { gql } from '@/graphql';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
@@ -15,6 +14,15 @@ import {
   type TimeFormat,
 } from '@/lib/dateTimeFormat';
 import { detectBrowserTimeZone, formatTimeZoneLabel, getAvailableTimeZones } from '@/lib/timezone';
+
+import {
+  SettingsFooter,
+  SettingsGroup,
+  SettingsHint,
+  SettingsRow,
+  SettingsSection,
+  SettingsStatus,
+} from '../kit';
 
 const UPDATE_CURRENT_USER = gql(`
   mutation UpdateCurrentUserTimezone($input: UpdateCurrentUserInput!) {
@@ -138,96 +146,80 @@ export function PreferencesSection() {
   };
 
   return (
-    <>
-      <div className="mb-6">
-        <h2 className="text-xl font-semibold">Preferences</h2>
-        <p className="text-sm text-muted-foreground mt-1">
-          Set your timezone so predictions, summaries, and insights line up with your local day, and choose
-          how times are written.
-        </p>
-      </div>
+    <SettingsSection
+      title="Preferences"
+      description="Your timezone and how times are written."
+      help="Predictions, summaries and insights use your timezone to line up with your local day."
+    >
+      <SettingsGroup>
+        <SettingsRow label="Timezone" htmlFor="timezone">
+          <Select value={selected} onValueChange={setSelected} disabled={loading}>
+            <Select.Trigger id="timezone" className="w-full">
+              <Select.Value placeholder={loading ? 'Loading…' : 'Select a timezone'} />
+            </Select.Trigger>
+            <Select.Content className="max-h-80">
+              {options.map((zone) => (
+                <Select.Item key={zone} value={zone}>
+                  {formatTimeZoneLabel(zone)}
+                </Select.Item>
+              ))}
+            </Select.Content>
+          </Select>
 
-      <Card>
-        <Card.Content className="space-y-4 pt-6">
-          <div className="grid gap-2">
-            <Label htmlFor="timezone" className="flex items-center gap-2">
-              <Globe className="h-4 w-4" />
-              Timezone
-            </Label>
-
-            <Select value={selected} onValueChange={setSelected} disabled={loading}>
-              <Select.Trigger id="timezone" className="w-full">
-                <Select.Value placeholder={loading ? 'Loading…' : 'Select a timezone'} />
-              </Select.Trigger>
-              <Select.Content className="max-h-80">
-                {options.map((zone) => (
-                  <Select.Item key={zone} value={zone}>
-                    {formatTimeZoneLabel(zone)}
-                  </Select.Item>
-                ))}
-              </Select.Content>
-            </Select>
-
-            <p className="text-xs text-muted-foreground">
-              Detected from this browser:{' '}
-              <button
-                type="button"
-                className="underline underline-offset-2 hover:text-foreground disabled:no-underline disabled:opacity-60"
-                onClick={() => setSelected(detected)}
-                disabled={selected === detected}
-              >
-                {formatTimeZoneLabel(detected)}
-              </button>
-            </p>
-          </div>
-
-          <div className="grid gap-2">
-            <Label htmlFor="time-format" className="flex items-center gap-2">
-              <Clock className="h-4 w-4" />
-              Time format
-            </Label>
-
-            <Select
-              value={selectedTimeFormat}
-              onValueChange={(value) => {
-                if (isTimeFormat(value)) {
-                  setSelectedTimeFormat(value);
-                }
-              }}
-              disabled={loading}
+          <SettingsHint>
+            Detected from this browser:{' '}
+            <button
+              type="button"
+              className="cursor-pointer underline underline-offset-2 hover:text-foreground disabled:cursor-default disabled:no-underline disabled:opacity-60"
+              onClick={() => setSelected(detected)}
+              disabled={selected === detected}
             >
-              <Select.Trigger id="time-format" className="w-full">
-                <Select.Value />
-              </Select.Trigger>
-              <Select.Content>
-                {TIME_FORMATS.map((format) => (
-                  <Select.Item key={format} value={format}>
-                    {TIME_FORMAT_LABELS[format]}
-                  </Select.Item>
-                ))}
-              </Select.Content>
-            </Select>
+              {formatTimeZoneLabel(detected)}
+            </button>
+          </SettingsHint>
+        </SettingsRow>
 
-            <p className="text-xs text-muted-foreground" data-testid="time-format-example">
-              Times will look like <span className="tabular-nums text-foreground">{example}</span>
-            </p>
-          </div>
+        <SettingsRow label="Time format" htmlFor="time-format">
+          <Select
+            value={selectedTimeFormat}
+            onValueChange={(value) => {
+              if (isTimeFormat(value)) {
+                setSelectedTimeFormat(value);
+              }
+            }}
+            disabled={loading}
+          >
+            <Select.Trigger id="time-format" className="w-full">
+              <Select.Value />
+            </Select.Trigger>
+            <Select.Content>
+              {TIME_FORMATS.map((format) => (
+                <Select.Item key={format} value={format}>
+                  {TIME_FORMAT_LABELS[format]}
+                </Select.Item>
+              ))}
+            </Select.Content>
+          </Select>
 
-          {error ? <p className="text-sm text-destructive">{error}</p> : null}
+          <SettingsHint data-testid="time-format-example">
+            Times will look like <span className="text-foreground tabular-nums">{example}</span>
+          </SettingsHint>
+        </SettingsRow>
 
-          <div className="flex items-center gap-3">
-            <Button onClick={handleSave} disabled={!dirty || saving}>
-              {saving ? 'Saving…' : 'Save'}
-            </Button>
-            {saved ? (
-              <span className="flex items-center gap-1 text-sm text-muted-foreground">
-                <Check className="h-4 w-4" />
-                Saved
-              </span>
-            ) : null}
-          </div>
-        </Card.Content>
-      </Card>
-    </>
+        <SettingsFooter
+          status={
+            error ? (
+              <SettingsStatus tone="error">{error}</SettingsStatus>
+            ) : saved ? (
+              <SettingsStatus tone="success">Saved</SettingsStatus>
+            ) : null
+          }
+        >
+          <Button onClick={handleSave} disabled={!dirty || saving}>
+            {saving ? 'Saving…' : 'Save'}
+          </Button>
+        </SettingsFooter>
+      </SettingsGroup>
+    </SettingsSection>
   );
 }

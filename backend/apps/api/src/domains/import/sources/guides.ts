@@ -449,27 +449,26 @@ export const WIZARD_SOURCES: WizardSource[] = [
   {
     id: 'apple_photos',
     title: 'Apple Photos',
-    blurb: 'Photos + videos with full EXIF, places, and faces (on device).',
+    blurb: 'Photos + videos with their EXIF dates and GPS (on device).',
     ecosystem: 'apple',
     category: 'photos',
     tier: 1,
     acquisition: 'app-export',
     wait: 'minutes',
     steps: [
-      'Easiest: point the Import page directly at ~/Pictures/Photos Library.photoslibrary — the apple_photos importer reads dates, places, and faces straight from its database.',
+      'Easiest: point the Import page directly at ~/Pictures/Photos Library.photoslibrary. The apple_photos importer reads the original photos and videos inside it.',
       UPLOAD_STEP,
       'For a full off-device archive, the Apple privacy export at https://privacy.apple.com is more complete but takes 1–7 days.',
     ],
     expectedFormat:
-      'A `.photoslibrary` package (point the import directly at it) containing `database/Photos.sqlite` and the `originals/` media tree. Exported "Originals" land as plain files handled by the generic importer instead.',
+      'A `.photoslibrary` package (point the import directly at it). The importer reads its `originals/` media tree. Exported "Originals" land as plain files handled by the generic importer instead.',
     whatImported: [
-      'Photos and videos with full EXIF, timestamps, and GPS',
-      'Place names, titles, descriptions, keywords, favorites',
-      'People and pets recognized in the library, linked as entities',
-      'Edit history and album membership',
+      'Photos and videos with their EXIF or video timestamps and GPS',
+      'Live Photo stills and their motion clips, marked as pairs',
     ],
     caveats: [
       'Turn on Photos → Settings → iCloud → "Download Originals to this Mac" first, or cloud-only photos are skipped with warnings.',
+      'Titles, descriptions, keywords, favorites, people and albums live in the library database (`database/Photos.sqlite`), which is not read yet.',
       'Keep the `.photoslibrary` package intact — do not open or modify its contents.',
     ],
     inboxPath: 'apple/photos',
@@ -951,7 +950,7 @@ export const WIZARD_SOURCES: WizardSource[] = [
   {
     id: 'fitbit',
     title: 'Fitbit / Google Fit',
-    blurb: 'Steps, sleep, heart rate, and GPS from Fitbit (now a Google product).',
+    blurb: 'Steps, sleep, heart rate and workouts from Fitbit (now a Google product).',
     ecosystem: 'wearable',
     category: 'health',
     tier: 2,
@@ -991,12 +990,12 @@ export const WIZARD_SOURCES: WizardSource[] = [
       UPLOAD_STEP,
     ],
     expectedFormat:
-      'A Garmin `Activities.csv` (Activity Type / Distance + Garmin-specific columns). The export also bundles `.fit`/`.gpx` activity files importable via the GPX guide.',
+      'The account export zip: activities from `DI_CONNECT/DI-Connect-Fitness/*_summarizedActivities.json` and sleep from `DI-Connect-Wellness/*_sleepData.json`. An `Activities.csv` from the Activities list (Export CSV) works too.',
     inboxPath: 'garmin',
     importer: 'garmin',
     importerReady: true,
     notes: [
-      'Export includes .fit and .gpx activity files plus JSON health summaries. Individual .gpx files can also be imported via the generic importer.',
+      'Daily summaries, the profile and personal records in the export are kept as plain files for now. The original activity files are mostly .fit, which are not read; a .gpx among them imports as a GPS track.',
     ],
   },
   {
@@ -1015,7 +1014,8 @@ export const WIZARD_SOURCES: WizardSource[] = [
       'Download and unzip the archive (contains CSV files).',
       UPLOAD_STEP,
     ],
-    expectedFormat: 'A MyFitnessPal `Nutrition-Summary*.csv` (Date / Calories / Protein columns).',
+    expectedFormat:
+      'The MyFitnessPal export: `Nutrition-Summary*.csv`, `Exercise-Summary*.csv` and `Measurement-Summary*.csv`.',
     inboxPath: 'myfitnesspal',
     importer: 'myfitnesspal',
     importerReady: true,
@@ -1414,7 +1414,7 @@ export const WIZARD_SOURCES: WizardSource[] = [
     importerReady: true,
     notes: [
       'Grok is an X product; its data is bundled with the X/Twitter export. No separate export page exists.',
-      'This card imports ONLY the Grok chats out of the archive. Use the Twitter / X card to import the whole thing — tweets, DMs and Grok together.',
+      'Memory imports everything it recognizes in the archive, whichever card you start from: your tweets and DMs come in too, alongside the Grok chats.',
     ],
   },
 
@@ -2755,7 +2755,7 @@ export const WIZARD_SOURCES: WizardSource[] = [
     url: 'https://github.com/settings/admin',
     steps: [
       'Open GitHub → Settings → Account → "Export account data" and request your archive (emailed in a few minutes).',
-      'Unzip and find `starred_repositories.json`.',
+      'Download the `.tar.gz` the email links to.',
       'Alternatively, use a stars exporter (e.g. ghstars) to produce a `ghstars.json`.',
       UPLOAD_STEP,
     ],
@@ -2854,7 +2854,7 @@ export const WIZARD_SOURCES: WizardSource[] = [
     wait: 'instant',
     steps: ['Save the NMEA log from your GPS logger (commonly `.nmea`, `.log`, or `.txt`).', UPLOAD_STEP],
     expectedFormat:
-      'A text log of NMEA sentences beginning with `$GPRMC` / `$GPGGA` (date + fix, with altitude).',
+      'A text log of NMEA `RMC` / `GGA` sentences (date + fix, with altitude), such as `$GPRMC` from a GPS receiver or `$GNRMC` from a multi-GNSS one.',
     inboxPath: 'nmea',
     signature: ['*.nmea', '*.log', '*.txt'],
     importer: 'nmea',

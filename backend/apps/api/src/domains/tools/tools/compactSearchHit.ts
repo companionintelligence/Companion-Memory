@@ -19,11 +19,17 @@
  * - {@link BOOKKEEPING_KEYS} go at every depth: provenance and storage columns no question asks.
  * - A long URL inside text becomes its host (`https://calendar.google.com/…`): email bodies are
  *   mostly tracking and unsubscribe links, each a few hundred characters of signature.
+ * - Invisible padding goes: marketing email pads its preheader with hundreds of zero-width and
+ *   combining characters ({@link INVISIBLE_PADDING}), which read as nothing and cost tokens.
  * - Runs of blank lines collapse, and every string is capped at `stringCap` characters with a
  *   note of how much was cut. The cap is shared out across the page ({@link stringCapFor}), so
  *   one hit can be read nearly whole while a page of ten each gets a paragraph.
  *
- * `link` is the way to the rest: the prompt tells the model to hand it to the user.
+ * The cut note names `knowledge_get`, which reads one entry's whole text a window at a time
+ * ({@link readEntryWindow}). It used to say "open the link for the rest", and `link` is a page
+ * for the user, not something a model can fetch: asked on 2026-11-13 for "the full body of that
+ * email", OpenClaw spent 20 shell calls hunting for an API key to call the REST route and
+ * overflowed a 64k window before it read a word.
  */
 
 /** Columns that are provenance or storage, at any depth (`metadata` repeats several). */
@@ -64,6 +70,12 @@ const MAXIMUM_STRING_CAP = 4_000;
 /** A URL longer than this inside text is shortened to its origin. */
 const LONG_URL_LENGTH = 60;
 
+/**
+ * Characters that render as nothing: combining grapheme joiner, zero-width space / non-joiner /
+ * joiner, word joiner, byte-order mark and soft hyphen. A Grubhub preheader was 200 of them.
+ */
+const INVISIBLE_PADDING = /[\u034F\u00AD\u200B-\u200D\u2060\uFEFF]/g;
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const URL_IN_TEXT = /\bhttps?:\/\/[^\s<>"')\]]+/g;
 
@@ -88,12 +100,19 @@ function shortenUrls(text: string): string {
   });
 }
 
-function compactString(value: string, stringCap: number): string | undefined {
-  const text = shortenUrls(value)
+/** A string as a model should read it: short URLs, no invisible padding, no runs of blank space. */
+function cleanText(value: string): string {
+  return shortenUrls(value)
+    .replace(INVISIBLE_PADDING, '')
     .replace(/\r\n?/g, '\n')
+    .replace(/[ \t\u00A0]{2,}/g, ' ')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+function compactString(value: string, stringCap: number): string | undefined {
+  const text = cleanText(value);
 
   if (text.length === 0) {
     return undefined;
@@ -103,7 +122,7 @@ function compactString(value: string, stringCap: number): string | undefined {
     return text;
   }
 
-  return `${text.slice(0, stringCap)}…[${text.length - stringCap} more characters; open the link for the rest]`;
+  return `${text.slice(0, stringCap)}…[${text.length - stringCap} more characters; call knowledge_get with this id for the rest]`;
 }
 
 function compactValue(value: unknown, stringCap: number, depth: number): unknown {
@@ -236,3 +255,87 @@ export type CompactSearchHit<TType extends string = string> = {
   link?: string;
   takenAt?: string;
 } & Record<string, unknown>;
+
+/** How much of an entry's text one `knowledge_get` call returns. */
+export const ENTRY_WINDOW_CHARACTERS = 6_000;
+
+/** Every other string of the entry is capped at this, so the window is most of the result. */
+const ENTRY_FIELD_CAP = 500;
+
+/** One entry read whole, a window of its text at a time. See {@link readEntryWindow}. */
+export type EntryWindow<TType extends string = string> = CompactSearchHit<TType> & {
+  /** Which field the window is cut from (`content`, `text`, `description`...). Absent when the entry has no text. */
+  textField?: string;
+  /** The text's whole length, after cleaning, so the caller knows how many windows there are. */
+  textLength?: number;
+  /** Where the window starts. */
+  offset?: number;
+  /** Pass this as `offset` to read the next window; absent on the last one. */
+  nextOffset?: number;
+};
+
+/**
+ * One entry as `knowledge_get` returns it: the entry compacted as a search hit would be (same
+ * rules, every other string capped at {@link ENTRY_FIELD_CAP}), except its longest text field,
+ * which is cleaned and returned whole from `offset` for `window` characters. A 10k-character
+ * email is two calls of about 6k each, never one that fills the chat.
+ *
+ * The longest top-level string is the text: `content` on a communication, note or content row,
+ * `text` on a file chunk, `description` on an event. `preview` repeats the head of `content` and
+ * is left out when it is not the text itself.
+ */
+export function readEntryWindow<T extends { id: string; type: string; link?: string; takenAt?: string }>(
+  entry: T,
+  offset = 0,
+  window: number = ENTRY_WINDOW_CHARACTERS,
+): EntryWindow<T['type']> {
+  let textField: string | undefined;
+  let text = '';
+
+  for (const [key, value] of Object.entries(entry)) {
+    if (
+      key === 'id' ||
+      key === 'type' ||
+      key === 'link' ||
+      BOOKKEEPING_KEYS.has(key) ||
+      typeof value !== 'string'
+    ) {
+      continue;
+    }
+
+    const cleaned = cleanText(value);
+
+    if (cleaned.length > text.length) {
+      textField = key;
+      text = cleaned;
+    }
+  }
+
+  const rest: Record<string, unknown> = { ...entry };
+
+  if (textField) {
+    delete rest[textField];
+
+    if (textField !== 'preview') {
+      delete rest.preview;
+    }
+  }
+
+  const compact = compactSearchHit(rest as T, ENTRY_FIELD_CAP);
+
+  if (!textField) {
+    return compact;
+  }
+
+  const start = Math.min(Math.max(0, Math.floor(offset)), text.length);
+  const end = Math.min(text.length, start + window);
+
+  return {
+    ...compact,
+    textField,
+    textLength: text.length,
+    offset: start,
+    ...(end < text.length ? { nextOffset: end } : {}),
+    [textField]: text.slice(start, end),
+  };
+}

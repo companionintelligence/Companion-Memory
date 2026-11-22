@@ -54,6 +54,10 @@ function makeService(
     role?: string;
     /** This box's signer, for the token-less path; absent means no signing key. */
     signatureService?: unknown;
+    /** Per-person keys (`PeerIdentityService`); absent means the box-key rule applies. */
+    identityService?: unknown;
+    /** The caller's `UserEntity.name`. */
+    name?: string;
   } = {},
 ) {
   const peerLinkService = {
@@ -117,7 +121,11 @@ function makeService(
   };
   const logger = { setContext: jest.fn(), warn: jest.fn() };
   const userService = {
-    findById: jest.fn().mockResolvedValue({ id: CTX.userId, role: overrides.role ?? 'admin' }),
+    findById: jest.fn().mockResolvedValue({
+      id: CTX.userId,
+      role: overrides.role ?? 'admin',
+      name: overrides.name ?? 'Alice',
+    }),
   };
 
   const service = new OutboundAskService(
@@ -131,6 +139,7 @@ function makeService(
     logger as never,
     userService as never,
     overrides.signatureService as never,
+    overrides.identityService as never,
   );
 
   return {
@@ -238,7 +247,12 @@ describe('OutboundAskService.send', () => {
 
     await service.send(CTX as never, DTO, '');
 
-    expect(client.send).toHaveBeenCalledWith(link(), expect.objectContaining({ prompt: DTO.prompt }), '');
+    expect(client.send).toHaveBeenCalledWith(
+      link(),
+      expect.objectContaining({ prompt: DTO.prompt }),
+      '',
+      undefined,
+    );
   });
 
   it('still sends an ask that carries the account’s own Portal token', async () => {
@@ -246,7 +260,7 @@ describe('OutboundAskService.send', () => {
 
     await service.send(CTX as never, DTO, 'portal-token');
 
-    expect(client.send).toHaveBeenCalledWith(link(), expect.anything(), 'portal-token');
+    expect(client.send).toHaveBeenCalledWith(link(), expect.anything(), 'portal-token', undefined);
   });
 
   /**
@@ -278,7 +292,7 @@ describe('OutboundAskService.send', () => {
 
     await service.send(CTX as never, DTO, 'KERI anything');
 
-    expect(client.send).toHaveBeenCalledWith(link(), expect.anything(), '');
+    expect(client.send).toHaveBeenCalledWith(link(), expect.anything(), '', undefined);
   });
 
   it('refuses a token the peer reads as none on a box with no signing key', async () => {
@@ -296,7 +310,7 @@ describe('OutboundAskService.send', () => {
 
     await service.send(CTX as never, DTO, 'keri.token');
 
-    expect(client.send).toHaveBeenCalledWith(link(), expect.anything(), 'keri.token');
+    expect(client.send).toHaveBeenCalledWith(link(), expect.anything(), 'keri.token', undefined);
   });
 
   it('audits an answered reply without claiming WE disclosed anything', async () => {
@@ -399,7 +413,12 @@ describe('OutboundAskService.pollForAnswer', () => {
     // channel, so an approved answer stayed on the responder's box forever.
     const result = await service.pollForAnswer(CTX as never, 'ask-1', 'token');
 
-    expect(client.poll).toHaveBeenCalledWith(expect.objectContaining({ id: 'link-1' }), 'corr-1', 'token');
+    expect(client.poll).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'link-1' }),
+      'corr-1',
+      'token',
+      undefined,
+    );
     expect(result.response.status).toBe('answered');
     expect(answerService.create).toHaveBeenCalled();
     expect(persisted.status).toBe('answered');
@@ -466,7 +485,12 @@ describe('OutboundAskService.pollForAnswer', () => {
 
     await owner.service.pollForAnswer(CTX as never, 'ask-1', '');
 
-    expect(owner.client.poll).toHaveBeenCalledWith(expect.objectContaining({ id: 'link-1' }), 'corr-1', '');
+    expect(owner.client.poll).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'link-1' }),
+      'corr-1',
+      '',
+      undefined,
+    );
   });
 
   it.each(['keri', 'KERI', 'keri x'])(
@@ -483,9 +507,141 @@ describe('OutboundAskService.pollForAnswer', () => {
 
       await owner.service.pollForAnswer(CTX as never, 'ask-1', token);
 
-      expect(owner.client.poll).toHaveBeenCalledWith(expect.objectContaining({ id: 'link-1' }), 'corr-1', '');
+      expect(owner.client.poll).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'link-1' }),
+        'corr-1',
+        '',
+        undefined,
+      );
     },
   );
+});
+
+describe('OutboundAskService — every person signs as themselves', () => {
+  const SIGNER = { key: {} as never, keyid: 'did:key:z6MkSender' };
+
+  function identityService() {
+    return {
+      identityFor: jest.fn().mockResolvedValue({ userId: CTX.userId, didKey: SIGNER.keyid, signer: SIGNER }),
+    };
+  }
+
+  it('lets an account that is not the administrator send with no token, signed with its own key', async () => {
+    const identity = identityService();
+    const { service, client } = makeService({ role: 'user', identityService: identity });
+
+    await service.send(CTX, DTO);
+
+    expect(identity.identityFor).toHaveBeenCalledWith(CTX.userId);
+    expect(client.send).toHaveBeenCalledWith(link(), expect.anything(), '', SIGNER);
+  });
+
+  it('signs an ask that carries a Portal token too', async () => {
+    const { service, client } = makeService({ role: 'user', identityService: identityService() });
+
+    await service.send(CTX, DTO, 'portal-token');
+
+    expect(client.send).toHaveBeenCalledWith(link(), expect.anything(), 'portal-token', SIGNER);
+  });
+
+  it('collects with the same key', async () => {
+    const { service, client } = makeService({
+      role: 'user',
+      identityService: identityService(),
+      poll: ANSWERED,
+    });
+
+    await service.pollForAnswer(CTX, 'ask-1');
+
+    expect(client.poll).toHaveBeenCalledWith(link(), 'corr-1', '', SIGNER);
+  });
+
+  it("sends the sender's own name as askerHandle when the box has no peers.handle", async () => {
+    const { service, client } = makeService({ identityService: identityService(), name: '  Carol  ' });
+
+    await service.send(CTX, DTO);
+
+    const [, body] = client.send.mock.calls[0];
+    expect(body.askerHandle).toBe('Carol');
+  });
+});
+
+describe('OutboundAskService.collectOpenAnswers', () => {
+  function openAsk(id: string, peerLinkId: string, askerUserId: string | null = 'user-1') {
+    return { id, peerLinkId, askerUserId, direction: 'outbound', status: 'delivered' };
+  }
+
+  function withOpen(asks: unknown[]) {
+    const made = makeService();
+    const find = jest.fn().mockResolvedValue(asks);
+    (made.service as unknown as { askRepository: unknown }).askRepository = { find };
+    const poll = jest.spyOn(made.service, 'pollForAnswer').mockImplementation(async (_ctx, askId) => ({
+      ask: {} as never,
+      response: { askId, status: askId.endsWith('answered') ? 'answered' : 'delivered' },
+    }));
+
+    return { ...made, find, poll };
+  }
+
+  it('asks only for open, unexpired outbound asks, oldest first, in a bounded batch', async () => {
+    const { service, find } = withOpen([]);
+    const now = new Date('2026-11-19T12:00:00Z');
+
+    await service.collectOpenAnswers(now);
+
+    const [{ where, order, take }] = find.mock.calls[0];
+    expect(where.direction).toBe('outbound');
+    expect(where.status).toBe('delivered');
+    expect(order).toEqual({ createdAt: 'ASC' });
+    expect(take).toBe(200);
+  });
+
+  it('collects each as the person who asked it, and counts the answers', async () => {
+    const { service, poll } = withOpen([openAsk('a-answered', 'l1', 'alice'), openAsk('b', 'l2', 'carol')]);
+
+    await expect(service.collectOpenAnswers()).resolves.toEqual({ checked: 2, answered: 1 });
+    expect(poll).toHaveBeenCalledWith({ userId: 'alice' }, 'a-answered');
+    expect(poll).toHaveBeenCalledWith({ userId: 'carol' }, 'b');
+  });
+
+  it('collects at most ten from one peer link per run, inside the peer’s collect budget', async () => {
+    const asks = Array.from({ length: 15 }, (_, i) => openAsk(`a${i}`, 'same-link'));
+    const { service, poll } = withOpen([...asks, openAsk('other', 'l2')]);
+
+    await expect(service.collectOpenAnswers()).resolves.toEqual({ checked: 11, answered: 0 });
+    expect(poll).toHaveBeenCalledTimes(11);
+    expect(poll).toHaveBeenCalledWith({ userId: 'user-1' }, 'other');
+  });
+
+  it('keeps going when one ask fails', async () => {
+    const { service, poll } = withOpen([openAsk('bad', 'l1'), openAsk('good-answered', 'l2')]);
+    poll.mockRejectedValueOnce(new Error('boom'));
+
+    await expect(service.collectOpenAnswers()).resolves.toEqual({ checked: 2, answered: 1 });
+  });
+});
+
+describe('OutboundAskService — naming the person asked', () => {
+  it('names the recipient by the did:key the link records', async () => {
+    const theirs = 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK';
+    const { service, client } = makeService({
+      link: link({ peerIssuer: 'did:key', peerSubject: theirs } as never),
+    });
+
+    await service.send(CTX, DTO, 'portal-token');
+
+    expect(client.send.mock.calls[0][1].recipient).toBe(theirs);
+  });
+
+  it('names no one on a link made by a Portal identity', async () => {
+    const { service, client } = makeService({
+      link: link({ peerIssuer: 'https://hub.ci.computer', peerSubject: 'sub-1' } as never),
+    });
+
+    await service.send(CTX, DTO, 'portal-token');
+
+    expect(client.send.mock.calls[0][1]).not.toHaveProperty('recipient');
+  });
 });
 
 describe('toStoredAnswer', () => {
