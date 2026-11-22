@@ -43,8 +43,8 @@ export const SignedAndConsented: Story = { args: { record: BASE } };
 /**
  * The COMMON case today — real consent, unsigned channel.
  *
- * `peers.requireHttpSignature` ships off, so this is what most federated
- * disclosures look like. The channel section still renders and says so in a
+ * Every local ask, and a federated one from a box that turned
+ * `peers.requireHttpSignature` off, looks like this. The channel section still renders and says so in a
  * sentence: an owner who cannot tell "arrived unsigned" from "we did not record
  * how it arrived" cannot act on either.
  */

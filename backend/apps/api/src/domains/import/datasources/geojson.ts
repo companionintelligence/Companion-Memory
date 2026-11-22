@@ -35,6 +35,96 @@ function isFeatureCollection(o: unknown): o is FeatureCollection {
   return !!rec && rec.type === 'FeatureCollection' && Array.isArray(rec.features);
 }
 
+function toDate(raw: unknown): Date | undefined {
+  // `new Date` takes both the ISO string and the epoch number.
+  if (typeof raw === 'string' || typeof raw === 'number') {
+    const d = new Date(raw);
+    if (!isNaN(d.getTime())) {
+      return d;
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * The feature's own time. GeoJSON has no time member; the de-facto conventions
+ * carry an ISO string or an epoch number under one of these keys. The first
+ * one that reads as a date wins, so an unreadable `time` doesn't hide a good
+ * `timestamp`. A 0 or '' is still skipped as a placeholder rather than 1970.
+ */
+function featureTime(props: JsonRecord): unknown {
+  return [props.time, props.timestamp, props.datetime].find((raw) => !!raw && toDate(raw) !== undefined);
+}
+
+/**
+ * Per-point times, nested like the geometry: flat for a LineString or
+ * MultiPoint, one array per line of a MultiLineString. togeojson (behind most
+ * GPX and KML to GeoJSON converters) writes them to `coordinateProperties.times`
+ * since 4.4 (the geojson-coordinate-properties convention) and to `coordTimes`
+ * before that. Each entry is an ISO string, epoch milliseconds or null.
+ */
+function perPointTimes(props: JsonRecord): unknown[] | undefined {
+  const times = asRecord(props.coordinateProperties)?.times ?? props.coordTimes;
+
+  return Array.isArray(times) ? times : undefined;
+}
+
+/**
+ * `times` matched to `lines` point for point: one array per line, or undefined
+ * for a line whose times can't be matched to its points. Takes times nested per
+ * line or flat across the whole feature.
+ *
+ * A count that doesn't match is not trusted. Older togeojson releases leave a
+ * point with no time out of `coordTimes` and a segment with no times out of the
+ * outer array, so reading such an array by index puts each later time on the
+ * wrong point. A line none of whose times reads as a date has no times to give
+ * either. It falls back to the feature's own time like a line without any.
+ */
+function alignTimes(lines: unknown, times: unknown[] | undefined): Array<unknown[] | undefined> | undefined {
+  if (!times || !Array.isArray(lines) || !lines.every((line) => Array.isArray(line))) {
+    return undefined;
+  }
+
+  const positions = lines as unknown[][];
+  let perLine: Array<unknown[] | undefined>;
+  if (times.every((t) => Array.isArray(t))) {
+    const nested = times as unknown[][];
+    perLine =
+      nested.length === positions.length
+        ? positions.map((line, k) => (nested[k].length === line.length ? nested[k] : undefined))
+        : [];
+  } else if (!times.some((t) => Array.isArray(t))) {
+    let total = 0;
+    for (const line of positions) {
+      total += line.length;
+    }
+
+    if (total !== times.length) {
+      return undefined;
+    }
+
+    let start = 0;
+    perLine = positions.map((line) => times.slice(start, (start += line.length)));
+  } else {
+    return undefined;
+  }
+
+  return perLine.map((t) => (t?.some((raw) => toDate(raw) !== undefined) ? t : undefined));
+}
+
+/** The [lon, lat] pair a position holds, or undefined when it holds none. */
+function readFix(pos: unknown): { lat: number; lon: number } | undefined {
+  if (!Array.isArray(pos) || pos.length < 2) {
+    return undefined;
+  }
+
+  const lon = parseFloat(String(pos[0]));
+  const lat = parseFloat(String(pos[1]));
+
+  return isNaN(lat) || isNaN(lon) ? undefined : { lat, lon };
+}
+
 export class GeoJSONFileImporter implements FileImporter {
   async recognize(_ctx: unknown, entry: DirEntry): Promise<Recognition> {
     const full = entry.fullPath || entry.fsRoot || entry.filename;
@@ -138,39 +228,33 @@ export class GeoJSONFileImporter implements FileImporter {
         continue;
       }
 
-      const props = feat.properties || {};
+      // The per-point arrays are read here and kept out of `props`, which every
+      // point copies into its metadata: a 10,000-point track would otherwise
+      // stage 10,000 copies of a 10,000-entry array.
+      const featureProps = feat.properties || {};
+      const times = perPointTimes(featureProps);
+      const { coordinateProperties: _perPoint, coordTimes: _legacyPerPoint, ...props } = featureProps;
       const geom = feat.geometry;
       try {
         switch (geom.type) {
           case 'Point':
-            this.emitPosition(params, fpath, geom.coordinates as Position, props, featureIdx, 0);
+            this.emitPosition(
+              params,
+              fpath,
+              geom.coordinates as Position,
+              props,
+              featureIdx,
+              0,
+              featureTime(props),
+            );
             break;
           case 'MultiPoint':
-          case 'LineString': {
-            let i = 0;
-            for (const pos of geom.coordinates as Position[]) {
-              this.emitPosition(params, fpath, pos, props, featureIdx, i++);
-            }
-
+          case 'LineString':
+            this.emitPoints(params, fpath, [geom.coordinates as Position[]], times, props, featureIdx);
             break;
-          }
-
-          case 'MultiLineString': {
-            // One running counter across every constituent line of this
-            // feature — never reset per line — so each position gets a
-            // strictly increasing, never-colliding index. A per-line reset
-            // combined with a `lineIdx * 100000 + i` compound index looks
-            // collision-safe but isn't: it collides as soon as any single
-            // line carries 100,000 or more positions.
-            let i = 0;
-            for (const line of geom.coordinates as Position[][]) {
-              for (const pos of line) {
-                this.emitPosition(params, fpath, pos, props, featureIdx, i++);
-              }
-            }
-
+          case 'MultiLineString':
+            this.emitPoints(params, fpath, geom.coordinates as Position[][], times, props, featureIdx);
             break;
-          }
 
           default:
             // skip unsupported geometry types
@@ -184,6 +268,63 @@ export class GeoJSONFileImporter implements FileImporter {
     }
   }
 
+  /**
+   * The points of a MultiPoint, LineString or MultiLineString, as `lines` of
+   * positions, with `times` nested the same way or flat across all of them.
+   *
+   * One running counter across every line of the feature, never reset per
+   * line, so each position gets a strictly increasing, never-colliding index.
+   * A per-line reset combined with a `lineIdx * 100000 + i` compound index
+   * looks collision-safe but isn't: it collides as soon as any single line
+   * carries 100,000 or more positions.
+   *
+   * Without per-point times every point would carry the feature's one time,
+   * and `ci.position` keeps one fix per user per instant: the store kept the
+   * last point and Sync still counted every one as written. So the first point
+   * that lands takes the feature's time and each later one is counted as
+   * `position_shared_time` instead of being sent to collapse. A line whose
+   * per-point times can't be matched to its points (see alignTimes) is treated
+   * the same way. A later point with no usable coordinates is still counted as
+   * `position_without_fix`, since it never had a fix to lose.
+   */
+  private emitPoints(
+    params: ImportParams,
+    sourcePath: string,
+    lines: Position[][],
+    times: unknown[] | undefined,
+    props: JsonRecord,
+    featureIdx: number,
+  ): void {
+    const perLineTimes = alignTimes(lines, times);
+    const sharedTime = featureTime(props);
+    let sharedTimeTaken = false;
+    let i = 0;
+    let l = 0;
+    // for...of rather than counting to `.length`: the coordinates are whatever
+    // the file says. With `"coordinates": {"length": 1e15}` a counting loop
+    // would spin here without reading a point. Anything not iterable throws
+    // and the caller logs it.
+    for (const line of lines) {
+      const lineTimes = perLineTimes?.[l];
+      l++;
+      let j = 0;
+      for (const pos of line) {
+        const posIdx = i++;
+        const own = lineTimes?.[j];
+        j++;
+        if (lineTimes) {
+          this.emitPosition(params, sourcePath, pos, props, featureIdx, posIdx, own);
+        } else if (sharedTime !== undefined && sharedTimeTaken && readFix(pos)) {
+          params.pipeline.consumed?.(1);
+          params.pipeline.drop?.('position_shared_time');
+        } else if (this.emitPosition(params, sourcePath, pos, props, featureIdx, posIdx, sharedTime)) {
+          sharedTimeTaken = true;
+        }
+      }
+    }
+  }
+
+  /** Push one position, or count why not. Returns whether it was pushed. */
   private emitPosition(
     params: ImportParams,
     sourcePath: string,
@@ -191,41 +332,26 @@ export class GeoJSONFileImporter implements FileImporter {
     props: JsonRecord,
     featureIdx: number,
     posIdx: number,
-  ): void {
+    rawTime: unknown,
+  ): boolean {
     // One candidate fix read. Every path below either pushes it or drops it, so
     // this is what makes `consumed = produced + dropped` a real equality rather
     // than the 0 = 0 + 0 the parser used to report (U-22).
     params.pipeline.consumed?.(1);
 
-    if (!Array.isArray(pos) || pos.length < 2) {
+    const fix = readFix(pos);
+    if (!fix) {
       params.pipeline.drop?.('position_without_fix');
 
-      return;
+      return false;
     }
 
-    const lon = parseFloat(String(pos[0]));
-    const lat = parseFloat(String(pos[1]));
-    if (isNaN(lat) || isNaN(lon)) {
-      params.pipeline.drop?.('position_without_fix');
-
-      return;
-    }
-
-    let ts: Date | undefined;
-    const rawTime = props.time || props.timestamp || props.datetime;
-    // GeoJSON has no time member; the de-facto conventions carry an ISO string
-    // or an epoch number, which is exactly what `new Date` accepts here.
-    if (typeof rawTime === 'string' || typeof rawTime === 'number') {
-      const d = new Date(rawTime);
-      if (!isNaN(d.getTime())) {
-        ts = d;
-      }
-    }
-
+    const { lat, lon } = fix;
+    const ts = toDate(rawTime);
     if (!timeframeContains(params.timeframe, ts)) {
       params.pipeline.drop?.('outside_timeframe');
 
-      return;
+      return false;
     }
 
     const altitude = pos.length >= 3 && typeof pos[2] === 'number' ? pos[2] : undefined;
@@ -252,6 +378,8 @@ export class GeoJSONFileImporter implements FileImporter {
       },
     };
     params.pipeline.push({ item });
+
+    return true;
   }
 }
 

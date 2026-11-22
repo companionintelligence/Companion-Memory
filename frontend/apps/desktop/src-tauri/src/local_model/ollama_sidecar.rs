@@ -141,8 +141,13 @@ pub fn is_running(port: u16) -> bool {
 }
 
 /// [`is_running`] at another of this host's addresses: the docker bridge
-/// gateway, to tell whether a server answering on loopback is also reachable
-/// from the containers.
+/// gateway, to tell whether a server answering on loopback also listens on
+/// that address, so needs no relay.
+///
+/// It cannot tell whether the containers reach that server. This host's request
+/// to its own gateway address goes over loopback, which a host firewall always
+/// lets through, while the containers' packets go through its incoming rules.
+/// container_reach checks that from inside the appliance once it is up.
 fn is_running_on(host: std::net::Ipv4Addr, port: u16) -> bool {
     // No proxy: both addresses are this host's own. reqwest otherwise follows
     // HTTP_PROXY. A NO_PROXY that lists loopback rarely lists the bridge
@@ -244,7 +249,7 @@ pub fn ensure_available(
     // After the pulls, not before: the relay only matters to the containers,
     // which cannot ask for a model until the stack is up, and a failure here
     // must not cost the user a re-download.
-    register_relay(handles, start_bridge_relay(OLLAMA_PORT));
+    start_bridge_relay(handles, OLLAMA_PORT);
 
     Ok(RunningInstance { port: OLLAMA_PORT })
 }
@@ -260,6 +265,10 @@ pub fn ensure_available(
 /// appliance's own compose networks and gone when the app quits. The user's
 /// Ollama itself is not touched. One that already answers on the gateway
 /// address (bound to 0.0.0.0, say) is left alone and gets no relay.
+///
+/// Either way the containers' reach is then checked from inside them once the
+/// stack is up (see container_reach): answering on the gateway address from
+/// this host says nothing about a firewall dropping the containers' packets.
 pub fn reach_host_ollama(handles: &crate::local_model::LocalModelHandles) {
     #[cfg(not(target_os = "linux"))]
     {
@@ -276,22 +285,57 @@ pub fn reach_host_ollama(handles: &crate::local_model::LocalModelHandles) {
                      be discovered ({e}), so no relay was started. If the appliance reports model errors, \
                      check `docker network inspect bridge`."
                 );
+                expect_container_check(handles, OLLAMA_PORT, None, false);
                 return;
             }
         };
 
         if is_running_on(gateway, OLLAMA_PORT) {
             log::info!(
-                "Your Ollama already answers on the docker bridge gateway ({gateway}:{OLLAMA_PORT}), \
-                 so the containers reach it directly; no relay started."
+                "Your Ollama also listens on the docker bridge gateway address ({gateway}:{OLLAMA_PORT}), \
+                 so no relay is needed. Whether the appliance's containers reach it there is checked from \
+                 inside them once they are running."
             );
+            expect_container_check(handles, OLLAMA_PORT, Some(gateway), false);
             return;
         }
 
-        register_relay(handles, relay_on_gateway(gateway, OLLAMA_PORT));
+        relay_and_check(handles, gateway, OLLAMA_PORT);
     }
 }
 
+/// Linux: has the containers' reach checked from inside them once the stack is
+/// up. See LocalModelHandles::check_container_reach.
+#[cfg(target_os = "linux")]
+fn expect_container_check(
+    handles: &crate::local_model::LocalModelHandles,
+    port: u16,
+    gateway: Option<std::net::Ipv4Addr>,
+    relayed: bool,
+) {
+    handles.expect_container_check(crate::local_model::container_reach::Target {
+        port,
+        gateway,
+        relayed,
+    });
+}
+
+/// Puts the relay on the gateway in front of the loopback Ollama on `port`
+/// and has the containers' reach checked. The check is recorded even when the
+/// relay could not start: it then says what the containers get instead.
+#[cfg(target_os = "linux")]
+fn relay_and_check(
+    handles: &crate::local_model::LocalModelHandles,
+    gateway: std::net::Ipv4Addr,
+    port: u16,
+) {
+    let relay = relay_on_gateway(gateway, port);
+    let relayed = relay.is_some();
+    register_relay(handles, relay);
+    expect_container_check(handles, port, Some(gateway), relayed);
+}
+
+#[cfg(target_os = "linux")]
 fn register_relay(
     handles: &crate::local_model::LocalModelHandles,
     relay: Option<crate::local_model::bridge_relay::RelayHandle>,
@@ -312,17 +356,17 @@ fn register_relay(
 /// from. A no-op everywhere else, where Docker Desktop already tunnels
 /// `host.docker.internal` to the host's loopback.
 ///
-/// Every failure is non-fatal and returns `None`. That is the deliberate
+/// Every failure is non-fatal and leaves no relay. That is the deliberate
 /// trade: the app still runs, the sidecar still answers everything on this
 /// host, and the log says exactly what the containers will not be able to
 /// reach and why — which is strictly better than the `0.0.0.0` bind this
 /// replaced, where the same situations silently exposed an unauthenticated GPU
-/// to the LAN instead.
-fn start_bridge_relay(port: u16) -> Option<crate::local_model::bridge_relay::RelayHandle> {
+/// to the LAN instead. The relay is registered in `handles` and the containers'
+/// reach is checked once the stack is up, relay or not.
+fn start_bridge_relay(handles: &crate::local_model::LocalModelHandles, port: u16) {
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = port;
-        None
+        let _ = (handles, port);
     }
 
     #[cfg(target_os = "linux")]
@@ -343,17 +387,17 @@ fn start_bridge_relay(port: u16) -> Option<crate::local_model::bridge_relay::Rel
                      `docker network inspect bridge` — under rootless Docker the containers \
                      should still reach the host on loopback."
                 );
-                return None;
+                expect_container_check(handles, port, None, false);
+                return;
             }
         };
 
-        relay_on_gateway(gateway, port)
+        relay_and_check(handles, gateway, port);
     }
 }
 
-/// The half of [`start_bridge_relay`] after the gateway is known. Shared with
-/// reach_host_ollama, which has already asked Docker for the gateway and would
-/// otherwise run `docker network inspect bridge` a second time.
+/// The relay half of [`relay_and_check`]. Shared by start_bridge_relay and
+/// reach_host_ollama, which have already asked Docker for the gateway.
 #[cfg(target_os = "linux")]
 fn relay_on_gateway(
     gateway: std::net::Ipv4Addr,
@@ -361,7 +405,10 @@ fn relay_on_gateway(
 ) -> Option<crate::local_model::bridge_relay::RelayHandle> {
     match crate::local_model::bridge_relay::spawn(gateway, port) {
         Ok(handle) => {
-            log::info!("Local model server reachable by containers at {} (relayed to 127.0.0.1:{port})", handle.bind_addr);
+            log::info!(
+                "Relaying {} to the local model server on 127.0.0.1:{port} for the appliance's containers",
+                handle.bind_addr
+            );
             Some(handle)
         }
         Err(e) => {
@@ -1020,8 +1067,8 @@ mod tests {
     }
 
     /// The probe reach_host_ollama decides with: it relays the user's own
-    /// Ollama only when the containers cannot already reach it, which it finds
-    /// out by asking at the docker bridge gateway address. Modelled here on
+    /// Ollama only when it does not already listen on the docker bridge
+    /// gateway address, which it finds out by asking there. Modelled here on
     /// loopback, which Linux spans across 127.0.0.0/8. A server bound to
     /// 127.0.0.1 alone (Ollama's own Linux service, as the gateway sees it)
     /// does not answer at 127.0.0.2. One bound to every address does.

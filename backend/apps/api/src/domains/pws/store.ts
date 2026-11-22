@@ -12,6 +12,7 @@
  * (`after`), never by offset.
  */
 import type { CollectionRecord, PolicyDocument, PolicyScope, ResourceRecord, SpaceRecord } from './models';
+import { PwsError } from './problems';
 
 export interface ListOptions {
   /** Return only ids strictly greater than this one. */
@@ -86,7 +87,32 @@ function copyResource(resource: ResourceRecord): ResourceRecord {
   return { ...copy(rest), bytes: new Uint8Array(bytes) };
 }
 
+/**
+ * How much an in-memory store may hold before it refuses writes.
+ *
+ * The store lives in the API process's own memory, and anyone can create a
+ * Space: the request need only be signed by the controller its body names,
+ * which can be a `did:key` minted for the purpose. Without a ceiling, `/pws/*`
+ * (when the `pws.storage` flag is on) let any caller grow the process without
+ * bound, 25 MiB a Resource, until it fell over.
+ */
+export interface MemoryPwsStoreLimits {
+  /** Total Resource bytes. */
+  maxBytes: number;
+  /** Spaces, Collections, Resources and policies together. */
+  maxRecords: number;
+}
+
+export const DEFAULT_MEMORY_PWS_STORE_LIMITS: MemoryPwsStoreLimits = {
+  maxBytes: 256 * 1024 * 1024,
+  maxRecords: 100_000,
+};
+
 export class MemoryPwsStore implements PwsStore {
+  constructor(private readonly limits: MemoryPwsStoreLimits = DEFAULT_MEMORY_PWS_STORE_LIMITS) {}
+
+  private bytes = 0;
+
   private readonly spaces = new Map<string, SpaceRecord>();
 
   private readonly collections = new Map<string, CollectionRecord>();
@@ -110,16 +136,36 @@ export class MemoryPwsStore implements PwsStore {
     const collections = this.collections;
     const resources = this.resources;
     const policies = this.policies;
+    const limits = this.limits;
+    const records = (): number => spaces.size + collections.size + resources.size + policies.size;
+    // A write that adds a record must fit the record ceiling; a write that replaces one always may.
+    const roomForRecord = (map: Map<string, unknown>, key: string): void => {
+      if (!map.has(key) && records() >= limits.maxRecords) {
+        throw new PwsError('quota-exceeded', 'This storage is full.');
+      }
+    };
+
     const ckey = (spaceId: string, id: string): string => `${spaceId}\u0000${id}`;
     const rkey = (spaceId: string, collectionId: string, id: string): string =>
       `${spaceId}\u0000${collectionId}\u0000${id}`;
     const inCollection = (spaceId: string, collectionId: string): ResourceRecord[] =>
       [...resources.values()].filter((r) => r.spaceId === spaceId && r.collectionId === collectionId);
 
+    const dropResource = (key: string): boolean => {
+      const existing = resources.get(key);
+      if (existing === undefined) {
+        return false;
+      }
+
+      this.bytes -= existing.bytes.byteLength;
+
+      return resources.delete(key);
+    };
+
     const dropCollection = (spaceId: string, id: string): void => {
       collections.delete(ckey(spaceId, id));
       for (const r of inCollection(spaceId, id)) {
-        resources.delete(rkey(spaceId, id, r.id));
+        dropResource(rkey(spaceId, id, r.id));
         policies.delete(policyKey({ spaceId, collectionId: id, resourceId: r.id }));
       }
 
@@ -129,6 +175,7 @@ export class MemoryPwsStore implements PwsStore {
     return {
       getSpace: async (id) => copyOrUndefined(spaces.get(id)),
       putSpace: async (space) => {
+        roomForRecord(spaces, space.id);
         spaces.set(space.id, copy(space));
       },
       deleteSpace: async (id) => {
@@ -151,7 +198,9 @@ export class MemoryPwsStore implements PwsStore {
 
       getCollection: async (spaceId, id) => copyOrUndefined(collections.get(ckey(spaceId, id))),
       putCollection: async (collection) => {
-        collections.set(ckey(collection.spaceId, collection.id), copy(collection));
+        const key = ckey(collection.spaceId, collection.id);
+        roomForRecord(collections, key);
+        collections.set(key, copy(collection));
       },
       deleteCollection: async (spaceId, id) => dropCollection(spaceId, id),
       listCollections: async (spaceId, options) =>
@@ -170,12 +219,21 @@ export class MemoryPwsStore implements PwsStore {
         return stored === undefined ? undefined : copyResource(stored);
       },
       putResource: async (resource) => {
-        resources.set(rkey(resource.spaceId, resource.collectionId, resource.id), copyResource(resource));
+        const key = rkey(resource.spaceId, resource.collectionId, resource.id);
+        roomForRecord(resources, key);
+        const growth = resource.bytes.byteLength - (resources.get(key)?.bytes.byteLength ?? 0);
+        // Shrinking or same-size rewrites always fit, so a full store can still be tidied.
+        if (growth > 0 && this.bytes + growth > limits.maxBytes) {
+          throw new PwsError('quota-exceeded', 'This storage is full.');
+        }
+
+        resources.set(key, copyResource(resource));
+        this.bytes += growth;
       },
       deleteResource: async (spaceId, collectionId, id) => {
         policies.delete(policyKey({ spaceId, collectionId, resourceId: id }));
 
-        return resources.delete(rkey(spaceId, collectionId, id));
+        return dropResource(rkey(spaceId, collectionId, id));
       },
       listResources: async (spaceId, collectionId, options) => {
         const { items, hasMore } = page(inCollection(spaceId, collectionId), options);
@@ -186,6 +244,7 @@ export class MemoryPwsStore implements PwsStore {
 
       getPolicy: async (scope) => copyOrUndefined(policies.get(policyKey(scope))),
       putPolicy: async (scope, policy) => {
+        roomForRecord(policies, policyKey(scope));
         policies.set(policyKey(scope), copy(policy));
       },
       deletePolicy: async (scope) => policies.delete(policyKey(scope)),

@@ -1,7 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 
 import { formatModelBytes, getApiBaseUrl, isNativePlatform, subscribeApiBaseUrl } from '@ci/common';
-import { Button, Card, Dialog, Switch } from '@ci/shadcn';
+import { Button, Dialog, Switch } from '@ci/shadcn';
 import { usePowerSync } from '@powersync/react';
 import type { AbstractPowerSyncDatabase, SyncStatus } from '@powersync/web';
 
@@ -28,21 +28,20 @@ import {
 } from '@/api/powersync/workingSet';
 import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 
+import { SettingsGroup, SettingsLoading, SettingsRow } from '../kit';
+
 export function WorkingSetSection() {
   // A browser keeps no copy at all (PowerSyncProvider opens no database there),
   // so there is no working set to show or clear — only the fact that nothing is
   // stored.
   if (!isNativePlatform()) {
     return (
-      <Card>
-        <Card.Content className="space-y-1 pt-6">
-          <h3 className="text-sm font-medium">On-device working set</h3>
-          <p className="text-sm text-muted-foreground">
-            This browser keeps no copy of your data. Only the mobile apps store a working set, in encrypted
-            SQLite on the phone; here, everything comes from your Memory Server as you use it.
-          </p>
-        </Card.Content>
-      </Card>
+      <SettingsGroup title="On-device working set">
+        <SettingsRow
+          label="Nothing is stored in this browser"
+          hint="Only the mobile apps keep a working set, in encrypted SQLite on the phone. Here, everything comes from your Memory Server as you use it."
+        />
+      </SettingsGroup>
     );
   }
 
@@ -60,16 +59,16 @@ function NativeWorkingSetSection() {
 
   if (!database) {
     return (
-      <Card>
-        <Card.Content className="space-y-1 pt-6">
-          <h3 className="text-sm font-medium">On-device working set</h3>
-          <p className="text-sm text-muted-foreground">
-            {openState.phase === 'failed'
-              ? 'This phone’s copy could not be opened, so nothing is stored here; everything comes from your Memory Server.'
-              : 'Opening this phone’s copy…'}
-          </p>
-        </Card.Content>
-      </Card>
+      <SettingsGroup title="On-device working set">
+        {openState.phase === 'failed' ? (
+          <SettingsRow
+            label="This phone’s copy could not be opened"
+            hint="Nothing is stored here; everything comes from your Memory Server."
+          />
+        ) : (
+          <SettingsLoading>Opening this phone’s copy…</SettingsLoading>
+        )}
+      </SettingsGroup>
     );
   }
 
@@ -118,9 +117,9 @@ function SyncStatusLine({ database }: { database: AbstractPowerSyncDatabase }) {
   }
 
   return (
-    <p className="text-sm text-muted-foreground" data-testid="working-set-sync-status">
+    <span className="block" data-testid="working-set-sync-status">
       {text}
-    </p>
+    </span>
   );
 }
 
@@ -187,39 +186,48 @@ function OpenWorkingSetSection({ database }: { database: AbstractPowerSyncDataba
   const budgetLabel = formatCacheBudget(POWER_SYNC_CACHE_BUDGET_BYTES);
 
   return (
-    <Card>
-      <Card.Content className="space-y-4 pt-6">
-        <div className="space-y-1">
-          <h3 className="text-sm font-medium">On-device working set</h3>
-          {syncUnavailable ? (
-            <p className="text-sm text-muted-foreground" data-testid="working-set-sync-status">
-              Your Memory Server does not run the sync service, so this phone keeps no copy of your data and
-              no photo previews. Everything comes from the server as you use it, so nothing here works while
-              it is unreachable.
-            </p>
-          ) : (
-            <SyncStatusLine database={database} />
-          )}
-          {!syncUnavailable && (
-            <p className="text-sm text-muted-foreground">
-              This phone keeps a rolling window of notes, messages, threads and recent events in encrypted
-              SQLite — currently the last {lookbackDays} days, capped at {budgetLabel} — plus a searchable
-              index of everything (names, subjects and snippets), so search keeps working when your Memory
-              Server is unreachable. It is not a copy of the whole server: full-size media, the graph and
-              embeddings stay online; photo previews are the one exception, below.
-            </p>
-          )}
-          <p className="text-sm text-muted-foreground">
-            Used: {usedLabel} / {budgetLabel}
+    <SettingsGroup
+      title="On-device working set"
+      help={
+        syncUnavailable ? (
+          'Everything comes from the server as you use it, so nothing here works while it is unreachable.'
+        ) : (
+          <p>
+            This phone keeps a rolling window of notes, messages, threads and recent events in encrypted
+            SQLite (currently the last {lookbackDays} days, capped at {budgetLabel}) plus a searchable index
+            of everything (names, subjects and snippets), so search keeps working when your Memory Server is
+            unreachable. It is not a copy of the whole server: full-size media, the graph and embeddings stay
+            online; photo previews are the one exception.
           </p>
-        </div>
-        <Button variant="outline" onClick={() => void handleClear()} disabled={clearing}>
-          {clearing ? 'Clearing…' : 'Clear cache'}
-        </Button>
+        )
+      }
+    >
+      <SettingsRow
+        label="Cache on this phone"
+        hint={
+          <>
+            {syncUnavailable ? (
+              <span className="block" data-testid="working-set-sync-status">
+                Your Memory Server does not run the sync service, so this phone keeps no copy of your data and
+                no photo previews.
+              </span>
+            ) : (
+              <SyncStatusLine database={database} />
+            )}
+            <span className="block">
+              Used: {usedLabel} / {budgetLabel}
+            </span>
+          </>
+        }
+        control={
+          <Button variant="outline" onClick={() => void handleClear()} disabled={clearing}>
+            {clearing ? 'Clearing…' : 'Clear cache'}
+          </Button>
+        }
+      />
 
-        {!syncUnavailable && <PreviewStoreSettings database={database} />}
-      </Card.Content>
-    </Card>
+      {!syncUnavailable && <PreviewStoreSettings database={database} />}
+    </SettingsGroup>
   );
 }
 
@@ -298,32 +306,35 @@ function PreviewStoreSettings({ database }: { database: AbstractPowerSyncDatabas
           : '');
 
   return (
-    <div className="space-y-2 border-t pt-4" data-testid="preview-store">
-      <div className="flex items-start justify-between gap-4">
-        <div className="space-y-0.5">
-          <label htmlFor="preview-sync" className="text-sm font-medium">
-            Keep photo previews on this phone
-          </label>
-          <p className="text-sm text-muted-foreground">
+    <>
+      <SettingsRow
+        testId="preview-store"
+        label="Keep photo previews on this phone"
+        htmlFor="preview-sync"
+        align="start"
+        hint={
+          <>
             A small copy of every photo and video, so the gallery and saved records show pictures when your
             Memory Server is unreachable. About 16 kB each.
-          </p>
-          <p className="text-sm text-muted-foreground" data-testid="preview-store-summary">
-            {summary}
-          </p>
-        </div>
-        <Switch
-          id="preview-sync"
-          checked={enabled}
-          onCheckedChange={(next) => {
-            if (next) {
-              setPreviewSyncEnabled(true);
-            } else {
-              setConfirming(true);
-            }
-          }}
-        />
-      </div>
+            <span className="mt-1 block" data-testid="preview-store-summary">
+              {summary}
+            </span>
+          </>
+        }
+        control={
+          <Switch
+            id="preview-sync"
+            checked={enabled}
+            onCheckedChange={(next) => {
+              if (next) {
+                setPreviewSyncEnabled(true);
+              } else {
+                setConfirming(true);
+              }
+            }}
+          />
+        }
+      />
 
       {confirming && (
         <Dialog open onOpenChange={(open) => !open && !deleting && setConfirming(false)}>
@@ -364,6 +375,6 @@ function PreviewStoreSettings({ database }: { database: AbstractPowerSyncDatabas
           </Dialog.Content>
         </Dialog>
       )}
-    </div>
+    </>
   );
 }

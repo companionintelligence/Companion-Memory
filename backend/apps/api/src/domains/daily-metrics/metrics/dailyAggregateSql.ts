@@ -152,8 +152,12 @@ SELECT
              AND (i.acquired_at AT TIME ZONE 'UTC')::time <> time '00:00')
             OR i.acquired_at = ($2::date::timestamp AT TIME ZONE 'UTC')))
      AS inv_rows,
+  -- Spend counts only prices in a currency: a thing priced in a unit with no ISO
+  -- code (an import keeps Roblox's "1200 Robux" as written) is not 1200 dollars.
+  -- It stays in inv_rows, so it shows as a thing with no usable price.
   (SELECT count(i.purchase_price) FROM ci.objects i
      WHERE i.user_id::uuid = $1::uuid
+       AND (i.currency IS NULL OR upper(btrim(i.currency)) ~ '^[A-Z]{3}$')
        AND ((i.acquired_at >= ($2::date::timestamp AT TIME ZONE $3::text)
              AND i.acquired_at < (($2::date + 1)::timestamp AT TIME ZONE $3::text)
              AND (i.acquired_at AT TIME ZONE 'UTC')::time <> time '00:00')
@@ -161,6 +165,7 @@ SELECT
      AS inv_rows_with_price,
   (SELECT sum(i.purchase_price) FROM ci.objects i
      WHERE i.user_id::uuid = $1::uuid
+       AND (i.currency IS NULL OR upper(btrim(i.currency)) ~ '^[A-Z]{3}$')
        AND ((i.acquired_at >= ($2::date::timestamp AT TIME ZONE $3::text)
              AND i.acquired_at < (($2::date + 1)::timestamp AT TIME ZONE $3::text)
              AND (i.acquired_at AT TIME ZONE 'UTC')::time <> time '00:00')
@@ -223,7 +228,8 @@ SELECT
  *  - communications / browser_activity: any row (both produce count metrics)
  *  - position: `location IS NOT NULL`, since a fix with no point yields no
  *    metric (`assembleDailyMetrics` gates n_places/km_traveled on posLoc > 0)
- *  - objects: `purchase_price IS NOT NULL`, which is what spend_total needs
+ *  - objects: `purchase_price IS NOT NULL` in a three-letter currency (or none),
+ *    which is what spend_total needs
  *  - events: the meeting whitelist or `'sleep'`, NOT any event. Dropping that
  *    filter is what made a naive MAX() anchor land on 2026-08-30 on the live
  *    corpus: the only rows there are reddit `moderated_subreddit` records with
@@ -264,6 +270,7 @@ WITH days AS (
         FROM ci.objects i
        WHERE i.user_id::uuid = $1::uuid
          AND i.purchase_price IS NOT NULL
+         AND (i.currency IS NULL OR upper(btrim(i.currency)) ~ '^[A-Z]{3}$')
   UNION
       SELECT DISTINCT (e.start_time AT TIME ZONE $2::text)::date AS day
         FROM ci.events e

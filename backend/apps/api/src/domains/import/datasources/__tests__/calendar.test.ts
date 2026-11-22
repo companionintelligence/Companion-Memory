@@ -26,6 +26,64 @@ import { metaText, type EmittedGraph } from './support/emitted';
 
 const FIXTURES_DIR = path.join(__dirname, 'fixtures');
 
+/**
+ * The head of a calendar published from Outlook.com (Settings > Shared
+ * calendars > Publish a calendar): Exchange names every zone the Windows way
+ * and defines each one it uses in a VTIMEZONE block before the first event.
+ */
+const OUTLOOK_HEAD = [
+  'BEGIN:VCALENDAR',
+  'METHOD:PUBLISH',
+  'PRODID:Microsoft Exchange Server 2010',
+  'VERSION:2.0',
+  'X-WR-CALNAME:Calendar',
+  'BEGIN:VTIMEZONE',
+  'TZID:Pacific Standard Time',
+  'BEGIN:STANDARD',
+  'DTSTART:16010101T020000',
+  'TZOFFSETFROM:-0700',
+  'TZOFFSETTO:-0800',
+  'RRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=1SU;BYMONTH=11',
+  'END:STANDARD',
+  'BEGIN:DAYLIGHT',
+  'DTSTART:16010101T020000',
+  'TZOFFSETFROM:-0800',
+  'TZOFFSETTO:-0700',
+  'RRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=2SU;BYMONTH=3',
+  'END:DAYLIGHT',
+  'END:VTIMEZONE',
+  'BEGIN:VTIMEZONE',
+  'TZID:GMT Standard Time',
+  'BEGIN:STANDARD',
+  'DTSTART:16010101T030000',
+  'TZOFFSETFROM:+0100',
+  'TZOFFSETTO:+0000',
+  'RRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=-1SU;BYMONTH=10',
+  'END:STANDARD',
+  'BEGIN:DAYLIGHT',
+  'DTSTART:16010101T010000',
+  'TZOFFSETFROM:+0000',
+  'TZOFFSETTO:+0100',
+  'RRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=-1SU;BYMONTH=3',
+  'END:DAYLIGHT',
+  'END:VTIMEZONE',
+  'BEGIN:VTIMEZONE',
+  'TZID:W. Europe Standard Time',
+  'BEGIN:STANDARD',
+  'DTSTART:16010101T030000',
+  'TZOFFSETFROM:+0200',
+  'TZOFFSETTO:+0100',
+  'RRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=-1SU;BYMONTH=10',
+  'END:STANDARD',
+  'BEGIN:DAYLIGHT',
+  'DTSTART:16010101T010000',
+  'TZOFFSETFROM:+0100',
+  'TZOFFSETTO:+0200',
+  'RRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=-1SU;BYMONTH=3',
+  'END:DAYLIGHT',
+  'END:VTIMEZONE',
+];
+
 /** Write an .ics into a throwaway directory and hand back its path. */
 function icsFile(prefix: string, name: string, lines: string[], newline = '\r\n'): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -313,6 +371,90 @@ describe('Calendar datasource', () => {
     }
   });
 
+  it('reads Windows zone names, as an Outlook published calendar writes them', async () => {
+    const icsPath = icsFile('ci-ics-outlook-', 'calendar.ics', [
+      ...OUTLOOK_HEAD,
+      'BEGIN:VEVENT',
+      'UID:dentist@outlook',
+      'SUMMARY:Dentist',
+      'DTSTART;TZID=Pacific Standard Time:20260818T143000',
+      'DTEND;TZID=Pacific Standard Time:20260818T153000',
+      'END:VEVENT',
+      'BEGIN:VEVENT',
+      'UID:review@outlook',
+      'SUMMARY:Quarterly review',
+      'DTSTART;TZID=Pacific Standard Time:20261103T130000',
+      'DTEND;TZID=Pacific Standard Time:20261103T140000',
+      'END:VEVENT',
+      'BEGIN:VEVENT',
+      'UID:london@outlook',
+      'SUMMARY:Call with London',
+      'DTSTART;TZID=GMT Standard Time:20260612T170000',
+      'DTEND;TZID=GMT Standard Time:20260612T174500',
+      'END:VEVENT',
+      'BEGIN:VEVENT',
+      'UID:frankfurt@outlook',
+      'SUMMARY:Stand setup',
+      'DTSTART;TZID=W. Europe Standard Time:20261014T080000',
+      'DTEND;TZID=W. Europe Standard Time:20261014T120000',
+      'END:VEVENT',
+      'BEGIN:VEVENT',
+      'UID:webinar@outlook',
+      'SUMMARY:Webinar',
+      'DTSTART:20260325T180000Z',
+      'DTEND:20260325T190000Z',
+      'END:VEVENT',
+      'BEGIN:VEVENT',
+      'UID:birthday@outlook',
+      'SUMMARY:Birthday',
+      'DTSTART;VALUE=DATE:20260502',
+      'DTEND;VALUE=DATE:20260503',
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ]);
+
+    try {
+      const items = (await importIcs(icsPath)).map((graph) => graph.item);
+      const at = (id: string) => {
+        const item = items.find((candidate) => candidate.id === id);
+
+        return [item?.timestamp?.toISOString(), item?.timespanEnd?.toISOString()];
+      };
+
+      // Pacific in summer (PDT, UTC-7) and after the clocks went back on
+      // November 1 (PST, UTC-8), London in summer (BST, UTC+1) and Frankfurt in
+      // summer (CEST, UTC+2). Each used to be the wall clock read as UTC.
+      expect(at('dentist@outlook')).toEqual(['2026-08-18T21:30:00.000Z', '2026-08-18T22:30:00.000Z']);
+      expect(at('review@outlook')).toEqual(['2026-11-03T21:00:00.000Z', '2026-11-03T22:00:00.000Z']);
+      expect(at('london@outlook')).toEqual(['2026-06-12T16:00:00.000Z', '2026-06-12T16:45:00.000Z']);
+      expect(at('frankfurt@outlook')).toEqual(['2026-10-14T06:00:00.000Z', '2026-10-14T10:00:00.000Z']);
+      // No TZID to resolve: as before.
+      expect(at('webinar@outlook')).toEqual(['2026-03-25T18:00:00.000Z', '2026-03-25T19:00:00.000Z']);
+      expect(at('birthday@outlook')).toEqual(['2026-05-02T00:00:00.000Z', '2026-05-03T00:00:00.000Z']);
+    } finally {
+      fs.rmSync(path.dirname(icsPath), { recursive: true, force: true });
+    }
+  });
+
+  it('reads a quoted TZID, as Outlook desktop exports write it', () => {
+    const [event] = parseIcsEvents(
+      [
+        'BEGIN:VCALENDAR',
+        'BEGIN:VEVENT',
+        'UID:desktop@outlook',
+        'SUMMARY:Dentist',
+        'DTSTART;TZID="Pacific Standard Time":20260818T143000',
+        'DTEND;TZID="Pacific Standard Time":20260818T153000',
+        'END:VEVENT',
+        'END:VCALENDAR',
+      ].join('\r\n'),
+      'calendar.ics',
+    );
+
+    expect(event.dtStart?.toISOString()).toBe('2026-08-18T21:30:00.000Z');
+    expect(event.dtEnd?.toISOString()).toBe('2026-08-18T22:30:00.000Z');
+  });
+
   it("keeps the event's own properties when a nested VALARM repeats them", async () => {
     // RFC 5545 §3.6.6 nests VALARM INSIDE the VEVENT, and every Apple/Google
     // export emits it AFTER the event's own properties. The parser used to fold
@@ -540,6 +682,10 @@ describe('Calendar datasource', () => {
       ['a UTC start', 'DTSTART:20261005T170000Z', 'UTC'],
       // The zone the parser read the wall clock in (see seriesTimeZone).
       ['a floating start', 'DTSTART:20261005T100000', serverTimezone()],
+      ['a Windows zone name', 'DTSTART;TZID=Pacific Standard Time:20261005T100000', PACIFIC],
+      // Outlook's desktop export quotes the TZID.
+      ['a quoted Windows zone name', 'DTSTART;TZID="Pacific Standard Time":20261005T100000', PACIFIC],
+      ['a quoted IANA id', 'DTSTART;TZID="America/Los_Angeles":20261005T100000', PACIFIC],
       ['a zone the runtime does not know', 'DTSTART;TZID=Not/AZone:20261005T100000', serverTimezone()],
     ])('sets the series zone for %s', (_, dtstart, zone) => {
       const [event] = parseIcsEvents(
@@ -557,6 +703,81 @@ describe('Calendar datasource', () => {
 
       expect(event.recurrence).toEqual(['RRULE:FREQ=WEEKLY']);
       expect(event.recurrenceTimeZone).toBe(zone);
+    });
+
+    it('repeats an Outlook series at its own wall clock through DST, without its excluded and moved dates', async () => {
+      const icsPath = icsFile('ci-ics-outlook-series-', 'calendar.ics', [
+        ...OUTLOOK_HEAD,
+        'BEGIN:VEVENT',
+        'RRULE:FREQ=WEEKLY;UNTIL=20261215T170000Z;INTERVAL=1;BYDAY=TU;WKST=SU',
+        'EXDATE;TZID=Pacific Standard Time:20260707T090000',
+        'UID:guild-sync@outlook',
+        'SUMMARY:Weekly guild sync',
+        'DTSTART;TZID=Pacific Standard Time:20260106T090000',
+        'DTEND;TZID=Pacific Standard Time:20260106T093000',
+        'END:VEVENT',
+        'BEGIN:VEVENT',
+        'RECURRENCE-ID;TZID=Pacific Standard Time:20260915T090000',
+        'UID:guild-sync@outlook',
+        'SUMMARY:Weekly guild sync (moved to Wednesday)',
+        'DTSTART;TZID=Pacific Standard Time:20260916T100000',
+        'DTEND;TZID=Pacific Standard Time:20260916T103000',
+        'END:VEVENT',
+        'END:VCALENDAR',
+      ]);
+
+      try {
+        const items = (await importIcs(icsPath)).map((graph) => graph.item);
+        const series = items.find((item) => item.id === 'guild-sync@outlook')!;
+        const moved = items.find((item) => item.id !== series.id)!;
+
+        // 09:00 PST is 17:00Z. The override keeps the key it had (its
+        // RECURRENCE-ID wall clock) and lands at 10:00 PDT, 17:00Z.
+        expect(series.timestamp?.toISOString()).toBe('2026-01-06T17:00:00.000Z');
+        expect(series.metadata.recurrenceTimeZone).toBe(PACIFIC);
+        expect(moved.id).toBe('guild-sync@outlook#20260915T090000');
+        expect(moved.timestamp?.toISOString()).toBe('2026-09-16T17:00:00.000Z');
+
+        const spec = parseRecurrence(
+          {
+            id: 'series',
+            startTime: series.timestamp as Date,
+            endTime: series.timespanEnd ?? null,
+            isAllDay: false,
+            metadata: series.metadata,
+            recurrencePattern: null,
+            sourceSystem: 'calendar',
+            sourceId: series.id as string,
+          },
+          { fallbackTimeZone: 'UTC' },
+        );
+        const local = (from: string, to: string) =>
+          expandSeries(spec!, { from: new Date(from), to: new Date(to) }).starts.map((start) => {
+            const wall = wallClockInTZ(start, PACIFIC);
+
+            return `${wall.month}/${wall.day} ${wall.hour}:${String(wall.minute).padStart(2, '0')}`;
+          });
+
+        // The clocks go forward on March 8: still 09:00 either side.
+        expect(local('2026-02-25T00:00:00Z', '2026-03-20T00:00:00Z')).toEqual([
+          '3/3 9:00',
+          '3/10 9:00',
+          '3/17 9:00',
+        ]);
+        // July 7 is excluded and September 15 moved to the override's own row.
+        expect(local('2026-06-29T00:00:00Z', '2026-07-22T00:00:00Z')).toEqual([
+          '6/30 9:00',
+          '7/14 9:00',
+          '7/21 9:00',
+        ]);
+        expect(local('2026-09-07T00:00:00Z', '2026-09-30T00:00:00Z')).toEqual([
+          '9/8 9:00',
+          '9/22 9:00',
+          '9/29 9:00',
+        ]);
+      } finally {
+        fs.rmSync(path.dirname(icsPath), { recursive: true, force: true });
+      }
     });
 
     it('skips a floating EXDATE even when the owner lives in another zone', () => {
@@ -651,7 +872,11 @@ describe('Calendar datasource', () => {
      * know, keeps its wall clock as its key, so the series has to be told.
      */
     it.each([
-      ['a zone the runtime does not know', ';TZID=Pacific Standard Time'],
+      // The series' zone is America/Los_Angeles; the overrides keep their
+      // Windows-named wall clock as their key.
+      ['a Windows zone name', ';TZID=Pacific Standard Time'],
+      ['a quoted Windows zone name', ';TZID="Pacific Standard Time"'],
+      ['a zone the runtime does not know', ';TZID=Customized Time Zone'],
       ['a floating time', ''],
     ])('does not draw the occurrence an override replaces, for %s', (_, tzid) => {
       const events = parseIcsEvents(

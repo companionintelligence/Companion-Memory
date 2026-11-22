@@ -257,13 +257,22 @@ export class PeerSignatureService {
    * `peers.requireHttpSignature` is rolling out, and a box with no key must
    * still be able to talk to a peer that does not require one.
    */
-  signOutbound(request: {
-    method: string;
-    targetUri: string;
-    body?: string;
-    now?: Date;
-  }): Record<string, string> | null {
-    const signing = this.signingKey();
+  signOutbound(
+    request: {
+      method: string;
+      targetUri: string;
+      body?: string;
+      now?: Date;
+    },
+    /**
+     * The person sending, from `PeerIdentityService`. Asks are signed with the
+     * sender's own key; without one this falls back to the box key, which is
+     * what the tests that predate per-person keys exercise.
+     */
+    signer?: { key: KeyObject; keyid: string },
+  ): Record<string, string> | null {
+    const box = signer == null ? this.signingKey() : null;
+    const signing = signer ?? (box == null ? null : { key: box.key, keyid: box.keyid ?? box.thumbprint });
     if (signing == null) {
       return null;
     }
@@ -276,7 +285,7 @@ export class PeerSignatureService {
       components: [...REQUIRED_COMPONENTS, ...(hasBody ? [BODY_COMPONENT] : [])],
       created,
       expires: created + OUTBOUND_LIFETIME_MS / 1000,
-      keyid: signing.keyid ?? signing.thumbprint,
+      keyid: signing.keyid,
       alg: PEER_SIGNATURE_ALG,
       // 128 bits, base64url -- comfortably inside NONCE_PATTERN and far beyond
       // any birthday concern over the five minutes a nonce can live.

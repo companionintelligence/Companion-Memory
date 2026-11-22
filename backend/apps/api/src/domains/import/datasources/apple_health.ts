@@ -57,6 +57,114 @@ function parseHealthDate(s: string): Date | undefined {
   return isNaN(d.getTime()) ? undefined : d;
 }
 
+/** Kilometres per HealthKit length unit, for the units a workout distance uses. */
+const KM_PER_UNIT: Record<string, number> = { km: 1, m: 0.001, mi: 1.609344, yd: 0.0009144, ft: 0.0003048 };
+
+/** A distance in kilometres (to the metre), or undefined for an unknown unit. */
+function toKm(value: string | undefined, unit: string | undefined): number | undefined {
+  const n = value !== undefined ? parseFloat(value) : NaN;
+  const factor = unit !== undefined ? KM_PER_UNIT[unit] : undefined;
+
+  return Number.isFinite(n) && factor !== undefined ? Math.round(n * factor * 1000) / 1000 : undefined;
+}
+
+function finite(value: string | undefined): number | undefined {
+  const n = value !== undefined ? parseFloat(value) : NaN;
+
+  return Number.isFinite(n) ? n : undefined;
+}
+
+/** Kilocalories per HealthKit energy unit. `Cal` is the large calorie, a kilocalorie. */
+const KCAL_PER_UNIT: Record<string, number> = { kcal: 1, Cal: 1, cal: 0.001, kJ: 1 / 4.184, J: 1 / 4184 };
+
+/**
+ * An energy in kilocalories, or undefined for an unknown unit. No unit reads
+ * as kilocalories. An account set to kilojoules exports its workouts in kJ,
+ * which stored as `Calories` would be 4.184 times too high.
+ */
+function toKcal(value: string | undefined, unit: string | undefined): number | undefined {
+  const n = finite(value);
+  const factor = unit ? KCAL_PER_UNIT[unit] : 1;
+  if (n === undefined || factor === undefined) {
+    return undefined;
+  }
+
+  return factor === 1 ? n : Math.round(n * factor * 10) / 10;
+}
+
+interface WorkoutTotals {
+  distanceKm?: number;
+  /** The first distance as written, when its unit isn't one we convert. */
+  distanceText?: string;
+  calories?: number;
+  hrAvg?: number;
+  hrMin?: number;
+  hrMax?: number;
+}
+
+/** A `<WorkoutActivity>` element with its children, or a self-closed one. */
+const WORKOUT_ACTIVITY = /<WorkoutActivity\b(?:[^>]*\/>|[^>]*>[\s\S]*?<\/WorkoutActivity>)/g;
+
+/** Totals from the `<WorkoutStatistics>` tags in `xml`. */
+function statisticsIn(xml: string): WorkoutTotals {
+  const out: WorkoutTotals = {};
+  let heartRates = 0;
+  for (const m of xml.matchAll(/<WorkoutStatistics\b([^>]*)>/g)) {
+    const a = parseAttrs(m[1]);
+    const type = a.type ?? '';
+    if (type.startsWith('HKQuantityTypeIdentifierDistance') && a.sum !== undefined) {
+      // A multisport workout lists one distance per sport: add them up.
+      const km = toKm(a.sum, a.unit);
+      if (km !== undefined) {
+        out.distanceKm = Math.round(((out.distanceKm ?? 0) + km) * 1000) / 1000;
+      } else {
+        out.distanceText ??= `${a.sum} ${a.unit ?? ''}`.trim();
+      }
+    } else if (type === 'HKQuantityTypeIdentifierActiveEnergyBurned') {
+      const kcal = toKcal(a.sum, a.unit);
+      if (kcal !== undefined) {
+        out.calories = Math.round(((out.calories ?? 0) + kcal) * 10) / 10;
+      }
+    } else if (type === 'HKQuantityTypeIdentifierHeartRate') {
+      heartRates++;
+      const min = finite(a.minimum);
+      const max = finite(a.maximum);
+      // One average per statistic; several can't be combined without their durations.
+      out.hrAvg = heartRates === 1 ? finite(a.average) : undefined;
+      out.hrMin = min === undefined ? out.hrMin : Math.min(out.hrMin ?? min, min);
+      out.hrMax = max === undefined ? out.hrMax : Math.max(out.hrMax ?? max, max);
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Totals from a workout's `<WorkoutStatistics>` children. Exports since iOS 16
+ * carry distance and energy here, and a workout saved through the newer
+ * HealthKit API has no `totalDistance`/`totalEnergyBurned` on its own tag.
+ *
+ * The same exports nest a `<WorkoutActivity>` per sport (and one in most
+ * single-sport workouts), each with statistics of its own that the workout's
+ * already total. Adding those in counted every distance twice, so the
+ * workout's own statistics are read first and an activity's only fill a gap.
+ */
+function workoutStatistics(block: string): WorkoutTotals {
+  const activities = [...block.matchAll(WORKOUT_ACTIVITY)].map((m) => m[0]);
+  const own = statisticsIn(block.replace(WORKOUT_ACTIVITY, ''));
+  const nested = statisticsIn(activities.join('\n'));
+  const hr = own.hrAvg !== undefined || own.hrMin !== undefined || own.hrMax !== undefined ? own : nested;
+
+  return {
+    distanceKm: own.distanceKm ?? (own.distanceText === undefined ? nested.distanceKm : undefined),
+    distanceText: own.distanceText ?? (own.distanceKm === undefined ? nested.distanceText : undefined),
+    calories: own.calories ?? nested.calories,
+    hrAvg: hr.hrAvg,
+    hrMin: hr.hrMin,
+    hrMax: hr.hrMax,
+  };
+}
+
 export class AppleHealthFileImporter implements FileImporter {
   async recognize(_ctx: unknown, entry: DirEntry): Promise<Recognition> {
     const root = entry.fullPath || entry.fsRoot || entry.filename;
@@ -299,6 +407,19 @@ export class AppleHealthFileImporter implements FileImporter {
     }
 
     const actType = (attrs.workoutActivityType ?? '').replace('HKWorkoutActivityType', '');
+    // The tag's own totals win; the statistics fill in what it doesn't carry.
+    const stats = workoutStatistics(block);
+    const distanceKm = attrs.totalDistance
+      ? toKm(attrs.totalDistance, attrs.totalDistanceUnit)
+      : stats.distanceKm;
+    // A unit with no conversion is kept as written rather than dropped.
+    let distanceText: string | undefined;
+    if (distanceKm === undefined) {
+      distanceText = attrs.totalDistance
+        ? `${attrs.totalDistance} ${attrs.totalDistanceUnit ?? ''}`.trim()
+        : stats.distanceText;
+    }
+
     seen.emitted++;
     params.pipeline.push({
       item: {
@@ -311,10 +432,14 @@ export class AppleHealthFileImporter implements FileImporter {
           Title: actType || undefined,
           'Activity Type': actType || undefined,
           'Duration (min)': attrs.duration ? parseFloat(attrs.duration) : undefined,
-          Distance: attrs.totalDistance
-            ? `${attrs.totalDistance} ${attrs.totalDistanceUnit ?? ''}`.trim()
-            : undefined,
-          Calories: attrs.totalEnergyBurned ? parseFloat(attrs.totalEnergyBurned) : undefined,
+          'Distance (km)': distanceKm,
+          Distance: distanceText,
+          Calories: attrs.totalEnergyBurned
+            ? toKcal(attrs.totalEnergyBurned, attrs.totalEnergyBurnedUnit)
+            : stats.calories,
+          'Average Heart Rate': stats.hrAvg,
+          'Min Heart Rate': stats.hrMin,
+          'Max Heart Rate': stats.hrMax,
           Source: attrs.sourceName || undefined,
         },
       },

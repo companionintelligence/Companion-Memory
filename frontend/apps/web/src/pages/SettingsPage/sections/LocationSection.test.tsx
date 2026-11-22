@@ -58,6 +58,11 @@ beforeEach(() => {
   h.setBackgroundUpload.mockImplementation(async (enabled: boolean) => ({ enabled, supported: true }));
 });
 
+/** The value beside a label in the recorded-positions list. */
+function fact(label: string): string | null | undefined {
+  return screen.queryByText(label)?.nextElementSibling?.textContent;
+}
+
 describe('LocationSection', () => {
   it('offers Off and While using on web, not Always', async () => {
     render(<LocationSection />);
@@ -66,7 +71,8 @@ describe('LocationSection', () => {
     expect(screen.getByRole('radio', { name: 'Off' })).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: 'While using' })).toBeInTheDocument();
     expect(screen.queryByRole('radio', { name: 'Always' })).not.toBeInTheDocument();
-    expect(screen.getByText(/Background location is on the mobile app/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'About location on this device' }));
+    expect(await screen.findByText(/Background location is on the mobile app/)).toBeInTheDocument();
   });
 
   it('offers Always on native (iOS or Android)', async () => {
@@ -176,8 +182,8 @@ describe('LocationSection', () => {
     h.fetchJson.mockResolvedValue({ total: 1, byProvider: { 'companion-mobile': 1 }, lastFixAt: null });
     render(<LocationSection />);
 
-    expect(await screen.findByText('1 fixes recorded from your devices')).toBeInTheDocument();
-    expect(screen.getByText(/80 more on this device, waiting to upload/)).toBeInTheDocument();
+    await waitFor(() => expect(fact('From your devices')).toBe('1'));
+    expect(fact('Waiting to upload from this device')).toBe('80');
   });
 
   it('says nothing about waiting fixes when none are queued', async () => {
@@ -185,21 +191,21 @@ describe('LocationSection', () => {
     render(<LocationSection />);
     await waitFor(() => expect(h.fetchJson).toHaveBeenCalled());
 
-    expect(screen.queryByText(/waiting to upload/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/waiting to upload/i)).not.toBeInTheDocument();
   });
 
   it('recounts once waiting fixes upload', async () => {
     h.pendingByKind = { positions: 80 };
     h.fetchJson.mockResolvedValue({ total: 1, byProvider: { 'companion-mobile': 1 }, lastFixAt: null });
     const { rerender } = render(<LocationSection />);
-    expect(await screen.findByText('1 fixes recorded from your devices')).toBeInTheDocument();
+    await waitFor(() => expect(fact('From your devices')).toBe('1'));
 
     h.fetchJson.mockResolvedValue({ total: 81, byProvider: { 'companion-mobile': 81 }, lastFixAt: null });
     h.pendingByKind = {};
     rerender(<LocationSection />);
 
-    expect(await screen.findByText('81 fixes recorded from your devices')).toBeInTheDocument();
-    expect(screen.queryByText(/waiting to upload/)).not.toBeInTheDocument();
+    await waitFor(() => expect(fact('From your devices')).toBe('81'));
+    expect(screen.queryByText(/waiting to upload/i)).not.toBeInTheDocument();
   });
 
   it('offers background upload in Always where the phone supports it, on by default', async () => {

@@ -24,7 +24,7 @@ describe('Garmin Connect datasource', () => {
 
   it('does not false-match a Strava activities.csv', async () => {
     // Strava's activities.csv also has "Activity Type" + "Distance" columns but
-    // lacks Garmin-distinctive fields (Favorite/Calories/Avg HR/Aerobic TE).
+    // no "Date" cell and none of Garmin's own columns (Favorite/Avg HR/Aerobic TE).
     const fpath = path.join(FIXTURES_DIR, 'strava-export', 'activities.csv');
     const fi = new GarminFileImporter();
     const rec = await fi.recognize({}, { filename: 'activities.csv', fullPath: fpath });
@@ -167,6 +167,58 @@ describe('Garmin Connect datasource', () => {
       // Re-import of the same file yields the same ids (idempotent).
       const again = await run();
       expect(again.map((p) => p.item.id!)).toEqual(ids);
+    } finally {
+      await fs.promises.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  // Strava's real activities.csv runs to dozens of columns, Calories and
+  // Average Heart Rate among them, and repeats Elapsed Time and Distance. The
+  // fixture above stops before Calories, which is how a header test that
+  // counted Calories as Garmin's let this file through: each Strava activity
+  // came in again as an undated "Garmin Connect" workout.
+  it("does not claim Strava's full activities.csv, Calories column included", async () => {
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'garmin-strava-'));
+    const csv = path.join(tmpDir, 'activities.csv');
+    try {
+      await fs.promises.writeFile(
+        csv,
+        'Activity ID,Activity Date,Activity Name,Activity Type,Activity Description,Elapsed Time,' +
+          'Distance,Max Heart Rate,Relative Effort,Commute,Activity Private Note,Activity Gear,' +
+          'Filename,Athlete Weight,Bike Weight,Elapsed Time,Moving Time,Distance,Max Speed,' +
+          'Average Speed,Elevation Gain,Elevation Loss,Elevation Low,Elevation High,Max Grade,' +
+          'Average Grade,Max Cadence,Average Cadence,Max Heart Rate,Average Heart Rate,Calories,' +
+          'Start Time,Media\n' +
+          '16012345101,"Mar 14, 2026, 7:05:12 AM",Creek tempo run,Run,,1980,6.12,176,48,false,,,' +
+          'activities/16012345101.gpx,71.5,,1980.0,1841.0,6120.0,6.1,3.091,88.0,84.0,12.4,96.2,' +
+          '9.3,0.1,,,176,151.2,512.0,,\n',
+      );
+      fs.mkdirSync(path.join(tmpDir, 'activities'));
+      const fi = new GarminFileImporter();
+      const asFile = await fi.recognize({}, { filename: 'activities.csv', fullPath: csv });
+      expect(asFile.confidence).toBe(0);
+      const asDir = await fi.recognize({}, { filename: path.basename(tmpDir), fullPath: tmpDir });
+      expect(asDir.confidence).toBe(0);
+    } finally {
+      await fs.promises.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('still recognizes an Activities.csv whose header cells are quoted', async () => {
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'garmin-quoted-'));
+    const csv = path.join(tmpDir, 'Activities.csv');
+    try {
+      await fs.promises.writeFile(
+        csv,
+        '\uFEFF"Activity Type","Date","Favorite","Title","Distance","Calories","Time","Avg HR"\r\n' +
+          '"Running","2023-01-15 10:30:00","false","Morning Run","5.02","412","00:28:43","148"\r\n',
+      );
+      const rec = await new GarminFileImporter().recognize({}, { filename: 'Activities.csv', fullPath: csv });
+      expect(rec.confidence).toBeGreaterThan(0.8);
     } finally {
       await fs.promises.rm(tmpDir, { recursive: true, force: true });
     }

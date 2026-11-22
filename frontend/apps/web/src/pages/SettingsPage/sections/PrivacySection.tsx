@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { fetchJson } from '@ci/common';
-import { Card, Label, Switch } from '@ci/shadcn';
+import { Switch } from '@ci/shadcn';
 
 import { useAuth } from '@/hooks';
+
+import { SettingsGroup, SettingsNotice, SettingsRow, SettingsSection, SettingsStatus } from '../kit';
 
 export type OutboundKey = 'crash_reports' | 'place_lookups' | 'link_previews' | 'portal_oauth';
 
@@ -95,32 +97,33 @@ export function PrivacySection() {
   const byKey = new Map(settings?.paths.map((path) => [path.key, path]));
 
   return (
-    <>
-      <div className="mb-6">
-        <h2 className="text-xl font-semibold">Privacy</h2>
-        <p className="text-sm text-muted-foreground mt-1">
-          Your memory stays on this appliance. These are the few things that can leave it, and each one can be
-          switched off. Everything else — search, chat with a local model, sync — never leaves.
-        </p>
-      </div>
+    <SettingsSection
+      title="Privacy"
+      description="The few things that can leave this appliance. Each one can be switched off."
+      help="Your memory stays on this appliance. Everything else (search, chat with a local model, sync) never leaves."
+    >
+      {settings && !settings.canEdit ? (
+        <SettingsNotice>Only an administrator can change these.</SettingsNotice>
+      ) : null}
 
-      <Card>
-        <Card.Content className="space-y-6 pt-6">
-          {KEYS.map((key) => {
-            const path = byKey.get(key);
-            const copy = OUTBOUND_COPY[key];
+      <SettingsGroup>
+        {KEYS.map((key) => {
+          const path = byKey.get(key);
+          const copy = OUTBOUND_COPY[key];
 
-            return (
-              <div key={key} className="flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <Label htmlFor={`outbound-${key}`} className="text-sm font-medium">
-                    {copy.label}
-                  </Label>
-                  <p className="text-xs text-muted-foreground mt-1">{copy.sends}</p>
-                  {path?.locked ? (
-                    <p className="text-xs text-muted-foreground mt-1">{path.lockedReason}</p>
-                  ) : null}
-                </div>
+          return (
+            <SettingsRow
+              key={key}
+              label={copy.label}
+              htmlFor={`outbound-${key}`}
+              align="start"
+              hint={
+                <>
+                  {copy.sends}
+                  {path?.locked ? <span className="mt-1 block">{path.lockedReason}</span> : null}
+                </>
+              }
+              control={
                 <Switch
                   id={`outbound-${key}`}
                   aria-label={copy.label}
@@ -128,16 +131,17 @@ export function PrivacySection() {
                   disabled={!path || !settings?.canEdit || pending === key || (path.locked && !path.enabled)}
                   onCheckedChange={(checked) => void toggle(key, checked)}
                 />
-              </div>
-            );
-          })}
+              }
+            />
+          );
+        })}
 
-          {settings && !settings.canEdit ? (
-            <p className="text-xs text-muted-foreground">Only an administrator can change these.</p>
-          ) : null}
-          {error ? <p className="text-sm text-destructive">{error}</p> : null}
-        </Card.Content>
-      </Card>
-    </>
+        {error ? (
+          <SettingsRow>
+            <SettingsStatus tone="error">{error}</SettingsStatus>
+          </SettingsRow>
+        ) : null}
+      </SettingsGroup>
+    </SettingsSection>
   );
 }

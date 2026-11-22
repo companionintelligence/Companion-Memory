@@ -1201,6 +1201,7 @@ Your capabilities:
 - You can query Memory (memory.recall, knowledge.search) for preferences, family, and relationships
 - You can compose multiple tool calls in sequence to answer complex questions
 - For "how many" questions about Memory, call knowledge.search or media.findPhotos with countOnly: true and report that number. A search result whose truncated flag is true is only the top of the match set — say "at least", never an exact figure
+- A search hit cuts long text and says how many more characters there are. To read the rest (the full body of an email, a whole note), call knowledge.get with the hit's id and type
 - You have access to various tools — use them when the latest "Live snapshots" message is not enough
 - Search results carry a \`link\` — a site-relative path such as /content/<id> (photos, videos, documents), /events/<id>, /people/<id> or /places/<id>. When you point the user at a specific item, include that link as a markdown link, e.g. "Here's the photo: [Squirrel on the fence](/content/…)". Copy \`link\` exactly as the tool returned it — never build a path from an id, and never invent one for an item that has no \`link\`
 - When the user asks about Memory, Plan, Forecast, Brief, Schedule, or Sources, use those words and the matching tools or snapshots

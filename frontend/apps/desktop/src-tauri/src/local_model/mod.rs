@@ -29,6 +29,10 @@ pub mod recommended;
 /// Compiled everywhere, used only on Linux — see its module doc comment.
 pub mod bridge_relay;
 
+/// Linux: whether the containers reach the model, checked from inside them.
+/// Compiled everywhere, like bridge_relay.
+pub mod container_reach;
+
 #[cfg(target_os = "macos")]
 pub mod apple_bridge;
 
@@ -130,6 +134,12 @@ pub struct LocalModelHandles {
     /// `ollama_child` — it owns a listening socket that must be released on
     /// quit, or a relaunch cannot bind the gateway address again.
     ollama_relay: Mutex<Option<bridge_relay::RelayHandle>>,
+    /// Linux only in practice: the check that the containers reach the model,
+    /// owed once the stack is up. Recorded by ollama_sidecar wherever the
+    /// containers come to depend on an Ollama on this host, run by
+    /// check_container_reach. See container_reach for why the host cannot
+    /// answer this itself.
+    container_check: Mutex<Option<container_reach::Target>>,
     #[cfg(target_os = "macos")]
     apple_bridge: Mutex<Option<apple_bridge::AppleBridgeHandle>>,
     /// Set once resolution finishes — read by get_local_model_status_command
@@ -147,6 +157,7 @@ impl Default for LocalModelHandles {
         Self {
             ollama_child: Mutex::new(None),
             ollama_relay: Mutex::new(None),
+            container_check: Mutex::new(None),
             #[cfg(target_os = "macos")]
             apple_bridge: Mutex::new(None),
             status: Mutex::new(None),
@@ -164,8 +175,49 @@ impl LocalModelHandles {
     }
 
     /// Same reason as `ollama_child_slot`, for the Linux bridge relay.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn ollama_relay_slot(&self) -> &Mutex<Option<bridge_relay::RelayHandle>> {
         &self.ollama_relay
+    }
+
+    /// Records that the containers reach the model at `target`, to be checked
+    /// from inside the appliance once the stack is up. Replaces an earlier one.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub(crate) fn expect_container_check(&self, target: container_reach::Target) {
+        let mut pending = self
+            .container_check
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        *pending = Some(target);
+    }
+
+    /// Runs the check recorded by expect_container_check, once the stack has
+    /// started. Blocking: `docker exec` and up to five seconds of curl.
+    ///
+    /// Both callers of ensure_local_model_then_start_stack reach this, as does
+    /// the tray's Start. The second may get here while the first is still
+    /// bringing the stack up. A probe that finds the api container not running
+    /// (or stopped under it by a recreate) keeps the check for the caller that
+    /// started it; any other outcome is logged once. A caller that arrives
+    /// while another's probe runs waits for it, then probes only if that one
+    /// found no api container.
+    pub fn check_container_reach(&self) {
+        self.check_container_reach_with(container_reach::check_and_log);
+    }
+
+    /// check_container_reach with the probe passed in. `probe` logs what it
+    /// found and returns false when the api container was not running.
+    fn check_container_reach_with(&self, probe: impl FnOnce(&container_reach::Target) -> bool) {
+        let mut pending = self
+            .container_check
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let Some(target) = *pending else {
+            return;
+        };
+        if probe(&target) {
+            *pending = None;
+        }
     }
 
     pub fn shutdown(&self) {
@@ -293,8 +345,8 @@ fn resolve_and_start(
         // `handles` itself, so quitting the app removes it.
         #[cfg(target_os = "linux")]
         log::info!(
-            "An Ollama instance is already answering on port {}. Reusing it after checking that the \
-             appliance's containers can reach it.",
+            "An Ollama instance is already answering on port {}. Reusing it; whether the appliance's \
+             containers reach it is checked from inside them once they are running.",
             ollama_sidecar::OLLAMA_PORT
         );
         ollama_sidecar::reach_host_ollama(handles);
@@ -435,6 +487,84 @@ mod tests {
         assert_eq!(retry, Ok(()));
         assert_eq!(*attempts.borrow(), vec![false, true], "only the second attempt is a retry");
         assert_eq!(state.settle(false, |_| panic!("a success is kept")), Ok(()));
+    }
+
+    fn gateway_target() -> container_reach::Target {
+        container_reach::Target {
+            port: ollama_sidecar::OLLAMA_PORT,
+            gateway: Some(std::net::Ipv4Addr::new(172, 17, 0, 1)),
+            relayed: true,
+        }
+    }
+
+    /// The splash's start returns at once while the first start is still
+    /// pulling images, so its probe can find no api container yet. That probe
+    /// must leave the check for the start that brings the container up. A
+    /// check that ran must not run again at every later start.
+    #[test]
+    fn the_container_check_waits_for_the_api_container_and_then_runs_once() {
+        let handles = LocalModelHandles::default();
+        let probes = std::cell::RefCell::new(Vec::new());
+
+        handles.check_container_reach_with(|_| panic!("nothing was recorded"));
+
+        handles.expect_container_check(gateway_target());
+        handles.check_container_reach_with(|target| {
+            probes.borrow_mut().push(*target);
+            false
+        });
+        handles.check_container_reach_with(|target| {
+            probes.borrow_mut().push(*target);
+            true
+        });
+        handles.check_container_reach_with(|_| panic!("a check that ran is not repeated"));
+
+        assert_eq!(*probes.borrow(), vec![gateway_target(), gateway_target()]);
+    }
+
+    /// The start that brought the stack up can finish while the splash's
+    /// probe is still running. It waits for that probe and probes again only
+    /// when that one found no api container; returning at once left the check
+    /// undone for the whole launch.
+    #[test]
+    fn a_check_that_arrives_during_another_waits_and_probes_only_if_still_owed() {
+        for first_found_the_container in [true, false] {
+            let handles = LocalModelHandles::default();
+            handles.expect_container_check(gateway_target());
+            let second_probes = std::sync::atomic::AtomicUsize::new(0);
+            let (probing, probing_seen) = std::sync::mpsc::channel();
+            let (release, released) = std::sync::mpsc::channel::<()>();
+
+            std::thread::scope(|scope| {
+                let first = &handles;
+                scope.spawn(move || {
+                    first.check_container_reach_with(|_| {
+                        probing.send(()).unwrap();
+                        released.recv().unwrap();
+                        first_found_the_container
+                    })
+                });
+                probing_seen.recv().unwrap();
+                let second = scope.spawn(|| {
+                    handles.check_container_reach_with(|_| {
+                        second_probes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        true
+                    })
+                });
+                // Long enough for the second caller to reach the lock while
+                // the first probe still holds it.
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                release.send(()).unwrap();
+                second.join().unwrap();
+            });
+
+            let expected = if first_found_the_container { 0 } else { 1 };
+            assert_eq!(
+                second_probes.into_inner(),
+                expected,
+                "first found the container: {first_found_the_container}"
+            );
+        }
     }
 
     #[test]

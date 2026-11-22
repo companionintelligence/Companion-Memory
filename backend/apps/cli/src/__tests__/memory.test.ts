@@ -53,6 +53,27 @@ describe('ci-import memory', () => {
     expect(JSON.parse(ctx.term.text())).toMatchObject({ ok: false, models: [] });
   });
 
+  it('prints the firewall rule a failed check suggests, on its own line and in the error', async () => {
+    const fixCommand = 'sudo ufw allow from 172.16.0.0/12 to 172.17.0.1 port 11434 proto tcp';
+    const ctx = harness({
+      preflightLlmEndpoint: async () => ({
+        ...endpoint,
+        ok: false,
+        models: [],
+        reason: 'timeout',
+        message:
+          'host.docker.internal:11434 did not answer in time. If that computer runs Linux with ufw, this rule lets them through:',
+        fixCommand,
+      }),
+    });
+
+    const error = await memoryCheckCommand(ctx).catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(CliError);
+    expect((error as CliError).message).toMatch(/lets them through: sudo ufw allow from 172\.16\.0\.0\/12/);
+    expect(ctx.term.lines).toContain(`  ${fixCommand}`);
+  });
+
   it('maps the friendly backend spelling and keeps the backend credential write-only', async () => {
     const seen: unknown[] = [];
     const ctx = harness({

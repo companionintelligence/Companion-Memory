@@ -15,8 +15,94 @@ function parsePayPalCSV(text: string): Record<string, string>[] {
   return parseCSV(text, { findHeader: (r) => (r[0] ?? '').trim() === 'Date' });
 }
 
-// Combine "MM/DD/YYYY" date and "HH:MM:SS" time into a Date.
-function parsePayPalDate(date: string, time: string): Date | undefined {
+/**
+ * UTC offsets for the zone abbreviations PayPal writes in the TimeZone column.
+ * Each row carries the abbreviation in force on its own date (`PDT` on a July
+ * row, `PST` on a November one), so one fixed offset per abbreviation is exact.
+ *
+ * Left out on purpose: abbreviations that name more than one zone. `CST` is US
+ * Central and China, `IST` India, Ireland and Israel, `BST` British Summer and
+ * Bangladesh, `AST` Atlantic and Arabia. A row with one of those keeps the
+ * reading it always had rather than a guess, as `TemporalRepairStage` refuses
+ * abbreviations for the same reason, unless the rest of the file settles it
+ * (PAYPAL_PARTNERED_OFFSETS).
+ */
+const PAYPAL_ZONE_OFFSETS: ReadonlyMap<string, string> = new Map([
+  ['UTC', '+00:00'],
+  ['GMT', '+00:00'],
+  ['HST', '-10:00'],
+  ['AKST', '-09:00'],
+  ['AKDT', '-08:00'],
+  ['PST', '-08:00'],
+  ['PDT', '-07:00'],
+  ['MST', '-07:00'],
+  ['MDT', '-06:00'],
+  ['CDT', '-05:00'],
+  ['EST', '-05:00'],
+  ['EDT', '-04:00'],
+  ['WET', '+00:00'],
+  ['WEST', '+01:00'],
+  ['CET', '+01:00'],
+  ['CEST', '+02:00'],
+  ['EET', '+02:00'],
+  ['EEST', '+03:00'],
+  ['JST', '+09:00'],
+  ['AWST', '+08:00'],
+  ['ACST', '+09:30'],
+  ['ACDT', '+10:30'],
+  ['AEST', '+10:00'],
+  ['AEDT', '+11:00'],
+  ['NZST', '+12:00'],
+  ['NZDT', '+13:00'],
+]);
+
+/**
+ * Ambiguous abbreviations a file settles on its own, each with the partner that
+ * settles it and the offset it then has. Every row of one download is in the
+ * account's zone. A US Central account writes CDT in summer and CST in winter,
+ * and a China account never writes CDT, so CST in a file that also has CDT rows
+ * is US Central. GMT beside BST is the UK, and GMT beside IST is Ireland.
+ *
+ * Without this, a US Central download read its CDT rows exactly and its CST rows
+ * in the server's zone: the error jumped between none and six hours at each
+ * clock change, and payments either side of the November change sorted out of
+ * order.
+ */
+const PAYPAL_PARTNERED_OFFSETS: ReadonlyMap<string, { partner: string; offset: string }> = new Map([
+  ['CST', { partner: 'CDT', offset: '-06:00' }],
+  ['BST', { partner: 'GMT', offset: '+01:00' }],
+  ['IST', { partner: 'GMT', offset: '+01:00' }],
+]);
+
+/**
+ * A row's TimeZone abbreviation, upper-cased. The Activity download spells the
+ * column `TimeZone`, and some PayPal downloads spell it `Time Zone`.
+ */
+function payPalZoneOf(row: Record<string, string>): string {
+  return (row['TimeZone'] ?? row['Time Zone'] ?? '').trim().toUpperCase();
+}
+
+/**
+ * The UTC offset for each abbreviation in one file: PAYPAL_ZONE_OFFSETS, plus
+ * each PAYPAL_PARTNERED_OFFSETS entry whose partner the file also carries.
+ */
+function payPalZoneOffsets(rows: readonly Record<string, string>[]): ReadonlyMap<string, string> {
+  const zones = new Set(rows.map(payPalZoneOf));
+  const offsets = new Map(PAYPAL_ZONE_OFFSETS);
+
+  for (const [zone, { partner, offset }] of PAYPAL_PARTNERED_OFFSETS) {
+    if (zones.has(zone) && zones.has(partner)) {
+      offsets.set(zone, offset);
+    }
+  }
+
+  return offsets;
+}
+
+// Combine "MM/DD/YYYY" date and "HH:MM:SS" time into a Date, at `offset` (the
+// row's TimeZone, resolved by payPalZoneOffsets) when there is one. Otherwise
+// the wall clock is read in the server's zone, as it always was.
+function parsePayPalDate(date: string, time: string, offset?: string): Date | undefined {
   if (!date) {
     return undefined;
   }
@@ -29,7 +115,7 @@ function parsePayPalDate(date: string, time: string): Date | undefined {
 
   const [mm, dd, yyyy] = parts;
   const iso = `${yyyy}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}T${time || '00:00:00'}`;
-  const d = new Date(iso);
+  const d = new Date(iso + (offset ?? ''));
 
   return isNaN(d.getTime()) ? undefined : d;
 }
@@ -82,6 +168,7 @@ export class PayPalFileImporter extends CsvExportImporter {
     }
 
     const completed = rows.filter((r) => !r['Status'] || r['Status'] === 'Completed');
+    const offsets = payPalZoneOffsets(rows);
     // When a payment is funded by card, PayPal books a same-instant
     // "General Card Deposit" for the covering amount. That deposit is billing
     // plumbing, not money arriving — suppress any card deposit that sits within
@@ -94,7 +181,7 @@ export class PayPalFileImporter extends CsvExportImporter {
         continue;
       }
 
-      const t = parsePayPalDate(r['Date'], r['Time']);
+      const t = parsePayPalDate(r['Date'], r['Time'], offsets.get(payPalZoneOf(r)));
       if (t) {
         paymentTimes.push(t.getTime());
       }
@@ -102,14 +189,19 @@ export class PayPalFileImporter extends CsvExportImporter {
 
     for (const row of completed) {
       try {
-        this.pushRow(row, paymentTimes, params);
+        this.pushRow(row, paymentTimes, offsets, params);
       } catch (e) {
         params.log?.('error', `Failed to import row in ${base}`, { error: (e as Error).message });
       }
     }
   }
 
-  private pushRow(row: Record<string, string>, paymentTimes: number[], params: ImportParams): void {
+  private pushRow(
+    row: Record<string, string>,
+    paymentTimes: number[],
+    offsets: ReadonlyMap<string, string>,
+    params: ImportParams,
+  ): void {
     const type = row['Type'] || '';
     // An authorization is bookkeeping riding along with the payment it holds
     // funds for (and its Completed row often shares the payment's Transaction
@@ -124,7 +216,7 @@ export class PayPalFileImporter extends CsvExportImporter {
       return;
     }
 
-    const ts = parsePayPalDate(row['Date'], row['Time']);
+    const ts = parsePayPalDate(row['Date'], row['Time'], offsets.get(payPalZoneOf(row)));
     if (!timeframeContains(params.timeframe, ts)) {
       return;
     }

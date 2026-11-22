@@ -2537,6 +2537,7 @@ __metadata:
     rrule: "npm:^2.8.1"
     rxjs: "npm:^7.8.1"
     supertest: "npm:^7.3.2"
+    tar: "npm:^7.5.22"
     ts-node: "npm:^10.9.2"
     tsc-alias: "npm:^1.9.10"
     tsconfig-paths: "npm:^4.2.0"
