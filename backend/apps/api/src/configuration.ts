@@ -1929,7 +1929,8 @@ if (parsed.peers.allowCgnatEndpoints) {
  * at all, see `PeerAskController`) and `peers.requireHttpSignature` is off.
  *
  * Not the shipped default (the requirement ships on); an operator who turns it off gets it. The bearer
- * token alone then authenticates the ask, so a leaked token works for its whole
+ * token alone then authenticates an ask from a peer whose link records no key
+ * (a link that records one always needs a signature, see `PeerAskController`), so a leaked token works for its whole
  * lifetime and replay is not detected; only a signature binds the token to one
  * request. The default stays off for interoperability with peers that do not
  * sign yet, so this is surfaced rather than refused.
@@ -1943,8 +1944,8 @@ export function acceptsUnsignedPeerAsks(
 if (acceptsUnsignedPeerAsks()) {
   console.warn(
     '[configuration] peers.audience is set and peers.requireHttpSignature is off — inbound peer asks ' +
-      'that carry only a Portal token are accepted without an HTTP message signature, so a leaked ' +
-      'token is enough to ask as that peer and a replayed request is not detected. Turn on ' +
+      'that carry only a Portal token are accepted without an HTTP message signature from any peer ' +
+      'whose link records no key, so a leaked token is enough to ask as such a peer and a replayed request is not detected. Turn on ' +
       'peers.requireHttpSignature once every linked peer signs (see docs/peer-federation.md).',
   );
 }

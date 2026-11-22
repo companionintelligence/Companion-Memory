@@ -38,7 +38,8 @@ import { selfCertifyingIssuerOf } from './selfCertifyingKeyId';
  * request once `peers.requireHttpSignature` is on. The flag ships on (since
  * 2026-11-19); a box that turns it off accepts an unsigned Portal-token ask
  * from a peer whose link records no key, and all three problems above hold for
- * it (see `PeerAskController.assertSignature`).
+ * it (see `PeerAskController.assertSignature`, which refuses one from a keyed
+ * link whatever the flag says).
  *
  * ═══ WHAT IS DELIBERATELY NOT HERE ═══
  *

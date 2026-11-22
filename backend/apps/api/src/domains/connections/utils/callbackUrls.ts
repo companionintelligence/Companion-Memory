@@ -132,9 +132,9 @@ const HOST_AND_PORT = /^(?:[a-z0-9_-]+(?:\.[a-z0-9_-]+)*\.?|\[[0-9a-f:.]+\])(?::
  * The origin the browser used for this request, worked out by sign-in's own
  * {@link resolveRequestOrigin} (the first X-Forwarded-Host, else Host; the first
  * X-Forwarded-Proto, else the connection's scheme), so the two trust the same headers. The
- * gateway passes Host through, sets X-Forwarded-Proto to http or https and passes on an
- * X-Forwarded-Host the caller sent unchanged, so any caller can name the address for its own
- * request.
+ * gateway passes Host through, sets X-Forwarded-Proto to http or https and sets X-Forwarded-Host
+ * to the same value as Host, replacing any the caller sent, so the address is the Host the caller
+ * used for its own request.
  *
  * It answers only the request it came from: the dialog that asked, or the authorization the same
  * person starts with their own OAuth app, which keeps the address on the connection for its code
