@@ -37,7 +37,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     // A session token carries no `purpose`. Anything else signed with this secret was minted for one
     // job and is not a sign-in: only a Python run token, and only for the read queries the sidecars
     // send (`runTokenAccess.ts`).
-    if (result.data.purpose !== undefined && !(result.data.purpose === RUN_TOKEN_PURPOSE && runTokenMayAuthenticate(req))) {
+    if (
+      result.data.purpose !== undefined &&
+      !(result.data.purpose === RUN_TOKEN_PURPOSE && runTokenMayAuthenticate(req))
+    ) {
       return null;
     }
 

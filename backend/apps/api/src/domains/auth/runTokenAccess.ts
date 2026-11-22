@@ -24,7 +24,12 @@ export const RUN_TOKEN_PURPOSE = 'python_run';
  * Root query fields the sidecars send with a run token: HBPE's `data_client.py` (`me`, `summaries`,
  * `contents`). A new sidecar query that needs another root field must be added here.
  */
-export const RUN_TOKEN_ROOT_FIELDS: ReadonlySet<string> = new Set(['me', 'summaries', 'contents', '__typename']);
+export const RUN_TOKEN_ROOT_FIELDS: ReadonlySet<string> = new Set([
+  'me',
+  'summaries',
+  'contents',
+  '__typename',
+]);
 
 /** The GraphQL endpoint itself (no global prefix; the gateway strips `/api`), never a REST route ending in it. */
 const GRAPHQL_PATH = /^\/graphql\/?$/;
@@ -34,12 +39,18 @@ const verdicts = new WeakMap<object, boolean>();
 
 function graphqlDocumentOf(req: Request): string | undefined {
   const path = (req.originalUrl ?? req.url ?? '').split('?')[0] ?? '';
-  if (!GRAPHQL_PATH.test(path)) {return undefined;}
+  if (!GRAPHQL_PATH.test(path)) {
+    return undefined;
+  }
 
   const body = req.body as { query?: unknown } | undefined;
-  if (req.method === 'POST' && typeof body?.query === 'string') {return body.query;}
+  if (req.method === 'POST' && typeof body?.query === 'string') {
+    return body.query;
+  }
 
-  if (req.method === 'GET' && typeof req.query?.query === 'string') {return req.query.query;}
+  if (req.method === 'GET' && typeof req.query?.query === 'string') {
+    return req.query.query;
+  }
 
   return undefined;
 }
@@ -50,14 +61,18 @@ export function isRunTokenReadDocument(document: DocumentNode): boolean {
     (definition) =>
       definition.kind === Kind.OPERATION_DEFINITION &&
       definition.operation === 'query' &&
-      definition.selectionSet.selections.every((selection) => selection.kind === Kind.FIELD && RUN_TOKEN_ROOT_FIELDS.has(selection.name.value)),
+      definition.selectionSet.selections.every(
+        (selection) => selection.kind === Kind.FIELD && RUN_TOKEN_ROOT_FIELDS.has(selection.name.value),
+      ),
   );
 }
 
 /** Whether `req` is a request a run token may authenticate. */
 export function runTokenMayAuthenticate(req: Request): boolean {
   const cached = verdicts.get(req);
-  if (cached !== undefined) {return cached;}
+  if (cached !== undefined) {
+    return cached;
+  }
 
   let verdict = false;
   const source = graphqlDocumentOf(req);
