@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { EntityManager, Repository } from 'typeorm';
+import { EntityManager, IsNull, MoreThan, Not, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { type UserServiceContext } from '@ci/common/context';
@@ -23,6 +23,7 @@ import type { AskerVisiblePeerReply, PeerAskBody, PeerAskRequest } from '../prot
 
 import { PeerAskClient } from './PeerAskClient';
 import { PeerAskCorrelationService, requestDigest } from './PeerAskCorrelationService';
+import { PeerIdentityService, type PeerSigner } from './PeerIdentityService';
 import { PeerLinkService } from './PeerLinkService';
 import { PeerSignatureService } from './PeerSignatureService';
 
@@ -68,6 +69,12 @@ export interface SendAskResult {
  * persists an answer whenever one arrives, and {@link pollForAnswer} goes and
  * gets one that arrived later.
  */
+/** Most open outbound asks one collection run checks. */
+const COLLECT_BATCH = 200;
+
+/** Most asks one run collects from one peer link; see {@link OutboundAskService.collectOpenAnswers}. */
+const COLLECT_PER_LINK = 10;
+
 @Injectable()
 export class OutboundAskService {
   constructor(
@@ -83,6 +90,8 @@ export class OutboundAskService {
     private readonly userService: UserService,
     @Optional()
     private readonly signatureService?: PeerSignatureService,
+    @Optional()
+    private readonly identityService?: PeerIdentityService,
   ) {
     this.logger.setContext(OutboundAskService.name);
   }
@@ -93,13 +102,14 @@ export class OutboundAskService {
    * `accessToken` must be a Portal-issued token whose audience is the PEER box
    * (the peer verifies that binding on receipt). Until Portal token exchange
    * lands, the caller supplies it; this service never mints or caches one.
-   * With no token the request is signed with this box's key alone, which only
-   * the box's administrator may do (see {@link peerToken}).
+   * Every send is signed with the sender's OWN key (see {@link credentials}),
+   * and with no token that signature is the whole authentication.
    */
   async send(context: UserServiceContext, dto: SendAskDto, accessToken?: string): Promise<SendAskResult> {
     const link = await this.activeLink(context, dto.handle);
 
-    const effectiveToken = await this.peerToken(context, accessToken);
+    const { token: effectiveToken, signer } = await this.credentials(context, accessToken);
+    const askerHandle = await this.askerHandle(context);
 
     const ask = await this.askService.create(context, {
       responderUserId: null,
@@ -112,7 +122,7 @@ export class OutboundAskService {
       },
     });
 
-    const body = this.toBody(link, dto);
+    const body = this.toBody(dto, askerHandle);
 
     // Recorded BEFORE the request leaves. The correlation id is minted here and
     // returned to nobody, so without this row a send that comes back
@@ -128,7 +138,7 @@ export class OutboundAskService {
       requestDigest: requestDigest(body),
     });
 
-    const response = await this.client.send(link, body, effectiveToken);
+    const response = await this.client.send(link, body, effectiveToken, signer);
 
     await this.absorb(ask, link, response);
 
@@ -162,7 +172,7 @@ export class OutboundAskService {
       throw new NotFoundException('No outbound ask with that id');
     }
 
-    const effectiveToken = await this.peerToken(context, accessToken);
+    const { token: effectiveToken, signer } = await this.credentials(context, accessToken);
 
     if (ask.status === 'answered') {
       const stored = await this.answerService.findByAskId(ask.id);
@@ -203,11 +213,66 @@ export class OutboundAskService {
       return { ask, response: { askId: ask.id, status: 'delivered', reason: 'No active peer link' } };
     }
 
-    const response = await this.client.poll(link, correlation.correlationId, effectiveToken);
+    const response = await this.client.poll(link, correlation.correlationId, effectiveToken, signer);
 
     await this.absorb(ask, link, response);
 
     return { ask, response };
+  }
+
+  /**
+   * Collect, for every person on the box, the answers to outbound asks still
+   * waiting, so an ask the peer's owner approved later lands here on its own.
+   *
+   * Driven by `PeerAnswerCollectionCron`. Bounded twice: at most
+   * {@link COLLECT_BATCH} asks per run, oldest first, and at most
+   * {@link COLLECT_PER_LINK} per peer link, which keeps one run well inside the
+   * peer's collect budget (30 a minute per identity) however many asks are
+   * open to it. Whatever a run leaves is picked up by the next.
+   *
+   * One ask's failure never stops the others: a peer that is down is reported
+   * by {@link pollForAnswer} as `delivered`, and anything that throws is logged
+   * and skipped.
+   */
+  async collectOpenAnswers(now: Date = new Date()): Promise<{ checked: number; answered: number }> {
+    const open = await this.askRepository.find({
+      where: {
+        direction: 'outbound',
+        status: 'delivered',
+        peerLinkId: Not(IsNull()),
+        expiresAt: MoreThan(now),
+      },
+      order: { createdAt: 'ASC' },
+      take: COLLECT_BATCH,
+    });
+
+    const perLink = new Map<string, number>();
+    let checked = 0;
+    let answered = 0;
+
+    for (const ask of open) {
+      const linkId = ask.peerLinkId as string;
+      const count = perLink.get(linkId) ?? 0;
+      if (count >= COLLECT_PER_LINK || ask.askerUserId == null) {
+        continue;
+      }
+
+      perLink.set(linkId, count + 1);
+      checked += 1;
+
+      try {
+        const { response } = await this.pollForAnswer({ userId: ask.askerUserId }, ask.id);
+        if (response.status === 'answered') {
+          answered += 1;
+        }
+      } catch (error) {
+        this.logger.warn(
+          `collecting outbound ask ${ask.id} failed: ${error instanceof Error ? error.message : 'error'}`,
+        );
+      }
+    }
+
+    return { checked, answered };
   }
 
   private async activeLink(context: UserServiceContext, handle: string): Promise<PeerLink> {
@@ -223,23 +288,39 @@ export class OutboundAskService {
   }
 
   /**
-   * The Portal token to send, or `''` for a request signed with this box's key
-   * alone, which `PeerAskClient` sends as `Bearer keri`.
+   * The Portal token to send (or `''` for none, which `PeerAskClient` sends as
+   * `Bearer keri`) and the key to sign with.
    *
-   * An ask with no Portal token is authenticated by this box's signing key
-   * alone, so the peer reads it as the box's own identity (the `did:key` or
-   * `did:keri:D<x>` link it made for this box), and it carries this box's
-   * `peers.handle`. Only the appliance's administrator (`UserEntity.role`
-   * `admin`, the account that claimed the box) may send one. Anyone else on the
-   * box asks with a Portal token of their own.
+   * ═══ EVERY PERSON SIGNS AS THEMSELVES ═══
+   *
+   * With {@link PeerIdentityService} wired (always, in the app), the request is
+   * signed with the SENDER'S own key, made the first time they need one, and
+   * that is enough on its own: the peer reads a token-less ask as the sender's
+   * `did:key` and answers it only through a link its owner made for exactly that
+   * identifier. So anyone on the box may send, as themselves. A Portal token, if
+   * the caller has one, still goes along and the request is signed all the same.
+   *
+   * Without it (hand-built tests only) the old rule stands: no token means the
+   * BOX key, which speaks for everyone on the box, so only the administrator
+   * (`UserEntity.role` `admin`) may send with it.
    *
    * "No token" is decided as the peer decides it ({@link readsAsNoToken}), so a
    * token the peer would read as none is held to the same rule and sent as none.
    */
-  private async peerToken(context: UserServiceContext, accessToken: string | undefined): Promise<string> {
+  private async credentials(
+    context: UserServiceContext,
+    accessToken: string | undefined,
+  ): Promise<{ token: string; signer?: PeerSigner }> {
     const token = accessToken?.trim() ?? '';
+
+    if (this.identityService != null) {
+      const { signer } = await this.identityService.identityFor(context.userId);
+
+      return { token: readsAsNoToken(token) ? '' : token, signer };
+    }
+
     if (!readsAsNoToken(token)) {
-      return token;
+      return { token };
     }
 
     if (!this.signatureService?.hasSigningKey) {
@@ -252,15 +333,33 @@ export class OutboundAskService {
       throw new BadRequestException('A peer access token is required');
     }
 
-    return '';
+    return { token: '' };
   }
 
-  private toBody(link: PeerLink, dto: SendAskDto): PeerAskBody {
+  /**
+   * The name this box gives the asker: `peers.handle` when the operator set one,
+   * else the sender's own name. The receiver refuses an empty one, and shows the
+   * owner its own label for the link, not this, so it is a courtesy, not an
+   * identity.
+   */
+  private async askerHandle(context: UserServiceContext): Promise<string> {
+    const configured = config.peers?.handle?.trim();
+    if (configured) {
+      return configured;
+    }
+
+    const user = await this.userService.findById(context, context.userId);
+    const name = user?.name?.trim().slice(0, 120);
+
+    return name || 'companion';
+  }
+
+  private toBody(dto: SendAskDto, askerHandle: string): PeerAskBody {
     return {
       // A fresh correlation id per send — never the local row id, which would
       // leak this box's identifiers to the peer.
       askId: uuidv7(),
-      askerHandle: config.peers?.handle ?? '',
+      askerHandle,
       prompt: dto.prompt,
       request: dto.request,
     } as PeerAskBody;

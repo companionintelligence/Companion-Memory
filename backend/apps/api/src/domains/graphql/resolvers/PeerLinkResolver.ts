@@ -4,7 +4,7 @@ import { Args, ID, Mutation, Parent, Query, ResolveField, Resolver } from '@nest
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { FeatureService } from '@ci/common/feature';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
-import { PeerLinkService } from '@ci/domains/peers';
+import { PeerIdentityService, PeerLinkService, PeerNoticeService } from '@ci/domains/peers';
 
 import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { PersonLoader } from '../loaders/PersonLoader';
@@ -75,7 +75,14 @@ export class PeerLinkResolver {
     private readonly peerLinkService: PeerLinkService,
     private readonly personLoader: PersonLoader,
     @Optional() private readonly featureService?: FeatureService,
+    @Optional() private readonly identityService?: PeerIdentityService,
+    @Optional() private readonly noticeService?: PeerNoticeService,
   ) {}
+
+  /** The caller's own did:key, for the safety codes on their links. Makes no key. */
+  private async ownerDidKey(context: RequestContext): Promise<string | null> {
+    return (await this.identityService?.existingDidKeyFor(toServiceContext(context).userId)) ?? null;
+  }
 
   private async enabled(): Promise<boolean> {
     return this.featureService ? this.featureService.isFeatureEnabled('ask') : true;
@@ -97,7 +104,9 @@ export class PeerLinkResolver {
 
     const links = await this.peerLinkService.findAll(toServiceContext(context));
 
-    return links.map(PeerLinkType.toType);
+    const ownerDidKey = await this.ownerDidKey(context);
+
+    return links.map((link) => PeerLinkType.toType(link, ownerDidKey));
   }
 
   @Query(() => PeerLinkType, { nullable: true })
@@ -114,7 +123,7 @@ export class PeerLinkResolver {
       GlobalUID.parse('peer-link', gid),
     );
 
-    return link ? PeerLinkType.toType(link) : null;
+    return link ? PeerLinkType.toType(link, await this.ownerDidKey(context)) : null;
   }
 
   @Mutation(() => PeerLinkPayload)
@@ -150,7 +159,7 @@ export class PeerLinkResolver {
       status: 'active',
     });
 
-    return { success: true, peerLink: PeerLinkType.toType(link) };
+    return { success: true, peerLink: PeerLinkType.toType(link, await this.ownerDidKey(context)) };
   }
 
   /**
@@ -204,7 +213,7 @@ export class PeerLinkResolver {
       peerSubject: input.peerSubject ?? existing.peerSubject,
     });
 
-    return { success: true, peerLink: PeerLinkType.toType(link) };
+    return { success: true, peerLink: PeerLinkType.toType(link, await this.ownerDidKey(context)) };
   }
 
   /**
@@ -238,12 +247,21 @@ export class PeerLinkResolver {
     // Already ended. `revoke` ends the handle's current link, which for a peer
     // added back since is the NEW one, not the link this id names.
     if (existing.revokedAt != null) {
-      return { success: true, peerLink: PeerLinkType.toType(existing) };
+      return { success: true, peerLink: PeerLinkType.toType(existing, await this.ownerDidKey(context)) };
     }
 
     const link = await this.peerLinkService.revoke(serviceContext, existing.peerHandle);
 
-    return { success: true, peerLink: PeerLinkType.toType(link) };
+    // Ended here first, whatever happens next: telling their box is a courtesy
+    // that keeps both lists honest, never a condition for ending it.
+    const peerNotified =
+      (await this.noticeService?.announceUnlink(serviceContext, link).catch(() => false)) ?? false;
+
+    return {
+      success: true,
+      peerLink: PeerLinkType.toType(link, await this.ownerDidKey(context)),
+      peerNotified,
+    };
   }
 
   /**

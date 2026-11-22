@@ -139,6 +139,43 @@ export function composeRecipients(sources: RecipientSources): ComposerRecipient[
     }));
 }
 
+type PeerLinkRow = {
+  id: string;
+  peerHandle: string;
+  displayName?: string | null;
+  avatarUrl?: string | null;
+  trustTier: string;
+  status?: string | null;
+  revokedAt?: string | null;
+  /** Whether the link names the peer by their own key, as an invite makes it. */
+  linkedByKey?: boolean | null;
+};
+
+function isLive(link: PeerLinkRow): boolean {
+  return link.revokedAt == null && link.status !== 'revoked';
+}
+
+/**
+ * The people on OTHER Companions the owner can ask from this page: every live
+ * link that names the peer by their key. Each ask is signed with the owner's
+ * own key, and the other side answers it only through the link its owner made
+ * for that key, which is exactly what an invite sets up on both sides.
+ *
+ * Pure.
+ */
+export function peerRecipients(links: readonly PeerLinkRow[]): ComposerRecipient[] {
+  return links
+    .filter((link) => isLive(link) && link.linkedByKey === true)
+    .map((link) => ({
+      id: link.id,
+      name: link.displayName || link.peerHandle,
+      avatarUrl: link.avatarUrl ?? null,
+      tier: peerTrustLabel(link.trustTier),
+      why: 'linked with an invite, on their own Companion',
+      peerHandle: link.peerHandle,
+    }));
+}
+
 /**
  * The people the owner has linked, and cannot ask from this page.
  *
@@ -149,35 +186,23 @@ export function composeRecipients(sources: RecipientSources): ComposerRecipient[
  *
  * ═══ THE REASON NAMES THE WAY OUT, NOT JUST THE WALL ═══
  *
- * `sendPeerAsk` takes a `peerAccessToken` that nothing on this page can mint,
- * so a linked peer genuinely is un-askable from here. But an owner reading only
- * that concluded the whole feature was inert, which is not true: an account on
- * THIS appliance is askable today, and the grant they need to make that work is
- * one tab away. Saying so is the difference between "this is broken" and "you
- * are on the federated path, and the local one works".
+ * A link entered by hand (a handle and an address) names no key, so the other
+ * side has nothing to recognise this owner's signed ask by. The way out is an
+ * invite, which links both sides by key; saying so is the difference between
+ * "this is broken" and "do this next".
  *
  * Pure.
  */
-export function unreachablePeers(
-  links: readonly {
-    id: string;
-    peerHandle: string;
-    displayName?: string | null;
-    avatarUrl?: string | null;
-    trustTier: string;
-    status?: string | null;
-    revokedAt?: string | null;
-  }[],
-): UnreachableRecipient[] {
+export function unreachablePeers(links: readonly PeerLinkRow[]): UnreachableRecipient[] {
   return links
-    .filter((link) => link.revokedAt == null && link.status !== 'revoked')
+    .filter((link) => isLive(link) && link.linkedByKey !== true)
     .map((link) => ({
       id: link.id,
       name: link.displayName || link.peerHandle,
       avatarUrl: link.avatarUrl ?? null,
       tier: peerTrustLabel(link.trustTier),
       reason:
-        'asking across boxes needs an access token from the Portal that your Companion cannot issue from this page yet — someone with an account on this Companion can be asked once you grant them under “Who can ask me what”',
+        'this link was entered by hand, so their Companion would not recognise your ask — link again with an invite under “People I’m linked to”',
     }));
 }
 
@@ -229,12 +254,14 @@ export const COMPOSER_SHAPES: readonly ComposerShape[] = [
     id: 'relationship',
     label: 'Do you know…?',
     queryType: 'relationship',
+    peer: true,
     ceiling: 'They can answer at most yes or no.',
   },
   {
     id: 'existence',
     label: 'Do you have any…?',
     queryType: 'content',
+    peer: true,
     ceiling: 'They can answer at most how many — never which ones.',
   },
   {
@@ -254,6 +281,7 @@ export const COMPOSER_SHAPES: readonly ComposerShape[] = [
     label: 'Do you have photos of…?',
     queryType: 'content',
     dataClass: 'photos',
+    peer: true,
     ceiling:
       'They can answer at most how many — never which ones. Naming “photos” does not narrow what their Companion searches.',
   },

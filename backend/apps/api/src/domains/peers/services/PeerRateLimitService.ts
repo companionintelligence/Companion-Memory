@@ -28,6 +28,9 @@ const MAX_PER_WINDOW = 10;
  */
 const MAX_POLLS_PER_WINDOW = 30;
 
+/** Identity proofs, invite acceptance and key notices, per named identity. See {@link PeerRateLimitService.consumeExchange}. */
+const MAX_EXCHANGES_PER_WINDOW = 20;
+
 /**
  * Sliding-window rate limit for INBOUND peer asks, keyed on the peer's OIDC
  * identity rather than a local user id.
@@ -66,8 +69,21 @@ export class PeerRateLimitService {
     await this.take('poll', identity, MAX_POLLS_PER_WINDOW, now);
   }
 
+  /**
+   * The budget for the exchange routes (identity proofs, invite acceptance,
+   * rotation and unlink notices), keyed on what the caller names: the `did:key`
+   * asked about, or the identity a notice claims. Apart from the ask budget, so
+   * linking someone never spends the budget that protects a review inbox.
+   */
+  async consumeExchange(
+    identity: { issuer: string; subject: string },
+    now: number = Date.now(),
+  ): Promise<void> {
+    await this.take('exchange', identity, MAX_EXCHANGES_PER_WINDOW, now);
+  }
+
   private async take(
-    bucket: 'ask' | 'poll',
+    bucket: 'ask' | 'poll' | 'exchange',
     identity: { issuer: string; subject: string },
     max: number,
     now: number,
