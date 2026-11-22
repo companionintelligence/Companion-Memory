@@ -258,7 +258,7 @@ describe('PeerAskController — signatures not required', () => {
     expect(didKey.peerAskService.handle).not.toHaveBeenCalled();
   });
 
-  it("refuses an unsigned request from a peer whose link records a key, on both routes", async () => {
+  it('refuses an unsigned request from a peer whose link records a key, on both routes', async () => {
     // That peer's box signs every call, so an unsigned request naming it is a token without the key: a
     // leaked or replayed token. It is refused even with the box-wide switch off.
     const peer = signAs(JSON.stringify(BODY), 'POST', `${ENDPOINT}/ask`);
