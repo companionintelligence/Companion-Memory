@@ -71,13 +71,17 @@ const MEDIA_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.heic', '.heif', '
 
 /**
  * Parse Flickr's export media filename `[slug_parts..._]<photo id>[_secret]_o.<ext>`
- * into the photo id it belongs to, or null if `name` doesn't match the
- * convention. Mirrors offlickr's `parse_media_filename` (see file header):
- * split on `_`, require a trailing literal `o` token, then take the LEFTMOST
- * all-digit token before it — a secret/hash token, if present, sits between
- * the id and `o` and is also all-digit, so leftmost is what disambiguates them.
+ * into the tokens that could be its photo id, left to right, or null if `name`
+ * doesn't match the convention: split on `_`, require a trailing literal `o`
+ * token and keep every all-digit token before it.
+ *
+ * More than one is common. The slug is the photo's title. A title kept from
+ * the camera (`IMG_4412`) puts its own number ahead of the id
+ * (`img_4412_53990000003_o.jpg`); a secret token, when present, sits between
+ * the id and `o` and can be all-digit too. Which one is the id is decided
+ * against the sidecars, in {@link buildMediaIndex}.
  */
-function parseMediaFilename(name: string): { photoId: string } | null {
+function parseMediaFilename(name: string): { idCandidates: string[] } | null {
   const ext = path.extname(name).toLowerCase();
   if (!ext || !MEDIA_EXTS.has(ext)) {
     return null;
@@ -89,17 +93,24 @@ function parseMediaFilename(name: string): { photoId: string } | null {
     return null;
   }
 
-  const pre = tokens.slice(0, -1);
-  const idIdx = pre.findIndex((t) => /^\d+$/.test(t));
-  if (idIdx === -1) {
+  const idCandidates = tokens.slice(0, -1).filter((t) => /^\d+$/.test(t));
+  if (idCandidates.length === 0) {
     return null;
   }
 
-  return { photoId: pre[idIdx] };
+  return { idCandidates };
 }
 
-/** First-seen media file per photo id, built once per directory walk. */
-function buildMediaIndex(dir: string): Map<string, string> {
+/**
+ * First-seen media file per photo id, built once per directory walk.
+ *
+ * A file is filed under the candidate token that names one of `photoIds`, the
+ * ids of the `photo_<id>.json` sidecars being imported. Taking the leftmost
+ * all-digit token, as offlickr does, read `img_4412_53990000003_o.jpg` as photo
+ * 4412 and dropped the photo as missing. Rightmost first among the matches,
+ * because the id follows the slug.
+ */
+function buildMediaIndex(dir: string, photoIds: ReadonlySet<string>): Map<string, string> {
   const index = new Map<string, string>();
   let names: string[];
   try {
@@ -110,11 +121,12 @@ function buildMediaIndex(dir: string): Map<string, string> {
 
   for (const name of names) {
     const parsed = parseMediaFilename(name);
-    if (!parsed || index.has(parsed.photoId)) {
+    const photoId = parsed?.idCandidates.reverse().find((candidate) => photoIds.has(candidate));
+    if (!photoId || index.has(photoId)) {
       continue;
     }
 
-    index.set(parsed.photoId, path.join(dir, name));
+    index.set(photoId, path.join(dir, name));
   }
 
   return index;
@@ -259,7 +271,6 @@ class FlickrFileImporter implements FileImporter {
     }
 
     const dir = st.isDirectory() ? root : path.dirname(root);
-    const mediaIndex = buildMediaIndex(dir);
 
     let jsonPaths: string[];
     if (st.isFile()) {
@@ -274,6 +285,9 @@ class FlickrFileImporter implements FileImporter {
 
       jsonPaths = names.filter((n) => PHOTO_JSON_RE.test(n)).map((n) => path.join(dir, n));
     }
+
+    const photoIds = new Set(jsonPaths.map((p) => PHOTO_JSON_RE.exec(path.basename(p))![1]));
+    const mediaIndex = buildMediaIndex(dir, photoIds);
 
     for (const jsonPath of jsonPaths) {
       try {

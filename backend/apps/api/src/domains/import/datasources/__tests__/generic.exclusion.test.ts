@@ -69,6 +69,24 @@ describe('GenericFileImporter — exclusion-aware walk', () => {
     expect(staged.sort()).toEqual(['a.txt', 'sub/b.txt']);
   });
 
+  it("skips Synology's @eaDir thumbnails and the litter Windows leaves in a folder", async () => {
+    // A Synology Photos folder copied off the NAS: DSM keeps two thumbnails per
+    // photo under @eaDir, and each used to land as an extra, undated photo.
+    const root = await tempDir('generic-excl-nas-');
+    await writeFiles(root, [
+      '2026-10 Hallstatt/DSC01201.JPG',
+      '2026-10 Hallstatt/@eaDir/DSC01201.JPG/SYNOPHOTO_THUMB_M.jpg',
+      '2026-10 Hallstatt/@eaDir/DSC01201.JPG/SYNOPHOTO_THUMB_XL.jpg',
+      '2026-10 Hallstatt/Thumbs.db',
+      '2026-10 Hallstatt/desktop.ini',
+      'album notes.txt',
+    ]);
+
+    const staged = await runGeneric(root);
+
+    expect(staged.sort()).toEqual(['2026-10 Hallstatt/DSC01201.JPG', 'album notes.txt']);
+  });
+
   it('skips every file under an excluded subtree, staging what is outside it', async () => {
     const root = await tempDir('generic-excl-basic-');
     await writeFiles(root, ['claimed/one.json', 'claimed/deep/two.json', 'loose.pdf']);

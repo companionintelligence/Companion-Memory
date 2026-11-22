@@ -204,7 +204,10 @@ export const RelationshipMap = {
     place: [RelationshipType.MENTIONS],
     item: [RelationshipType.MENTIONS],
     event: [RelationshipType.DOCUMENTS, RelationshipType.PART_OF],
-    content: [RelationshipType.DERIVED_FROM],
+    // DERIVED_FROM: an edited copy of a photo, or a motion photo's clip, made
+    // from the original. PART_OF: a photo in an album, the album being a content
+    // row of its own (the import staging's `in_collection` link).
+    content: [RelationshipType.DERIVED_FROM, RelationshipType.PART_OF],
     // A content row that rode a message as its attachment (a reddit post's
     // picture, catalogued as ci.content rather than stored as a file). Same
     // edge the file half of an attachment writes.
