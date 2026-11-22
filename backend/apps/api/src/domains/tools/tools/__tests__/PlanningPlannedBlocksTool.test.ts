@@ -5,6 +5,8 @@ import type { PlannedBlockService } from '@ci/domains/planning/task.module';
 
 import { PlanningPlannedBlocksTool } from '../PlanningPlannedBlocksTool';
 
+import { losAngelesPlanningTime } from './losAngelesPlanningTime';
+
 const CONTEXT = { userId: '00000000-0000-0000-0000-0000000000aa' } as RequestContext;
 const FROM = '2026-09-16T00:00:00.000Z';
 const TO = '2026-09-23T00:00:00.000Z';
@@ -20,7 +22,11 @@ function logger(): LoggerService {
 }
 
 function makeTool(list: jest.Mock) {
-  return new PlanningPlannedBlocksTool({ list } as unknown as PlannedBlockService, logger());
+  return new PlanningPlannedBlocksTool(
+    { list } as unknown as PlannedBlockService,
+    losAngelesPlanningTime(),
+    logger(),
+  );
 }
 
 describe('PlanningPlannedBlocksTool', () => {
@@ -36,7 +42,24 @@ describe('PlanningPlannedBlocksTool', () => {
     expect(list).toHaveBeenCalledWith({ userId: CONTEXT.userId }, new Date(FROM), new Date(TO));
   });
 
-  it('rejects a range where to is not after from at validation time', async () => {
+  it("reads a bare-date range as whole local days, in the owner's zone or the one given", async () => {
+    const list = jest.fn().mockResolvedValue([]);
+    const tool = makeTool(list);
+
+    await tool.execute(CONTEXT, { from: '2026-11-16', to: '2026-11-17' });
+    await tool.execute(CONTEXT, {
+      from: '2026-11-16T18:00',
+      to: '2026-11-16T21:00',
+      timeZone: 'America/New_York',
+    });
+
+    expect(list.mock.calls.map(([, from, to]) => [from, to])).toEqual([
+      [new Date('2026-11-16T08:00:00.000Z'), new Date('2026-11-17T08:00:00.000Z')],
+      [new Date('2026-11-16T23:00:00.000Z'), new Date('2026-11-17T02:00:00.000Z')],
+    ]);
+  });
+
+  it('rejects a range where to is not after from', async () => {
     const list = jest.fn();
     const tool = makeTool(list);
 
@@ -46,7 +69,7 @@ describe('PlanningPlannedBlocksTool', () => {
     expect(list).not.toHaveBeenCalled();
   });
 
-  it('rejects an equal from/to range at validation time', async () => {
+  it('rejects an equal from/to range', async () => {
     const list = jest.fn();
     const tool = makeTool(list);
 
