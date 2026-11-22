@@ -951,7 +951,7 @@ export const WIZARD_SOURCES: WizardSource[] = [
   {
     id: 'fitbit',
     title: 'Fitbit / Google Fit',
-    blurb: 'Steps, sleep, heart rate, and GPS from Fitbit (now a Google product).',
+    blurb: 'Steps, sleep, heart rate and workouts from Fitbit (now a Google product).',
     ecosystem: 'wearable',
     category: 'health',
     tier: 2,
@@ -1015,7 +1015,8 @@ export const WIZARD_SOURCES: WizardSource[] = [
       'Download and unzip the archive (contains CSV files).',
       UPLOAD_STEP,
     ],
-    expectedFormat: 'A MyFitnessPal `Nutrition-Summary*.csv` (Date / Calories / Protein columns).',
+    expectedFormat:
+      'The MyFitnessPal export: `Nutrition-Summary*.csv`, `Exercise-Summary*.csv` and `Measurement-Summary*.csv`.',
     inboxPath: 'myfitnesspal',
     importer: 'myfitnesspal',
     importerReady: true,

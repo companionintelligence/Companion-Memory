@@ -57,13 +57,14 @@ exports[`golden corpus discord: imports its fixture without dropping records 1`]
 exports[`golden corpus fitbit: imports its fixture without dropping records 1`] = `
 {
   "byClassification": {
+    "observation": 1,
     "sleep": 3,
   },
   "entities": 0,
-  "items": 3,
+  "items": 4,
   "relationships": 0,
   "withLocation": 0,
-  "withTimestamp": 3,
+  "withTimestamp": 4,
 }
 `;
 
