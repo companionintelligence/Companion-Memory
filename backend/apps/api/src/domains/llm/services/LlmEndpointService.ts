@@ -6,8 +6,23 @@ import { LoggerService } from '@ci/common/logging';
 import config, { LLM_API_KEY_PLACEHOLDER } from '@ci/configuration';
 
 import {
+  classifyConnectionError,
+  connectionFailureMessage,
+  containerSourceRange,
+  firstErrorCode,
+  hostIpv4,
+  stalledServerMessage,
+  tcpConnects,
+  ufwAllowCommand,
+  type ConnectionTarget,
+  type LlmConnectionFailureReason,
+  type LookupIpv4,
+  type TcpProbe,
+} from './llmConnectionFailure';
+import {
   containerSharedConfigPath,
   DEFAULT_OPENAI_BASE_PATH,
+  isHostGatewayName,
   normalizeBasePath,
   readSharedConfig,
   sharedConfigPath,
@@ -69,7 +84,35 @@ export interface LlmEndpointPreflight {
   /** A safe, actionable status for a person or CLI; never includes a credential. */
   message?: string;
   status?: number;
+  /** Set when the request got no HTTP answer at all: what went wrong on the way. */
+  reason?: LlmConnectionFailureReason;
+  /**
+   * A command for the person to run on the computer the containers run on, shown as code after
+   * {@link message}. Only for a server on that computer that did not answer in time: a ufw rule that
+   * lets Memory's containers through. Memory never runs it.
+   */
+  fixCommand?: string;
 }
+
+/** A request to the endpoint that got no HTTP answer, described for a person. */
+export interface LlmEndpointConnectionFailure {
+  reason: LlmConnectionFailureReason;
+  /** The error code that decided {@link reason}, for logs. */
+  code: string;
+  /** The address tried, what happened and the likely cause. Carries no credential and no command. */
+  message: string;
+  /** See {@link LlmEndpointPreflight.fixCommand}. */
+  fixCommand?: string;
+}
+
+/** Ends a preflight message that has a {@link LlmEndpointPreflight.fixCommand} to show after it. */
+const UFW_HINT = 'If that computer runs Linux with ufw, this rule lets them through:';
+
+/** How long Test connection waits for the model list. */
+const PREFLIGHT_TIMEOUT_MS = 5_000;
+
+const GENERIC_UNREACHABLE_MESSAGE =
+  'Could not reach this server from the Memory API. Verify the port is exposed to the API container.';
 
 interface ResolvedLlmEndpoint {
   settings: LlmEndpointSettings;
@@ -207,6 +250,16 @@ function endpointRequestUrl(resolved: ResolvedLlmEndpoint): string {
   return `${resolved.apiBase?.replace(/\/$/, '') ?? ''}/models`;
 }
 
+function connectionTarget(url: string): ConnectionTarget | null {
+  try {
+    const { hostname } = new URL(url);
+
+    return { hostname, port: portFromUrl(url, 80), onHost: isHostGatewayName(hostname) };
+  } catch {
+    return null;
+  }
+}
+
 function modelsFromPreflightPayload(backend: LlmBackendKind, payload: unknown): string[] {
   if (!payload || typeof payload !== 'object') {
     return [];
@@ -342,7 +395,10 @@ export class LlmEndpointService implements OnModuleInit {
    * matters to Memory. A browser or host-side curl can reach localhost while a
    * containerized API cannot, so the check intentionally runs here.
    */
-  async preflight(fetchImpl: typeof fetch = fetch): Promise<LlmEndpointPreflight> {
+  async preflight(
+    fetchImpl: typeof fetch = fetch,
+    network: { lookup?: LookupIpv4; connects?: TcpProbe } = {},
+  ): Promise<LlmEndpointPreflight> {
     const endpoint = safeEndpoint(this.resolved.apiBase ?? this.resolved.ollamaHost);
     const requestUrl = endpointRequestUrl(this.resolved);
     const headers =
@@ -354,7 +410,7 @@ export class LlmEndpointService implements OnModuleInit {
       const response = await fetchImpl(requestUrl, {
         headers,
         redirect: 'error',
-        signal: AbortSignal.timeout(5_000),
+        signal: AbortSignal.timeout(PREFLIGHT_TIMEOUT_MS),
       });
 
       if (!response.ok) {
@@ -395,21 +451,91 @@ export class LlmEndpointService implements OnModuleInit {
             : `Connected. ${models.length} model${models.length === 1 ? '' : 's'} reported.`,
       };
     } catch (error) {
+      // Described against the URL this request went to, not the endpoint as it is now: Settings
+      // can change it during the five seconds this waits.
+      const target = connectionTarget(requestUrl);
+      // The deadline above fires for a server that accepted the connection and then stalled as
+      // much as for one a firewall cut off. A bare TCP connect tells them apart, so a busy server
+      // is not met with firewall advice.
+      const stalled =
+        target != null &&
+        classifyConnectionError(error)?.code === 'TimeoutError' &&
+        (await (network.connects ?? tcpConnects)(target.hostname, target.port)) === true;
+      const failure: LlmEndpointConnectionFailure | null =
+        stalled && target
+          ? {
+              reason: 'timeout',
+              code: 'TimeoutError',
+              message: stalledServerMessage(target, PREFLIGHT_TIMEOUT_MS / 1000),
+            }
+          : await this.describeFailureAt(error, requestUrl, network.lookup);
+
       this.logger.warn('LLM endpoint preflight failed', {
         backend: this.resolved.settings.backend,
         endpoint,
         error: error instanceof Error ? error.name : String(error),
+        reason: failure?.reason ?? 'unknown',
+        code: failure?.code ?? firstErrorCode(error) ?? null,
       });
+
+      if (!failure) {
+        return {
+          backend: this.resolved.settings.backend,
+          endpoint,
+          ok: false,
+          models: [],
+          message: GENERIC_UNREACHABLE_MESSAGE,
+        };
+      }
 
       return {
         backend: this.resolved.settings.backend,
         endpoint,
         ok: false,
         models: [],
-        message:
-          'Could not reach this server from the Memory API. Verify the port is exposed to the API container.',
+        message: failure.fixCommand ? `${failure.message} ${UFW_HINT}` : failure.message,
+        reason: failure.reason,
+        ...(failure.fixCommand && { fixCommand: failure.fixCommand }),
       };
     }
+  }
+
+  /**
+   * Why a request to the endpoint got no HTTP answer, in words that name the address it tried and
+   * the likely cause. Null when `error` is something else (an HTTP error, a bad payload), which the
+   * caller reports its own way.
+   *
+   * A timeout to a server on the containers' own host gets a ufw rule as well. Docker's iptables
+   * rules cover traffic into containers, not from a container to its host, so a host firewall that
+   * drops incoming connections silently eats every one of those. The rule names the address the
+   * gateway name resolves to here, the only one the containers call, so it doesn't open the port on
+   * the host's LAN address to a LAN that shares 172.16.0.0/12. When the name doesn't resolve there
+   * is no rule: the only one left would be for any address.
+   */
+  async describeConnectionFailure(error: unknown): Promise<LlmEndpointConnectionFailure | null> {
+    return this.describeFailureAt(error, endpointRequestUrl(this.resolved));
+  }
+
+  private async describeFailureAt(
+    error: unknown,
+    requestUrl: string,
+    lookupImpl?: LookupIpv4,
+  ): Promise<LlmEndpointConnectionFailure | null> {
+    const kind = classifyConnectionError(error);
+    const target = kind ? connectionTarget(requestUrl) : null;
+
+    if (!kind || !target) {
+      return null;
+    }
+
+    const range = kind.reason === 'timeout' && target.onHost ? containerSourceRange() : undefined;
+    const hostAddress = range ? await hostIpv4(target.hostname, lookupImpl) : undefined;
+
+    return {
+      ...kind,
+      message: connectionFailureMessage(kind, target),
+      ...(range && hostAddress && { fixCommand: ufwAllowCommand(target.port, range, hostAddress) }),
+    };
   }
 
   private reload(): void {

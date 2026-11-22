@@ -89,12 +89,23 @@ const SUBNET_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 
 /// An IPv4 network in CIDR form, as `docker network inspect` prints it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Ipv4Subnet {
-    network: Ipv4Addr,
-    prefix_len: u8,
+pub(super) struct Ipv4Subnet {
+    pub(super) network: Ipv4Addr,
+    pub(super) prefix_len: u8,
+}
+
+impl std::fmt::Display for Ipv4Subnet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.network, self.prefix_len)
+    }
 }
 
 impl Ipv4Subnet {
+    /// `other` lies wholly inside this network.
+    pub(super) fn covers(&self, other: &Ipv4Subnet) -> bool {
+        other.prefix_len >= self.prefix_len && self.contains(IpAddr::V4(other.network))
+    }
+
     fn contains(&self, ip: IpAddr) -> bool {
         let IpAddr::V4(ip) = ip else {
             return false;
@@ -112,7 +123,7 @@ impl Ipv4Subnet {
 /// `{{range .IPAM.Config}}{{.Subnet}} {{end}}` output. IPv6 entries are
 /// skipped: the relay listens on IPv4 only. A `/0` is refused as well, since it
 /// would admit every address there is.
-fn parse_subnets(output: &str) -> Vec<Ipv4Subnet> {
+pub(super) fn parse_subnets(output: &str) -> Vec<Ipv4Subnet> {
     output
         .split_whitespace()
         .filter_map(|token| {
@@ -132,7 +143,7 @@ fn parse_subnets(output: &str) -> Vec<Ipv4Subnet> {
 /// compose project created, found by its project label. Empty when Docker
 /// cannot be asked or the project has no network yet, which refuses every
 /// peer rather than guessing.
-fn discover_appliance_subnets() -> Vec<Ipv4Subnet> {
+pub(super) fn discover_appliance_subnets() -> Vec<Ipv4Subnet> {
     let label = format!(
         "label=com.docker.compose.project={}",
         crate::stack_manager::PROJECT_NAME
@@ -643,8 +654,19 @@ mod tests {
 
         handle.shutdown();
 
-        // The listener is closed, so the port is free to take again.
-        TcpListener::bind(bound).expect("port released after shutdown");
+        // The listener is closed, so the port is free to take again. Retried
+        // briefly: while another test was starting processes, the rebind
+        // failed for up to 20ms, most likely because a new process holds a
+        // copy of every socket until it runs its own program. A listener that
+        // was never closed still fails here.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while let Err(e) = TcpListener::bind(bound) {
+            assert!(
+                Instant::now() < deadline,
+                "port not released after shutdown: {e}"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     /// The exact scenario `shutdown`'s own doc comment describes: the wake-up

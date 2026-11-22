@@ -13,11 +13,21 @@ import {
   type BackgroundUploadState,
   type LocationTrackingMode,
 } from '@ci/common';
-import { AlertDialog, Button, Card, cn, Label, Switch } from '@ci/shadcn';
-import { MapPin } from '@ci/shadcn/icons';
+import { AlertDialog, Button, Switch } from '@ci/shadcn';
+import { RefreshCw } from '@ci/shadcn/icons';
 
 import { useAuth, useLocationTracking } from '@/hooks';
 import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+
+import {
+  SegmentedControl,
+  SettingsFacts,
+  SettingsGroup,
+  SettingsHint,
+  SettingsNotice,
+  SettingsRow,
+  SettingsSection,
+} from '../kit';
 
 interface PositionStats {
   total: number;
@@ -189,109 +199,94 @@ export function LocationSection() {
   };
 
   return (
-    <div className="flex flex-col gap-6">
-      <div>
-        <h2 className="flex items-center gap-2 text-lg font-semibold">
-          <MapPin className="h-5 w-5" />
-          Location
-        </h2>
-        <p className="text-sm text-muted-foreground">
-          Track where you are so your memory can place events, photos and messages on a map.
-        </p>
-      </div>
+    <SettingsSection
+      title="Location"
+      description="Track where you are so your memory can place events, photos and messages on a map."
+    >
+      <SettingsGroup>
+        <SettingsRow
+          label="Location on this device"
+          hint={modeDescription(mode, showAlways)}
+          help={
+            showAlways
+              ? undefined
+              : 'Background location is on the mobile app. This device uses location only when you ask it to, such as placing a note or photo.'
+          }
+          control={
+            <SegmentedControl
+              label="Location tracking"
+              value={mode}
+              options={visibleModes}
+              onChange={onSelectMode}
+              className={showAlways ? 'w-72' : 'w-56'}
+            />
+          }
+        />
 
-      <Card>
-        <Card.Header>
-          <Card.Title className="text-base">Location on this device</Card.Title>
-          <Card.Description>{modeDescription(mode, showAlways)}</Card.Description>
-        </Card.Header>
-        <Card.Content className="flex flex-col gap-4">
-          <div
-            role="radiogroup"
-            aria-label="Location tracking"
-            className="flex gap-1 rounded-md bg-muted p-1 text-xs"
-          >
-            {visibleModes.map((entry) => (
-              <button
-                key={entry.value}
-                type="button"
-                role="radio"
-                aria-checked={mode === entry.value}
-                onClick={() => onSelectMode(entry.value)}
-                className={cn(
-                  'flex-1 cursor-pointer rounded-sm px-2 py-1.5 transition-colors',
-                  mode === entry.value
-                    ? 'bg-background text-foreground shadow-sm'
-                    : 'text-muted-foreground hover:text-foreground',
-                )}
-              >
-                {entry.label}
-              </button>
-            ))}
-          </div>
+        {needsSettingsUpgrade && showAlways ? (
+          <SettingsRow>
+            <SettingsNotice
+              tone="warning"
+              action={
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void openNativeLocationSettings()}
+                >
+                  Open Settings
+                </Button>
+              }
+            >
+              Your device didn&apos;t grant background location access. Open Settings to allow it if you want
+              Companion to remember places after you leave the app.
+            </SettingsNotice>
+          </SettingsRow>
+        ) : null}
 
-          {!showAlways && (
-            <p className="text-sm text-muted-foreground">
-              Background location is on the mobile app. This device uses location only when you ask it to,
-              such as placing a note or photo.
-            </p>
-          )}
-
-          {needsSettingsUpgrade && showAlways && (
-            <div className="flex flex-col gap-2 rounded-md border border-border p-3 text-sm">
-              <p>
-                Your device didn&apos;t grant background location access. Open Settings to allow it if you
-                want Companion to remember places after you leave the app.
-              </p>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => void openNativeLocationSettings()}
-              >
-                Open Settings
-              </Button>
-            </div>
-          )}
-
-          {showBackgroundUpload && (
-            <div className="flex items-start justify-between gap-4 border-t border-border pt-4">
-              <div className="space-y-0.5">
-                <Label htmlFor="location-background-upload">Upload in the background</Label>
-                <p className="text-xs text-muted-foreground">
-                  Send places recorded while the app is closed to your Companion as soon as this phone can
-                  reach it. Off, they wait on this phone until you next open the app.
-                </p>
-              </div>
+        {showBackgroundUpload ? (
+          <SettingsRow
+            label="Upload in the background"
+            htmlFor="location-background-upload"
+            hint="Send places recorded while the app is closed to your Companion as soon as this phone can reach it. Off, they wait on this phone until you next open the app."
+            control={
               <Switch
                 id="location-background-upload"
                 checked={backgroundUpload.enabled}
                 onCheckedChange={onToggleBackgroundUpload}
               />
-            </div>
-          )}
+            }
+          />
+        ) : null}
+      </SettingsGroup>
 
-          <div className="text-sm text-muted-foreground">
-            <div>{trackedCount} fixes recorded from your devices</div>
-            {waitingCount > 0 && (
-              <div>
-                {waitingCount} more on this device, waiting to upload.{' '}
-                {uploadsInBackground
-                  ? 'They upload in the background once this phone can reach your Companion.'
-                  : 'They upload while the app is open and can reach your Companion.'}
-              </div>
-            )}
-            <div>{stats ? `${stats.total} position fixes total` : 'Loading position stats…'}</div>
-            {stats?.lastFixAt && <div>Last fix {fmt.dateTime(stats.lastFixAt)}</div>}
-          </div>
-
-          <div>
-            <Button variant="outline" size="sm" onClick={() => void refreshStats()}>
-              Refresh stats
-            </Button>
-          </div>
-        </Card.Content>
-      </Card>
+      <SettingsGroup
+        title="Recorded positions"
+        actions={
+          <Button variant="ghost" size="sm" onClick={() => void refreshStats()}>
+            <RefreshCw aria-hidden="true" />
+            Refresh stats
+          </Button>
+        }
+      >
+        <SettingsRow>
+          <SettingsFacts
+            items={[
+              { label: 'From your devices', value: trackedCount },
+              waitingCount > 0 && { label: 'Waiting to upload from this device', value: waitingCount },
+              { label: 'All position fixes', value: stats ? stats.total : 'Loading…' },
+              stats?.lastFixAt ? { label: 'Last fix', value: fmt.dateTime(stats.lastFixAt) } : null,
+            ]}
+          />
+          {waitingCount > 0 ? (
+            <SettingsHint data-testid="location-waiting-note">
+              {uploadsInBackground
+                ? 'They upload in the background once this phone can reach your Companion.'
+                : 'They upload while the app is open and can reach your Companion.'}
+            </SettingsHint>
+          ) : null}
+        </SettingsRow>
+      </SettingsGroup>
 
       <AlertDialog
         open={pendingMode === 'when_in_use'}
@@ -354,7 +349,7 @@ export function LocationSection() {
           </AlertDialog.Footer>
         </AlertDialog.Content>
       </AlertDialog>
-    </div>
+    </SettingsSection>
   );
 }
 

@@ -211,7 +211,8 @@ jobs:
             --json tagName --jq '.[].tagName' | grep -E '^v[0-9]{4}\.' | grep -vxF "${TAG}" || true)
           previous=$({ printf '%s\n' "${releases}"; echo "${TAG}"; } | grep -v '^$' | sort -V \
             | grep -B1 -xF "${TAG}" | grep -vxF "${TAG}" || true)
-          args=(--verify-tag --title "${TAG}" --generate-notes)
+          # "Server 2026.11.19", to sit beside "Desktop 2026.11.19 (macOS, Windows, Linux)".
+          args=(--verify-tag --title "Server ${TAG#v}" --generate-notes)
           if [[ -n "${previous}" ]]; then
             args+=(--notes-start-tag "${previous}")
           fi

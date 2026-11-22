@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { fetchJson } from '@ci/common';
-import { Button, Card } from '@ci/shadcn';
-import { Check } from '@ci/shadcn/icons';
+import { Button } from '@ci/shadcn';
 
 import { useSessionAuth } from '@/hooks';
 
 import { TRUST_OPTIONS } from '../../OnboardingPage/TrustDialStep';
+import { ChoiceList, SettingsFooter, SettingsGroup, SettingsSection, SettingsStatus } from '../kit';
 
 type TrustMode = 'cautious' | 'balanced' | 'hands_off';
 
@@ -74,56 +74,55 @@ export function AutonomySection() {
   };
 
   return (
-    <>
-      <div className="mb-6">
-        <h2 className="text-xl font-semibold">Autonomy</h2>
-        <p className="text-sm text-muted-foreground mt-1">
-          Control how much Companion does on its own — inbox triage into tasks, calendar placement, graph
-          growth, inferred answers, and feed actions all respect this setting. So does chat: deleting data,
-          importing the inbox, sending a message, completing a task, and every tool from a connected MCP
-          server wait for your approval unless you choose Hands-off. So does anything else chat changes right
-          after looking something up in the same reply. So does a question it then sends to a third-party
-          service such as a streaming catalog, though reading your texts off your own Mac doesn't count.
-          Reading from an outside service at your request (your messages, streaming availability) asks first
-          only on Cautious.
-        </p>
-      </div>
+    <SettingsSection
+      title="Autonomy"
+      description="Choose how much Companion does on its own."
+      help={
+        <>
+          <p>
+            Inbox triage into tasks, calendar placement, graph growth, inferred answers and feed actions all
+            follow this setting.
+          </p>
+          <p>In chat, these wait for your approval unless you choose Hands-off:</p>
+          <ul>
+            <li>deleting data, importing the inbox, sending a message or completing a task</li>
+            <li>every tool from a connected MCP server</li>
+            <li>anything chat changes right after looking something up in the same reply</li>
+            <li>
+              a question chat then sends to a third-party service such as a streaming catalog (reading your
+              texts off your own Mac doesn&apos;t count)
+            </li>
+          </ul>
+          <p>
+            Reading from an outside service at your request (your messages, streaming availability) asks first
+            only on Cautious.
+          </p>
+        </>
+      }
+    >
+      <SettingsGroup>
+        <ChoiceList
+          label="Autonomy"
+          value={selected}
+          options={TRUST_OPTIONS}
+          onChange={setSelected}
+          disabled={loading}
+        />
 
-      <Card>
-        <Card.Content className="space-y-4 pt-6">
-          <div className="flex flex-col gap-3">
-            {TRUST_OPTIONS.map((opt) => (
-              <button
-                key={opt.value}
-                type="button"
-                aria-pressed={selected === opt.value}
-                disabled={loading}
-                className={`rounded-xl border border-border px-5 py-4 text-left transition-colors hover:border-teal-600/60 ${
-                  selected === opt.value ? 'border-teal-600 bg-teal-500/10' : ''
-                }`}
-                onClick={() => setSelected(opt.value)}
-              >
-                <span className="block text-lg font-medium">{opt.label}</span>
-                <span className="block text-sm text-muted-foreground mt-1">{opt.hint}</span>
-              </button>
-            ))}
-          </div>
-
-          {error ? <p className="text-sm text-destructive">{error}</p> : null}
-
-          <div className="flex items-center gap-3">
-            <Button onClick={handleSave} disabled={loading || saving}>
-              {saving ? 'Saving…' : 'Save'}
-            </Button>
-            {saved ? (
-              <span className="flex items-center gap-1 text-sm text-muted-foreground">
-                <Check className="h-4 w-4" />
-                Saved
-              </span>
-            ) : null}
-          </div>
-        </Card.Content>
-      </Card>
-    </>
+        <SettingsFooter
+          status={
+            error ? (
+              <SettingsStatus tone="error">{error}</SettingsStatus>
+            ) : saved ? (
+              <SettingsStatus tone="success">Saved</SettingsStatus>
+            ) : null
+          }
+        >
+          <Button onClick={handleSave} disabled={loading || saving}>
+            {saving ? 'Saving…' : 'Save'}
+          </Button>
+        </SettingsFooter>
+      </SettingsGroup>
+    </SettingsSection>
   );
 }

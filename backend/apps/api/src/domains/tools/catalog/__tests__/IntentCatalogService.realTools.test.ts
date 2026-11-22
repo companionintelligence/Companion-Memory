@@ -17,6 +17,7 @@ import { GetFamilyMembersTool } from '../../tools/GetFamilyMembersTool';
 import { GetStreamingAvailabilityTool } from '../../tools/GetStreamingAvailabilityTool';
 import { GetUserPreferencesTool } from '../../tools/GetUserPreferencesTool';
 import { InsightsExplainTool } from '../../tools/InsightsExplainTool';
+import { KnowledgeGetTool } from '../../tools/KnowledgeGetTool';
 import { MediaFindPhotosTool } from '../../tools/MediaFindPhotosTool';
 import { PeopleFindTool } from '../../tools/PeopleFindTool';
 import { PlacesFindTool } from '../../tools/PlacesFindTool';
@@ -41,6 +42,7 @@ const TOOL_CLASSES = [
   WriteKnowledgeTool,
   ForgetKnowledgeTool,
   DatabaseSearchTool,
+  KnowledgeGetTool,
   GetUserPreferencesTool,
   GetFamilyMembersTool,
   GetEntertainmentPreferencesTool,
@@ -66,6 +68,7 @@ const EXPECTED_INTENTS = [
   'forecast.calibration',
   'forecast.read',
   'insights.explain',
+  'knowledge.get',
   'knowledge.preferences',
   'knowledge.search',
   'media.entertainmentPreferences',
@@ -91,6 +94,8 @@ const EXPECTED_NOT_LOCAL_CAPABLE = [
   // HBPE is a server-only inference / scoring pipeline.
   'forecast.calibration',
   'forecast.read',
+  // The phone has no handler for reading one entry whole yet; its search hits carry what it shows.
+  'knowledge.get',
   // Live TMDB availability: exists nowhere on the device.
   'media.streamingAvailability',
   // A delete is authoritative on the appliance; a partial mirror cannot show what it would remove.

@@ -13,6 +13,7 @@ import {
   Query,
   Req,
   Res,
+  ServiceUnavailableException,
   UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
@@ -38,6 +39,7 @@ import { isActiveGenerationStatus } from '../constants';
 import { ChatGenerationBroker } from '../services/ChatGenerationBroker';
 import { ChatTurnService } from '../services/ChatTurnService';
 import { DESKTOP_APP_CLOSED_MESSAGE, DesktopAppService } from '../services/DesktopAppService';
+import { LlmEndpointService } from '../services/LlmEndpointService';
 import { OllamaService } from '../services/OllamaService';
 import type { PromptInput } from '../types';
 
@@ -63,6 +65,7 @@ export class OllamaController {
     private readonly broker: ChatGenerationBroker,
     private readonly chatTurnService: ChatTurnService,
     private readonly desktopAppService: DesktopAppService,
+    private readonly llmEndpointService: LlmEndpointService,
     private readonly logger: LoggerService,
     // Same forwardRef as ChatTurnService: intelligence and llm import each other.
     @Inject(forwardRef(() => ActionService))
@@ -78,8 +81,33 @@ export class OllamaController {
     try {
       return await this.ollamaService.getAvailableModels(context);
     } catch (error: unknown) {
-      return await this.desktopAppService.rethrow(error);
+      return await this.desktopAppService.rethrow((await this.unreachable(error)) ?? error);
     }
+  }
+
+  /**
+   * A model server that gave no HTTP answer, as a 503 that says what failed and where, instead of a
+   * bare 500. Chat shows the message under "Chat can't reach a model". The firewall rule itself is
+   * left to Test connection in Settings, which can show it as a command.
+   */
+  private async unreachable(error: unknown): Promise<ServiceUnavailableException | null> {
+    const failure = await this.llmEndpointService.describeConnectionFailure(error);
+
+    if (!failure) {
+      return null;
+    }
+
+    return new ServiceUnavailableException(
+      {
+        statusCode: 503,
+        error: 'Service Unavailable',
+        message: failure.fixCommand
+          ? `${failure.message} Test connection in Settings > Model shows a firewall rule for it.`
+          : failure.message,
+        reason: failure.reason,
+      },
+      { cause: error },
+    );
   }
 
   /**

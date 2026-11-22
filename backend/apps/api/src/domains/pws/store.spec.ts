@@ -58,3 +58,66 @@ describe('MemoryPwsStore: Resource bytes', () => {
     });
   });
 });
+
+describe('MemoryPwsStore: limits', () => {
+  const bytes = (n: number): Uint8Array => new Uint8Array(n);
+  const put = (store: MemoryPwsStore, id: string, size: number) =>
+    store.transaction((tx) => tx.putResource(resource(id, bytes(size))));
+  const quota = expect.objectContaining({ kind: 'quota-exceeded', status: 507 });
+
+  it('refuses a Resource that would take it past its byte ceiling', async () => {
+    const store = new MemoryPwsStore({ maxBytes: 100, maxRecords: 1_000 });
+    await put(store, 'r1', 60);
+
+    await expect(put(store, 'r2', 50)).rejects.toEqual(quota);
+    await expect(put(store, 'r2', 40)).resolves.toBeUndefined();
+  });
+
+  it('counts a rewrite by how much it grows, and always lets one shrink', async () => {
+    const store = new MemoryPwsStore({ maxBytes: 100, maxRecords: 1_000 });
+    await put(store, 'r1', 100);
+
+    await expect(put(store, 'r1', 100)).resolves.toBeUndefined();
+    await expect(put(store, 'r1', 101)).rejects.toEqual(quota);
+    await expect(put(store, 'r1', 10)).resolves.toBeUndefined();
+    await expect(put(store, 'r2', 90)).resolves.toBeUndefined();
+  });
+
+  it('gives the bytes back when a Resource, its Collection or its Space is deleted', async () => {
+    const store = new MemoryPwsStore({ maxBytes: 100, maxRecords: 1_000 });
+    await put(store, 'r1', 100);
+    await store.transaction((tx) => tx.deleteResource('s', 'c', 'r1'));
+    await put(store, 'r2', 100);
+    await store.transaction((tx) => tx.deleteCollection('s', 'c'));
+    // A Space is deleted through its Collections, so this one has its Collection record, as a real one does.
+    await store.transaction((tx) => tx.putCollection({ spaceId: 's', id: 'c' } as never));
+    await put(store, 'r3', 100);
+    await store.transaction((tx) => tx.deleteSpace('s'));
+
+    await expect(put(store, 'r4', 100)).resolves.toBeUndefined();
+  });
+
+  it('refuses a new record past its record ceiling, but not a rewrite of one it holds', async () => {
+    const store = new MemoryPwsStore({ maxBytes: 1_000, maxRecords: 2 });
+    await put(store, 'r1', 1);
+    await put(store, 'r2', 1);
+
+    await expect(put(store, 'r3', 1)).rejects.toEqual(quota);
+    await expect(put(store, 'r1', 2)).resolves.toBeUndefined();
+  });
+
+  it('keeps working after a refused write', async () => {
+    const store = new MemoryPwsStore({ maxBytes: 10, maxRecords: 1_000 });
+    await expect(put(store, 'big', 11)).rejects.toEqual(quota);
+
+    await expect(store.transaction((tx) => tx.getResource('s', 'c', 'big'))).resolves.toBeUndefined();
+    await expect(put(store, 'small', 10)).resolves.toBeUndefined();
+  });
+
+  it('ships with ceilings that leave room for real use', () => {
+    const limits = (new MemoryPwsStore() as unknown as { limits: { maxBytes: number; maxRecords: number } }).limits;
+
+    expect(limits.maxBytes).toBe(256 * 1024 * 1024);
+    expect(limits.maxRecords).toBe(100_000);
+  });
+});

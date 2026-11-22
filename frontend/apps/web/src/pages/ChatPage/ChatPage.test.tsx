@@ -917,6 +917,45 @@ describe('ChatPage', () => {
         expect(h.refetchModels).toHaveBeenCalledTimes(1);
       });
 
+      it('says what the server found wrong with the model server, when it says something', () => {
+        h.selectedModel = null;
+        h.modelsError = new FetchJsonError(
+          503,
+          'Service Unavailable',
+          'host.docker.internal:11434 refused the connection. Check that the server is running.',
+        );
+        renderEmpty();
+
+        const state = screen.getByTestId('chat-no-model');
+        expect(state).toHaveTextContent('Chat can’t reach a model');
+        expect(state).toHaveTextContent(
+          'the model server isn’t responding. host.docker.internal:11434 refused the connection. Check that the server is running.',
+        );
+        expect(state).not.toHaveTextContent(
+          'Check that Ollama (or your OpenAI-compatible server) is running',
+        );
+      });
+
+      it('keeps the general advice for a 503 that came without a message', () => {
+        h.selectedModel = null;
+        h.modelsError = new FetchJsonError(503, 'Service Unavailable');
+        renderEmpty();
+
+        expect(screen.getByTestId('chat-no-model')).toHaveTextContent(
+          'Check that Ollama (or your OpenAI-compatible server) is running',
+        );
+      });
+
+      it('keeps the general advice for a 503 whose body only repeats the status text', () => {
+        h.selectedModel = null;
+        h.modelsError = new FetchJsonError(503, 'Service Unavailable', 'Service Unavailable');
+        renderEmpty();
+
+        expect(screen.getByTestId('chat-no-model')).toHaveTextContent(
+          'Check that Ollama (or your OpenAI-compatible server) is running',
+        );
+      });
+
       // Memory Desktop was quit and its model went with it. Settings is not the fix; opening the app is.
       it('says Memory Desktop is closed when that is why the model cannot be reached', () => {
         h.selectedModel = null;

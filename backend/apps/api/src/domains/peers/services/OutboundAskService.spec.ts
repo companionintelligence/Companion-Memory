@@ -121,11 +121,13 @@ function makeService(
   };
   const logger = { setContext: jest.fn(), warn: jest.fn() };
   const userService = {
-    findById: jest.fn().mockResolvedValue({
-      id: CTX.userId,
-      role: overrides.role ?? 'admin',
-      name: overrides.name ?? 'Alice',
-    }),
+    findById: jest
+      .fn()
+      .mockResolvedValue({
+        id: CTX.userId,
+        role: overrides.role ?? 'admin',
+        name: overrides.name ?? 'Alice',
+      }),
   };
 
   const service = new OutboundAskService(
