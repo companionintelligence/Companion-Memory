@@ -18,6 +18,37 @@ export interface ParseCSVOptions extends ParseCSVRowsOptions {
       first row matching the predicate becomes the header and everything above
       it is discarded. Returns [] if no row matches. Default: the first row. */
   findHeader?: (row: string[]) => boolean;
+  /** Keep repeated header names apart: the second `Distance` becomes
+      `Distance.1`, the third `Distance.2` (pandas' naming). Default false:
+      a repeated name keeps only its last column's value. */
+  suffixDuplicateHeaders?: boolean;
+}
+
+/**
+ * Rename repeated names in place: `a,b,a` becomes `a,b,a.1`. A suffix the
+ * header already uses is skipped (`a,a,a.1` becomes `a,a.2,a.1`), so no two
+ * columns end up under one key.
+ */
+function suffixDuplicates(headers: string[]): void {
+  const taken = new Set(headers);
+  const seen = new Set<string>();
+  const next = new Map<string, number>();
+  headers.forEach((h, i) => {
+    if (!seen.has(h)) {
+      seen.add(h);
+
+      return;
+    }
+
+    let n = next.get(h) ?? 1;
+    while (taken.has(`${h}.${n}`)) {
+      n++;
+    }
+
+    next.set(h, n + 1);
+    headers[i] = `${h}.${n}`;
+    taken.add(headers[i]);
+  });
 }
 
 /** Parse CSV text into raw rows (no header mapping). */
@@ -60,6 +91,10 @@ export function parseCSV(text: string, opts: ParseCSVOptions = {}): Record<strin
   }
 
   const headers = rows[headerIdx].map((h) => h.trim());
+  if (opts.suffixDuplicateHeaders) {
+    suffixDuplicates(headers);
+  }
+
   const trim = opts.trimValues !== false;
 
   return rows
