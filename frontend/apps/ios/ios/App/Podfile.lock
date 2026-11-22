@@ -1,5 +1,5 @@
 PODS:
-  - Capacitor (8.6.0):
+  - Capacitor (8.6.2):
     - CapacitorCordova
   - CapacitorApp (8.1.2):
     - Capacitor
@@ -12,7 +12,7 @@ PODS:
     - Capacitor
     - SQLCipher
     - ZIPFoundation
-  - CapacitorCordova (8.6.0)
+  - CapacitorCordova (8.6.2)
   - CapacitorLocalNotifications (8.3.1):
     - Capacitor
   - CapacitorMlkitBarcodeScanning (8.2.2):
@@ -20,9 +20,8 @@ PODS:
     - GoogleMLKit/BarcodeScanning (~> 8.0.0)
   - CapacitorPushNotifications (8.1.3):
     - Capacitor
-  - CapacitorSecureStoragePlugin (0.13.0):
+  - CapacitorSecureStoragePlugin (0.14.2):
     - Capacitor
-    - SwiftKeychainWrapper
   - CapacitorSplashScreen (8.0.2):
     - Capacitor
   - CapacitorStatusBar (8.0.4):
@@ -96,7 +95,6 @@ PODS:
   - SQLCipher/common (4.10.0)
   - SQLCipher/standard (4.10.0):
     - SQLCipher/common
-  - SwiftKeychainWrapper (4.0.1)
   - ZIPFoundation (0.9.20)
 
 DEPENDENCIES:
@@ -134,7 +132,6 @@ SPEC REPOS:
     - powersync-sqlite-core
     - PromisesObjC
     - SQLCipher
-    - SwiftKeychainWrapper
     - ZIPFoundation
 
 EXTERNAL SOURCES:
@@ -172,16 +169,16 @@ EXTERNAL SOURCES:
     :path: "../../node_modules/@powersync/capacitor"
 
 SPEC CHECKSUMS:
-  Capacitor: 62cab4ab4ba04ea925576ddd1be188869e90d9ea
+  Capacitor: 0a406b8a50b1ddcfe49fbc5795515918d5294708
   CapacitorApp: 7b7e43debe505bc61beedb83796aa1368c86078b
   CapacitorBrowser: f94f92654e92a97981bf346b3681af76527dace0
   CapacitorCamera: 09e51f52c079eaf731a5528a1c3455c074ccc24c
   CapacitorCommunitySqlite: 785553c54e52da62d058238d4571db5692c022c4
-  CapacitorCordova: 922f0a94dae286165215f0c7cf16fbde662d5ee4
+  CapacitorCordova: 8e68a712e47128cf5b97e88b9c2b406b9b956b22
   CapacitorLocalNotifications: e0747a329ddde3074d52dc74a003688af90e42be
   CapacitorMlkitBarcodeScanning: 43ac9fce0c369f823f364e3cc0f8012024cf6f6a
   CapacitorPushNotifications: a31b62e18764ab855537dfcdade1e6ecf5aba29f
-  CapacitorSecureStoragePlugin: d083ff28d9ba5bc74924b9bcf9754ea605016b63
+  CapacitorSecureStoragePlugin: 2906a5fe9d33fdf2cb8dd5313bde457851020c0c
   CapacitorSplashScreen: 7bf61c2001557ff9e195e601c6b87344480d3c65
   CapacitorStatusBar: ff844df1f126da6c4fbc4028272425fa3a91e7e3
   CiCapacitorAppLock: 5f016286369522c4f28afdefb00f155f9ef5a33d
@@ -203,7 +200,6 @@ SPEC CHECKSUMS:
   PowersyncCapacitor: 5af8af23e0267513a233f765da97a1de34334a6e
   PromisesObjC: 752c3227f599e3467650e47ea36f433eeb10c273
   SQLCipher: eb79c64049cb002b4e9fcb30edb7979bf4706dfc
-  SwiftKeychainWrapper: 807ba1d63c33a7d0613288512399cd1eda1e470c
   ZIPFoundation: dfd3d681c4053ff7e2f7350bc4e53b5dba3f5351
 
 PODFILE CHECKSUM: cf58c5d20fedab47e5a18cd8c138c25f5a950ecf
