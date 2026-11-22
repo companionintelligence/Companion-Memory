@@ -435,6 +435,14 @@ export class FacebookFileImporter implements FileImporter {
       return { confidence: 0 };
     }
 
+    // Instagram's export keeps its DMs in your_instagram_activity/messages/, in
+    // the same message_N.json layout Messenger uses, so the bare `messages` rule
+    // below matched it. That folder is Instagram's and instagram.ts reads it;
+    // claiming it here imported every Instagram DM a second time as Messenger.
+    if (path.basename(root) === 'your_instagram_activity') {
+      return { confidence: 0 };
+    }
+
     if (st.isDirectory()) {
       try {
         const names = await readdir(root);
