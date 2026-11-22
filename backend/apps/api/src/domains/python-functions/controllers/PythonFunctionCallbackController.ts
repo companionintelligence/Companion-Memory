@@ -23,10 +23,11 @@ import {
 const CALLBACK_QUEUES = new Set<string>(Object.values(PYTHON_FUNCTION_QUEUES));
 
 /**
- * Completion webhook (and heartbeat) for deferred python-function jobs. The Python runner
- * self-signs a JWT with the shared AUTH_TOKEN_SECRET (same pattern as HBPE's
- * graphql_client), using the run's user as subject, so the standard JWT guard
- * accepts it — no separate service-auth path.
+ * Completion webhook (and heartbeat) for deferred python-function jobs. The sidecar echoes the
+ * per-run token the API issued with the job (`PythonFunctionTokenService`), and
+ * `PythonRunCallbackGuard` verifies it and checks it names this job. The standard JWT guard does
+ * not accept that token here: it is a session only for the sidecars' read queries
+ * (`domains/auth/runTokenAccess.ts`).
  */
 @Controller('function-runs')
 export class PythonFunctionCallbackController {

@@ -173,7 +173,7 @@ describe('SMS Backup & Restore datasource', () => {
       <part ct="text/plain" chset="utf-8" text="Hello from MMS!" />
     </parts>
     <addrs>
-      <addr type="137" value="+15551234567" charset="utf-8" />
+      <addr type="137" address="+15551234567" charset="utf-8" />
     </addrs>
   </mms>
   <mms date="1609506000000" msg_box="2" address="+15551234567" contact_name="Alice Example">
@@ -181,7 +181,7 @@ describe('SMS Backup & Restore datasource', () => {
       <part ct="text/plain" chset="utf-8" text="Replying via MMS" />
     </parts>
     <addrs>
-      <addr type="151" value="+15551234567" charset="utf-8" />
+      <addr type="151" address="+15551234567" charset="utf-8" />
     </addrs>
   </mms>
 </smses>`,
@@ -208,6 +208,81 @@ describe('SMS Backup & Restore datasource', () => {
     }
   });
 
+  it('takes a group MMS sender from its From addr and the other members as recipients', async () => {
+    const tmp = path.join(os.tmpdir(), `sbr-mms-group-${Date.now()}.xml`);
+    fs.writeFileSync(
+      tmp,
+      `<?xml version="1.0" encoding="UTF-8"?>
+<smses>
+  <mms date="1786284333000" msg_box="1" address="+12065550182~+12065550133" contact_name="Leopold Ashgrove, (Unknown)">
+    <parts>
+      <part seq="0" ct="text/plain" chset="106" text="group photo from the regatta" />
+    </parts>
+    <addrs>
+      <addr address="+12065550182" type="137" charset="106" />
+      <addr address="+12065550133" type="151" charset="106" />
+      <addr address="+12065550147" type="151" charset="106" />
+    </addrs>
+  </mms>
+  <mms date="1786284400000" msg_box="2" address="+12065550182~+12065550133" contact_name="Leopold Ashgrove, (Unknown)">
+    <parts>
+      <part seq="0" ct="text/plain" chset="106" text="see you there" />
+    </parts>
+    <addrs>
+      <addr address="insert-address-token" type="137" charset="106" />
+      <addr address="+12065550182" type="151" charset="106" />
+      <addr address="+12065550133" type="130" charset="106" />
+    </addrs>
+  </mms>
+  <mms date="1786284500000" msg_box="1" address="+12065550182~+12065550133">
+    <parts>
+      <part seq="0" ct="text/plain" chset="106" text="an older backup with no addrs" />
+    </parts>
+  </mms>
+</smses>`,
+    );
+    try {
+      const pipeline = await runImport({ filename: 'mms-group.xml', fullPath: tmp });
+      expect(pipeline.map((p) => [p.item.metadata.Sender, p.item.metadata.To])).toEqual([
+        // You (+12065550147) are not on the root list, so not a recipient, as on a received SMS.
+        ['+12065550182', ['+12065550133']],
+        ['Me', ['+12065550182', '+12065550133']],
+        // No addrs: the sender can't be told apart, but the joined string is not a sender.
+        [undefined, ['+12065550182', '+12065550133']],
+      ]);
+    } finally {
+      fs.unlinkSync(tmp);
+    }
+  });
+
+  it("does not carry an unclosed MMS's addrs into the next one", async () => {
+    const tmp = path.join(os.tmpdir(), `sbr-mms-unclosed-${Date.now()}.xml`);
+    fs.writeFileSync(
+      tmp,
+      `<?xml version="1.0" encoding="UTF-8"?>
+<smses>
+  <mms date="1786284333000" msg_box="1" address="+12065550199">
+    <parts>
+      <part seq="0" ct="text/plain" chset="106" text="cut off" />
+    </parts>
+    <addrs>
+      <addr address="+12065550199" type="137" charset="106" />
+    </addrs>
+  <mms date="1786284400000" msg_box="1" address="+12065550182">
+    <parts>
+      <part seq="0" ct="text/plain" chset="106" text="from Leopold" />
+    </parts>
+  </mms>
+</smses>`,
+    );
+    try {
+      const pipeline = await runImport({ filename: 'mms-unclosed.xml', fullPath: tmp });
+      expect(pipeline.map((p) => p.item.metadata.Sender)).toEqual(['+12065550182']);
+    } finally {
+      fs.unlinkSync(tmp);
+    }
+  });
+
   it('imports MMS with fallback content when no text part', async () => {
     const tmp = path.join(os.tmpdir(), `sbr-mms-nofallback-${Date.now()}.xml`);
     fs.writeFileSync(
@@ -219,7 +294,7 @@ describe('SMS Backup & Restore datasource', () => {
       <part ct="image/jpeg" name="photo.jpg" data="" />
     </parts>
     <addrs>
-      <addr type="137" value="+15551234567" charset="utf-8" />
+      <addr type="137" address="+15551234567" charset="utf-8" />
     </addrs>
   </mms>
 </smses>`,
@@ -247,7 +322,7 @@ describe('SMS Backup & Restore datasource', () => {
       <part ct="text/plain" text="should be ignored" />
     </parts>
     <addrs>
-      <addr type="137" value="+15551234567" />
+      <addr type="137" address="+15551234567" />
     </addrs>
   </mms>
 </smses>`,
@@ -271,7 +346,7 @@ describe('SMS Backup & Restore datasource', () => {
       <part ct="text/plain" chset="1252" text="Latin-1 text: caf\u00e9" />
     </parts>
     <addrs>
-      <addr type="137" value="+15551234567" charset="1252" />
+      <addr type="137" address="+15551234567" charset="1252" />
     </addrs>
   </mms>
 </smses>`,

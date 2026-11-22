@@ -476,6 +476,8 @@ export const MY_PEER_LINKS = gql(`
       status
       revokedAt
       createdAt
+      linkedByKey
+      safetyCode
     }
   }
 `);
@@ -599,6 +601,122 @@ export const ASK_AUDIT_RECEIPT = gql(`
         disclosedCount
         issuedAt
       }
+    }
+  }
+`);
+
+/**
+ * Ask a person on another Companion. Sent with no Portal token: the server
+ * signs it with the sender's own key, which is what the other side checks.
+ */
+export const SEND_PEER_ASK = gql(`
+  mutation SendPeerAsk($input: SendPeerAskInput!) {
+    sendPeerAsk(input: $input) {
+      success
+      status
+      reason
+      ask {
+        id
+        status
+      }
+    }
+  }
+`);
+
+/** Fetch the answer to one of the owner's sent asks now, instead of waiting for the next automatic check. */
+export const COLLECT_PEER_ANSWER = gql(`
+  mutation CollectPeerAnswer($askId: ID!) {
+    collectPeerAnswer(askId: $askId) {
+      success
+      status
+      reason
+      ask {
+        id
+        status
+      }
+    }
+  }
+`);
+
+/** The owner's invites. The codes themselves are not here: each is shown once, when made. */
+export const MY_PEER_INVITES = gql(`
+  query MyPeerInvites {
+    myPeerInvites {
+      id
+      label
+      inviterName
+      status
+      createdAt
+      expiresAt
+      usedAt
+    }
+  }
+`);
+
+export const CREATE_PEER_INVITE = gql(`
+  mutation CreatePeerInvite($input: CreatePeerInviteInput) {
+    createPeerInvite(input: $input) {
+      success
+      code
+      invite {
+        id
+        label
+        inviterName
+        status
+        createdAt
+        expiresAt
+        usedAt
+      }
+    }
+  }
+`);
+
+export const REVOKE_PEER_INVITE = gql(`
+  mutation RevokePeerInvite($id: ID!) {
+    revokePeerInvite(id: $id) {
+      success
+      invite {
+        id
+        status
+      }
+    }
+  }
+`);
+
+export const ACCEPT_PEER_INVITE = gql(`
+  mutation AcceptPeerInvite($input: AcceptPeerInviteInput!) {
+    acceptPeerInvite(input: $input) {
+      success
+      peerLink {
+        id
+        peerHandle
+        displayName
+        trustTier
+        linkedByKey
+        safetyCode
+      }
+    }
+  }
+`);
+
+/** Retire the owner's peer key and make a new one; everyone linked by key is told. */
+export const ROTATE_PEER_KEY = gql(`
+  mutation RotatePeerKey {
+    rotatePeerKey {
+      success
+      notified
+      unreachable
+    }
+  }
+`);
+
+/** Tell everyone about the last key change again, for those who could not be reached. */
+export const RESEND_PEER_KEY_ROTATION = gql(`
+  mutation ResendPeerKeyRotation {
+    resendPeerKeyRotation {
+      success
+      notified
+      unreachable
     }
   }
 `);

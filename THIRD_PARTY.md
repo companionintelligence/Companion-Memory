@@ -280,6 +280,10 @@ package manager's own `licenses` command.
 5. [`knip`](https://knip.dev) `6.37.0` — dev
 6. [`rimraf`](https://github.com/isaacs/rimraf) `3.0.2` — dev
 
+## BlueOak-1.0.0
+
+1. [`tar`](https://github.com/isaacs/node-tar) `7.5.22` — runtime
+
 ## BSD-2-Clause
 
 1. [`dotenv`](https://github.com/motdotla/dotenv#readme) `18.0.2` — runtime

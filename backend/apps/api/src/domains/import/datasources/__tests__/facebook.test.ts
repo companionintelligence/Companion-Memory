@@ -17,6 +17,41 @@ describe('Facebook datasource', () => {
     expect(rec.confidence).toBeGreaterThan(0.8);
   });
 
+  // Instagram's export keeps its DMs in your_instagram_activity/messages/inbox/,
+  // in Messenger's own file layout. Claiming that folder imported every
+  // Instagram DM a second time, labelled Facebook Messenger.
+  it("does not claim an Instagram export's your_instagram_activity folder", async () => {
+    const fi = new FacebookFileImporter();
+    for (const fixture of ['instagram-export', 'instagram-html-export']) {
+      const activity = path.join(FIXTURES_DIR, fixture, 'your_instagram_activity');
+      expect(fs.existsSync(path.join(activity, 'messages'))).toBe(true);
+      const rec = await fi.recognize({}, { filename: 'your_instagram_activity', fullPath: activity });
+      expect({ fixture, confidence: rec.confidence }).toEqual({ fixture, confidence: 0 });
+    }
+  });
+
+  it('still claims a Facebook export that holds only its messages folder', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-messages-only-'));
+    try {
+      const thread = path.join(dir, 'messages', 'inbox', 'alice_12345');
+      fs.mkdirSync(thread, { recursive: true });
+      fs.writeFileSync(
+        path.join(thread, 'message_1.json'),
+        JSON.stringify({
+          participants: [{ name: 'Alice' }, { name: 'Me' }],
+          messages: [{ sender_name: 'Alice', timestamp_ms: 1700000000000, content: 'hi' }],
+        }),
+      );
+      const rec = await new FacebookFileImporter().recognize(
+        {},
+        { filename: path.basename(dir), fullPath: dir },
+      );
+      expect(rec.confidence).toBeGreaterThan(0);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('imports messages and posts', async () => {
     const root = path.join(FIXTURES_DIR, 'facebook-export');
     const fi = new FacebookFileImporter();
@@ -191,6 +226,164 @@ describe('Facebook datasource — HTML (Download Your Information) format', () =
     expect(messages[0].item.metadata.To).toBe('Test User');
     expect(messages[1].item.metadata.Sender).toBe('Test User');
     expect(messages[1].item.metadata.To).toBe('Alice Smith');
+  });
+});
+
+describe("Facebook datasource: which messages are the owner's", () => {
+  const roots: string[] = [];
+
+  afterAll(() => {
+    for (const root of roots) {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // Meta writes non-ASCII as one \u00XX escape per UTF-8 byte; "ë" is c3 ab.
+  const ZOE_META = 'ZoÃ« Quillfeather';
+
+  function writeThread(root: string, dir: string, thread: object): void {
+    const threadDir = path.join(root, 'your_facebook_activity', 'messages', 'inbox', dir);
+    fs.mkdirSync(threadDir, { recursive: true });
+    fs.writeFileSync(path.join(threadDir, 'message_1.json'), JSON.stringify(thread));
+  }
+
+  function buildExport(withProfile: boolean): string {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-owner-'));
+    roots.push(root);
+    if (withProfile) {
+      const profileDir = path.join(root, 'personal_information', 'profile_information');
+      fs.mkdirSync(profileDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(profileDir, 'profile_information.json'),
+        JSON.stringify({ profile_v2: { name: { full_name: ZOE_META, first_name: 'ZoÃ«' } } }),
+      );
+    }
+
+    writeThread(root, 'ottilie_101', {
+      participants: [{ name: 'Ottilie Brightwater' }, { name: ZOE_META }],
+      title: 'Ottilie Brightwater',
+      messages: [
+        { sender_name: ZOE_META, timestamp_ms: 1757876740000, content: 'See you at the trailhead at 7 then' },
+        { sender_name: 'Ottilie Brightwater', timestamp_ms: 1757876282000, content: 'Here is the ridge' },
+      ],
+    });
+    writeThread(root, 'lanternhikers_202', {
+      participants: [{ name: 'Casimir Thornwhistle' }, { name: 'Dagny Velloreaux' }, { name: ZOE_META }],
+      title: 'Lantern Hikers',
+      messages: [
+        { sender_name: 'Dagny Velloreaux', timestamp_ms: 1759439649000, content: 'I can bring the stove' },
+        { sender_name: ZOE_META, timestamp_ms: 1759439451000, content: 'Who is in for the loop?' },
+      ],
+    });
+    // Two people, but renamed: the title names neither of them.
+    writeThread(root, 'renamed_303', {
+      participants: [{ name: 'Ivo Brackenridge' }, { name: ZOE_META }],
+      title: 'Ferry plans',
+      messages: [{ sender_name: ZOE_META, timestamp_ms: 1759000000000, content: 'Boat at 9' }],
+    });
+
+    return root;
+  }
+
+  async function fromMe(root: string): Promise<Record<string, unknown>> {
+    const fi = new FacebookFileImporter();
+    const pipeline: EmittedGraph[] = [];
+    await fi.fileImport({}, { filename: path.basename(root), fullPath: root }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    return Object.fromEntries(
+      pipeline
+        .filter((p) => p.item.classification === 'message')
+        .map((p) => [p.item.metadata.Text as string, p.item.metadata['From Me']]),
+    );
+  }
+
+  it("marks the profile owner's messages, in one-to-one and group threads alike", async () => {
+    expect(await fromMe(buildExport(true))).toEqual({
+      'See you at the trailhead at 7 then': true,
+      'Here is the ridge': false,
+      'I can bring the stove': false,
+      'Who is in for the loop?': true,
+      'Boat at 9': true,
+    });
+  });
+
+  it('without a profile, still tells in a one-to-one thread and leaves the rest to the push', async () => {
+    expect(await fromMe(buildExport(false))).toEqual({
+      'See you at the trailhead at 7 then': true,
+      'Here is the ridge': false,
+      'I can bring the stove': undefined,
+      'Who is in for the loop?': undefined,
+      'Boat at 9': undefined,
+    });
+  });
+
+  it('reads the owner from the profile key exports used before profile_v2', async () => {
+    const root = buildExport(false);
+    fs.mkdirSync(path.join(root, 'profile_information'));
+    fs.writeFileSync(
+      path.join(root, 'profile_information', 'profile_information.json'),
+      JSON.stringify({ profile: { name: { full_name: ZOE_META } } }),
+    );
+
+    expect((await fromMe(root))['Who is in for the loop?']).toBe(true);
+  });
+
+  it('ignores a profile name nobody in the thread goes by', async () => {
+    const root = buildExport(false);
+    const profileDir = path.join(root, 'personal_information', 'profile_information');
+    fs.mkdirSync(profileDir, { recursive: true });
+    // Renamed since: the threads still carry the name the messages were sent under.
+    fs.writeFileSync(
+      path.join(profileDir, 'profile_information.json'),
+      JSON.stringify({ profile_v2: { name: { full_name: 'Zoe Ashcombe' } } }),
+    );
+
+    // The one-to-one thread still tells; the rest is left to the push.
+    expect(await fromMe(root)).toEqual({
+      'See you at the trailhead at 7 then': true,
+      'Here is the ridge': false,
+      'I can bring the stove': undefined,
+      'Who is in for the loop?': undefined,
+      'Boat at 9': undefined,
+    });
+  });
+
+  it("leaves a sender who is not on the thread's roster to the push", async () => {
+    const root = buildExport(false);
+    // A one-to-one thread with a message under a name neither participant has now.
+    writeThread(root, 'casimir_404', {
+      participants: [{ name: 'Casimir Thornwhistle' }, { name: ZOE_META }],
+      title: 'Casimir Thornwhistle',
+      messages: [
+        { sender_name: 'Zoe Ashcombe', timestamp_ms: 1758000000000, content: 'Sent under my old name' },
+        { sender_name: 'Casimir Thornwhistle', timestamp_ms: 1758000100000, content: 'Got it' },
+      ],
+    });
+
+    const marks = await fromMe(root);
+    expect(marks['Sent under my old name']).toBeUndefined();
+    expect(marks['Got it']).toBe(false);
+  });
+
+  it('works out the owner of a one-to-one HTML thread from its folder name', async () => {
+    const root = path.join(FIXTURES_DIR, 'facebook-html-export');
+    const fi = new FacebookFileImporter();
+    const pipeline: EmittedGraph[] = [];
+    await fi.fileImport({}, { filename: 'facebook-html-export', fullPath: root }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    const messages = pipeline.filter((p) => p.item.classification === 'message');
+    expect(messages.map((p) => [p.item.metadata.Sender, p.item.metadata['From Me']])).toEqual([
+      ['Alice Smith', false],
+      ['Test User', true],
+    ]);
   });
 });
 

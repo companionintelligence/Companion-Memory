@@ -38,6 +38,14 @@ describeWithDb(`Daily stats over a thing's acquired date (${availability.target}
   const PICKED = { id: uuidv7(), acquiredAt: '2026-10-01T00:00:00.000Z', price: 40 };
   /** An order placed at 8 pm on Sep 30 in Los Angeles, already Oct 1 in UTC and in Tokyo. */
   const ORDERED = { id: uuidv7(), acquiredAt: '2026-10-01T03:00:00.000Z', price: 15 };
+  /**
+   * Two purchases on Nov 5, one paid in Robux. An import keeps "1200 Robux" on
+   * the thing as written; summed with the dollars it would read as $1,204.99.
+   */
+  const ROBUX = { id: uuidv7(), acquiredAt: '2026-11-05T09:12:45.000Z', price: 1200, currency: 'Robux' };
+  const DOLLARS = { id: uuidv7(), acquiredAt: '2026-11-05T12:00:00.000Z', price: 4.99, currency: 'USD' };
+  /** Nov 6 has only a Robux price, so it has no spend to report. */
+  const ROBUX_ONLY = { id: uuidv7(), acquiredAt: '2026-11-06T09:00:00.000Z', price: 400, currency: 'Robux' };
 
   async function inventoryFor(
     day: string,
@@ -90,6 +98,9 @@ describeWithDb(`Daily stats over a thing's acquired date (${availability.target}
     for (const [name, thing] of [
       ['Picked grinder', PICKED],
       ['Ordered kettle', ORDERED],
+      ['Sparkle Time Fedora', ROBUX],
+      ['400 Robux', DOLLARS],
+      ['Robux emote', ROBUX_ONLY],
     ] as const) {
       await dataSource.query(
         `INSERT INTO ci.entities (entity_id, entity_type, name, owner_user_id, linked_table, linked_id)
@@ -97,9 +108,9 @@ describeWithDb(`Daily stats over a thing's acquired date (${availability.target}
         [thing.id, name, userId],
       );
       await dataSource.query(
-        `INSERT INTO ci.objects (object_id, user_id, entity_type, acquired_at, purchase_price)
-         VALUES ($1::uuid, $2::uuid, 'Item', $3::timestamptz, $4)`,
-        [thing.id, userId, thing.acquiredAt, thing.price],
+        `INSERT INTO ci.objects (object_id, user_id, entity_type, acquired_at, purchase_price, currency)
+         VALUES ($1::uuid, $2::uuid, 'Item', $3::timestamptz, $4, COALESCE($5, 'USD'))`,
+        [thing.id, userId, thing.acquiredAt, thing.price, 'currency' in thing ? thing.currency : null],
       );
     }
   });
@@ -133,7 +144,17 @@ describeWithDb(`Daily stats over a thing's acquired date (${availability.target}
   });
 
   it('lists the same days as having data', async () => {
-    await expect(daysWithData('America/Los_Angeles')).resolves.toEqual(['2026-10-01', '2026-09-30']);
-    await expect(daysWithData('Asia/Tokyo')).resolves.toEqual(['2026-10-01']);
+    await expect(daysWithData('America/Los_Angeles')).resolves.toEqual([
+      '2026-11-05',
+      '2026-10-01',
+      '2026-09-30',
+    ]);
+    await expect(daysWithData('Asia/Tokyo')).resolves.toEqual(['2026-11-05', '2026-10-01']);
+  });
+
+  it('spends only the prices that are in a currency', async () => {
+    // The Robux thing still counts as a thing that day, just not as money.
+    await expect(inventoryFor('2026-11-05', 'UTC')).resolves.toEqual({ rows: 2, priced: 1, sum: 4.99 });
+    await expect(inventoryFor('2026-11-06', 'UTC')).resolves.toEqual({ rows: 1, priced: 0, sum: 0 });
   });
 });

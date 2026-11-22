@@ -8,10 +8,11 @@ import {
   isAndroidPlatform,
   isNativePlatform,
 } from '@ci/common';
-import { Button, Card, Label, Select, Switch } from '@ci/shadcn';
-import { LockKeyhole } from '@ci/shadcn/icons';
+import { Button, Select, Switch } from '@ci/shadcn';
 
 import { useAppLock } from '@/hooks/useAppLock';
+
+import { SettingsFooter, SettingsGroup, SettingsRow, SettingsSection, SettingsStatus } from '../kit';
 
 /**
  * Settings → App lock: require your face, fingerprint or device passcode to open the
@@ -26,16 +27,14 @@ export function AppLockSection() {
 
   if (!isNativePlatform() || status === null) {
     return (
-      <Card>
-        <Card.Header>
-          <Card.Title>App lock</Card.Title>
-          <Card.Description>
-            {isNativePlatform()
-              ? 'Checking this device…'
-              : 'The app lock is available in the iOS and Android apps, where your face, fingerprint or passcode can guard the app.'}
-          </Card.Description>
-        </Card.Header>
-      </Card>
+      <SettingsSection
+        title="App lock"
+        description={
+          isNativePlatform()
+            ? 'Checking this device…'
+            : 'The app lock is available in the iOS and Android apps, where your face, fingerprint or passcode can guard the app.'
+        }
+      />
     );
   }
 
@@ -64,38 +63,44 @@ export function AppLockSection() {
     });
 
   return (
-    <Card>
-      <Card.Header>
-        <Card.Title className="flex items-center gap-2">
-          <LockKeyhole className="h-5 w-5" aria-hidden />
-          App lock
-        </Card.Title>
-        <Card.Description>
-          Ask for your face, fingerprint or device passcode before showing your memory. Captures and sync keep
-          running behind the lock; only the screen is covered.
-        </Card.Description>
-      </Card.Header>
-      <Card.Content className="space-y-6">
-        <div className="flex items-start justify-between gap-4">
-          <div className="space-y-1">
-            <Label htmlFor="app-lock-enabled">Require unlock</Label>
-            <p className="text-sm text-muted-foreground">{describeBiometry(status.biometry)}</p>
-            {!status.available && status.reason ? (
-              <p className="text-sm text-destructive">{status.reason}</p>
-            ) : null}
-          </div>
-          <Switch
-            id="app-lock-enabled"
-            checked={status.enabled}
-            disabled={busy || (!status.enabled && !status.available)}
-            onCheckedChange={(checked) => void toggleEnabled(checked)}
-          />
-        </div>
+    <SettingsSection
+      title="App lock"
+      description="Ask for your face, fingerprint or device passcode before showing your memory."
+      help="Captures and sync keep running behind the lock; only the screen is covered."
+    >
+      <SettingsGroup>
+        <SettingsRow
+          label="Require unlock"
+          htmlFor="app-lock-enabled"
+          hint={
+            <>
+              {describeBiometry(status.biometry)}
+              {!status.available && status.reason ? (
+                <span className="mt-1 block text-destructive">{status.reason}</span>
+              ) : null}
+            </>
+          }
+          control={
+            <Switch
+              id="app-lock-enabled"
+              checked={status.enabled}
+              disabled={busy || (!status.enabled && !status.available)}
+              onCheckedChange={(checked) => void toggleEnabled(checked)}
+            />
+          }
+        />
 
-        {notice ? <p className="text-sm text-muted-foreground">{notice}</p> : null}
+        {notice ? (
+          <SettingsRow>
+            <SettingsStatus>{notice}</SettingsStatus>
+          </SettingsRow>
+        ) : null}
 
-        <div className="space-y-2">
-          <Label htmlFor="app-lock-grace">Lock again</Label>
+        <SettingsRow
+          label="Lock again"
+          htmlFor="app-lock-grace"
+          hint={APP_LOCK_GRACE_LABELS[status.grace].hint}
+        >
           <Select
             value={status.grace}
             disabled={busy || !status.enabled}
@@ -112,34 +117,33 @@ export function AppLockSection() {
               ))}
             </Select.Content>
           </Select>
-          <p className="text-sm text-muted-foreground">{APP_LOCK_GRACE_LABELS[status.grace].hint}</p>
-        </div>
+        </SettingsRow>
 
         {/* Android only: FLAG_SECURE is a real choice there. iOS always blurs the app in
             the switcher while the lock is on and has no screenshot block, so a switch
             would do nothing and is not shown. */}
         {isAndroidPlatform() && (
-          <div className="flex items-start justify-between gap-4">
-            <div className="space-y-1">
-              <Label htmlFor="app-lock-secure">Hide in app switcher and prevent screenshots</Label>
-              <p className="text-sm text-muted-foreground">
-                Shows a blank card in recent apps and blocks screenshots and screen recording, including your
-                own.
-              </p>
-            </div>
-            <Switch
-              id="app-lock-secure"
-              checked={status.secureScreen}
-              disabled={busy || !status.enabled}
-              onCheckedChange={(checked) => void run(() => configure({ secureScreen: checked }))}
-            />
-          </div>
+          <SettingsRow
+            label="Hide in app switcher and prevent screenshots"
+            htmlFor="app-lock-secure"
+            hint="Shows a blank card in recent apps and blocks screenshots and screen recording, including your own."
+            control={
+              <Switch
+                id="app-lock-secure"
+                checked={status.secureScreen}
+                disabled={busy || !status.enabled}
+                onCheckedChange={(checked) => void run(() => configure({ secureScreen: checked }))}
+              />
+            }
+          />
         )}
 
-        <Button variant="outline" disabled={busy || !status.enabled} onClick={() => void run(lock)}>
-          Lock now
-        </Button>
-      </Card.Content>
-    </Card>
+        <SettingsFooter>
+          <Button variant="outline" disabled={busy || !status.enabled} onClick={() => void run(lock)}>
+            Lock now
+          </Button>
+        </SettingsFooter>
+      </SettingsGroup>
+    </SettingsSection>
   );
 }

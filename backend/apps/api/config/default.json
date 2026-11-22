@@ -314,7 +314,7 @@
     "handle": "",
     "audience": "",
     "timeoutMs": 10000,
-    "requireHttpSignature": false,
+    "requireHttpSignature": true,
     "signingKeyJwk": "",
     "allowCgnatEndpoints": false,
     "localPubEnabled": false

@@ -739,6 +739,38 @@ export class AskResolver {
     };
   }
 
+  /**
+   * Fetch the answer to one of the caller's own outbound asks from the peer it
+   * went to, now, instead of waiting for `PeerAnswerCollectionCron`. An ask
+   * already answered returns the stored answer without calling the peer.
+   */
+  @Mutation(() => SendPeerAskPayload)
+  // Reaches another Companion, as sendPeerAsk does.
+  @GraphqlPrivacy({ external: true })
+  async collectPeerAnswer(
+    @Context() context: RequestContext,
+    @Args('askId', { type: () => ID }) gid: string,
+  ): Promise<SendPeerAskPayload> {
+    if (!(await this.enabled())) {
+      return { success: false };
+    }
+
+    const serviceContext = toServiceContext(context);
+    await this.rateLimitService.consume(serviceContext.userId);
+
+    const { ask, response } = await this.outboundAskService.pollForAnswer(
+      serviceContext,
+      GlobalUID.parse('ask', gid),
+    );
+
+    return {
+      success: true,
+      ask: await this.toAskType(serviceContext, ask),
+      status: response.status,
+      reason: response.reason,
+    };
+  }
+
   @Mutation(() => AskGrantPayload)
   @GraphqlPrivacy({ destructive: false })
   async createAskGrant(

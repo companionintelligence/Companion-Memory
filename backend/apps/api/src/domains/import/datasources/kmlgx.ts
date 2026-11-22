@@ -22,21 +22,73 @@ interface KMLGXOptions {
   ownerEntityId?: number;
 }
 
+interface KMLTrack {
+  when?: string[];
+  coord?: string[];
+}
+
+/** An element that can hold a gx:Track, as xml2js parses it (prefixes stripped). */
+interface KMLNode {
+  Track?: unknown[];
+  Document?: unknown[];
+  Folder?: unknown[];
+  Placemark?: unknown[];
+  MultiTrack?: unknown[];
+  MultiGeometry?: unknown[];
+}
+
 interface KMLDocument {
-  kml?: {
+  kml?: KMLNode & {
     // xml2js stores namespace declarations as attribute keys. The realistic
     // Google KML attribute is `xmlns:gx`; attrNameProcessors doesn't strip
     // namespace declarations, so we check both `gx` and `xmlns:gx`.
     $?: { gx?: string; [key: string]: string | undefined };
-    Document?: Array<{
-      Placemark?: Array<{
-        Track?: Array<{
-          when?: string[];
-          coord?: string[];
-        }>;
-      }>;
-    }>;
   };
+}
+
+// A gx:Track is the geometry of a Placemark, directly or inside a gx:MultiTrack
+// or MultiGeometry. A Placemark can sit at the root or in Documents and Folders
+// nested to any depth. Reading only Document > Placemark > gx:Track lost every
+// track kept in a Folder or a gx:MultiTrack without a word.
+const TRACK_CONTAINERS = ['Document', 'Folder', 'Placemark', 'MultiTrack', 'MultiGeometry'] as const;
+
+function isElement(value: unknown): value is object {
+  // An element with no children parses to '' rather than an object.
+  return typeof value === 'object' && value !== null;
+}
+
+function collectTracks(root: KMLNode): KMLTrack[] {
+  const tracks: KMLTrack[] = [];
+  // A stack rather than recursion and one push per track rather than
+  // `push(...tracks)`: the nesting depth and the number of children are
+  // whatever the file says. Either one could overflow the call stack and lose
+  // every track in the file. Children go on in reverse so they come off in the
+  // order xml2js lists them. That is document order among elements of one name
+  // but not across names, because xml2js groups same-named children: a Folder's
+  // tracks come out before those of a Placemark written ahead of the Folder.
+  const stack: KMLNode[] = [root];
+  for (let node = stack.pop(); node; node = stack.pop()) {
+    for (const track of node.Track ?? []) {
+      if (isElement(track)) {
+        tracks.push(track);
+      }
+    }
+
+    const children: KMLNode[] = [];
+    for (const key of TRACK_CONTAINERS) {
+      for (const child of node[key] ?? []) {
+        if (isElement(child)) {
+          children.push(child);
+        }
+      }
+    }
+
+    for (let k = children.length - 1; k >= 0; k--) {
+      stack.push(children[k]);
+    }
+  }
+
+  return tracks;
 }
 
 const GX_NS_PREFIX = 'http://www.google.com/kml/ext/2';
@@ -122,9 +174,7 @@ export class KMLGXFileImporter implements FileImporter {
         return;
       }
 
-      const tracks = (doc.kml?.Document || [])
-        .flatMap((d) => d.Placemark || [])
-        .flatMap((p) => p.Track || []);
+      const tracks = doc.kml ? collectTracks(doc.kml) : [];
       for (const track of tracks) {
         const whens = track.when || [];
         const coords = track.coord || [];

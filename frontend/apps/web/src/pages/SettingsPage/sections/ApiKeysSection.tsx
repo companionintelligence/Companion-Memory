@@ -19,7 +19,6 @@ import {
   Badge,
   Button,
   Calendar,
-  Card,
   Checkbox,
   Dialog,
   IconButton,
@@ -33,6 +32,15 @@ import { useTranslation } from 'react-i18next';
 
 import { useNeedsWebSignIn, WebSignInRequired } from '@/components/WebSignInRequired';
 import { useAuth } from '@/hooks';
+
+import {
+  SettingsCard,
+  SettingsEmpty,
+  SettingsLoading,
+  SettingsNotice,
+  SettingsRow,
+  SettingsSection,
+} from '../kit';
 
 interface ApiKeyResponse {
   id: string;
@@ -447,188 +455,165 @@ export function ApiKeysSection() {
 
   if (needsWebSignIn) {
     return (
-      <>
-        <div className="mb-6">
-          <h2 className="text-xl font-semibold">API keys</h2>
-          <p className="text-sm text-muted-foreground mt-1">
-            Create keys to grant other applications access to your account.
-          </p>
-        </div>
-
+      <SettingsSection
+        title="API keys"
+        description="Create keys to grant other applications access to your account."
+      >
         <WebSignInRequired>
           API keys are created, listed and revoked from a web sign-in only. This app signs in with its own
           device key, and a key is never allowed to mint or revoke keys — that way a leaked key cannot outlive
           its revocation. Open Companion Memory in a web browser and sign in to manage your keys.
         </WebSignInRequired>
-      </>
+      </SettingsSection>
     );
   }
 
   return (
-    <>
-      <div className="mb-6 flex items-center justify-between">
-        <div>
-          <h2 className="text-xl font-semibold">API keys</h2>
-          <p className="text-sm text-muted-foreground mt-1">
-            Create keys to grant other applications access to your account.
-          </p>
-        </div>
-        {/* Icon-only trigger: without an explicit label it reaches assistive tech as an unnamed button. */}
-        <IconButton
-          variant="outline"
-          label={t('SETTINGS_API_KEY_CREATE')}
-          onClick={() => setCreateOpen(true)}
+    <SettingsSection
+      title="API keys"
+      description="Create keys to grant other applications access to your account."
+      actions={
+        <Button variant="outline" onClick={() => setCreateOpen(true)}>
+          <Plus aria-hidden="true" />
+          {t('SETTINGS_API_KEY_CREATE')}
+        </Button>
+      }
+    >
+      {error ? <SettingsNotice tone="error">{error}</SettingsNotice> : null}
+
+      {revealedKey ? (
+        <SettingsNotice
+          tone="success"
+          title="Your new API key has been created."
+          action={
+            <IconButton
+              variant="ghost"
+              size="icon-sm"
+              label={t('SETTINGS_API_KEY_DISMISS_BANNER')}
+              onClick={() => {
+                setRevealedKey(null);
+                setCopied(false);
+              }}
+            >
+              <X />
+            </IconButton>
+          }
         >
-          <Plus className="h-4 w-4" />
-        </IconButton>
-      </div>
+          <div className="mt-2 flex items-center gap-1.5 rounded-md border bg-background p-1.5 text-foreground shadow-xs">
+            <Input
+              readOnly
+              value={revealedKey}
+              className="!ml-1 !h-auto !flex-1 !rounded-none !border-0 !bg-transparent !p-0 font-mono text-base !shadow-none !ring-0 focus-visible:!border-transparent focus-visible:!ring-0 md:text-sm"
+            />
+            <IconButton
+              variant="ghost"
+              size="icon-sm"
+              label={t('SETTINGS_API_KEY_COPY')}
+              onClick={() => copyToClipboard(revealedKey)}
+              className="transition-transform duration-200 ease-out active:scale-90"
+            >
+              {copied ? <Check className="text-teal-700 dark:text-teal-300" /> : <ClipboardCopy />}
+            </IconButton>
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">The key value won&apos;t be shown again.</p>
+        </SettingsNotice>
+      ) : null}
 
-      {error && (
-        <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-400">
-          {error}
-        </div>
-      )}
-
-      {/* Revealed key banner */}
-      {revealedKey && (
-        <Card className="mb-4 border-green-200 dark:border-green-800 relative">
-          <IconButton
-            variant="ghost"
-            label={t('SETTINGS_API_KEY_DISMISS_BANNER')}
-            className="absolute top-3 right-3 h-6 w-6"
-            onClick={() => {
-              setRevealedKey(null);
-              setCopied(false);
-            }}
-          >
-            <X className="h-3 w-3" />
-          </IconButton>
-          <Card.Content className="space-y-4">
-            <p className="text-sm font-medium text-green-700 dark:text-green-400 pr-8">
-              Your new API key has been created.
-            </p>
-            <div className="flex items-center gap-1.5 p-1.5 border shadow-xs rounded-md bg-background">
-              <Input
-                readOnly
-                value={revealedKey}
-                className="!flex-1 !border-0 !ring-0 !shadow-none !bg-transparent !p-0 !ml-1 !h-auto !rounded-none font-mono text-base md:text-sm focus-visible:!ring-0 focus-visible:!border-transparent"
-              />
-              <IconButton
-                variant="ghost"
-                size="sm"
-                label={t('SETTINGS_API_KEY_COPY')}
-                onClick={() => copyToClipboard(revealedKey)}
-                className="cursor-pointer h-8 w-8 p-0 active:scale-90 transition-transform duration-200 ease-out will-change-transform"
-              >
-                {copied ? (
-                  <Check className="h-4 w-4 text-green-600" />
-                ) : (
-                  <ClipboardCopy className="h-4 w-4" />
-                )}
-              </IconButton>
-            </div>
-            <p className="text-xs text-muted-foreground">The key value won't be shown again.</p>
-          </Card.Content>
-        </Card>
-      )}
-
-      {/* Key list */}
       {loading ? (
-        <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">Loading…</div>
+        <SettingsCard>
+          <SettingsLoading />
+        </SettingsCard>
       ) : keys.length === 0 ? (
         // A failed load leaves the list empty. The banner above already says so; "No API keys
         // created yet." under it would contradict it.
         loadFailed ? null : (
-          <Card>
-            <Card.Content className="flex flex-col items-center justify-center py-12 text-center">
-              <p className="text-sm text-muted-foreground">No API keys created yet.</p>
-            </Card.Content>
-          </Card>
+          <SettingsCard>
+            <SettingsEmpty icon={<KeyRound />} title="No API keys created yet." />
+          </SettingsCard>
         )
       ) : (
-        <div className="space-y-3">
+        <SettingsCard>
           {keys.map((key) => (
-            <Card key={key.id}>
-              <Card.Content className="flex items-center justify-between">
-                <div className="min-w-0 flex-1 space-y-4">
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium truncate">{key.name}</span>
-                    {isExpired(key.expires_at) && (
-                      <Badge variant="destructive" className="text-xs">
-                        Expired
-                      </Badge>
-                    )}
-                  </div>
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    {isHubManagedKey(key) ? (
-                      <Badge
-                        variant="outline"
-                        className="border-emerald-500/30 bg-emerald-500/10 text-xs text-emerald-600 dark:text-emerald-400"
-                      >
-                        <Lock />
-                        Managed by Companion Hub
-                      </Badge>
-                    ) : key.scopes.length === 0 ? (
-                      <Badge variant="outline" className="text-xs">
-                        <KeyRound />
-                        All areas
-                      </Badge>
-                    ) : (
-                      key.scopes.map((scope) => (
-                        <Badge key={scope} variant="outline" className="text-xs">
-                          {scope}
-                        </Badge>
-                      ))
-                    )}
-                    {/* Shown for every key, including Hub-managed and full-surface ones: the scope
-                        badges say where a key reaches, and without this the row never says whether
-                        it can delete what it finds there. */}
-                    <Badge
-                      variant="outline"
-                      className={`text-xs ${CAPABILITY_BADGE_CLASS[capabilityOf(key)]}`}
-                    >
-                      {CAPABILITY_LABELS[capabilityOf(key)]}
-                    </Badge>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                    <span>
-                      Key: <code className="font-mono">{key.prefix}…</code>
-                    </span>
-                    <span>Created {formatDate(key.created_at)}</span>
-                    {key.expires_at && <span>Expires {formatDate(key.expires_at)}</span>}
-                    {key.last_used_at && <span>Last used {formatDate(key.last_used_at)}</span>}
-                  </div>
-                </div>
-                <div className="ml-4 flex items-center gap-1">
+            <SettingsRow
+              key={key.id}
+              label={<span className="block truncate">{key.name}</span>}
+              meta={
+                isExpired(key.expires_at) ? (
+                  <Badge variant="destructive" className="text-xs">
+                    Expired
+                  </Badge>
+                ) : null
+              }
+              align="start"
+              control={
+                <>
                   <IconButton
                     variant="ghost"
-                    className="h-8 w-8"
                     onClick={() => openEdit(key)}
                     label={t('SETTINGS_API_KEY_EDIT', { name: key.name })}
                     tooltip={isHubManagedKey(key) ? t('SETTINGS_API_KEY_HUB_MANAGED') : undefined}
                   >
-                    <Pencil className="h-4 w-4" />
+                    <Pencil />
                   </IconButton>
                   <IconButton
                     variant="ghost"
-                    className="h-8 w-8 text-red-600 hover:text-red-700"
+                    className="text-destructive hover:text-destructive"
                     onClick={() => openDelete(key)}
                     label={t('SETTINGS_API_KEY_DELETE', { name: key.name })}
                   >
-                    <Trash className="h-4 w-4" />
+                    <Trash />
                   </IconButton>
+                </>
+              }
+            >
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {isHubManagedKey(key) ? (
+                    <Badge
+                      variant="outline"
+                      className="border-emerald-500/30 bg-emerald-500/10 text-xs text-emerald-600 dark:text-emerald-400"
+                    >
+                      <Lock />
+                      Managed by Companion Hub
+                    </Badge>
+                  ) : key.scopes.length === 0 ? (
+                    <Badge variant="outline" className="text-xs">
+                      <KeyRound />
+                      All areas
+                    </Badge>
+                  ) : (
+                    key.scopes.map((scope) => (
+                      <Badge key={scope} variant="outline" className="text-xs">
+                        {scope}
+                      </Badge>
+                    ))
+                  )}
+                  {/* Shown for every key, including Hub-managed and full-surface ones: the scope
+                      badges say where a key reaches, and without this the row never says whether
+                      it can delete what it finds there. */}
+                  <Badge variant="outline" className={`text-xs ${CAPABILITY_BADGE_CLASS[capabilityOf(key)]}`}>
+                    {CAPABILITY_LABELS[capabilityOf(key)]}
+                  </Badge>
                 </div>
-              </Card.Content>
-            </Card>
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                  <span>
+                    Key: <code className="font-mono">{key.prefix}…</code>
+                  </span>
+                  <span>Created {formatDate(key.created_at)}</span>
+                  {key.expires_at && <span>Expires {formatDate(key.expires_at)}</span>}
+                  {key.last_used_at && <span>Last used {formatDate(key.last_used_at)}</span>}
+                </div>
+              </div>
+            </SettingsRow>
           ))}
-        </div>
+        </SettingsCard>
       )}
 
       {/* Create dialog */}
       <Dialog open={createOpen} onOpenChange={handleCreateOpenChange}>
         <Dialog.Content>
           <Dialog.Header>
-            <Dialog.Title>Create API Key</Dialog.Title>
+            <Dialog.Title>Create API key</Dialog.Title>
           </Dialog.Header>
           <div className="space-y-4 py-2">
             <div className="grid gap-2">
@@ -800,7 +785,7 @@ export function ApiKeysSection() {
           {editStep === 'form' ? (
             <>
               <Dialog.Header>
-                <Dialog.Title>Edit API Key</Dialog.Title>
+                <Dialog.Title>Edit API key</Dialog.Title>
                 <Dialog.Description>
                   The key value does not change, so anything using it keeps working — with the access you
                   choose here.
@@ -907,14 +892,14 @@ export function ApiKeysSection() {
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <Dialog.Content>
           <Dialog.Header>
-            <Dialog.Title>Delete API Key</Dialog.Title>
+            <Dialog.Title>Delete API key?</Dialog.Title>
             <Dialog.Description>
               Are you sure you want to delete the <strong>{deleteKey?.name}</strong> key? Any integrations
               using this key will stop working. This action cannot be undone.
             </Dialog.Description>
           </Dialog.Header>
           {deleteKey && isHubManagedKey(deleteKey) && (
-            <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300">
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-200">
               This key is managed by Companion Hub for a connected app. Deleting it here will break that app's
               memory connection — to disconnect cleanly, use <strong>Disconnect Memory</strong> on the app's
               page in Hub instead.
@@ -930,6 +915,6 @@ export function ApiKeysSection() {
           </Dialog.Footer>
         </Dialog.Content>
       </Dialog>
-    </>
+    </SettingsSection>
   );
 }

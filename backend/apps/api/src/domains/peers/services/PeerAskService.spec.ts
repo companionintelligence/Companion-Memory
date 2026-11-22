@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException } from '@nestjs/common';
 
 import { AskEntity, AskExecutorService, GrantService, TERMINAL_ASK_STATUSES } from '@ci/domains/asks';
 
+import { PeerIdentityKeyEntity } from '../entities/PeerIdentityKeyEntity';
 import { PEER_ASK_NO_ANSWER_REASON, PEER_ASK_PENDING, type PeerAskBody } from '../protocol';
 
 import { requestDigest } from './PeerAskCorrelationService';
@@ -54,6 +55,8 @@ function makeService(
     storedAnswer?: unknown;
     /** The status the persisted ask row starts at (a replay reads it). */
     askStatus?: string;
+    /** Live did:keys on this box, by owner: what a named `recipient` is looked up in. */
+    keys?: Record<string, string>;
   } = {},
 ) {
   const peerLinkService = {
@@ -153,10 +156,21 @@ function makeService(
     create: jest.fn().mockImplementation((row: unknown) => row),
     save: jest.fn().mockImplementation((row: unknown) => Promise.resolve(row)),
   };
+  const identityKeyRepository = {
+    findOne: jest.fn().mockImplementation(({ where }: { where: { didKey: string; status: string } }) => {
+      const owner = Object.entries(opts.keys ?? {}).find(([, didKey]) => didKey === where.didKey)?.[0];
+
+      return Promise.resolve(owner != null && where.status === 'active' ? { userId: owner } : null);
+    }),
+  };
   const eventRepository = {
     find: jest.fn().mockResolvedValue(opts.events ?? []),
     manager: {
-      getRepository: jest.fn().mockReturnValue(correlationRepository),
+      getRepository: jest
+        .fn()
+        .mockImplementation((entity: unknown) =>
+          entity === PeerIdentityKeyEntity ? identityKeyRepository : correlationRepository,
+        ),
       transaction: jest.fn().mockImplementation(async (work: (m: unknown) => Promise<unknown>) => {
         transacting = true;
         try {
@@ -215,6 +229,67 @@ function makeService(
     writes,
   };
 }
+
+describe('PeerAskService — two people here linked to the same asker', () => {
+  const BOB = 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK';
+  const CAROL = 'did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH';
+  const household = () => [
+    link({ id: 'link-bob', ownerUserId: 'bob' }),
+    link({ id: 'link-carol', ownerUserId: 'carol' }),
+  ];
+  const ask = (recipient?: string): PeerAskBody => ({
+    ...body({ archetype: 'relationship', subject: 'X' }),
+    ...(recipient ? { recipient } : {}),
+  });
+
+  it('answers as the person the ask names', async () => {
+    const { service, askService } = makeService({ links: household(), keys: { bob: BOB, carol: CAROL } });
+
+    // What follows the routing reads this suite's fixed ask row, owned by `owner-1`; only the routing matters here.
+    await service.handle(PEER, ask(CAROL)).catch(() => undefined);
+
+    expect(askService.create).toHaveBeenCalledWith(
+      { userId: 'carol' },
+      expect.objectContaining({ peerLinkId: 'link-carol', responderUserId: 'carol' }),
+    );
+  });
+
+  it('still refuses when no one is named, rather than pick a member', async () => {
+    const { service, askService } = makeService({ links: household(), keys: { bob: BOB, carol: CAROL } });
+
+    await expect(service.handle(PEER, ask())).rejects.toThrow('Ambiguous peer link');
+    expect(askService.create).not.toHaveBeenCalled();
+  });
+
+  it('never answers through another member’s link when the person named is not linked to the asker', async () => {
+    const { service, askService } = makeService({
+      links: [link({ id: 'link-bob', ownerUserId: 'bob' })],
+      keys: { bob: BOB, carol: CAROL },
+    });
+
+    await expect(service.handle(PEER, ask(CAROL))).rejects.toThrow('No peer link');
+    expect(askService.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a recipient who holds no live key here', async () => {
+    const { service } = makeService({ links: household(), keys: { bob: BOB } });
+
+    await expect(service.handle(PEER, ask(CAROL))).rejects.toThrow('No peer link');
+  });
+
+  it('collects from the link the ask came in on, with no recipient needed', async () => {
+    const { service, correlationRepository } = makeService({ links: household() });
+    correlationRepository.findOne.mockImplementation(({ where }: { where: { peerLinkId: string } }) =>
+      Promise.resolve(where.peerLinkId === 'link-carol' ? { askId: 'ask-1', requestDigest: 'x' } : null),
+    );
+
+    await service.result(PEER, 'ask-corr-1');
+
+    expect(correlationRepository.findOne).toHaveBeenCalledWith({
+      where: { peerLinkId: 'link-carol', correlationId: 'ask-corr-1' },
+    });
+  });
+});
 
 describe('PeerAskService.handle', () => {
   it('refuses an unlinked peer', async () => {

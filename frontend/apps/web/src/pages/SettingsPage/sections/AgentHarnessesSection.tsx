@@ -1,10 +1,20 @@
 import { useCallback } from 'react';
 
-import { Button, Card, IconButton } from '@ci/shadcn';
-import { Bot, CheckCircle2, Circle, ExternalLink, Info, Link2 } from '@ci/shadcn/icons';
+import { Button, IconButton } from '@ci/shadcn';
+import { Bot, CheckCircle2, Circle, ExternalLink, Link2 } from '@ci/shadcn/icons';
 
 import { useAgentHarnesses, type AgentHarnessStatus } from '@/api/useAgentHarnesses';
 import { openAgentHarness } from '@/lib/agentChat';
+
+import {
+  InfoTip,
+  SettingsCard,
+  SettingsEmpty,
+  SettingsLoading,
+  SettingsNotice,
+  SettingsRow,
+  SettingsSection,
+} from '../kit';
 
 interface StatusField {
   key: 'installed' | 'connectedToMemory' | 'running' | 'accessible';
@@ -27,9 +37,9 @@ const STATUS_FIELDS: StatusField[] = [
 
 function StatusIndicator({ value }: { value: boolean }) {
   return value ? (
-    <CheckCircle2 className="h-4 w-4 flex-shrink-0 text-green-600 dark:text-green-500" />
+    <CheckCircle2 className="size-4 shrink-0 text-teal-700 dark:text-teal-300" aria-hidden="true" />
   ) : (
-    <Circle className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+    <Circle className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
   );
 }
 
@@ -62,7 +72,7 @@ export function connectDisabledReason(harness: AgentHarnessStatus): string {
     : 'Connect this app to Memory from the Companion Hub — there is no in-app flow for that yet.';
 }
 
-function HarnessCard({ harness }: { harness: AgentHarnessStatus }) {
+function HarnessRow({ harness }: { harness: AgentHarnessStatus }) {
   const openReason = openDisabledReason(harness);
   const connectReason = connectDisabledReason(harness);
 
@@ -73,62 +83,49 @@ function HarnessCard({ harness }: { harness: AgentHarnessStatus }) {
   }, [harness]);
 
   return (
-    <Card>
-      <Card.Content className="space-y-4 pt-6">
-        <div className="flex items-start gap-3">
-          <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-teal-500/15 text-teal-700 dark:text-teal-300">
-            <Bot className="h-4 w-4" />
-          </div>
-          <h3 className="text-base font-semibold text-foreground">{harness.name}</h3>
-        </div>
-
-        <div className="grid gap-2 border-t border-border pt-4 sm:grid-cols-2">
-          {STATUS_FIELDS.map((field) => {
-            const value = harness[field.key];
-
-            return (
-              <div key={field.key} className="flex items-center gap-1.5 text-sm">
-                <StatusIndicator value={value} />
-                <span className={value ? 'text-foreground' : 'text-muted-foreground'}>{field.label}</span>
-                {field.note && (
-                  <IconButton
-                    variant="ghost"
-                    size="icon-sm"
-                    label={field.note}
-                    className="h-4 w-4 text-muted-foreground hover:text-foreground"
-                  >
-                    <Info className="h-3 w-3" />
-                  </IconButton>
-                )}
-              </div>
-            );
-          })}
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
+    <SettingsRow
+      label={harness.name}
+      control={
+        <>
           <IconButton
             variant="outline"
-            size="sm"
+            size="default"
             label={openReason ? `Open ${harness.name} — ${openReason}` : `Open ${harness.name}`}
             disabled={openReason != null}
             onClick={handleOpen}
           >
-            <ExternalLink className="mr-1.5 h-3.5 w-3.5" strokeWidth={1.5} />
+            <ExternalLink aria-hidden="true" />
             Open
           </IconButton>
 
           <IconButton
             variant="outline"
-            size="sm"
+            size="default"
             label={`Connect ${harness.name} to Memory — ${connectReason}`}
             disabled
           >
-            <Link2 className="mr-1.5 h-3.5 w-3.5" strokeWidth={1.5} />
+            <Link2 aria-hidden="true" />
             Connect
           </IconButton>
-        </div>
-      </Card.Content>
-    </Card>
+        </>
+      }
+    >
+      <div className="grid gap-x-6 gap-y-2 sm:grid-cols-2">
+        {STATUS_FIELDS.map((field) => {
+          const value = harness[field.key];
+
+          return (
+            <div key={field.key} className="flex items-center gap-1.5 text-sm">
+              <StatusIndicator value={value} />
+              <span className={value ? 'text-foreground' : 'text-muted-foreground'}>{field.label}</span>
+              {field.note ? (
+                <InfoTip label={`About ${field.label.toLowerCase()}`}>{field.note}</InfoTip>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    </SettingsRow>
   );
 }
 
@@ -136,39 +133,41 @@ export function AgentHarnessesSection() {
   const { harnesses, loading, error, reload } = useAgentHarnesses();
 
   return (
-    <>
-      <div className="mb-6">
-        <h2 className="text-xl font-semibold">Agents</h2>
-        <p className="text-sm text-muted-foreground mt-1">
-          Hermes and OpenClaw agent harnesses discovered through the Companion Hub — open one directly, or see
-          why it isn't reachable yet.
-        </p>
-      </div>
-
-      {error && (
-        <div className="mb-4 flex items-center justify-between gap-3 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-400">
+    <SettingsSection
+      title="Agents"
+      description="Agent apps Memory found through the Companion Hub."
+      help="Hermes and OpenClaw agent harnesses discovered through the Companion Hub. Open one directly, or see why it isn't reachable yet."
+    >
+      {error ? (
+        <SettingsNotice
+          tone="error"
+          action={
+            <Button size="sm" variant="outline" onClick={() => void reload()}>
+              Try again
+            </Button>
+          }
+        >
           {error}
-          <Button size="sm" variant="outline" onClick={() => void reload()}>
-            Try again
-          </Button>
-        </div>
-      )}
+        </SettingsNotice>
+      ) : null}
 
       {loading ? (
-        <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">Loading…</div>
+        <SettingsCard>
+          <SettingsLoading />
+        </SettingsCard>
       ) : harnesses.length === 0 ? (
-        <Card>
-          <Card.Content className="flex flex-col items-center justify-center py-12 text-center">
-            <p className="text-sm text-muted-foreground">No agent harnesses found.</p>
-          </Card.Content>
-        </Card>
+        error ? null : (
+          <SettingsCard>
+            <SettingsEmpty icon={<Bot />} title="No agent harnesses found." />
+          </SettingsCard>
+        )
       ) : (
-        <div className="space-y-3">
+        <SettingsCard>
           {harnesses.map((harness) => (
-            <HarnessCard key={harness.id} harness={harness} />
+            <HarnessRow key={harness.id} harness={harness} />
           ))}
-        </div>
+        </SettingsCard>
       )}
-    </>
+    </SettingsSection>
   );
 }
