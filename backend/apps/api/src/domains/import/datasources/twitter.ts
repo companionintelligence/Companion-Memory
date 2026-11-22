@@ -12,8 +12,10 @@
    no id linking the two; noteTweetTexts joins them on snowflake proximity so
    the post imports with its full body.
 
-   Grok conversation history also ships in this archive; it imports here as well
-   as from the standalone Grok card (_x_archive.ts, grok.ts).
+   Grok conversation history also ships in this archive. The grok importer reads
+   it (grok.ts, _x_archive.ts): it claims every archive that holds those chats,
+   and every importer that claims an upload runs, so reading them here as well
+   imported each Grok message twice.
 
    Media rides on its message as an attachment descriptor (metadata
    .MediaAttachments). The push uploads the bytes as a file, creates a content
@@ -30,7 +32,7 @@ import fs from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import { readStore, readManifest, importGrokChats } from './_x_archive';
+import { readStore, readManifest } from './_x_archive';
 import { parseFlexibleDate } from './dates';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
@@ -839,9 +841,6 @@ export class TwitterFileImporter implements FileImporter {
 
     this.importTweets(tweets, dataDir, owner, opts, params);
     this.importDirectMessages(dataDir, owner, handles, params);
-    // Grok ships inside the X archive, so the Twitter card imports it too —
-    // those rows keep `Source: 'Grok'` (see _x_archive.ts importGrokChats).
-    importGrokChats(root, params);
   }
 
   /* ---------------------------------------------------------------------- *

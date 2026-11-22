@@ -17,6 +17,41 @@ describe('Facebook datasource', () => {
     expect(rec.confidence).toBeGreaterThan(0.8);
   });
 
+  // Instagram's export keeps its DMs in your_instagram_activity/messages/inbox/,
+  // in Messenger's own file layout. Claiming that folder imported every
+  // Instagram DM a second time, labelled Facebook Messenger.
+  it("does not claim an Instagram export's your_instagram_activity folder", async () => {
+    const fi = new FacebookFileImporter();
+    for (const fixture of ['instagram-export', 'instagram-html-export']) {
+      const activity = path.join(FIXTURES_DIR, fixture, 'your_instagram_activity');
+      expect(fs.existsSync(path.join(activity, 'messages'))).toBe(true);
+      const rec = await fi.recognize({}, { filename: 'your_instagram_activity', fullPath: activity });
+      expect({ fixture, confidence: rec.confidence }).toEqual({ fixture, confidence: 0 });
+    }
+  });
+
+  it('still claims a Facebook export that holds only its messages folder', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-messages-only-'));
+    try {
+      const thread = path.join(dir, 'messages', 'inbox', 'alice_12345');
+      fs.mkdirSync(thread, { recursive: true });
+      fs.writeFileSync(
+        path.join(thread, 'message_1.json'),
+        JSON.stringify({
+          participants: [{ name: 'Alice' }, { name: 'Me' }],
+          messages: [{ sender_name: 'Alice', timestamp_ms: 1700000000000, content: 'hi' }],
+        }),
+      );
+      const rec = await new FacebookFileImporter().recognize(
+        {},
+        { filename: path.basename(dir), fullPath: dir },
+      );
+      expect(rec.confidence).toBeGreaterThan(0);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('imports messages and posts', async () => {
     const root = path.join(FIXTURES_DIR, 'facebook-export');
     const fi = new FacebookFileImporter();

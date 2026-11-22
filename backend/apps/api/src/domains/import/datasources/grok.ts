@@ -4,10 +4,9 @@
 
    1. THE REAL ONE — `data/grok-chat-item.js` inside an X (Twitter) archive.
       Verified against a June 2026 export; parsed by _x_archive.ts
-      importGrokChats, which the twitter importer also calls so the Twitter card
-      captures these chats as part of the whole archive. This card exists so a
-      user who only wants their Grok history can drop the same .zip and get
-      nothing else out of it.
+      importGrokChats. This importer is the only one that reads these chats:
+      every importer that claims an upload runs, so the twitter importer imports
+      the rest of the same archive and leaves the chats to this one.
 
    2. A standalone `grok*.json` array of conversations, kept below. No xAI export
       is known to produce this; it predates the archive shape above and stays as
@@ -246,14 +245,12 @@ export class GrokFileImporter implements FileImporter {
 
       // An X archive. Deliberately LOW, and deliberately not zero.
       //
-      // Not zero, because findImportRoots resolves an explicitly-chosen
-      // importer's roots with `confidence > 0` — this is what lets the Grok card
-      // accept the X .zip and import only the chats out of it.
+      // Not zero, because this importer is what reads the archive's Grok chats:
+      // the parse stage runs every importer that claims an upload, and the
+      // twitter importer no longer reads them itself.
       //
-      // Low, because dataSourcesRecognize ranks by confidence, and a bare drop
-      // of an X archive should go to the twitter importer (0.9+), which imports
-      // the whole archive INCLUDING these chats. Ranking above it would silently
-      // reduce a Twitter import to Grok messages alone.
+      // Low, because dataSourcesRecognize ranks by confidence and the archive is
+      // mostly X's: the twitter importer (0.9+) should lead the run's matches.
       if (await hasGrokChats(root)) {
         return { confidence: 0.3 };
       }
@@ -284,9 +281,8 @@ export class GrokFileImporter implements FileImporter {
       return;
     }
 
-    // An X archive: import ONLY the Grok chats out of it. The user picked the
-    // Grok card, so tweets and DMs are not what they asked for — the Twitter
-    // card is what imports the rest of the same .zip.
+    // An X archive: import ONLY the Grok chats out of it. The twitter importer
+    // claims the same archive and imports its tweets and DMs.
     if (isDir && (await hasGrokChats(root))) {
       importGrokChats(root, params);
 
