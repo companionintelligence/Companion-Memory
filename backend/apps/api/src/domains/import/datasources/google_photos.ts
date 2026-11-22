@@ -512,6 +512,10 @@ class GooglePhotosFileImporter implements FileImporter {
         continue;
       }
 
+      // Real names in this folder. Motion clips are matched against these, not
+      // with existsSync, which is case-insensitive on macOS.
+      const albumNames = new Set(files.map((x) => x.name));
+
       for (const f of files) {
         if (!f.isFile() || f.name.startsWith('.')) {
           continue;
@@ -665,7 +669,7 @@ class GooglePhotosFileImporter implements FileImporter {
           const baseName = path.basename(f.name, ext2);
           for (const mExt of ['.mp4', '.mov', '.MP4', '.MOV']) {
             const motionPath = path.join(albumPath, baseName + mExt);
-            if (fs.existsSync(motionPath)) {
+            if (albumNames.has(baseName + mExt)) {
               const motionItem = mediaItemFromFile(motionPath);
               motionItem.timestamp = item.timestamp;
               graph.edges!.push({ relation: 'motion_photo', to: { item: motionItem } });
