@@ -497,8 +497,14 @@ Four things about this surface are deliberate:
   `PeerLinkIdentityBinding.integration.spec.ts` for the proof.
 
 Two members of the same box may still each link the same peer. That collision is
-reachable on purpose: `findActiveByPeerIdentity` is box-wide, and `resolveLink`
-refuses two matches as an *"Ambiguous peer link"* rather than answering as an
+reachable on purpose: `findActiveByPeerIdentity` is box-wide. Since 2026-11-19 an
+ask names its **recipient**, the `did:key` of the person it is for, as the
+sender's link records it, and `resolveLink` keeps only that person's link: two
+matches become one, and an ask naming someone not linked to the sender is refused
+as `No peer link`, never answered through another member's link. A collect needs
+no recipient, because the correlation was recorded against exactly one link. With
+no recipient (a sender from before this, or a Portal-identity link), two matches
+are still refused as an *"Ambiguous peer link"* rather than answered as an
 arbitrary member.
 
 **Verified against a live box on 2026-09-07.** The binding above was written to
