@@ -186,6 +186,58 @@ const NAME_FIELDS: string[] = [CANON.FULL, CANON.FIRST, CANON.LAST];
 const NAME_ORDER: string[] = [CANON.PREFIX, CANON.FIRST, CANON.MIDDLE, CANON.LAST, CANON.SUFFIX];
 
 /**
+ * Columns written onto the person as the fields its record reads
+ * (`properties.first_name`, `.middle_name`, `.last_name`, `.job_title`,
+ * `.organization`), the keys vcard.ts writes for a card. Matched apart from the
+ * dialects, like NAME_PARTS, so they cannot change which dialect wins. They
+ * never touch the display name or the key: an Outlook contact is still named
+ * "First Last".
+ */
+const PERSON_FIELDS: Record<string, RegExp[]> = {
+  first_name: [/^(first name|given name)$/i],
+  middle_name: [/^(middle name|additional name)$/i],
+  last_name: [/^(last name|family name)$/i],
+  job_title: [/^(job title|organization (1 - )?title)$/i],
+  organization: [/^(company|organization (1 - )?name)$/i],
+};
+
+/**
+ * A Birthday cell as the `YYYY-MM-DD` a person's birth date holds, or '' when it
+ * gives no whole date. Google writes `1987-03-21` (`--03-21` with no year).
+ * Outlook writes the computer's short date: `3/21/1987` in English and
+ * `0/0/00` for none. A slash date is read month first, as English Outlook
+ * writes it, unless its first number cannot be a month (`21/3/1987`). A
+ * day-first date whose day is 12 or less still reads month first: the CSV does
+ * not say which order the computer used.
+ */
+function birthDateOf(value: string | undefined): string {
+  const v = value?.trim() ?? '';
+  const iso = /^(\d{4})-?(\d{2})-?(\d{2})(?:[T\s].*)?$/.exec(v);
+  const slash = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(v);
+  let ymd: [number, number, number] | undefined;
+  if (iso) {
+    ymd = [Number(iso[1]), Number(iso[2]), Number(iso[3])];
+  } else if (slash) {
+    const [first, second, year] = [Number(slash[1]), Number(slash[2]), Number(slash[3])];
+    ymd = first > 12 ? [year, second, first] : [year, first, second];
+  }
+
+  if (!ymd || ymd[0] < 1) {
+    return '';
+  }
+
+  // setUTCFullYear, not Date.UTC, which reads years 0-99 as 1900-1999.
+  const [y, m, d] = ymd;
+  const date = new Date(0);
+  date.setUTCFullYear(y, m - 1, d);
+  if (date.getUTCFullYear() !== y || date.getUTCMonth() !== m - 1 || date.getUTCDate() !== d) {
+    return '';
+  }
+
+  return `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+}
+
+/**
  * The header's columns under each field `columns` has a pattern for. A column
  * goes to the first field that matches it.
  */
@@ -365,6 +417,7 @@ export class ContactListFileImporter implements FileImporter {
     } // insufficient mapping
 
     const columns = withNameParts(header, mapping);
+    const personColumns = matchColumns(header, PERSON_FIELDS);
     const faxSources = faxSourcesOf(header, columns[CANON.PHONE] ?? []);
 
     // Emitted together after the last row: an Outlook export's "Company Main
@@ -405,9 +458,19 @@ export class ContactListFileImporter implements FileImporter {
           .join(' ');
       }
 
+      const person: Record<string, string> = {};
+      for (const [field, idxs] of Object.entries(personColumns)) {
+        const v = idxs.map((idx) => row[idx]?.trim()).find(Boolean);
+        if (v) {
+          person[field] = v;
+        }
+      }
+
       if (!name) {
         name = vals[CANON.ORGANIZATION]?.[0] || '';
       }
+
+      const birthDate = birthDateOf(vals[CANON.BIRTH]?.[0]);
 
       const attributes: EntityAttribute[] = [];
       (vals[CANON.EMAIL] || []).forEach((v) => attributes.push({ name: 'email', value: v, identity: true }));
@@ -431,6 +494,14 @@ export class ContactListFileImporter implements FileImporter {
 
       if (vals[CANON.GENDER]?.[0]) {
         attributes.push({ name: 'gender', value: vals[CANON.GENDER][0] });
+      }
+
+      // A business's card with no person's name is named after its company
+      // (Outlook's `Company`), as Google's Organization Name names it above.
+      // Only a card with an email or phone, which it is keyed on: a name would
+      // let a card with nothing else pass the usefulness filter below.
+      if (!name && person.organization && attributes.some((a) => a.identity)) {
+        name = person.organization;
       }
 
       // A Google/Outlook contact's Photo column is a hosted URL (contacts.google.com
@@ -475,6 +546,8 @@ export class ContactListFileImporter implements FileImporter {
           // `PersonType.avatarUrl` (backend/.../types/PersonType.ts) reads it back
           // as `properties.avatar_url`.
           ...(avatarUrl ? { avatar_url: avatarUrl } : {}),
+          ...person,
+          ...(birthDate ? { birth_date: birthDate } : {}),
         },
         accumulate: ACCUMULATED_KEYS,
       });
