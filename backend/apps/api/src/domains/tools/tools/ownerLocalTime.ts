@@ -2,7 +2,6 @@ import { z } from 'zod/v3';
 
 import type { UserServiceContext } from '@ci/common/context';
 import { isValidTimezone, zonedWallTimeToUTC } from '@ci/common/time/zoned';
-import type { PlanningTimeService } from '@ci/domains/planning/task.module';
 
 /**
  * A time the planning intents take from a model: the owner's own wall clock, turned into an
@@ -53,9 +52,17 @@ export function timeZoneParameter(fields: string) {
   };
 }
 
+/**
+ * The one method of `PlanningTimeService` that this helper calls. It is declared here rather than
+ * imported: the planning barrel closes a `no-circular` cycle back through `domains/tools`.
+ */
+export interface LocalTimeConverter {
+  toInstant(context: UserServiceContext, date: string, time: string): Promise<Date>;
+}
+
 /** The instant `value` names: a local time or date in `timeZone` or the owner's zone, else as given. */
 export async function resolveLocalTime(
-  planningTime: PlanningTimeService,
+  planningTime: LocalTimeConverter,
   context: UserServiceContext,
   value: string,
   timeZone?: string,

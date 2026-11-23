@@ -1,5 +1,5 @@
 import { zonedWallTimeToUTC } from '@ci/common/time/zoned';
-import type { PlanningTimeService } from '@ci/domains/planning/task.module';
+import type { PlanningTimeService } from '@ci/domains/planning';
 
 /**
  * A PlanningTimeService for an owner whose saved zone is America/Los_Angeles, with the real

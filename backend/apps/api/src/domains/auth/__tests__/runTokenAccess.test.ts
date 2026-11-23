@@ -1,4 +1,4 @@
-import { PYTHON_RUN_TOKEN_PURPOSE } from '../../python-functions/services/PythonFunctionTokenService';
+import { PYTHON_RUN_TOKEN_PURPOSE } from '../../python-functions';
 import { RUN_TOKEN_PURPOSE } from '../runTokenAccess';
 
 describe('runTokenAccess', () => {
