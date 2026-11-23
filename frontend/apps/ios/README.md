@@ -109,6 +109,8 @@ xcrun simctl install $SIM ./DerivedData/Build/Products/Debug-iphonesimulator/App
 xcrun simctl launch  $SIM com.companionintelligence.app
 ```
 
+For a command-line Debug build, run `yarn build:sim` from `frontend/apps/ios`. It passes `ARCHS=arm64 ONLY_ACTIVE_ARCH=YES`, because `CLiteRTLM.xcframework` has no x86_64 simulator slice and an x86_64 link fails with undefined `_litert_lm_*` symbols. Simulator builds therefore need an Apple Silicon host.
+
 Simulator ad-hoc signing has no Keychain entitlement, so the native store
 keeps `ci.apiKey` in the app container on Simulator only. Device and store
 builds still use the Keychain. `CODE_SIGNING_ALLOWED=NO` remains CI-only.

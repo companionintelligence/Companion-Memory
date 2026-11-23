@@ -13,6 +13,7 @@
     "sync:safari-extension": "bash scripts/sync-safari-extension.sh",
     "sync": "cap sync ios && yarn sync:safari-extension",
     "build": "yarn build:web && yarn sync",
+    "build:sim": "xcodebuild -workspace ios/App/App.xcworkspace -scheme App -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' ARCHS=arm64 ONLY_ACTIVE_ARCH=YES build",
     "open": "cap open ios",
     "ios": "cap run ios"
   },
