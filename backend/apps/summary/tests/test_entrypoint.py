@@ -5,10 +5,28 @@ from __future__ import annotations
 import os
 import stat
 import subprocess
+import sys
 import time
 from pathlib import Path
 
+import pytest
+
 ENTRYPOINT = Path(__file__).resolve().parents[1] / "entrypoint.sh"
+
+# entrypoint.sh waits with `wait -n`, which needs bash 4.3 or newer. It is the
+# summary image's CMD and runs under that container's bash 5. macOS's /bin/bash
+# is 3.2 and refuses the flag ("wait: -n: invalid option"), so on a Mac whose
+# PATH reaches /bin/bash first these tests fail. They skip on every darwin run,
+# including a Mac with a newer bash first on PATH, rather than depend on which
+# `bash` the subprocess finds. Linux is never skipped; CI runs them there.
+_needs_wait_n = pytest.mark.skipif(
+    sys.platform == "darwin",
+    reason=(
+        "entrypoint.sh uses `wait -n` (bash 4.3+), which macOS's /bin/bash 3.2 "
+        "lacks. It is the summary container's CMD and runs under bash 5 there; "
+        "Linux CI runs these tests."
+    ),
+)
 
 # Stands in for uvicorn: the app named on the command line decides what it does.
 FAKE_UVICORN = """#!/bin/sh
@@ -54,6 +72,7 @@ def _alive(pid_file: Path) -> bool:
     return True
 
 
+@_needs_wait_n
 def test_a_dead_parser_takes_the_container_down(tmp_path: Path) -> None:
     result, elapsed = _run(tmp_path, "ci.summary.parser:app", 137)
 
@@ -63,6 +82,7 @@ def test_a_dead_parser_takes_the_container_down(tmp_path: Path) -> None:
     assert not _alive(tmp_path / "ci.summary.api:app.pid")
 
 
+@_needs_wait_n
 def test_a_service_that_exits_cleanly_still_fails_the_container(tmp_path: Path) -> None:
     result, _ = _run(tmp_path, "ci.summary.api:app", 0)
 

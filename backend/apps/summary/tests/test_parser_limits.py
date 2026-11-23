@@ -419,6 +419,15 @@ def test_parse_reports_a_timeout_and_a_failed_conversion(
     assert response.status_code == status
 
 
+@pytest.mark.skipif(
+    sys.platform == "darwin",
+    reason=(
+        "the conversion child caps its own address space with "
+        "setrlimit(RLIMIT_AS), which Darwin refuses (Python raises ValueError: "
+        "current limit exceeds maximum limit), so the child dies before it "
+        "converts anything. Linux enforces it; CI runs this test there."
+    ),
+)
 def test_parse_converts_a_real_docx_in_the_child(client: TestClient) -> None:
     response = client.post(
         "/parse",
