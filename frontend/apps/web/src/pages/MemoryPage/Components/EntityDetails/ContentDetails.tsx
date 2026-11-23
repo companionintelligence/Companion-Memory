@@ -110,7 +110,10 @@ export function ContentDetails({ entity }: Props) {
           ) : null,
         },
         {
-          label: 'Created',
+          // `createdAt` is when Memory stored the row — the import — not when the
+          // file was made, so it must not read "Created". See FileDetails for why
+          // there is no "File modified" row beside it yet.
+          label: 'Imported',
           value: data.createdAt ? formatEntityTimestamp(String(data.createdAt), fmt) : null,
         },
       ]}
