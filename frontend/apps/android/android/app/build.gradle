@@ -79,6 +79,7 @@ def crossBoundaryTestInputs = files(
     "${projectDir}/../../../../packages/common/src/utils/oidcNative.ts",
     "${projectDir}/../../../../apps/ios/ios/App/App/Info.plist",
     "${projectDir}/../../../../apps/web/src/lib/registerNativePushToken.ts",
+    "${projectDir}/../../capacitor.config.ts",
     "${projectDir}/../../../../../backend/apps/api/config/default.json"
 )
 tasks.withType(Test).configureEach {
