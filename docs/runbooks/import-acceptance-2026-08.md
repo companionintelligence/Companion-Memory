@@ -112,6 +112,12 @@ The media leg works too: the 425KB smoke archive produced 31 `ci.files` rows
 with `user_id` populated — the two specific things that were missing after the
 consolidation.
 
+> **Note (2026-11-23):** the 31 rows are 30 `ORIGINAL` files plus 1 `PREVIEW`
+> row (an `image/jpeg` rendition whose `parent_id` is the original
+> `ProfilePhoto.jpg`). Count `variant = 'ORIGINAL'` to get one row per file in
+> the archive. A from-scratch import of the 425KB smoke archive on 2026-11-23
+> gave the same 30 + 1 split.
+
 ## Findings
 
 ### 1. Withings claimed Google Fit's data — FIXED
