@@ -303,7 +303,9 @@ describeWithDb(`PersonResolver — removing a contact in the edit form (${availa
 
     expect((await shown(personId)).map((row) => `${row.kind}:${row.value}`)).toEqual(['phone:5550100144']);
 
-    await saveWithout(personId, byRaw('5550100144'));
+    // The Details card shows this number as the card wrote it (`Phones`), so the
+    // row is picked by its join key, not by the text the form shows for it.
+    await saveWithout(personId, (row) => row.kind === 'phone' && row.value === '5550100144');
 
     expect(await shown(personId)).toEqual([]);
 
