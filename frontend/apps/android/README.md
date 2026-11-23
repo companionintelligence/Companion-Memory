@@ -240,6 +240,9 @@ one store before the other.
 | `IOS_DIST_CERT_P12_BASE64` | base64 of the Apple Distribution `.p12` |
 | `IOS_DIST_CERT_PASSWORD` | that `.p12`'s password |
 | `IOS_PROVISIONING_PROFILE_BASE64` | base64 of the App Store `.mobileprovision` for `com.companionintelligence.app` |
+| `IOS_EXTENSION_PROVISIONING_PROFILE_BASE64` | base64 of the App Store `.mobileprovision` for `com.companionintelligence.app.SafariWebExtension` |
+| `IOS_WIDGETS_PROVISIONING_PROFILE_BASE64` | base64 of the App Store `.mobileprovision` for `com.companionintelligence.app.CompanionWidgets`. This profile and the app's both need the App Groups capability for `group.com.companionintelligence.memory.widgets` |
+| `CI_BROWSER_EXTENSION_DEPLOY_KEY` | read-only SSH deploy key for the private `CI-Browser-Extension` repo, so the archive can build the Safari extension from its pinned source |
 | `ANDROID_KEYSTORE_BASE64` | base64 of the upload `.jks` |
 | `ANDROID_KEYSTORE_PASSWORD` / `ANDROID_KEY_ALIAS` / `ANDROID_KEY_PASSWORD` | keystore credentials |
 | `PLAY_SERVICE_ACCOUNT_JSON` | Play service account with *Release to testing tracks* |
