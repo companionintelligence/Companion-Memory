@@ -178,12 +178,18 @@ Each job runs: root `yarn install` → `yarn workspace @ci/fe-web build` (PWA di
 the `VITE_DISABLE_PWA` env) → mobile `yarn install` → `cap sync` → native build
 (`gradlew assembleDebug` / `xcodebuild -sdk iphonesimulator`) → `upload-artifact`.
 
-The **Android** job adds one step the iOS job has no equivalent for: right after
-`assembleDebug` it runs `./gradlew testDebugUnitTest --continue`, the same 100 JVM
+The **Android** job adds two steps the iOS job has no equivalent for. Right after
+`assembleDebug` it runs `node scripts/check-android-16kb.mjs` on the debug APK, which
+fails the job if any `arm64-v8a` or `x86_64` library is not 16 KB page-size compatible
+(Play's rule for apps that target Android 15+; see `DELIVERY.md`, the edge-to-edge and
+16 KB item), before anything is uploaded. Then it runs
+`./gradlew testDebugUnitTest --continue`, the same 100 JVM
 tests as `make test-android`. It is nearly free — the JDK, the SDK and the Gradle
 cache are already warm from the build above — and on a red run it uploads the HTML
 and XML reports from all four modules as **`android-unit-test-reports`**. On a green
 run it uploads nothing, because the log already says everything the reports would.
+The 16 KB check also runs by hand on any build: `node scripts/check-android-16kb.mjs
+path/to/app-debug.apk`.
 
 Download the artifacts from the run's summary page, then:
 
@@ -228,6 +234,12 @@ a build number already used) — and stops short of submitting.
 
 Each platform **skips rather than fails** when its secrets are missing, so you can wire up
 one store before the other.
+
+The Android lane reads the `.aab` it has just built with `node scripts/check-android-16kb.mjs`
+and fails before the artifact upload and before anything reaches Play if a 64-bit native
+library is not 16 KB page-size compatible (ELF `p_align` below `0x4000`). A bundle is
+checked on its ELF alignment only, because Play cuts the installable APKs from it; the
+zip-offset half of the rule runs on the debug APK in `mobile-build.yml`.
 
 ### Required secrets
 
