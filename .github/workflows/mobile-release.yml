@@ -760,6 +760,17 @@ jobs:
           ANDROID_VERSION_NAME: ${{ needs.version.outputs.name }}
         run: ./gradlew bundleRelease --no-daemon
 
+      # Play refuses an update whose 64-bit native libraries do not support 16 KB memory pages,
+      # and the rule binds every app that targets Android 15+ (this one targets 36). A native
+      # dependency bump can break it with no change here, so the bundle that was just built is
+      # read BEFORE it is stored as an artifact or sent to Play, and a failure stops the lane.
+      # Every arm64-v8a and x86_64 library needs ELF p_align >= 0x4000. An .aab has no zip-offset
+      # rule: Play cuts the APKs from it. Node only, which setup-node above already installed.
+      # Locally: node scripts/check-android-16kb.mjs <file.aab>. See
+      # frontend/apps/android/DELIVERY.md, the "edge-to-edge + 16 KB page size" item.
+      - name: Check 16 KB page-size support (.aab)
+        run: node scripts/check-android-16kb.mjs frontend/apps/android/android/app/build/outputs/bundle/release/app-release.aab
+
       - name: Upload .aab artifact
         uses: actions/upload-artifact@v7
         with:
