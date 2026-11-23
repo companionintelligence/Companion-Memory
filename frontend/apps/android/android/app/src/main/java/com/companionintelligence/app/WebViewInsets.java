@@ -25,6 +25,12 @@ import androidx.core.view.WindowInsetsCompat;
  * the resize: the page's own viewport-height bookkeeping ({@code --vv-height}) then sees the
  * smaller WebView exactly as it saw the smaller window before.
  *
+ * <p>Capacitor 8 replaced that option with its core {@code SystemBars} plugin, whose default
+ * ({@code insetsHandling: 'css'}) pads the decor view by the bars and by the keyboard. Next to this
+ * listener that applied the keyboard twice, so capacitor.config.ts turns it off
+ * ({@code plugins.SystemBars.insetsHandling: 'disable'}) and this is the only thing that insets the
+ * WebView. {@code SystemBarsInsetsOwnershipTest} pins the setting.
+ *
  * <p>Only wired on Android 15+. Below that the window is not edge-to-edge, the decor view
  * already fits the system windows, and {@code adjustResize} still resizes for the keyboard.
  */
