@@ -11,6 +11,11 @@ struct CompanionAPI {
     /// Build a client from the shared Keychain config, throwing a Siri-friendly error
     /// when the prerequisites aren't met.
     static func make() throws -> CompanionAPI {
+        // Every intent and every entity query comes through here, so this one check keeps all of
+        // them behind the app lock (see CompanionAppLock).
+        guard !CompanionAppLock.isEnabled else {
+            throw CompanionIntentError.appLocked
+        }
         guard let baseURL = CompanionConfig.baseUrl else {
             throw CompanionIntentError.notConfigured
         }
