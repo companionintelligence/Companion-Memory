@@ -662,6 +662,48 @@ CARD_CASES = [
         id="card-second-zero-led-example",
     ),
     pytest.param(
+        "Card 4000-0000-0000-0002 now",
+        "Card [CARD] now",
+        {"card": 1},
+        id="card-zero-led-hyphen-groups",
+    ),
+    pytest.param(
+        "Card 4000.0000.0000.0002 now",
+        "Card 4000.[PHONE] now",
+        {"phone": 1},
+        id="known-gap-zero-led-dotted-card-is-read-as-a-phone",
+    ),
+    pytest.param(
+        "Card 4111 1111 1111 1111 555-123-4567 now",
+        "Card [CARD] [PHONE] now",
+        {"card": 1, "phone": 1},
+        id="card-followed-by-phone-keeps-the-card-whole",
+    ),
+    pytest.param(
+        "Tel 06 48 62 25 88 4801 7007 2418 4070 Thanks",
+        "Tel [PHONE] [CARD] Thanks",
+        {"card": 1, "phone": 1},
+        id="phone-followed-by-card-keeps-the-card-whole",
+    ),
+    pytest.param(
+        "+0000 0000 0000 0000.0000 4111 0046 0046",
+        "[PHONE] [PHONE] [PHONE]",
+        {"phone": 3},
+        id="phone-straddling-two-adjacent-cards-keeps-both-hidden",
+    ),
+    pytest.param(
+        "+8210 0564 3189 0046.0002 0753 0768 0462",
+        "[PHONE] [PHONE] [PHONE]",
+        {"phone": 3},
+        id="phone-straddling-a-card-and-the-next-group-stays-hidden",
+    ),
+    pytest.param(
+        "005 3976 0420 4819 6-936-918-8994 now",
+        "[PHONE] 6-[PHONE] now",
+        {"phone": 2},
+        id="phone-starting-inside-a-run-is-fully-hidden",
+    ),
+    pytest.param(
         "Card 41111111111111111226 now",
         "Card [CARD] now",
         {"card": 1},
@@ -777,6 +819,24 @@ ADDRESS_CASES = [
         "Meet at [ADDRESS].",
         {"address": 1},
         id="address-house-number-range",
+    ),
+    pytest.param(
+        "2831 0123 7430 0207+0207 946 0958-41 Station Circle0491-6264-7184 6744.Call\t+15/03/2024\t",
+        "2831 [PHONE][PHONE] Station Circle[PHONE] 6744.Call\t+15/03/2024\t",
+        {"phone": 3},
+        id="phone-split-by-a-new-suffix-stays-hidden",
+    ),
+    pytest.param(
+        "Visit 5 Old Circle today.",
+        "Visit [ADDRESS] today.",
+        {"address": 1},
+        id="address-circle-suffix",
+    ),
+    pytest.param(
+        "Meet at 4 Station Plaza.",
+        "Meet at [ADDRESS].",
+        {"address": 1},
+        id="address-plaza-suffix",
     ),
 ]
 

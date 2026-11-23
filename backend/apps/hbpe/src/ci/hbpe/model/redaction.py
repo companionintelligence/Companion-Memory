@@ -115,7 +115,7 @@ such as ``+ 44 20 7946 0958``, or with a bracketed zero, such as ``(0)20 7946 09
 matched, and neither is a national number without a plus sign or a 00 prefix outside North
 America, the UK and France. A UUID in a path is not treated as a token. A short value followed
 by two digit groups in a query is kept, as in ``?ref=abc 12 34``, so a short token there is not
-removed. A house number glued to a word, as in ``Flat221 Baker Street``, is not matched. An
+removed. A house number glued to a word, as in ``Flat221 Baker Street``, is not matched. A card written with dots and a zero-led group, such as ``4000.0000.0000.0002``, and a zero-led card in a longer run of digit groups, are partly read as phone numbers. An
 unseparated North American number whose exchange starts with 0 or 1, such as ``5551234567``, is
 not read as a phone number, though the separated form ``555-123-4567`` is. A secret with no
 keyword and no known format, such as a password written on its own, is not redacted. After a
@@ -1145,16 +1145,47 @@ def _redact_ibans(text: str, counts: Counter[str]) -> str:
     return "".join(pieces)
 
 
+def _lone_card_spans(text: str) -> list[tuple[int, int]]:
+    """Spans of digit runs that hold one card: four groups of four digits that pass Luhn.
+
+    Only a run of exactly four groups is taken, so a run with a phone or another card in
+    it is not. A run that overlaps a dotted card is not taken either, so the card rule
+    always reads the whole run.
+    """
+    masked = _mask_dates(text)
+    dotted = [(match.start(), match.end()) for match in _DOT_CARD_RE.finditer(masked)]
+    spans: list[tuple[int, int]] = []
+    for run in _CARD_RUN_RE.finditer(masked):
+        groups = _CARD_GROUP_RE.findall(run.group(0))
+        if len(groups) != 4 or any(len(group) != 4 for group in groups):
+            continue
+        if not _is_card("".join(groups)):
+            continue
+        if any(start < run.end() and run.start() < end for start, end in dotted):
+            continue
+        spans.append((run.start(), run.end()))
+    return spans
+
+
 def _redact_phones(text: str, counts: Counter[str]) -> str:
-    cards = _card_spans_of(text)
+    # A phone-shaped run inside a lone card is part of the card, which the card rule takes.
+    # Without this check the zero-led tail of 4000 0000 0000 0002 is read as a phone number.
+    # A lone card that a phone-shaped match only partly covers is not protected, so the
+    # phone rule treats it as the parent does.
+    matches = [match.span() for match in _PHONE_RE.finditer(text)]
+    lone = [
+        (start, end)
+        for start, end in _lone_card_spans(text)
+        if not any(
+            m_start < end and start < m_end and not (start <= m_start and m_end <= end)
+            for m_start, m_end in matches
+        )
+    ]
 
     def repl(match: re.Match[str]) -> str:
-        # A card can contain a phone-shaped run, as in 4000 0000 0000 0002. A phone match that
-        # lies inside a card is left for the card rule. A card that only overlaps the match does
-        # not win, since the match is then more likely a phone number.
-        if any(start <= match.start() and match.end() <= end for start, end in cards):
-            return match.group(0)
         candidate = match.group(0)
+        if any(start <= match.start() and match.end() <= end for start, end in lone):
+            return candidate
         span = _phone_span(candidate)
         if span is None:
             return candidate
@@ -1420,7 +1451,10 @@ class Redactor:
     def redact(self, text: str) -> tuple[str, dict[str, int]]:
         """Return the redacted text and the number of replacements per category.
 
-        The rules run again on their own output until a pass changes nothing. The
+        The name, URL, e-mail, IBAN, phone and card rules run again on their own output
+        until a pass changes nothing. Then the address rule runs once, and the others run
+        again on its output, until nothing changes. The address rule runs last, so a house
+        number is never taken from a phone or card that a later pass would find. The
         result is a fixed point, so redacting it a second time changes nothing. Each
         change removes at least one character that is not part of a placeholder, so the
         loop ends.
@@ -1428,7 +1462,12 @@ class Redactor:
         counts: Counter[str] = Counter()
         current = _normalise(text)
         while True:
-            step = self._redact_pass(current, counts)
+            while True:
+                step = self._redact_pass(current, counts)
+                if step == current:
+                    break
+                current = step
+            step = _redact_addresses(current, counts)
             if step == current:
                 return current, dict(counts)
             current = step
@@ -1442,5 +1481,4 @@ class Redactor:
         out = _redact_secret_keywords(out, counts)
         out = _redact_ibans(out, counts)
         out = _redact_phones(out, counts)
-        out = _redact_cards(out, counts)
-        return _redact_addresses(out, counts)
+        return _redact_cards(out, counts)
