@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { FILE_FRAGMENT } from '@/components/entities/grid/FileGridItem';
 import { makeFragmentData } from '@/graphql';
+import { DateTimeFormatOverride } from '@/hooks/useDateTimeFormat';
+import { createDateTimeFormatter } from '@/lib/dateTimeFormat';
 import { enterNativeShell, NATIVE_MEMORY_ORIGIN } from '@/test/nativeShell';
 import { renderWithProviders } from '@/test/renderWithProviders';
 
@@ -66,6 +68,45 @@ describe('FileDetails', () => {
     const download = screen.getByRole('link', { name: 'Download' });
     expect(download).toHaveAttribute('href', href);
     expect(download).toHaveAttribute('download', 'invoice448421297.pdf');
+  });
+
+  // `createdAt` is the moment Memory stored the row. For an imported file that is
+  // the import, so the drawer must not call it "Created": a 2019 photo imported
+  // today would read as made today. The zone and hour cycle are pinned so the
+  // expected text does not depend on the machine running the test.
+  describe('import date', () => {
+    const fmt = createDateTimeFormatter({ timeFormat: 'h23', timeZone: 'UTC' });
+    const importedAt = '2026-11-23T09:30:00.000Z';
+
+    function renderFile(overrides: Record<string, unknown> = {}) {
+      return renderWithProviders(
+        <DateTimeFormatOverride formatter={fmt}>
+          <EntityDrawerHostProvider value={host}>
+            <Sheet open>
+              <FileDetails entity={makeEntity(overrides) as never} />
+            </Sheet>
+          </EntityDrawerHostProvider>
+        </DateTimeFormatOverride>,
+      );
+    }
+
+    it('labels the row-write time "Imported", not "Created"', async () => {
+      renderFile({ createdAt: importedAt });
+
+      const label = await screen.findByText('Imported');
+
+      expect(label.nextElementSibling?.textContent).toBe(fmt.dateTime(importedAt));
+      expect(screen.queryByText('Created')).not.toBeInTheDocument();
+    });
+
+    it('shows no Imported row when the row has no createdAt', async () => {
+      renderFile({ createdAt: null });
+
+      await screen.findByText('Filename');
+
+      expect(screen.queryByText('Imported')).not.toBeInTheDocument();
+      expect(screen.queryByText('Created')).not.toBeInTheDocument();
+    });
   });
 
   describe('on the native shell', () => {

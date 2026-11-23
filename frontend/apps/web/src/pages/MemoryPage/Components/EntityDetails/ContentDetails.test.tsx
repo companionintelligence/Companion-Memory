@@ -3,7 +3,10 @@ import { screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { CONTENT_FRAGMENT } from '@/components/entities/grid/ContentGridItem';
+import { formatEntityTimestamp } from '@/components/EntityFields';
 import { makeFragmentData } from '@/graphql';
+import { DateTimeFormatOverride } from '@/hooks/useDateTimeFormat';
+import { createDateTimeFormatter } from '@/lib/dateTimeFormat';
 import { renderWithProviders } from '@/test/renderWithProviders';
 
 import { ContentDetails } from './ContentDetails';
@@ -132,5 +135,50 @@ describe('ContentDetails stored files', () => {
 
     await screen.findByRole('heading', { name: 'photo.jpg' });
     expect(screen.queryByRole('link', { name: 'Open' })).not.toBeInTheDocument();
+  });
+});
+
+// `createdAt` is the moment Memory stored the row. For an imported file that is the
+// import, so the drawer must not call it "Created": a 2019 photo imported today
+// would read as made today. The zone and hour cycle are pinned so the expected
+// text does not depend on the machine running the test.
+describe('ContentDetails import date', () => {
+  const fmt = createDateTimeFormatter({ timeFormat: 'h23', timeZone: 'UTC' });
+  const importedAt = '2026-11-23T09:30:00.000Z';
+
+  function renderContent(overrides: Record<string, unknown> = {}) {
+    return renderWithProviders(
+      <DateTimeFormatOverride formatter={fmt}>
+        <EntityDrawerHostProvider value={host}>
+          <Sheet open>
+            <ContentDetails entity={makeEntity(overrides) as never} />
+          </Sheet>
+        </EntityDrawerHostProvider>
+      </DateTimeFormatOverride>,
+    );
+  }
+
+  it('labels the row-write time "Imported", not "Created"', async () => {
+    renderContent({
+      title: 'IMG_0042.jpg',
+      mimetype: 'image/jpeg',
+      mediaUrl: '/companion/photo',
+      mediaFilename: 'IMG_0042.jpg',
+      createdAt: importedAt,
+    });
+
+    const label = await screen.findByText('Imported');
+
+    expect(label.nextElementSibling?.textContent).toBe(formatEntityTimestamp(importedAt, fmt));
+    expect(screen.queryByText('Created')).not.toBeInTheDocument();
+  });
+
+  it('shows no Imported row when the row has no createdAt', async () => {
+    renderContent({ createdAt: null });
+
+    await screen.findByText('Type');
+
+    expect(screen.queryByText('Imported')).not.toBeInTheDocument();
+    expect(screen.queryByText('Created')).not.toBeInTheDocument();
   });
 });

@@ -73,7 +73,12 @@ export function FileDetails({ entity }: Props) {
         { label: 'Filename', value: data.filename },
         { label: 'Content type', value: data.contentType },
         { label: 'Size', value: formatBytes(data.size) },
-        { label: 'Created', value: data.createdAt ? fmt.dateTime(data.createdAt) : null },
+        // `createdAt` is when Memory stored the row — the import — not when the
+        // file was made, so it must not read "Created": a 2019 photo imported
+        // today would say today. The file's own modified time is not on FileType
+        // (`ci.files.external_updated_at` is neither exposed nor filled for zip
+        // imports), so there is no "File modified" row to pair with this one yet.
+        { label: 'Imported', value: data.createdAt ? fmt.dateTime(data.createdAt) : null },
       ]}
       rawData={data}
     >
