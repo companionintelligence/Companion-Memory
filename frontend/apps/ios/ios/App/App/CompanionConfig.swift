@@ -1,3 +1,4 @@
+import AppIntents
 import Foundation
 
 /// Shared configuration the native App Intents need to reach the CI-Server, read
@@ -112,7 +113,6 @@ enum CompanionConfig {
 enum CompanionIntentError: LocalizedError {
     case notConfigured
     case notSignedIn
-    case appLocked
     case requestFailed(String)
 
     var errorDescription: String? {
@@ -121,27 +121,33 @@ enum CompanionIntentError: LocalizedError {
             return "Open Companion and set your server address first."
         case .notSignedIn:
             return "Sign in to Companion first, then try again."
-        case .appLocked:
-            return "Companion's app lock is on, so Siri and Shortcuts can't read or change your memory. Open Companion to do this."
         case let .requestFailed(message):
             return message
         }
     }
 }
 
-/// Whether the person turned Companion's app lock on (`@ci/capacitor-app-lock`).
+/// Companion's app lock (`@ci/capacitor-app-lock`) as the App Intents see it.
 ///
 /// ⚠ THE APP LOCK GUARDS THE WEBVIEW, NOT THESE INTENTS. Siri and Shortcuts run them in the
-/// background, straight against the server with the Keychain API key, so a lock that only covers
+/// background, straight against the server with the Keychain API key, so a lock that only covered
 /// the app's screen let anyone holding the unlocked phone ask, search and change the memory the
-/// lock was turned on to protect. A background intent cannot show the lock's Face ID prompt, so
-/// while the lock is on they refuse and send the person to the app (CompanionAPI.make).
+/// lock was turned on to protect. While it is on, iOS asks for Face ID (or the passcode) before each
+/// one runs instead: a background intent cannot show the lock's own prompt, but the system can.
 ///
 /// Read from the key the plugin writes (`AppLockSettings.enabledKey` in
 /// frontend/packages/capacitor-app-lock/ios/Sources/AppLockPlugin/AppLockPolicy.swift): the plugin
 /// is its own module, and its settings type is internal to it. Keep the two in step.
+@available(iOS 16.0, *)
 enum CompanionAppLock {
     static let enabledKey = "ci.appLock.enabled"
 
     static var isEnabled: Bool { UserDefaults.standard.bool(forKey: enabledKey) }
+
+    /// An unlocked phone always (Siri otherwise answers on the lock screen); Face ID or the passcode
+    /// on top while the app lock is on. Read each time an intent runs, so turning the lock on or off
+    /// in the app applies to the next request.
+    static var intentPolicy: IntentAuthenticationPolicy {
+        isEnabled ? .requiresLocalDeviceAuthentication : .requiresAuthentication
+    }
 }

@@ -375,10 +375,10 @@ the Keychain rather than `localStorage`: `CompanionConfig` reads the API key
 `useNativeShell`). `CompanionAPI` is a small `URLSession` client that authenticates with
 `x-api-key`. Intents short-circuit with a friendly Siri error when the user hasn't set a
 server / signed in. Every intent that reads or changes memory needs an **unlocked phone**
-(`authenticationPolicy = .requiresAuthentication`; Siri otherwise answers on the lock screen),
-and **none runs while Companion's app lock is on**: the lock guards the webview, and a
-background intent can't show its Face ID prompt, so `CompanionAPI.make()` refuses and sends the
-person to the app (`CompanionAppLock`, which reads the plugin's `ci.appLock.enabled`). (Execution is direct REST/GraphQL today; it can later target a
+(`authenticationPolicy`; Siri otherwise answers on the lock screen), and **Face ID or the
+passcode as well while Companion's app lock is on**: the lock guards the webview, which these
+intents never open, so iOS asks for it before each one runs instead
+(`CompanionAppLock.intentPolicy`, which reads the plugin's `ci.appLock.enabled`). (Execution is direct REST/GraphQL today; it can later target a
 deterministic Intent-Catalog execute endpoint when `feat/intent-catalog` lands.)
 
 **On-device chat (LocalLLM).** A `LocalLLM` Capacitor plugin runs a language model fully on the
