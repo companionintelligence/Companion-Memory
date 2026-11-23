@@ -81,7 +81,16 @@ function ChatPageContent() {
   const location = useLocation();
   const { isMobile } = useDeviceLayout();
 
-  const { id: initialThreadId } = useParams<{ id?: string }>();
+  const { id: routeThreadId } = useParams<{ id?: string }>();
+  // The thread this page started itself. `handleNewThread` moves the address bar to it without telling the router,
+  // which stays on the bare chat path until something makes it read the address bar again: any popstate (Back or
+  // Forward, a swipe, a fragment link). It then reports that thread as the route. Nothing has changed — the person
+  // is still in the conversation they started, with its reply still streaming — so the page must not read that as
+  // a navigation. `initialThreadId`, which keys the chat and drives the effects below, therefore stays empty for
+  // it. Taken at face value it remounted the chat against the stream it was already reading (a locked stream: the
+  // new processor failed and detached, which aborted the request) and reset that stream again from the route effect.
+  const startedHereRef = useRef<string | null>(null);
+  const initialThreadId = routeThreadId === startedHereRef.current ? undefined : routeThreadId;
   const [initialMessages, setInitialMessages] = useState<Message[]>([]);
   const [chatDraft, setChatDraft] = useState('');
   const [{ selectedModel, loading: modelsLoading, error: modelsError }, { refetch: refetchModels }] =
@@ -119,6 +128,7 @@ function ChatPageContent() {
   const handleNewThread = useCallback(
     (threadId: string) => {
       resolvedThreadId.current = threadId;
+      startedHereRef.current = threadId;
       window.history.replaceState({}, '', chatThreadPath(threadId));
       refetchThreads();
       refetchThread();
@@ -151,6 +161,7 @@ function ChatPageContent() {
     resetChatStream();
     void resetLocalLlmConversation();
     resolvedThreadId.current = null;
+    startedHereRef.current = null;
     setInitialMessages([]);
     setChatDraft('');
   }, [incrementNewThreadCount, resetChatStream]);
@@ -161,6 +172,8 @@ function ChatPageContent() {
   }, [startNewChat, navigate]);
 
   useEffect(() => {
+    // The route is now another conversation (or none), so the thread this page started is behind it.
+    startedHereRef.current = null;
     setInitialMessages([]);
     hasSetInitialMessages.current = initialThreadId ? false : true;
     resolvedThreadId.current = initialThreadId ?? null;
@@ -198,10 +211,12 @@ function ChatPageContent() {
 
     seenLocationKey.current = location.key;
 
-    if (!initialThreadId && (resolvedThreadId.current != null || local != null)) {
+    // The route's own id, not `initialThreadId`: the router catching up to the thread this page started is not a
+    // fresh navigation to the bare path, and `initialThreadId` is empty for it.
+    if (!routeThreadId && (resolvedThreadId.current != null || local != null)) {
       startNewChat();
     }
-  }, [location.key, initialThreadId, local, startNewChat]);
+  }, [location.key, routeThreadId, local, startNewChat]);
 
   useEffect(() => {
     if (initialThreadId) {

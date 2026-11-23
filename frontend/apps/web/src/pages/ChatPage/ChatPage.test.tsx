@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 
 import { FetchJsonError } from '@ci/common';
 import { resetLocalLlmPrefsCache } from '@ci/common/src/utils/localLlmPrefs';
@@ -33,6 +33,8 @@ const h = vi.hoisted(() => ({
   detach: vi.fn(),
   /** `useChatRequester().reset` — leaving a conversation (drops the stream and the on-device badge). */
   resetChat: vi.fn(),
+  /** How many times the composer mounted: a remount mid-reply is what tears the reply's stream down. */
+  chatMounts: 0,
   /** The options the page last handed `useChatRequester`, so a test can play the part of the first reply. */
   requesterOpts: null as null | { threadId: string | null; onNewThread?: (id: string) => void },
   isMobile: false,
@@ -203,24 +205,30 @@ vi.mock('@/components/Chat', () => ({
     blockUploads?: boolean;
     initialDraft?: string;
     placeholder?: string;
-  }) => (
-    <>
-      <span data-testid="chat-draft">{initialDraft}</span>
-      <span data-testid="chat-placeholder">{placeholder}</span>
-      <span data-testid="chat-disabled">{String(Boolean(disabled))}</span>
-      <span data-testid="chat-local-images">{String(Boolean(localImages))}</span>
-      <span data-testid="chat-block-uploads">{String(Boolean(blockUploads))}</span>
-      <button type="button" onClick={() => onStop?.()}>
-        Stop
-      </button>
-      <ul data-testid="thread-messages">
-        {messages?.map((message) => (
-          <li key={message.id}>{`${message.role}: ${message.content}`}</li>
-        ))}
-      </ul>
-      {emptyState}
-    </>
-  ),
+  }) => {
+    useEffect(() => {
+      h.chatMounts += 1;
+    }, []);
+
+    return (
+      <>
+        <span data-testid="chat-draft">{initialDraft}</span>
+        <span data-testid="chat-placeholder">{placeholder}</span>
+        <span data-testid="chat-disabled">{String(Boolean(disabled))}</span>
+        <span data-testid="chat-local-images">{String(Boolean(localImages))}</span>
+        <span data-testid="chat-block-uploads">{String(Boolean(blockUploads))}</span>
+        <button type="button" onClick={() => onStop?.()}>
+          Stop
+        </button>
+        <ul data-testid="thread-messages">
+          {messages?.map((message) => (
+            <li key={message.id}>{`${message.role}: ${message.content}`}</li>
+          ))}
+        </ul>
+        {emptyState}
+      </>
+    );
+  },
 }));
 
 describe('ChatPage', () => {
@@ -240,6 +248,7 @@ describe('ChatPage', () => {
     h.modelsError = null;
     h.reset.mockClear();
     h.resetChat.mockClear();
+    h.chatMounts = 0;
     h.requesterOpts = null;
     h.isMobile = false;
     h.seed = null;
@@ -617,6 +626,73 @@ describe('ChatPage', () => {
       // …and the composer is now talking to no thread at all.
       expect(h.requesterOpts?.threadId).toBeNull();
       expect(screen.getByRole('button', { name: STARTER_PROMPTS[0] })).toBeInTheDocument();
+    });
+
+    /**
+     * The other half of the same move: the router catching up. `onNewThread` moves the address bar to the new
+     * thread without telling the router, so the router stays on the bare chat path until a popstate of any kind
+     * (Back or Forward, a swipe, a fragment link) makes it read the address bar. The route's thread id then
+     * becomes the thread this page just started, which is the SAME conversation: its reply is still streaming
+     * into the chat on screen. Read as a navigation it remounted that chat (its `key` is the route's id) against
+     * the stream it was already reading, and the route effect reset the stream as well. The request was aborted
+     * and the first reply never showed.
+     */
+    it('keeps the first reply running when the router catches up to the thread the page started', () => {
+      renderWithProviders(
+        <>
+          <Link to="/memory/chat/t9">router catches up</Link>
+          <ChatPage />
+        </>,
+        { route: '/memory/chat', path: '/memory/chat/:id?' },
+      );
+      expect(h.chatMounts).toBe(1);
+
+      act(() => h.requesterOpts?.onNewThread?.('t9'));
+      fireEvent.click(screen.getByText('router catches up'));
+
+      // The stream is not dropped (`reset` is what aborts the request) …
+      expect(h.resetChat).not.toHaveBeenCalled();
+      expect(h.reset).not.toHaveBeenCalled();
+      // … and the chat showing the reply is the instance that was streaming, not a new one mounted against it.
+      expect(h.chatMounts).toBe(1);
+      expect(h.requesterOpts?.threadId).toBe('t9');
+    });
+
+    it('keeps what the page echoed for the first message when the router catches up', () => {
+      renderWithProviders(
+        <>
+          <Link to="/memory/chat/t9">router catches up</Link>
+          <ChatPage />
+        </>,
+        { route: '/memory/chat', path: '/memory/chat/:id?' },
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: STARTER_PROMPTS[2] }));
+      act(() => h.requesterOpts?.onNewThread?.('t9'));
+      fireEvent.click(screen.getByText('router catches up'));
+
+      expect(screen.getByText(`user: ${STARTER_PROMPTS[2]}`)).toBeInTheDocument();
+    });
+
+    // The catch-up is only "the same conversation" while the person is still in it. Once they have moved to
+    // another thread, a return to the one the page started is a navigation like any other.
+    it('treats a return to the thread the page started as a navigation once the person has left it', () => {
+      renderWithProviders(
+        <>
+          <Link to="/memory/chat/t2">drawer: Second</Link>
+          <Link to="/memory/chat/t9">drawer: the one I started</Link>
+          <ChatPage />
+        </>,
+        { route: '/memory/chat', path: '/memory/chat/:id?' },
+      );
+
+      act(() => h.requesterOpts?.onNewThread?.('t9'));
+      fireEvent.click(screen.getByText('drawer: Second'));
+      expect(h.resetChat).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(screen.getByText('drawer: the one I started'));
+
+      expect(h.resetChat).toHaveBeenCalledTimes(2);
     });
 
     // "Always answer on this phone" never creates a server thread, so there is no thread id to go on — the
