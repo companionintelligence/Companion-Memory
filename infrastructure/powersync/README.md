@@ -92,12 +92,19 @@ before being added.
 
 ## Running it under `make dev`
 
-Put a loopback URL in the root `.env` and start the stack as usual:
+Put a loopback URL in the root `.env`, with the two secrets beside it, and start the stack as usual:
 
 ```bash
-POWERSYNC_URL=http://localhost:18080   # .env — the one switch
+POWERSYNC_URL=http://localhost:18080        # the switch
+POWERSYNC_JWT_SECRET=<value from .env.default>
+POWERSYNC_DATABASE_PASSWORD=<value from .env.default>
 make dev
 ```
+
+`make init` writes the two secrets into a new `.env` only, so an older `.env` needs both
+lines copied from `.env.default`. Without them `scripts/dev-stack` stops before it starts
+any service and names the empty ones: the token endpoint would answer 503, and the service
+refuses to boot without the key and cannot authenticate without the password.
 
 `scripts/dev-stack` then:
 

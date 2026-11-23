@@ -191,11 +191,12 @@ sudo ufw allow from 172.16.0.0/12 to any port 3030 proto tcp comment 'ci-server 
 ```
 
 PowerSync is **opt-in** in the local stack. Set `POWERSYNC_URL=http://localhost:18080`
-in `.env` and `make dev` starts the `powersync` Compose service too (its own compose
-profile, published on loopback), hands the api that URL on the port this stack actually
-got, and the phone reaches it over the `adb reverse` that `yarn android` applies. Leave
-`POWERSYNC_URL` unset and nothing changes: the service does not run and
-`GET /api/powersync/token` answers 503. See
+in `.env`, with `POWERSYNC_JWT_SECRET` and `POWERSYNC_DATABASE_PASSWORD` copied from
+`.env.default` if `.env` predates them. Then `make dev` starts the `powersync` Compose
+service too (its own compose profile, published on loopback), hands the api that URL on
+the port this stack actually got, and the phone reaches it over the `adb reverse` that
+`yarn android` applies. Leave `POWERSYNC_URL` unset and nothing changes: the service does
+not run and `GET /api/powersync/token` answers 503. See
 [`infrastructure/powersync/README.md`](infrastructure/powersync/README.md#running-it-under-make-dev).
 
 ### Caddy request routing
