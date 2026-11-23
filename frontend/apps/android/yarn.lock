@@ -166,7 +166,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@ci/capacitor-app-lock@portal:../../packages/capacitor-app-lock::locator=%40ci%2Ffe-android%40workspace%3A."
   peerDependencies:
-    "@capacitor/core": ^8.6.0
+    "@capacitor/core": ^8.6.2
   languageName: node
   linkType: soft
 
@@ -174,7 +174,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@ci/capacitor-local-hub@portal:../../packages/capacitor-local-hub::locator=%40ci%2Ffe-android%40workspace%3A."
   peerDependencies:
-    "@capacitor/core": ^8.6.0
+    "@capacitor/core": ^8.6.2
   languageName: node
   linkType: soft
 
@@ -182,7 +182,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@ci/capacitor-local-llm@portal:../../packages/capacitor-local-llm::locator=%40ci%2Ffe-android%40workspace%3A."
   peerDependencies:
-    "@capacitor/core": ^8.6.0
+    "@capacitor/core": ^8.6.2
   languageName: node
   linkType: soft
 
@@ -190,7 +190,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@ci/capacitor-speech@portal:../../packages/capacitor-speech::locator=%40ci%2Ffe-android%40workspace%3A."
   peerDependencies:
-    "@capacitor/core": ^8.6.0
+    "@capacitor/core": ^8.6.2
   languageName: node
   linkType: soft
 
