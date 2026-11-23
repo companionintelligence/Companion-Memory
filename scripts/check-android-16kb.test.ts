@@ -11,8 +11,10 @@
  *      step and before anything is uploaded, on the file that is uploaded. Nothing else notices if
  *      someone reorders the steps, because no workflow runs on its own.
  *
- * When the Android SDK is on the machine (ANDROID_HOME, or zipalign on PATH) the zip rule is also
- * compared with the real `zipalign -c -P 16 4`, on the same synthetic files.
+ * The zip rule is held to the verdicts of the real `zipalign -c -P 16 4`, recorded in a table below
+ * so the test needs no Android SDK. When the SDK is on the machine (ANDROID_HOME, or zipalign on
+ * PATH) one more test replays that table against the real tool; it is registered only then,
+ * because the root-tests lane runs without the SDK and fails on a skipped test.
  */
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -639,30 +641,54 @@ function findZipalign(): string | undefined {
 
 const ZIPALIGN = findZipalign();
 
-test(
-  'the zip rule agrees with `zipalign -c -P 16 4` on stored libraries at each kind of offset',
-  { skip: ZIPALIGN ? false : 'zipalign is not available (no ANDROID_HOME build-tools, none on PATH)' },
-  (t) => {
+// What `zipalign -c -P 16 4` says about a stored library whose data starts `mod` bytes past a
+// 16 KiB boundary: it accepts only the entry on the boundary. Recorded from the Android SDK's
+// build-tools 36.1 on 2026-11-23; the test registered below re-derives it when zipalign is here.
+const ZIPALIGN_ACCEPTS_AT_OFFSET_MOD = [
+  [0, true],
+  [0x1000, false],
+  [0x2000, false],
+  [0x3ffc, false],
+  [4, false],
+] as const;
+
+function probeArchive(mod: number): ReturnType<typeof zip> {
+  return zip([{ name: 'lib/arm64-v8a/libprobe.so', data: OK_ELF, dataOffsetMod: mod }]);
+}
+
+test('the zip rule gives the verdicts `zipalign -c -P 16 4` gives, at each kind of offset', () => {
+  for (const [mod, zipalignAccepts] of ZIPALIGN_ACCEPTS_AT_OFFSET_MOD) {
+    const mine = checkPackage(probeArchive(mod)).libraries[0].problems.some((problem) =>
+      problem.includes('zipalign'),
+    );
+
+    assert.equal(mine, !zipalignAccepts, `offset mod 16 KiB = ${mod}`);
+  }
+});
+
+if (ZIPALIGN) {
+  const zipalign: string = ZIPALIGN;
+
+  test('the recorded zipalign verdicts still match the real `zipalign -c -P 16 4`', (t) => {
     const write = files(t);
 
-    for (const mod of [0, 0x1000, 0x2000, 0x3ffc, 4]) {
-      const archive = zip([{ name: 'lib/arm64-v8a/libprobe.so', data: OK_ELF, dataOffsetMod: mod }]);
-      const mine = checkPackage(archive).libraries[0].problems.some((problem) =>
-        problem.includes('zipalign'),
-      );
+    for (const [mod, zipalignAccepts] of ZIPALIGN_ACCEPTS_AT_OFFSET_MOD) {
       const theirs = spawnSync(
-        ZIPALIGN as string,
-        ['-c', '-P', '16', '4', write(`probe-${mod}.apk`, archive)],
+        zipalign,
+        ['-c', '-P', '16', '4', write(`probe-${mod}.apk`, probeArchive(mod))],
         {
           encoding: 'utf8',
         },
       );
 
-      assert.equal(mine, theirs.status !== 0, `offset mod 16 KiB = ${mod}: zipalign said ${theirs.status}`);
-      assert.equal(theirs.status === 0, mod === 0, `offset mod 16 KiB = ${mod}`);
+      assert.equal(
+        theirs.status === 0,
+        zipalignAccepts,
+        `offset mod 16 KiB = ${mod}: zipalign said ${theirs.status}`,
+      );
     }
-  },
-);
+  });
+}
 
 // ---------------------------------------------------------------------------------------------
 // The wiring: where the two workflows run it
