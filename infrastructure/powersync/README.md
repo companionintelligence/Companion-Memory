@@ -35,7 +35,7 @@ A Hub install cannot bind-mount this directory, so it runs `companion/powersync`
 from the `Dockerfile` here: the upstream image with `powersync.yaml` and
 `sync-rules.yaml` baked into `/config` and `entrypoint.sh` as its entrypoint (the file
 the compose service runs from its mount). It reads setup-secrets' `powersync`
-projection at `${APP_DATA_DIR}/data/secrets/services/powersync`; setup-database already
+projection at `${APP_DATA_DIR}/data/service-secrets/powersync`; setup-database already
 creates the replication role and publication from the same secrets. The api gets
 `POWERSYNC_URL=${APP_BASE_URL}/powersync`, and the gateway image already proxies
 `/powersync/`. `make build ENV=production` builds it; `scripts/publish/images.sh`

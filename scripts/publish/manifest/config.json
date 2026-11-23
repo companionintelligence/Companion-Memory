@@ -15,7 +15,11 @@
   "website": "https://companionintelligence.com",
   "exposable": true,
   "dynamic_config": true,
-  "cihub_app_version": 1,
+  "cihub_app_version": 2,
+  "data_moves": [
+    { "from": "data/llm-endpoint.json", "to": "data/shared/llm-endpoint.json" },
+    { "from": "data/import-work", "to": "data/shared/import-work" }
+  ],
   "min_hub_version": "v0.2.48",
   "hub_integration": {
     "memory": {
