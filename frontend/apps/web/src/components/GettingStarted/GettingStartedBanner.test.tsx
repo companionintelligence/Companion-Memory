@@ -335,6 +335,12 @@ describe('GettingStartedBanner', () => {
 
         expect(await screen.findByTestId('recommended-model-hint')).toBeInTheDocument();
 
+        // The recheck timer is armed in an effect, which can run after the hint is in the DOM.
+        // Let it run before the fake clock moves.
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+
         invoke.mockRejectedValueOnce(new Error('Task join error'));
         vi.advanceTimersByTime(15_000);
         await waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
