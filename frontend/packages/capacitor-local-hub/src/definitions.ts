@@ -121,6 +121,9 @@ export interface LocalHubPlugin {
   /** Removes one value. Resolves successfully when it was already absent. */
   secureRemove(options: { key: string }): Promise<void>;
 
+  /** Share a UTF-8 text/json/markdown export through the operating system. Never uploads it. */
+  shareTextFile(options: { filename: string; content: string; mimeType: string }): Promise<void>;
+
   /**
    * Opens `url` outside the app WebView.
    * Android presents Chrome Auth Tab and replays `companion://` into `appUrlOpen`.

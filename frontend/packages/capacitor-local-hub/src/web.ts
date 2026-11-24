@@ -62,6 +62,10 @@ export class LocalHubWeb extends WebPlugin implements LocalHubPlugin {
     throw this.unavailable('LocalHub secure storage is only available in the native app.');
   }
 
+  async shareTextFile(): Promise<void> {
+    throw this.unavailable('File sharing is only available in the native app.');
+  }
+
   async openUrl(): Promise<void> {
     throw this.unavailable('LocalHub openUrl is only available in the native app.');
   }

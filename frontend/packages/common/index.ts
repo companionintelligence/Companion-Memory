@@ -308,6 +308,7 @@ export {
   setBackgroundUpload,
   setStatusBarStyle,
   setSystemBarsBackground,
+  shareNativeTextFile,
   syncNativeIntentConfig,
   takeNativePhoto,
 } from './src/utils/nativeBridge';
