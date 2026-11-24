@@ -86,6 +86,20 @@ describe('deriveChecklist', () => {
     expect(deriveChecklist({ ...saved, indexingItems: 0 }).allDone).toBe(true);
   });
 
+  it('does not read a search index that has not answered as an empty queue', () => {
+    const saved = { ...base, connectionCount: 1, totals: { ...EMPTY, communications: 500 } };
+
+    // Zero is an answer: nothing queued. `null` is the absence of one, and must never finish the list.
+    expect(step({ ...saved, indexingItems: 0 }, 'memory').status).toBe('done');
+    expect(step({ ...saved, indexingItems: null }, 'memory')).toMatchObject({
+      status: 'unknown',
+      title: 'Checking the search index…',
+    });
+    expect(deriveChecklist({ ...saved, indexingItems: null }).allDone).toBe(false);
+    // The records that did arrive are still reported.
+    expect(deriveChecklist({ ...saved, indexingItems: null }).countsLine).toBe('500 messages');
+  });
+
   it('puts an unsaved import ahead of a running one', () => {
     expect(step({ ...base, unpushedRuns: 1, runningImports: 1 }, 'memory').status).toBe('attention');
   });

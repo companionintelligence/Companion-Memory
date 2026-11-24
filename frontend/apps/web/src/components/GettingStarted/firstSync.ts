@@ -174,6 +174,13 @@ export function deriveChecklist(input: FirstSyncInputs): Checklist {
       title: 'Waiting for the first sync',
       detail: 'Connected accounts sync in the background; the first records can take a few minutes.',
     };
+  } else if (input.indexingItems === null) {
+    memory = {
+      id: 'memory',
+      status: 'unknown',
+      title: 'Checking the search index…',
+      detail: 'Saved records are shown; search readiness has not been confirmed.',
+    };
   } else if (indexing > 0) {
     memory = {
       id: 'memory',

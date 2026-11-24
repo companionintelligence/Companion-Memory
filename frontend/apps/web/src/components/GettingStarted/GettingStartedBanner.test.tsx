@@ -1,5 +1,5 @@
 import type { DesktopRecommendedModel } from '@ci/common';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -33,6 +33,8 @@ const h = vi.hoisted(() => ({
     totals: null as MemoryTotals | null,
     indexingItems: null as number | null,
     unpushedRuns: null as number | null,
+    error: null as string | null,
+    failedIndexingItems: null as number | null,
     refresh: vi.fn(),
   },
   startPush: vi.fn(),
@@ -122,7 +124,14 @@ beforeEach(() => {
   h.connections = 0;
   h.importsFlag = true;
   h.snapshot = null;
-  h.status = { totals: EMPTY, indexingItems: 0, unpushedRuns: 0, refresh: vi.fn() };
+  h.status = {
+    totals: EMPTY,
+    indexingItems: 0,
+    unpushedRuns: 0,
+    error: null,
+    failedIndexingItems: null,
+    refresh: vi.fn(),
+  };
   h.startPush.mockReset();
   h.refreshImports.mockReset();
   h.toast.success.mockReset();
@@ -235,6 +244,86 @@ describe('GettingStartedBanner', () => {
 
     expect(screen.getByText('1 import running')).toBeInTheDocument();
     expect(screen.getByText(/5,000 records read so far/)).toBeInTheDocument();
+  });
+
+  describe('when the sync status cannot be read', () => {
+    beforeEach(() => {
+      markGettingStartedActive('u1');
+      h.connections = 1;
+      h.status.totals = { ...EMPTY, communications: 12_400, events: 88 };
+      h.status.indexingItems = 0;
+      h.status.error =
+        'Could not refresh your sync status. Any counts shown are from the last successful check.';
+    });
+
+    it('says the status needs attention instead of "all set", and keeps the last counts', () => {
+      renderBanner();
+
+      expect(screen.getByText('Sync status needs attention')).toBeInTheDocument();
+      expect(screen.queryByText('You’re all set')).toBeNull();
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'Any counts shown are from the last successful check.',
+      );
+      expect(screen.getByText(/In your memory now: 12,400 messages · 88 events/)).toBeInTheDocument();
+    });
+
+    it('does not call the search index done on the strength of a queue it could not read', () => {
+      renderBanner();
+
+      const memory = screen.getByText('Checking the search index…').closest('li');
+
+      expect(memory).toHaveAttribute('data-step', 'memory');
+      expect(memory).toHaveAttribute('data-status', 'unknown');
+      expect(screen.queryByText('Saved and indexed.')).toBeNull();
+    });
+
+    it('offers to check again and to open System status', () => {
+      renderBanner();
+
+      fireEvent.click(within(screen.getByRole('alert')).getByRole('button', { name: 'Check again' }));
+
+      expect(h.status.refresh).toHaveBeenCalledTimes(1);
+      expect(within(screen.getByRole('alert')).getByRole('link', { name: 'System status' })).toHaveAttribute(
+        'href',
+        '/settings/status',
+      );
+    });
+
+    it('opens System status inside Self settings on a phone', () => {
+      h.isMobile = true;
+      renderBanner();
+
+      expect(screen.getByRole('link', { name: 'System status' })).toHaveAttribute(
+        'href',
+        '/self/settings/status',
+      );
+    });
+  });
+
+  it('is quiet about the sync status while it reads fine', () => {
+    markGettingStartedActive('u1');
+    h.status.failedIndexingItems = 0;
+    renderBanner();
+
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByRole('link', { name: 'System status' })).toBeNull();
+  });
+
+  it.each([
+    [1, '1 indexing job has failed. Open System status for recovery.'],
+    [12_000, '12,000 indexing jobs have failed. Open System status for recovery.'],
+  ])('counts the search-index jobs that failed (%s)', (failed, line) => {
+    markGettingStartedActive('u1');
+    h.connections = 1;
+    h.status.totals = { ...EMPTY, communications: 500 };
+    h.status.failedIndexingItems = failed;
+    renderBanner();
+
+    expect(screen.getByRole('alert')).toHaveTextContent(line);
+    expect(screen.getByRole('link', { name: 'System status' })).toBeInTheDocument();
+    // A failed job is not a refresh failure: the headline and the checklist stay as they were.
+    expect(screen.queryByText('Sync status needs attention')).toBeNull();
+    expect(screen.getByText('You’re all set')).toBeInTheDocument();
   });
 
   it('goes away when dismissed, and stays away', () => {

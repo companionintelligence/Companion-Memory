@@ -53,4 +53,10 @@ describe('SETTINGS_SECTIONS', () => {
   it('exposes Trust & protocols section in visible settings destinations', () => {
     expect(visibleSettingsSections().some((section) => section.id === 'protocols')).toBe(true);
   });
+
+  it('exposes System status, on every platform, so the banner link has somewhere to land', () => {
+    expect(visibleSettingsSections().some((section) => section.id === 'status')).toBe(true);
+    isNativePlatform.mockReturnValue(true);
+    expect(visibleSettingsSections().some((section) => section.id === 'status')).toBe(true);
+  });
 });

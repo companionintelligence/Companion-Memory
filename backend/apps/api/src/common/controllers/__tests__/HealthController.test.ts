@@ -3,6 +3,7 @@ import { Test } from '@nestjs/testing';
 import { getDataSourceToken } from '@nestjs/typeorm';
 import request from 'supertest';
 
+import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { OllamaService } from '@ci/domains/llm';
 
 import { HealthController } from '../HealthController';
@@ -37,7 +38,10 @@ describe('HealthController', () => {
   beforeEach(async () => {
     const moduleRef = await Test.createTestingModule({
       imports: [HealthTestModule],
-    }).compile();
+    })
+      .overrideGuard(JwtOrApiKeyAuthGuard)
+      .useValue({ canActivate: () => true })
+      .compile();
 
     app = moduleRef.createNestApplication();
     await app.init();
@@ -275,7 +279,10 @@ describe('HealthController', () => {
     beforeAll(async () => {
       const moduleRef = await Test.createTestingModule({
         imports: [BareHealthTestModule],
-      }).compile();
+      })
+        .overrideGuard(JwtOrApiKeyAuthGuard)
+        .useValue({ canActivate: () => true })
+        .compile();
 
       bareApp = moduleRef.createNestApplication();
       await bareApp.init();

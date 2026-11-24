@@ -99,11 +99,19 @@ function GettingStartedBannerBody({ onDismiss }: { onDismiss: () => void }) {
     unpushedRuns: status.unpushedRuns,
     runningImports: importsEnabled ? (snapshot ? snapshot.batch.running + snapshot.batch.queued : null) : 0,
     runningRecords: snapshot?.batch.records ?? 0,
+    // A failed refresh keeps the last counts on screen (the alert says they are the last good ones), but
+    // search readiness is not known from them: an index status that did not answer is not an empty queue.
     totals: status.totals,
-    indexingItems: status.indexingItems,
+    indexingItems: status.error ? null : status.indexingItems,
   });
 
   const modelTarget = settingsSectionTarget('model', isMobile, location) ?? { to: '/settings/model' };
+  const statusTarget = settingsSectionTarget('status', isMobile, location) ?? { to: '/settings/status' };
+  const failedIndexing = status.failedIndexingItems ?? 0;
+  const failedIndexingLine =
+    failedIndexing === 1
+      ? '1 indexing job has failed.'
+      : `${failedIndexing.toLocaleString('en-US')} indexing jobs have failed.`;
 
   const saveToMemory = async () => {
     setSaving(true);
@@ -121,7 +129,11 @@ function GettingStartedBannerBody({ onDismiss }: { onDismiss: () => void }) {
   };
 
   const nextStep = checklist.steps.find((step) => step.status !== 'done' && step.status !== 'unknown');
-  const headline = checklist.allDone ? 'You’re all set' : `Getting started · ${checklist.doneCount} of 3`;
+  const headline = status.error
+    ? 'Sync status needs attention'
+    : checklist.allDone
+      ? 'You’re all set'
+      : `Getting started · ${checklist.doneCount} of 3`;
   // Folded, the summary names the next thing to do; open, the rows below already
   // say it, and repeating the same sentence twice in a strip is just noise.
   const summary = checklist.countsLine
@@ -208,6 +220,22 @@ function GettingStartedBannerBody({ onDismiss }: { onDismiss: () => void }) {
         </IconButton>
       </div>
 
+      {status.error || failedIndexing > 0 ? (
+        <div role="alert" className="mt-2 flex flex-wrap items-center gap-2 text-sm text-destructive">
+          <div className="min-w-0 flex-1 space-y-1">
+            {status.error ? <p>{status.error}</p> : null}
+            {failedIndexing > 0 ? <p>{failedIndexingLine} Open System status for recovery.</p> : null}
+          </div>
+          <Button size="sm" variant="outline" onClick={status.refresh}>
+            Check again
+          </Button>
+          <Button asChild size="sm" variant="outline">
+            <Link to={statusTarget.to} state={statusTarget.state}>
+              System status
+            </Link>
+          </Button>
+        </div>
+      ) : null}
       {expanded ? (
         <ol className="mt-2 space-y-2 pb-1">
           {checklist.steps.map((step) => {
