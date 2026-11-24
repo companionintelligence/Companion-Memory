@@ -57,6 +57,7 @@ import { YouTubeActivitiesTransformService } from './services/Google/transform/T
 import { YouTubeLikesTransformService } from './services/Google/transform/TransformYouTubeLikes';
 import { YouTubePlaylistsTransformService } from './services/Google/transform/TransformYouTubePlaylists';
 import { YouTubeSubscriptionsTransformService } from './services/Google/transform/TransformYouTubeSubscriptions';
+import { MailAttachmentService } from './services/MailAttachmentService';
 import { OneDriveTransformService } from './services/Microsoft/transform/TransformOneDrive';
 import { OutlookCalendarTransformService } from './services/Microsoft/transform/TransformOutlookCalendar';
 import { OutlookMailTransformService } from './services/Microsoft/transform/TransformOutlookMail';
@@ -110,6 +111,7 @@ import { SyncNowService } from './services/SyncNowService';
     SyncNowService,
     EndpointServiceMap,
     PromoteService,
+    MailAttachmentService,
     SyncOrchestrator,
     CloudFileIngestLedgerService,
     CloudFileIngestService,
