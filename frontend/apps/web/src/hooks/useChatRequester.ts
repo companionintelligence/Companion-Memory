@@ -117,6 +117,9 @@ export function isApplianceUnreachable(failure: unknown): boolean {
   return name !== 'AbortError';
 }
 
+/** Frames that arrive before the model speaks: they must not hide the "working" dots. */
+const SILENT_CHANNELS = new Set<Channel>([Channel.KEEPALIVE, Channel.GROUNDING]);
+
 function pipeMonitor(
   body: ReadableStream<Uint8Array>,
   onFirstChunk: () => void,
@@ -126,12 +129,12 @@ function pipeMonitor(
   // The server sends keep-alive frames (Channel.KEEPALIVE) from the moment the turn starts, so the
   // body's first bytes are not the reply's. Counting them hid the "working" dots at once and left
   // the page blank until the model spoke. Frames are decoded only until one on another channel
-  // arrives.
+  // arrives. The turn's grounding snapshot arrives before the model speaks too, so it does not count.
   const decoder = new FrameDecoder();
 
   const monitor = new TransformStream({
     transform(chunk, controller) {
-      if (!hasSeenFirstChunk && decoder.push(chunk).some((frame) => frame.channel !== Channel.KEEPALIVE)) {
+      if (!hasSeenFirstChunk && decoder.push(chunk).some((frame) => !SILENT_CHANNELS.has(frame.channel))) {
         hasSeenFirstChunk = true;
         onFirstChunk();
       }

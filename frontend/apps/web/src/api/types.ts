@@ -35,6 +35,7 @@ export interface Message {
   mimetype: string | null;
   toolCalls: object[] | null;
   canceled: boolean;
+  grounding?: unknown;
 }
 
 export interface Thread {

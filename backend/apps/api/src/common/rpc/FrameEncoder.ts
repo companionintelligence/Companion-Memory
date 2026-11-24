@@ -1,4 +1,4 @@
-import { type Channel } from './types';
+import { Channel, Flag } from './types';
 
 export class FrameEncoder {
   private readonly encoder = new TextEncoder();
@@ -7,8 +7,12 @@ export class FrameEncoder {
     const body = this.encoder.encode(text);
     const out = new Uint8Array(1 + 4 + body.length);
 
-    // Partition 1-byte header into 2 channel bits and 6 flag bits
-    out[0] = ((channel & 0b11) << 6) | (flags & 0b0011_1111);
+    // Partition 1-byte header into 2 channel bits and 6 flag bits. A higher channel rides as an
+    // extended KEEPALIVE frame, so a client that only knows channels 0-3 skips it (see Flag.EXTENDED_CHANNEL).
+    out[0] =
+      channel > Channel.KEEPALIVE
+        ? (Channel.KEEPALIVE << 6) | Flag.EXTENDED_CHANNEL | (((channel - 4) & 0b111) << 2) | (flags & 0b11)
+        : ((channel & 0b11) << 6) | (flags & 0b0011_1111);
 
     const view = new DataView(out.buffer, out.byteOffset, out.byteLength);
 

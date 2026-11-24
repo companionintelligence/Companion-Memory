@@ -26,6 +26,7 @@ import { UserMessage } from './blocks/UserMessage';
 import { ChatInput, type FormData } from './ChatInput';
 import { ChatLoader } from './ChatLoader';
 import { ChatMessage } from './ChatMessage';
+import { GroundingSources, parseGrounding } from './GroundingSources';
 import { streamingMarkdownRenderer } from './streamingRenderer';
 import { useConditionalAutoscroll } from './useConditionalAutoscroll';
 import { Channel, type Decoded, createStreamProcessor } from './utils';
@@ -39,6 +40,7 @@ interface Message {
   source?: 'openclaw' | 'memory' | 'user';
   /** Persisted tool calls. The live stream draws these as they arrive; a reload has only this column. */
   toolCalls?: object[] | null;
+  grounding?: unknown;
 }
 
 interface Props extends Omit<ChatInputProps, 'refocusWhenEnabled'> {
@@ -81,6 +83,8 @@ export function Chat({
 }: Props) {
   const autoFocusRef = useRef<HTMLTextAreaElement | null>(null);
   const lastProcessedResponseRef = useRef<string>('');
+  const [liveGrounding, setLiveGrounding] = useState<unknown>(null);
+  const liveGroundingRef = useRef<unknown>(null);
 
   // We want to maintain reference to the scroll container so that we can auto-scroll
   // when we deem it appropriate. According to the contract stipulated here, that's when
@@ -204,6 +208,21 @@ export function Chat({
         return true;
       }
 
+      // The turn's evidence snapshot: shown under the answer, and not a channel change.
+      if (chunk.channel === Channel.GROUNDING) {
+        try {
+          const metadata: unknown = JSON.parse(textDecoder.decode(chunk.payload));
+          if (parseGrounding(metadata)) {
+            liveGroundingRef.current = metadata;
+            setLiveGrounding(metadata);
+          }
+        } catch {
+          // Bad optional metadata cannot interrupt an otherwise readable answer.
+        }
+
+        return true;
+      }
+
       if (!supportedChannels.has(chunk.channel)) {
         console.warn('Ignored unsupported chunk channel:', chunk.channel);
 
@@ -292,6 +311,9 @@ export function Chat({
         return false;
       }
 
+      setLiveGrounding(null);
+      liveGroundingRef.current = null;
+
       // What this send added to the transcript: the bubble, and the empty reply blocks that were started after it.
       let echoed: ReactNode[] = [];
 
@@ -334,7 +356,12 @@ export function Chat({
 
     // First, check that we have a valid channel and flush the stream
     if (lastChannel != null) {
-      flushStream();
+      flushStream(
+        liveGroundingRef.current ? (
+          <GroundingSources key={uuid7()} value={liveGroundingRef.current} />
+        ) : undefined,
+      );
+      setLiveGrounding(null);
     }
 
     // Only handle response finished for TEXT channel with meaningful content
@@ -485,6 +512,7 @@ export function Chat({
           {children}
           {renderedMessages}
           {accumulatedMessages}
+          <GroundingSources value={liveGrounding} />
         </div>
       )}
 

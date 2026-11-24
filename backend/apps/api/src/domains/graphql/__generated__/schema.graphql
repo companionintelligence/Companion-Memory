@@ -1978,6 +1978,7 @@ type MessageEdge implements Edge {
 
 type MessageType implements Node {
   content: String!
+  grounding: JSONObject
   id: ID!
   role: String
   threadId: ID!

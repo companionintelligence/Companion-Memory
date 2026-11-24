@@ -1,6 +1,7 @@
 import { Field, ObjectType, ID } from '@nestjs/graphql';
 
 import { type Message } from '@ci/domains/conversations';
+import { GraphQLJSONObject } from '@ci/domains/graphql/scalars/JsonObjectScalar';
 
 import { GlobalUID } from './GlobalUID';
 import { Node } from './Node';
@@ -23,6 +24,9 @@ export class MessageType implements Node {
   @Field(() => String, { nullable: true })
   role!: string | null;
 
+  @Field(() => GraphQLJSONObject, { nullable: true })
+  grounding!: Message['grounding'];
+
   static toType(message: Message): MessageType {
     return {
       __typename: MessageType.name,
@@ -30,6 +34,7 @@ export class MessageType implements Node {
       id: GlobalUID.encode('message', message.id),
       content: message.content,
       role: message.role,
+      grounding: message.grounding ?? null,
       threadId: message.threadId ?? null,
     };
   }

@@ -2,6 +2,7 @@ import { AssistantMessage } from './blocks/AssistantMessage';
 import { ThinkBlock } from './blocks/ThinkBlock';
 import { ToolBlock } from './blocks/ToolBlock';
 import { UserMessage } from './blocks/UserMessage';
+import { GroundingSources } from './GroundingSources';
 import { parseChatContent } from './parser';
 
 interface ToolCallShape {
@@ -14,6 +15,7 @@ interface Props {
   createdAt?: string;
   source?: 'openclaw' | 'memory' | 'user';
   toolCalls?: object[] | null;
+  grounding?: unknown;
 }
 
 function persistedToolNames(toolCalls: object[] | null | undefined): string[] {
@@ -28,7 +30,7 @@ function persistedToolNames(toolCalls: object[] | null | undefined): string[] {
   });
 }
 
-export function ChatMessage({ role, content, createdAt, source, toolCalls }: Props) {
+export function ChatMessage({ role, content, createdAt, source, toolCalls, grounding }: Props) {
   if (role === 'tool') {
     return null;
   }
@@ -59,6 +61,7 @@ export function ChatMessage({ role, content, createdAt, source, toolCalls }: Pro
             return null;
         }
       })}
+      <GroundingSources value={grounding} />
       {toolNames.map((toolName, index) => (
         <ToolBlock key={`${toolName}-${index}`} toolName={toolName} />
       ))}

@@ -17,7 +17,14 @@ import config from '@ci/configuration';
 // LLMModule, so pulling the barrel in here would close an import cycle. The
 // concrete file reaches nothing under `domains/llm` that reaches back.
 import { RecallService } from '@ci/domains/agent/services/RecallService';
-import { MessageService, ThreadService, type Message, type Thread } from '@ci/domains/conversations';
+import {
+  MessageService,
+  ThreadService,
+  verifyMemoryCitations,
+  type Message,
+  type MessageGrounding,
+  type Thread,
+} from '@ci/domains/conversations';
 import { DescriptiveQuestionService } from '@ci/domains/daily-metrics';
 import { Events, EventService, INTERACTIVE_JOB_PRIORITY } from '@ci/domains/events';
 import { FileService } from '@ci/domains/files';
@@ -94,6 +101,7 @@ interface TurnContextOptions {
   recallBudgetBytes?: number;
   /** Whether this turn has tools; when it has none the block ends with {@link TOOLS_OFF_TURN_REMINDER}. */
   toolsEnabled?: boolean;
+  onGrounding?: (grounding: MessageGrounding) => void;
 }
 
 /**
@@ -295,6 +303,7 @@ export class ChatTurnService {
     let shrinkLevel = 0;
     let firstResponseAttempts = 0;
     const stopWatching = this.watchAsker(payload);
+    let grounding: MessageGrounding = { status: 'disabled', sources: [] };
 
     try {
       for (;;) {
@@ -304,6 +313,16 @@ export class ChatTurnService {
         });
 
         model = prepared.model;
+        grounding = prepared.grounding;
+        // Send retrieval health independently of generated prose, and persist
+        // before generation so interrupted turns also disclose a failed lookup.
+        if (grounding.status !== 'disabled') {
+          this.broker.publish(payload.threadId, {
+            channel: Channel.GROUNDING,
+            text: JSON.stringify(grounding),
+          });
+          await this.messageService.update(serviceContext, payload.assistantMessageId, { grounding });
+        }
 
         // A turn with no tools cannot change anything, so a plain instruction to
         // ("add a task…", "forget…") is answered here, in code, not by a model
@@ -462,6 +481,20 @@ export class ChatTurnService {
         }
       }
 
+      grounding = verifyMemoryCitations(
+        generated
+          .filter((message) => message.role === 'assistant')
+          .map((message) => message.content)
+          .join('\n') || latestText,
+        grounding,
+      );
+      if (grounding.status !== 'disabled') {
+        this.broker.publish(payload.threadId, {
+          channel: Channel.GROUNDING,
+          text: JSON.stringify(grounding),
+        });
+      }
+
       await this.persistTurn(
         serviceContext,
         payload,
@@ -470,6 +503,7 @@ export class ChatTurnService {
         signal.aborted,
         latestText,
         latestThink,
+        grounding,
       );
 
       if (!failed) {
@@ -691,6 +725,7 @@ export class ChatTurnService {
     aborted: boolean,
     streamedText: string,
     streamedThink: string,
+    grounding: MessageGrounding,
   ): Promise<void> {
     const stoppedEmpty = (content: string | null | undefined) => aborted && isBlankAssistantContent(content);
     const toolCallsOf = (message: OllamaMessage, last: boolean) =>
@@ -704,6 +739,7 @@ export class ChatTurnService {
       await this.messageService.update(context, payload.assistantMessageId, {
         content,
         canceled: stoppedEmpty(content),
+        grounding,
       });
 
       return;
@@ -719,6 +755,7 @@ export class ChatTurnService {
       content: firstContent,
       canceled: rest.length === 0 && stoppedEmpty(firstContent),
       toolCalls: toolCallsOf(first, rest.length === 0) ?? null,
+      grounding,
     });
 
     for (let i = 0; i < rest.length; i++) {
@@ -736,6 +773,7 @@ export class ChatTurnService {
           threadId: payload.threadId,
           ...(toolCalls && { toolCalls }),
           promptMessageId: payload.promptMessageId,
+          ...(message.role === 'assistant' && { grounding }),
         },
       );
     }
@@ -761,6 +799,7 @@ export class ChatTurnService {
     enableThinking: boolean;
     enableTools: boolean;
     budget: ContextBudget;
+    grounding: MessageGrounding;
   }> {
     // Turns older than the newest few replay as prose only: their tool_calls
     // and the paired role:'tool' result rows are dropped together. Folding
@@ -853,8 +892,12 @@ export class ChatTurnService {
       ? await this.buildSystemPrompt(requestContext, enableTools)
       : await this.buildL0OnlySystemPrompt(requestContext, enableTools);
 
+    let grounding: MessageGrounding = { status: 'disabled', sources: [] };
     const turnContext = options.systemPromptEnabled
       ? await this.buildTurnContext(requestContext, {
+          onGrounding: (value) => {
+            grounding = value;
+          },
           toolsEnabled: enableTools,
           leadingAssistantMessages,
           recallQuery: latestUserText(admittedMessages),
@@ -902,7 +945,7 @@ export class ChatTurnService {
       overBudget: plan.overBudget,
     });
 
-    return { messages: messagesWithSystem, model, enableThinking, enableTools, budget };
+    return { messages: messagesWithSystem, model, enableThinking, enableTools, budget, grounding };
   }
 
   /**
@@ -1184,6 +1227,7 @@ export class ChatTurnService {
 
 App surfaces — use these exact names when you talk about them:
 - Memory — the personal knowledge graph (people, places, events, communications, notes, files). Query it with memory.recall and knowledge.search. Do not invent facts that should be in Memory.
+- Cite facts from the recalled-memory snapshot with its exact [M1], [M2] source labels. These labels refer only to sources in this turn; never invent labels. A citation confirms a source exists, not that a claim is true. Distinguish the owner's records from other speakers' claims, retain dates and uncertainty, prefer explicit newer corrections, and disclose when retrieval did not complete.
 - Plan — to-dos / tasks (open work, due dates, scheduled items). Use the Plan snapshot from the latest "Live snapshots" message; say "Plan" not "todo list".
 - Forecast — predicted rest-of-day / tomorrow. Use the Forecast snapshot from the latest "Live snapshots" message.
 - Brief — inbox of actions, insights, and summaries. Use the Brief snapshot from the latest "Live snapshots" message.
@@ -1268,6 +1312,7 @@ Communication style:
           context.userId,
           options?.recallQuery ?? null,
           options?.recallBudgetBytes ?? 0,
+          options?.onGrounding,
         )
       : '';
     const liveBlocks = context.userId ? await this.buildLiveAppBlocks(context, recall) : '';
@@ -1345,17 +1390,29 @@ Communication style:
    * there. Running the same evidence-numbered pipeline up front makes grounding
    * the default rather than a choice the model has to make under a round limit.
    *
-   * FAILS OPEN, always. Recall is an improvement to a turn, not a precondition
-   * for one: a retrieval error, a missing container binding, or a query slower
-   * than {@link GROUNDED_RECALL_TIMEOUT_MS} all return '' and the turn proceeds
-   * byte-for-byte as it did before this existed.
+   * Retrieval failure does not stop general conversation, but it is reported
+   * separately to the viewer and model so an ungrounded answer cannot silently
+   * read as a successful search of the archive.
    */
   private async buildRecallSection(
     userId: string,
     query: string | null,
     budgetBytes: number,
+    onGrounding?: (grounding: MessageGrounding) => void,
   ): Promise<string> {
-    if (!config.llm.chat.groundedRecall.enabled || !query || budgetBytes <= 0) {
+    const report = (status: MessageGrounding['status'], sources: MessageGrounding['sources'] = []) => {
+      onGrounding?.({ status, sources });
+    };
+
+    if (!config.llm.chat.groundedRecall.enabled || !query) {
+      report('disabled');
+
+      return '';
+    }
+
+    if (budgetBytes <= 0) {
+      report('budget_exhausted');
+
       return '';
     }
 
@@ -1363,7 +1420,9 @@ Communication style:
       const recallService = this.moduleRef?.get(RecallService, { strict: false });
 
       if (!recallService) {
-        return '';
+        report('unavailable');
+
+        return `${RECALL_SECTION_HEADER}\nMemory retrieval is unavailable. Do not claim to have searched or verified personal facts.`;
       }
 
       const result = await withTimeout(
@@ -1376,14 +1435,17 @@ Communication style:
       );
 
       const lines: string[] = [];
-      let usedBytes = Buffer.byteLength(RECALL_SECTION_HEADER, 'utf8');
+      const sources: MessageGrounding['sources'] = [];
+      const heading = `${RECALL_SECTION_HEADER}\nCite personal facts with [M1], [M2], etc. Only these source numbers exist. Preserve attribution and record dates; use explicit newer corrections over older claims. If evidence is missing or conflicting, say so.`;
+      let usedBytes = Buffer.byteLength(heading, 'utf8');
 
       // Admitted line by line, in the pipeline's own relevance order, against
       // the bytes history left unspent — so a large corpus costs the tail of
       // the evidence, never the conversation. Each line is fenced exactly once,
       // here at the point of interpolation, per `untrustedBlock`'s contract.
       for (const line of result.lines) {
-        const rendered = `- ${fenceUntrusted(line.text)}`;
+        const citation = sources.length + 1;
+        const rendered = `- [M${citation}] (${line.voice === 'own' ? 'owner' : 'other speaker'}; record date: ${line.ref.at ?? 'unknown'}) ${fenceUntrusted(line.text)}`;
         // +1 for the newline this line is joined with.
         const cost = Buffer.byteLength(rendered, 'utf8') + 1;
 
@@ -1393,20 +1455,31 @@ Communication style:
 
         usedBytes += cost;
         lines.push(rendered);
+        sources.push({ citation, text: line.text, voice: line.voice, ref: line.ref });
       }
 
       if (lines.length === 0) {
+        report(result.lines.length ? 'budget_exhausted' : 'empty');
+
         return '';
       }
 
-      return [RECALL_SECTION_HEADER, ...lines].join('\n');
+      report('retrieved', sources);
+
+      return [heading, ...lines].join('\n');
     } catch (error) {
       this.logger.warn('Grounded recall failed; continuing the turn without it', {
         userId,
         error: error instanceof Error ? error.message : String(error),
       });
 
-      return '';
+      report(
+        error instanceof Error && error.message.startsWith('Grounded recall exceeded')
+          ? 'timeout'
+          : 'unavailable',
+      );
+
+      return `${RECALL_SECTION_HEADER}\nMemory retrieval did not complete. Personal facts have not been verified for this turn; disclose this limitation and do not invent them.`;
     }
   }
 

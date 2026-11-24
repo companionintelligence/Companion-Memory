@@ -1,4 +1,4 @@
-import { type Decoded } from './types';
+import { Channel, type Decoded, Flag } from './types';
 
 export class FrameDecoder {
   private buffer = new Uint8Array(0);
@@ -15,8 +15,10 @@ export class FrameDecoder {
 
     while (this.buffer.length >= 5) {
       const header = this.buffer[0];
-      const channel = (header >> 6) & 0b11;
-      const flags = header & 0b0011_1111;
+      const base = (header >> 6) & 0b11;
+      const extended = base === Channel.KEEPALIVE && (header & Flag.EXTENDED_CHANNEL) !== 0;
+      const channel = extended ? 4 + ((header >> 2) & 0b111) : base;
+      const flags = extended ? header & 0b11 : header & 0b0011_1111;
 
       const view = new DataView(this.buffer.buffer, this.buffer.byteOffset, this.buffer.byteLength);
       const len = view.getUint32(1, false);

@@ -349,6 +349,60 @@ describe('RecallService.recall — the grounded strategy', () => {
 describe('RecallService.recall — the two channels that bypass entity resolution', () => {
   const GROUNDED = { strategy: 'grounded' as const };
 
+  it.each(['seed-then-fallback', 'grounded'] as const)(
+    'retrieves raw memory before any graph entities exist with %s',
+    async (strategy) => {
+      const { service, send } = build({
+        searchMessages: jest.fn().mockResolvedValue([{ id: 'fresh' }]),
+        findByIds: jest.fn().mockResolvedValue([
+          {
+            id: 'fresh',
+            content: 'Mira works at Orbit Research',
+            createdAt: new Date('2026-10-22T10:00:00Z'),
+          },
+        ]),
+      });
+      const result = await service.recall(CONTEXT, { query: 'Where does Mira work?' }, { strategy });
+      expect(result.resultCount).toBe(1);
+      expect(result.lines[0]).toEqual({
+        text: 'Mira works at Orbit Research',
+        voice: 'other',
+        ref: { type: 'agent-memory', id: 'fresh', at: '2026-10-22T10:00:00.000Z' },
+      });
+      expect(send.mock.calls[0][1].resultCount).toBe(1);
+    },
+  );
+
+  it('still searches raw memory when no structured hit can be serialized', async () => {
+    const { service } = build({
+      searchAnchored: jest.fn().mockResolvedValue([{ type: 'person', id: 'empty-person' }]),
+      serialize: jest.fn().mockReturnValue(null),
+      searchMessages: jest.fn().mockResolvedValue([{ id: 'raw' }]),
+      findByIds: jest.fn().mockResolvedValue([{ id: 'raw', content: 'The original source sentence' }]),
+    });
+    const result = await service.recall(CONTEXT, { query: 'original source' }, GROUNDED);
+    expect(result.resultCount).toBe(1);
+    expect(result.block).toContain('The original source sentence');
+  });
+
+  it('reports grounded search failures instead of reporting an empty archive', async () => {
+    const { service, send } = build({ search: jest.fn().mockRejectedValue(new Error('index unavailable')) });
+    await expect(service.recall(CONTEXT, { query: 'saved fact' }, GROUNDED)).rejects.toThrow(
+      'index unavailable',
+    );
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('reports an unavailable raw-memory channel to grounded callers', async () => {
+    const { service } = build({
+      search: jest.fn().mockResolvedValue([{ type: 'person', id: 'person' }]),
+      searchMessages: jest.fn().mockRejectedValue(new Error('memory channel unavailable')),
+    });
+    await expect(service.recall(CONTEXT, { query: 'saved fact' }, GROUNDED)).rejects.toThrow(
+      'memory channel unavailable',
+    );
+  });
+
   // Neither of these goes through EntityResolutionService, so neither can name a
   // resolver type. They name their TABLE instead, which is where a click would
   // have to land anyway — and getting that wrong is invisible until somebody

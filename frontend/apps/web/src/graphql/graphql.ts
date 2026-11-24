@@ -1971,6 +1971,7 @@ export type MessageEdge = Edge & {
 export type MessageType = Node & {
   __typename?: 'MessageType';
   content: Scalars['String']['output'];
+  grounding?: Maybe<Scalars['JSONObject']['output']>;
   id: Scalars['ID']['output'];
   role?: Maybe<Scalars['String']['output']>;
   threadId: Scalars['ID']['output'];
