@@ -439,6 +439,60 @@ describe('ensureLocalLlmLoaded', () => {
     expect(plugin.loadModel).not.toHaveBeenCalled();
   });
 
+  it('applies changed sampling on the next load and preserves the resident context on unchanged turns', async () => {
+    const { plugin } = fakeLlm({
+      getLoadedModel: vi.fn(async () => ({ loaded: true, modelId: 'gemma-4-e2b-it', accelerator: 'cpu' })),
+    });
+    nativeWindow('android', plugin);
+
+    await ensureLocalLlmLoaded('gemma-4-e2b-it', { sampling: { temperature: 0.2, topP: 0.8, topK: 12 } });
+    expect(plugin.loadModel).toHaveBeenLastCalledWith(
+      expect.objectContaining({ temperature: 0.2, topP: 0.8, topK: 12 }),
+    );
+    await ensureLocalLlmLoaded('gemma-4-e2b-it', { sampling: { temperature: 0.2, topP: 0.8, topK: 12 } });
+    expect(plugin.loadModel).toHaveBeenCalledTimes(1);
+
+    await ensureLocalLlmLoaded('gemma-4-e2b-it', { sampling: { temperature: 0.4 } });
+    expect(plugin.loadModel).toHaveBeenCalledTimes(2);
+    await ensureLocalLlmLoaded('gemma-4-e2b-it');
+    expect(plugin.loadModel).toHaveBeenCalledTimes(3);
+    expect(plugin.loadModel).toHaveBeenLastCalledWith(
+      expect.not.objectContaining({ temperature: expect.anything() }),
+    );
+  });
+
+  it('sends only the sampler fields that were set — and a temperature of 0 is one of them', async () => {
+    const { plugin } = fakeLlm();
+
+    nativeWindow('android', plugin);
+
+    await ensureLocalLlmLoaded('gemma-4-e2b-it', { sampling: { temperature: 0 } });
+
+    const [request] = plugin.loadModel.mock.calls[0];
+
+    // 0 is greedy decoding, a real setting; a truthiness check anywhere on the way would have dropped it.
+    expect(request).toMatchObject({ modelId: 'gemma-4-e2b-it', temperature: 0 });
+    expect(request).not.toHaveProperty('topP');
+    expect(request).not.toHaveProperty('topK');
+  });
+
+  it('does not remember the sampler of a load that failed, so the next turn tries again', async () => {
+    const { plugin } = fakeLlm({
+      getLoadedModel: vi.fn(async () => ({ loaded: true, modelId: 'gemma-4-e2b-it', accelerator: 'cpu' })),
+    });
+
+    plugin.loadModel.mockRejectedValueOnce(new Error('Not enough memory to load the model'));
+    nativeWindow('android', plugin);
+
+    await expect(ensureLocalLlmLoaded('gemma-4-e2b-it', { sampling: { topK: 8 } })).rejects.toThrow(
+      /not enough memory/i,
+    );
+    await ensureLocalLlmLoaded('gemma-4-e2b-it', { sampling: { topK: 8 } });
+
+    expect(plugin.loadModel).toHaveBeenCalledTimes(2);
+    expect(plugin.loadModel).toHaveBeenLastCalledWith(expect.objectContaining({ topK: 8 }));
+  });
+
   it('asks for the CPU on a phone under the model’s GPU floor, and treats the resident CPU model as a match', async () => {
     let loaded: { loaded: boolean; modelId?: string; accelerator?: string } = { loaded: false };
     const { plugin } = fakeLlm({

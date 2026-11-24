@@ -19,6 +19,33 @@ import { type LocalLlmAccelerator, findLocalLlmModel } from './localLlmCatalog';
  */
 export type LocalLlmMode = 'appliance' | 'auto' | 'device';
 
+/** Sampler overrides for the on-device model. A field left out uses the model's own default. */
+export interface LocalLlmSampling {
+  temperature?: number;
+  topP?: number;
+  topK?: number;
+}
+
+/**
+ * What a stored answer setting is clamped to, whether it was typed in Settings or read back from storage.
+ * The Settings screen sets its inputs' `min` and `max` from this same table, so a field and the clamp cannot
+ * drift apart. The two token limits only bound what is stored: the native runtime still applies its own
+ * context-window, thermal and availability limits, so a reply can end sooner than the limit says.
+ */
+export const LOCAL_LLM_BOUNDS = {
+  temperature: { min: 0, max: 2 },
+  // Floored above 0: a top P of 0 is degenerate, so it is not offered.
+  topP: { min: 0.05, max: 1 },
+  topK: { min: 1, max: 100 },
+  maxOutputTokens: { min: 128, max: 8192 },
+  thinkingTokenBudget: { min: 64, max: 2048 },
+} as const;
+
+interface Bounds {
+  min: number;
+  max: number;
+}
+
 export interface LocalLlmPrefs {
   mode: LocalLlmMode;
   /** The model chat runs on. `null` until the user picks (or downloads) one. */
@@ -31,6 +58,12 @@ export interface LocalLlmPrefs {
   speculativeDecoding: boolean;
   /** Bind the appliance's intents as tools so the model answers from memory when it can reach it. */
   intentTools: boolean;
+  /** Device-only sampler overrides. Omitted fields use the selected model's defaults. */
+  sampling?: LocalLlmSampling;
+  /** The most tokens one whole reply, reasoning included, may take. Omitted: whatever the context window has left. */
+  maxOutputTokens?: number;
+  /** The most tokens the model may spend reasoning before it answers. Omitted: the runtime's own cap. */
+  thinkingTokenBudget?: number;
 }
 
 export const DEFAULT_LOCAL_LLM_PREFS: LocalLlmPrefs = {
@@ -73,6 +106,14 @@ export function parseLocalLlmPrefs(raw: string | null): LocalLlmPrefs {
     return { ...DEFAULT_LOCAL_LLM_PREFS };
   }
 
+  const sampling = normalizeSampling(value.sampling);
+  const maxOutputTokens = boundedNumber(value.maxOutputTokens, LOCAL_LLM_BOUNDS.maxOutputTokens, true);
+  const thinkingTokenBudget = boundedNumber(
+    value.thinkingTokenBudget,
+    LOCAL_LLM_BOUNDS.thinkingTokenBudget,
+    true,
+  );
+
   return {
     mode: isMode(value.mode) ? value.mode : DEFAULT_LOCAL_LLM_PREFS.mode,
     // A stored id the catalog no longer ships reads as "no model": a preference saved before a model was
@@ -88,7 +129,41 @@ export function parseLocalLlmPrefs(raw: string | null): LocalLlmPrefs {
         : DEFAULT_LOCAL_LLM_PREFS.speculativeDecoding,
     intentTools:
       typeof value.intentTools === 'boolean' ? value.intentTools : DEFAULT_LOCAL_LLM_PREFS.intentTools,
+    // Left out, not set to `undefined`, when absent or damaged: no override means the model's own default.
+    ...(sampling ? { sampling } : {}),
+    ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
+    ...(thinkingTokenBudget !== undefined ? { thinkingTokenBudget } : {}),
   };
+}
+
+/**
+ * `value` clamped into `bounds` (rounded first when `integer`). Anything that is not a finite number — a
+ * string, `null`, `NaN`, an infinity — comes back `undefined`, so a damaged field is dropped rather than
+ * guessed at, and the caller falls back to the model's default.
+ */
+function boundedNumber(value: unknown, { min, max }: Bounds, integer = false): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.max(min, Math.min(max, integer ? Math.round(value) : value))
+    : undefined;
+}
+
+/** The sampler overrides worth keeping, each clamped; `undefined` when none of them survive. */
+function normalizeSampling(value: unknown): LocalLlmSampling | undefined {
+  if (!value || typeof value !== 'object') {
+    return undefined;
+  }
+
+  const input = value as LocalLlmSampling;
+  const temperature = boundedNumber(input.temperature, LOCAL_LLM_BOUNDS.temperature);
+  const topP = boundedNumber(input.topP, LOCAL_LLM_BOUNDS.topP);
+  const topK = boundedNumber(input.topK, LOCAL_LLM_BOUNDS.topK, true);
+  const result = {
+    ...(temperature !== undefined ? { temperature } : {}),
+    ...(topP !== undefined ? { topP } : {}),
+    ...(topK !== undefined ? { topK } : {}),
+  };
+
+  return Object.keys(result).length ? result : undefined;
 }
 
 function readStorage(): string | null {
@@ -109,6 +184,16 @@ export function getLocalLlmPrefs(): LocalLlmPrefs {
 
 export function setLocalLlmPrefs(patch: Partial<LocalLlmPrefs>): LocalLlmPrefs {
   const next = { ...getLocalLlmPrefs(), ...patch };
+
+  // Clamped on the way in as well as on the way out, so a value typed into Settings is what chat uses at once,
+  // not only after the next launch re-reads storage. Passing `undefined` clears an override.
+  next.sampling = normalizeSampling(next.sampling);
+  next.maxOutputTokens = boundedNumber(next.maxOutputTokens, LOCAL_LLM_BOUNDS.maxOutputTokens, true);
+  next.thinkingTokenBudget = boundedNumber(
+    next.thinkingTokenBudget,
+    LOCAL_LLM_BOUNDS.thinkingTokenBudget,
+    true,
+  );
 
   cached = next;
 

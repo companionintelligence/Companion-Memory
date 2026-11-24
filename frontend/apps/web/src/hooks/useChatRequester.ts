@@ -244,6 +244,7 @@ export function useChatRequester({ threadId, onNewThread, actionId }: Opts): Ret
           accelerator: prefs.accelerator ?? undefined,
           enableSpeculativeDecoding: prefs.speculativeDecoding,
           useIntentTools: prefs.intentTools,
+          sampling: prefs.sampling,
         });
       } catch (err) {
         setError(err);
@@ -294,6 +295,8 @@ export function useChatRequester({ threadId, onNewThread, actionId }: Opts): Ret
       const generate = () =>
         streamLocalLlm(prompt, {
           enableThinking: prefs.thinking && spec.capabilities.includes('thinking'),
+          maxOutputTokens: prefs.maxOutputTokens,
+          thinkingTokenBudget: prefs.thinkingTokenBudget,
           images,
           signal: controller.signal,
           onText: (text) => push(Channel.TEXT, text),

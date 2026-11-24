@@ -33,6 +33,7 @@ import {
   type LocalLlmModelSpec,
   type LocalLlmPlatform,
 } from './localLlmCatalog';
+import type { LocalLlmSampling } from './localLlmPrefs';
 
 export type LocalLlmModelStatus = 'not_downloaded' | 'downloading' | 'ready' | 'error';
 
@@ -105,6 +106,10 @@ export interface LocalLlmPluginApi {
     modelId: string;
     accelerator?: LocalLlmAccelerator;
     enableSpeculativeDecoding?: boolean;
+    /** Sampler overrides. LiteRT-LM fixes them when the conversation is created, so they are set at load only. */
+    temperature?: number;
+    topP?: number;
+    topK?: number;
   }): Promise<LocalLlmLoadResult>;
   getLoadedModel(): Promise<{ loaded: boolean; modelId?: string; accelerator?: LocalLlmAccelerator }>;
   configureIntentTools(options: {
@@ -332,6 +337,12 @@ export async function isLocalLlmReady(modelId: string | null | undefined): Promi
 // ---------------------------------------------------------------------------
 
 export interface LoadLocalLlmOptions {
+  /**
+   * Sampler overrides; a field left out keeps the model's own default. LiteRT-LM fixes the sampler when the
+   * conversation is created, so a sampler that differs from the one the resident model was loaded with reloads
+   * it — and the reload starts a fresh conversation — while an unchanged one leaves the model alone.
+   */
+  sampling?: LocalLlmSampling;
   accelerator?: LocalLlmAccelerator;
   /** Multi-token prediction, where the model file has it. */
   enableSpeculativeDecoding?: boolean;
@@ -341,8 +352,8 @@ export interface LoadLocalLlmOptions {
 
 /**
  * Make `modelId` the resident model, loading it if needed. A no-op when that model is already loaded
- * on the requested backend — the load is a multi-second, gigabyte-scale operation and chat calls this
- * on every turn.
+ * on the requested backend with the requested sampler — the load is a multi-second, gigabyte-scale
+ * operation and chat calls this on every turn.
  *
  * Intent tools are bound *here*, because LiteRT-LM fixes the tool set when the conversation is
  * created. They need the appliance origin and API key; with either missing the model loads toolless
@@ -370,13 +381,21 @@ export async function ensureLocalLlmLoaded(
   const current = await plugin.getLoadedModel();
   const wanted = effectiveAccelerator(spec, options.accelerator, await deviceTotalMemoryBytes());
   const fallbackKey = `${modelId}:${wanted}`;
+  // The sampler the resident model was last loaded with is remembered here, not asked of the plugin (it cannot
+  // say). A model resident from before the WebView started has no entry, and then only "no overrides" counts as
+  // a match: a phone that asks for overrides loads once, which is cheaper than answering with the wrong sampler.
+  const samplingKey = JSON.stringify(options.sampling ?? {});
+  const knownSampling = loadedSampling.get(plugin);
+  const samplingMatches = knownSampling === samplingKey || (knownSampling === undefined && !options.sampling);
 
   // Already resident on the backend we would ask for — or on the CPU because that very request already fell
   // back once. Without the second clause a GPU request that cannot start (so the model sits on the CPU) would
-  // reload the model on every message, wiping its conversation each time.
+  // reload the model on every message, wiping its conversation each time. A changed sampler does not match
+  // either: LiteRT-LM fixes it when the conversation is created.
   if (
     current.loaded &&
     current.modelId === modelId &&
+    samplingMatches &&
     (!current.accelerator ||
       current.accelerator === wanted ||
       (current.accelerator === 'cpu' && gpuFallbacks.has(fallbackKey)))
@@ -410,6 +429,7 @@ export async function ensureLocalLlmLoaded(
   );
 
   const result = await plugin.loadModel({
+    ...options.sampling,
     modelId,
     accelerator: wanted,
     enableSpeculativeDecoding: options.enableSpeculativeDecoding,
@@ -422,12 +442,19 @@ export async function ensureLocalLlmLoaded(
   }
 
   toolCounts.set(modelId, result.toolCount);
+  loadedSampling.set(plugin, samplingKey);
 
   return result;
 }
 
 /** `model:accelerator` requests that already fell back to the CPU this session. */
 const gpuFallbacks = new Set<string>();
+
+/**
+ * The sampler overrides (as JSON) each plugin instance's resident model was last loaded with. Keyed on the plugin
+ * object, like the memory figure below, so a replaced bridge starts with no memory of the previous one's load.
+ */
+const loadedSampling = new WeakMap<LocalLlmPluginApi, string>();
 
 /** Tools bound by the most recent load of each model this session, for the already-loaded short cut. */
 const toolCounts = new Map<string, number>();

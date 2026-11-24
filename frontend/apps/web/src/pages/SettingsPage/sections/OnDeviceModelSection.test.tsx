@@ -276,6 +276,179 @@ describe('OnDeviceModelSection', () => {
     expect(JSON.parse(localStorage.getItem('ci.localLlm.prefs') ?? '{}').thinking).toBe(true);
   });
 
+  it('saves bounded answer controls without reloading immediately and resets model defaults', async () => {
+    localStorage.setItem('ci.localLlm.prefs', JSON.stringify({ modelId: 'gemma-4-e2b-it' }));
+    const { plugin } = installFakeNative('android', { status: { 'gemma-4-e2b-it': { status: 'ready' } } });
+    render(<OnDeviceModelSection />);
+
+    await screen.findByText('Answer settings');
+    fireEvent.change(screen.getByLabelText('Temperature'), { target: { value: '0.3' } });
+    fireEvent.change(screen.getByLabelText('Top K'), { target: { value: '500' } });
+    expect(JSON.parse(localStorage.getItem('ci.localLlm.prefs') ?? '{}').sampling).toEqual({
+      temperature: 0.3,
+      topK: 100,
+    });
+    expect(plugin.loadModel).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reset to model defaults' }));
+    expect(JSON.parse(localStorage.getItem('ci.localLlm.prefs') ?? '{}').sampling).toBeUndefined();
+    expect(screen.getByLabelText('Top K')).toHaveValue(64);
+  });
+
+  describe('answer settings', () => {
+    const savedPrefs = () => JSON.parse(localStorage.getItem('ci.localLlm.prefs') ?? '{}');
+
+    /** A selected, downloaded Gemma 4 E2B — the state in which the answer settings are offered. */
+    function renderSelected(prefs: object = {}, native: Parameters<typeof installFakeNative>[1] = {}) {
+      localStorage.setItem('ci.localLlm.prefs', JSON.stringify({ modelId: 'gemma-4-e2b-it', ...prefs }));
+
+      const fake = installFakeNative('android', {
+        status: { 'gemma-4-e2b-it': { status: 'ready' } },
+        ...native,
+      });
+
+      render(<OnDeviceModelSection />);
+
+      return fake;
+    }
+
+    it('is offered for a downloaded model that has been chosen, and not before', async () => {
+      installFakeNative('android', { status: { 'gemma-4-e2b-it': { status: 'ready' } } });
+      render(<OnDeviceModelSection />);
+
+      // Downloaded, not chosen yet: the models are listed, the settings for answering are not.
+      await screen.findByTestId('on-device-model-gemma-4-e2b-it');
+      expect(screen.queryByText('Answer settings')).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('Temperature')).not.toBeInTheDocument();
+    });
+
+    it('shows the model’s own defaults until a field is changed, over the same ranges the saved value is clamped to', async () => {
+      renderSelected();
+
+      expect(await screen.findByLabelText('Temperature')).toHaveValue(1);
+      expect(screen.getByLabelText('Top P')).toHaveValue(0.95);
+      expect(screen.getByLabelText('Top K')).toHaveValue(64);
+      expect(screen.getByRole('combobox', { name: 'Reply limit' })).toHaveTextContent('Default');
+
+      // Pinned here, with the clamp's own numbers pinned in localLlmCatalog.test.ts: if the two ever drifted, a
+      // field would offer a number the saved value would silently change.
+      expect(screen.getByLabelText('Temperature')).toHaveAttribute('min', '0');
+      expect(screen.getByLabelText('Temperature')).toHaveAttribute('max', '2');
+      expect(screen.getByLabelText('Top P')).toHaveAttribute('min', '0.05');
+      expect(screen.getByLabelText('Top P')).toHaveAttribute('max', '1');
+      expect(screen.getByLabelText('Top K')).toHaveAttribute('min', '1');
+      expect(screen.getByLabelText('Top K')).toHaveAttribute('max', '100');
+
+      // Nothing has been changed, so there is nothing to reset.
+      expect(screen.getByRole('button', { name: 'Reset to model defaults' })).toBeDisabled();
+      expect(savedPrefs()).not.toHaveProperty('sampling');
+    });
+
+    it('shows a saved value in place of the default, and offers the reset', async () => {
+      renderSelected({ sampling: { temperature: 0.4, topP: 0.8, topK: 12 }, maxOutputTokens: 512 });
+
+      expect(await screen.findByLabelText('Temperature')).toHaveValue(0.4);
+      expect(screen.getByLabelText('Top P')).toHaveValue(0.8);
+      expect(screen.getByLabelText('Top K')).toHaveValue(12);
+      expect(screen.getByRole('combobox', { name: 'Reply limit' })).toHaveTextContent('512 tokens');
+      expect(screen.getByRole('button', { name: 'Reset to model defaults' })).toBeEnabled();
+    });
+
+    it('shows a temperature of 0 as 0, not as the default', async () => {
+      renderSelected({ sampling: { temperature: 0 } });
+
+      expect(await screen.findByLabelText('Temperature')).toHaveValue(0);
+    });
+
+    it('lets a number be typed digit by digit, and shows the clamped value once the field is left', async () => {
+      renderSelected();
+
+      const topP = await screen.findByLabelText('Top P');
+
+      // "0" on the way to "0.5": it is saved at the 0.05 floor, but the field is not rewritten under the cursor.
+      fireEvent.focus(topP);
+      fireEvent.change(topP, { target: { value: '0' } });
+      expect(topP).toHaveValue(0);
+      expect(savedPrefs().sampling).toEqual({ topP: 0.05 });
+
+      fireEvent.change(topP, { target: { value: '0.5' } });
+      expect(topP).toHaveValue(0.5);
+      expect(savedPrefs().sampling).toEqual({ topP: 0.5 });
+
+      // Emptied to retype it: the field stays empty and nothing is saved over the old value.
+      fireEvent.change(topP, { target: { value: '' } });
+      expect(topP).toHaveValue(null);
+      expect(savedPrefs().sampling).toEqual({ topP: 0.5 });
+
+      // Left empty, it goes back to what is saved.
+      fireEvent.blur(topP);
+      expect(topP).toHaveValue(0.5);
+
+      // Past the end: saved at the end, and shown at the end as soon as the field is left.
+      fireEvent.focus(topP);
+      fireEvent.change(topP, { target: { value: '7' } });
+      expect(topP).toHaveValue(7);
+      expect(savedPrefs().sampling).toEqual({ topP: 1 });
+      fireEvent.blur(topP);
+      expect(topP).toHaveValue(1);
+    });
+
+    it('keeps the other fields when one changes, and does not reload a model that is already loaded', async () => {
+      const { plugin } = renderSelected(
+        { sampling: { temperature: 0.4 } },
+        { loaded: { loaded: true, modelId: 'gemma-4-e2b-it', accelerator: 'cpu' } },
+      );
+
+      fireEvent.change(await screen.findByLabelText('Top K'), { target: { value: '20' } });
+
+      expect(savedPrefs().sampling).toEqual({ temperature: 0.4, topK: 20 });
+      // The sampler is applied by the next message (ensureLocalLlmLoaded), not by editing a field.
+      expect(plugin.unloadModel).not.toHaveBeenCalled();
+      expect(plugin.loadModel).not.toHaveBeenCalled();
+    });
+
+    it.each([128, 300, 8192])(
+      'keeps a stored reply limit of %i tokens selectable, so the picker is never blank',
+      async (tokens) => {
+        renderSelected({ maxOutputTokens: tokens });
+
+        expect(await screen.findByRole('combobox', { name: 'Reply limit' })).toHaveTextContent(
+          `${tokens} tokens`,
+        );
+      },
+    );
+
+    it('sets the reply limit from the picker, and Default clears it', async () => {
+      renderSelected();
+
+      const picker = await screen.findByRole('combobox', { name: 'Reply limit' });
+
+      fireEvent.keyDown(picker, { key: 'Enter' });
+      fireEvent.keyDown(await screen.findByRole('option', { name: '512 tokens' }), { key: 'Enter' });
+      expect(savedPrefs().maxOutputTokens).toBe(512);
+      expect(picker).toHaveTextContent('512 tokens');
+
+      fireEvent.keyDown(picker, { key: 'Enter' });
+      fireEvent.keyDown(await screen.findByRole('option', { name: 'Default' }), { key: 'Enter' });
+      expect(savedPrefs()).not.toHaveProperty('maxOutputTokens');
+      expect(picker).toHaveTextContent('Default');
+    });
+
+    it('resets the limits too, including a reasoning budget the screen has no field for', async () => {
+      renderSelected({ sampling: { topK: 12 }, maxOutputTokens: 1024, thinkingTokenBudget: 256 });
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Reset to model defaults' }));
+
+      expect(savedPrefs()).not.toHaveProperty('sampling');
+      expect(savedPrefs()).not.toHaveProperty('maxOutputTokens');
+      expect(savedPrefs()).not.toHaveProperty('thinkingTokenBudget');
+      // The model, the routing and the other switches are not part of the reset.
+      expect(savedPrefs()).toMatchObject({ modelId: 'gemma-4-e2b-it', mode: 'appliance' });
+      expect(screen.getByRole('combobox', { name: 'Reply limit' })).toHaveTextContent('Default');
+      expect(screen.getByRole('button', { name: 'Reset to model defaults' })).toBeDisabled();
+    });
+  });
+
   it('deleting the selected model drops the preference and reverts chat to the appliance', async () => {
     const { plugin } = installFakeNative('android', { status: { 'gemma-4-e2b-it': { status: 'ready' } } });
 
