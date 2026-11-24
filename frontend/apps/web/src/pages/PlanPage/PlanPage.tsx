@@ -17,6 +17,7 @@ import { GET_PLAN_BADGE_COUNT } from '@/layouts/Main/SecondaryNavigation/usePlan
 import { EditTaskModal, UPDATE_TASK, type EditableTask } from './EditTaskModal';
 import { NewTaskForm } from './NewTaskForm';
 import { describePendingChange } from './pendingRationale';
+import { ReminderPanel } from './ReminderPanel';
 import { Task } from './Task';
 import { TaskBoard } from './TaskBoard';
 import { childrenOf, dueAtFromLocalDate, type SectionedTask } from './taskSections';
@@ -434,6 +435,7 @@ export function PlanPage() {
             {/* `refresh` re-reads the rail badge too. The live stream also moves
                 it, but not on the phone, which has no token to open the stream. */}
             <NewTaskForm onCreated={refresh} />
+            <ReminderPanel tasks={nodes} />
           </div>
 
           {selectedIds.length > 0 ? (

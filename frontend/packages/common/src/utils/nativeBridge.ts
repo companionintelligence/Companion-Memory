@@ -202,6 +202,7 @@ interface LocalNotificationsPlugin {
   checkPermissions(): Promise<{ display: string }>;
   requestPermissions(): Promise<{ display: string }>;
   schedule(options: { notifications: LocalNotification[] }): Promise<unknown>;
+  cancel?(options: { notifications: Array<{ id: number }> }): Promise<unknown>;
 }
 
 /**
@@ -1457,6 +1458,22 @@ export async function scheduleLocalNotification(
     await notifications.schedule({
       notifications: [{ id, title, body, ...(options.at ? { schedule: { at: options.at } } : {}) }],
     });
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Cancel a previously scheduled native reminder; false when the shell cannot cancel. */
+export async function cancelLocalNotification(id: number): Promise<boolean> {
+  const notifications = plugins()?.LocalNotifications;
+  if (!isNativePlatform() || !notifications?.cancel) {
+    return false;
+  }
+
+  try {
+    await notifications.cancel({ notifications: [{ id }] });
 
     return true;
   } catch {

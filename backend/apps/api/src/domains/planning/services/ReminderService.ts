@@ -14,6 +14,7 @@ export interface CreateReminderDto {
   taskId?: string | null;
   blockId?: string | null;
   fireAt: Date;
+  deliveryMode?: 'push' | 'device';
 }
 
 /**
@@ -42,6 +43,10 @@ export class ReminderService {
   ) {}
 
   async create(context: UserServiceContext, dto: CreateReminderDto): Promise<Reminder> {
+    if (!Number.isFinite(dto.fireAt.getTime()) || dto.fireAt.getTime() <= Date.now()) {
+      throw new BadRequestException('Choose a reminder time in the future');
+    }
+
     const hasTask = dto.taskId != null;
     const hasBlock = dto.blockId != null;
 
@@ -78,8 +83,13 @@ export class ReminderService {
       blockId: dto.blockId ?? null,
       fireAt: dto.fireAt,
       status: 'pending',
+      deliveryMode: dto.deliveryMode ?? 'push',
       firedAt: null,
       source: 'manual',
+      attempts: 0,
+      claimedAt: null,
+      nextAttemptAt: null,
+      lastError: null,
     });
 
     return this.reminderRepository.save(entity);
@@ -97,6 +107,24 @@ export class ReminderService {
     }
 
     return this.reminderRepository.findOne({ where: { id, userId: context.userId } });
+  }
+
+  async confirmDeviceSchedule(context: UserServiceContext, id: string): Promise<Reminder | null> {
+    const result = await this.reminderRepository.update(
+      { id, userId: context.userId, deliveryMode: 'device', status: 'pending' },
+      { status: 'scheduled', lastError: null },
+    );
+
+    return (result.affected ?? 0) > 0 ? this.findById(context, id) : null;
+  }
+
+  async retry(context: UserServiceContext, id: string): Promise<Reminder | null> {
+    const result = await this.reminderRepository.update(
+      { id, userId: context.userId, status: 'failed' },
+      { status: 'pending', attempts: 0, claimedAt: null, nextAttemptAt: null, lastError: null },
+    );
+
+    return (result.affected ?? 0) > 0 ? this.findById(context, id) : null;
   }
 
   /** Everything not soft-cancelled, ordered like CI-Planning's `listReminders`. */

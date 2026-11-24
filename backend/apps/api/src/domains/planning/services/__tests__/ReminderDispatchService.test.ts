@@ -67,7 +67,7 @@ describe('ReminderDispatchService', () => {
     const { service, dataSource, webPush, taskService } = makeHarness();
 
     dataSource.query.mockResolvedValueOnce([
-      [{ id: 'rem-1', taskId: 'task-1', blockId: null, source: 'manual', fireAt: new Date() }],
+      [{ id: 'rem-1', taskId: 'task-1', blockId: null, source: 'manual', fireAt: new Date(), attempts: 1 }],
       1,
     ]);
 
@@ -78,7 +78,7 @@ describe('ReminderDispatchService', () => {
     expect(webPush.sendPush).toHaveBeenCalledTimes(1);
     expect(webPush.sendPush).toHaveBeenCalledWith(
       { endpoint: 'https://push.example/1', keys: { p256dh: 'p', auth: 'a' } },
-      { title: 'Task reminder', body: 'Call the dentist', url: '/', tag: 'reminder:rem-1' },
+      { title: 'Task reminder', body: 'Call the dentist', url: '/plan', tag: 'reminder:rem-1' },
     );
   });
 
@@ -86,7 +86,7 @@ describe('ReminderDispatchService', () => {
     const { service, dataSource, webPush, calendarEventService, taskService } = makeHarness();
 
     dataSource.query.mockResolvedValueOnce([
-      [{ id: 'rem-2', taskId: null, blockId: 'event-1', source: 'manual', fireAt: new Date() }],
+      [{ id: 'rem-2', taskId: null, blockId: 'event-1', source: 'manual', fireAt: new Date(), attempts: 1 }],
       1,
     ]);
 
@@ -105,7 +105,16 @@ describe('ReminderDispatchService', () => {
 
     taskService.findById.mockResolvedValueOnce(null);
     dataSource.query.mockResolvedValueOnce([
-      [{ id: 'rem-3', taskId: 'task-missing', blockId: null, source: 'manual', fireAt: new Date() }],
+      [
+        {
+          id: 'rem-3',
+          taskId: 'task-missing',
+          blockId: null,
+          source: 'manual',
+          fireAt: new Date(),
+          attempts: 1,
+        },
+      ],
       1,
     ]);
 
@@ -135,7 +144,7 @@ describe('ReminderDispatchService', () => {
       sub.endpoint.endsWith('/dead') ? 'gone' : 'ok',
     );
     dataSource.query.mockResolvedValueOnce([
-      [{ id: 'rem-4', taskId: 'task-1', blockId: null, source: 'manual', fireAt: new Date() }],
+      [{ id: 'rem-4', taskId: 'task-1', blockId: null, source: 'manual', fireAt: new Date(), attempts: 1 }],
       1,
     ]);
 
@@ -150,13 +159,60 @@ describe('ReminderDispatchService', () => {
 
     webPush.sendPush.mockResolvedValueOnce('fail' as SendResult);
     dataSource.query.mockResolvedValueOnce([
-      [{ id: 'rem-5', taskId: 'task-1', blockId: null, source: 'manual', fireAt: new Date() }],
+      [{ id: 'rem-5', taskId: 'task-1', blockId: null, source: 'manual', fireAt: new Date(), attempts: 1 }],
       1,
     ]);
 
     await service.fireDueRemindersForUser(USER_ID);
 
     expect(pushSubscriptions.remove).not.toHaveBeenCalled();
+  });
+
+  it('records failure with a retry when no browser is subscribed', async () => {
+    const { service, dataSource, pushSubscriptions } = makeHarness();
+    pushSubscriptions.listForUser.mockResolvedValueOnce([]);
+    dataSource.query.mockResolvedValueOnce([[{ id: 'rem-none', taskId: 'task-1', attempts: 1 }], 1]);
+    expect(await service.fireDueRemindersForUser(USER_ID)).toEqual({ fired: 0 });
+    expect(dataSource.query).toHaveBeenLastCalledWith(expect.stringContaining("status = 'delivering'"), [
+      'rem-none',
+      USER_ID,
+      1,
+      'failed',
+      null,
+      expect.stringContaining('Enable notifications'),
+      expect.any(Date),
+    ]);
+  });
+
+  it('records provider acceptance only after a successful send', async () => {
+    const { service, dataSource } = makeHarness();
+    dataSource.query.mockResolvedValueOnce([[{ id: 'rem-ok', taskId: 'task-1', attempts: 2 }], 1]);
+    await service.fireDueRemindersForUser(USER_ID);
+    expect(dataSource.query).toHaveBeenLastCalledWith(expect.stringContaining('AND attempts = $3'), [
+      'rem-ok',
+      USER_ID,
+      2,
+      'delivered',
+      expect.any(Date),
+      null,
+      null,
+    ]);
+  });
+
+  it('leaves an exhausted reminder failed with no automatic retry time', async () => {
+    const { service, dataSource, webPush } = makeHarness();
+    dataSource.query.mockResolvedValueOnce([[{ id: 'rem-last', taskId: 'task-1', attempts: 5 }], 1]);
+    webPush.sendPush.mockResolvedValueOnce('fail');
+    await service.fireDueRemindersForUser(USER_ID);
+    expect(dataSource.query).toHaveBeenLastCalledWith(expect.any(String), [
+      'rem-last',
+      USER_ID,
+      5,
+      'failed',
+      null,
+      expect.any(String),
+      null,
+    ]);
   });
 
   it('claims the correct user and passes fire_at through to the SQL parameters', async () => {
@@ -176,8 +232,15 @@ describe('ReminderDispatchService', () => {
 
     dataSource.query.mockResolvedValueOnce([
       [
-        { id: 'rem-fail', taskId: 'task-1', blockId: null, source: 'manual', fireAt: new Date() },
-        { id: 'rem-ok', taskId: 'task-2', blockId: null, source: 'manual', fireAt: new Date() },
+        {
+          id: 'rem-fail',
+          taskId: 'task-1',
+          blockId: null,
+          source: 'manual',
+          fireAt: new Date(),
+          attempts: 1,
+        },
+        { id: 'rem-ok', taskId: 'task-2', blockId: null, source: 'manual', fireAt: new Date(), attempts: 1 },
       ],
       2,
     ]);
@@ -185,10 +248,11 @@ describe('ReminderDispatchService', () => {
 
     const result = await service.fireDueRemindersForUser(USER_ID);
 
-    // Both rows were CLAIMED (fired: 2) even though the first delivery threw
-    // — the claim already committed and must not be undone by a delivery
-    // failure, matching CI-Planning's per-row try/catch.
-    expect(result).toEqual({ fired: 2 });
+    // Both rows were CLAIMED and both were attempted even though the first
+    // delivery threw, matching CI-Planning's per-row try/catch. Only the
+    // second counts as fired: the first is recorded as a failed attempt that
+    // the lease lets a later tick retry.
+    expect(result).toEqual({ fired: 1 });
     expect(webPush.sendPush).toHaveBeenCalledTimes(2);
   });
 

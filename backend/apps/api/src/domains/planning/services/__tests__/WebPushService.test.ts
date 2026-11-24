@@ -76,7 +76,9 @@ describe('WebPushService', () => {
 
     expect(result).toBe('ok');
     expect(setVapidDetails).toHaveBeenCalledWith('mailto:a@b.test', 'pub', 'priv');
-    expect(sendNotification).toHaveBeenCalledWith(SUBSCRIPTION, JSON.stringify(PAYLOAD));
+    // A bounded send: a push service that never answers must not hold the
+    // reminder lease until it expires.
+    expect(sendNotification).toHaveBeenCalledWith(SUBSCRIPTION, JSON.stringify(PAYLOAD), { timeout: 20_000 });
   });
 
   it('calls setVapidDetails only once across repeated sends', async () => {

@@ -1005,6 +1005,9 @@ input CreateReminderInput {
   """A planned block (`ci.events` id). See `taskId`."""
   blockId: ID
 
+  """push (browser delivery) or device (scheduled by the native app)."""
+  deliveryMode: String
+
   """The instant this reminder fires. Must be in the future."""
   fireAt: DateTime!
 
@@ -2089,6 +2092,9 @@ type Mutation {
     itemId: ID
     productId: ID
   ): ObjectObservationType
+
+  """Record that the native OS accepted a local reminder schedule."""
+  confirmReminderDeviceSchedule(id: ID!): ReminderType
   createAnswer(input: CreateAnswerInput!): AnswerType!
   createAnswers(input: [CreateAnswerInput!]!): [AnswerType!]!
   createAsk(input: CreateAskInput!): CreateAskPayload!
@@ -2235,6 +2241,9 @@ type Mutation {
   rescheduleEvent(endTime: DateTime, id: ID!, startTime: DateTime!): EventType
   resendPeerKeyRotation: PeerKeyRotationPayload!
   restoreEvent(input: RestoreByIdInput!): EventType
+
+  """Retry a failed notification delivery."""
+  retryReminder(id: ID!): ReminderType
 
   """Return a placed event to the slate, deleting the event it minted"""
   returnEventToSlate(eventId: ID!): ScheduleCandidateType!
@@ -3417,21 +3426,30 @@ enum ReminderSource {
 }
 
 """
-A reminder's claim state. Fired is terminal in this milestone — there is no snooze yet.
+Reminder delivery state; delivered means a push provider accepted it, fired is a legacy outcome.
 """
 enum ReminderStatus {
   cancelled
+  delivered
+  delivering
+  failed
   fired
   pending
+  scheduled
 }
 
 type ReminderType implements Node {
+  attempts: Int!
+
   """A planned block — a `ci.events` row."""
   blockId: ID
   createdAt: DateTime!
+  deliveryMode: String!
   fireAt: DateTime!
   firedAt: DateTime
   id: ID!
+  lastError: String
+  nextAttemptAt: DateTime
   source: ReminderSource!
   status: ReminderStatus!
   taskId: ID

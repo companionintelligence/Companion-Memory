@@ -110,7 +110,7 @@ export class WebPushService {
     }
 
     try {
-      await webpush.sendNotification(subscription, JSON.stringify(payload));
+      await webpush.sendNotification(subscription, JSON.stringify(payload), { timeout: 20_000 });
 
       return 'ok';
     } catch (err: unknown) {

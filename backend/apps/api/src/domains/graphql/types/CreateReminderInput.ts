@@ -8,6 +8,12 @@ export class CreateReminderInput {
   @Field(() => ID, { nullable: true, description: 'A planned block (`ci.events` id). See `taskId`.' })
   blockId?: string;
 
+  @Field(() => String, {
+    nullable: true,
+    description: 'push (browser delivery) or device (scheduled by the native app).',
+  })
+  deliveryMode?: string;
+
   @Field(() => GraphQLISODateTime, { description: 'The instant this reminder fires. Must be in the future.' })
   fireAt!: Date;
 }

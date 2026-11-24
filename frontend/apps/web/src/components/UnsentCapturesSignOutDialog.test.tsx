@@ -5,6 +5,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AuthProvider, useAuth } from '@/hooks/useAuth';
+import { reminderNotificationId } from '@/lib/reminderNotifications';
 
 import { UnsentCapturesSignOutDialog } from './UnsentCapturesSignOutDialog';
 
@@ -56,11 +57,13 @@ function phone({ online }: { online: boolean }) {
   ]);
   const queue = new Map<string, OutboxItem>();
   const calls: Call[] = [];
+  const cancelNotification = vi.fn(async () => {});
 
   (window as unknown as { Capacitor?: unknown }).Capacitor = {
     isNativePlatform: () => true,
     getPlatform: () => 'android',
     Plugins: {
+      LocalNotifications: { cancel: cancelNotification },
       LocalHub: {
         start: vi.fn(async () => ({ baseUrl: HUB, token: 'hub-token' })),
         secureGet: vi.fn(async ({ key }: { key: string }) => ({ value: keystore.get(key) ?? null })),
@@ -143,7 +146,7 @@ function phone({ online }: { online: boolean }) {
     }),
   );
 
-  return { keystore, queue, calls };
+  return { keystore, queue, calls, cancelNotification };
 }
 
 function AccountMenu() {
@@ -186,6 +189,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  localStorage.removeItem('ci.memory.local-reminders.v1:owner');
   localStorage.removeItem('ci.apiBaseUrl');
   setApiBaseUrl('');
   setApiKey(null);
@@ -328,5 +332,36 @@ describe('signing out in a browser', () => {
       true,
     );
     expect(calls.some((call) => call.url.startsWith(HUB))).toBe(false);
+  });
+});
+
+describe('phone reminders during sign-out', () => {
+  it('pauses sign-out visibly when a phone alarm cannot be cancelled, and retries without losing its receipt', async () => {
+    const { keystore, calls, cancelNotification } = phone({ online: true });
+    localStorage.setItem(
+      'ci.memory.local-reminders.v1:owner',
+      JSON.stringify([
+        { id: 'private-task', at: new Date(Date.now() + 3_600_000).toISOString(), title: 'Private task' },
+      ]),
+    );
+    cancelNotification.mockRejectedValueOnce(new Error('Native cancellation failed'));
+    await signedIn();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Log out' }));
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByText('Phone reminders need attention')).toBeInTheDocument();
+    expect(screen.getByText('signed in')).toBeInTheDocument();
+    expect(keystore.get('ci.apiKey')).toBe(DEVICE_KEY);
+    expect(revoked(calls)).toBe(false);
+    expect(localStorage.getItem('ci.memory.local-reminders.v1:owner')).not.toBeNull();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Retry sign out' }));
+    await screen.findByText('signed out');
+    expect(cancelNotification).toHaveBeenLastCalledWith({
+      notifications: [{ id: reminderNotificationId('private-task') }],
+    });
+    expect(localStorage.getItem('ci.memory.local-reminders.v1:owner')).toBeNull();
+    expect(keystore.has('ci.apiKey')).toBe(false);
+    expect(revoked(calls)).toBe(true);
   });
 });

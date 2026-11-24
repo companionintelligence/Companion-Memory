@@ -35,6 +35,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { disconnectAndClearPowerSyncForLogout } from '@/api/powersync/session';
 import { forgetFeatures } from '@/common/feature/rememberedFeatures';
 import { registerNativePushToken } from '@/lib/registerNativePushToken';
+import { DeviceReminderCleanupError, requireDeviceRemindersCleared } from '@/lib/reminderNotifications';
 
 import { DeviceKeyNotSavedError } from './deviceKeyNotSaved';
 import { forgetUser, MEMORY_ANSWER_DEADLINE_MS } from './rememberedUser';
@@ -395,6 +396,8 @@ function deviceKeyName(): string {
 // JWT-guarded, so this must run while we still hold the login JWT), persist it to the
 // keystore, and activate it for subsequent requests. Returns the raw key, or null.
 async function mintAndStoreApiKey(jwt: string, memoryOrigin?: string): Promise<string | null> {
+  await requireDeviceRemindersCleared();
+
   const origin = memoryOrigin || getApiBaseUrl();
   const base = /^https?:\/\//i.test(origin) ? origin.replace(/\/+$/, '') : '';
   const keysUrl = `${base}/api/keys`;
@@ -524,6 +527,7 @@ async function adoptKeystoreOrigin(storedOrigin: string | null): Promise<boolean
 
   // Declined: drop the credential that came with it, so the app starts at device connect
   // instead of quietly reusing a key for a server the person did not recognise.
+  await requireDeviceRemindersCleared();
   await secureStorageRemove(API_BASE_URL_STORAGE);
   await removeStoredDeviceKey();
 
@@ -631,6 +635,8 @@ export interface SignOutPrompt {
   open: boolean;
   /** Queued captures of this account that signing out would delete. */
   unsentCaptures: number;
+  /** Sign-out paused before credentials changed because a phone alarm is still pending. */
+  notificationError?: string;
 }
 
 type ReturnValue = [
@@ -813,6 +819,7 @@ function useAuth(): ReturnValue {
 
   const completeMemoryPasswordConnect = useCallback(
     async (email: string, password: string, memoryOrigin: string) => {
+      await requireDeviceRemindersCleared();
       persistApiBaseUrl(memoryOrigin);
       await primeCsrfCookie();
 
@@ -854,6 +861,18 @@ function useAuth(): ReturnValue {
 
   // The sign-out itself, once there is nothing left to ask. `logout` decides whether to ask.
   const signOut = useCallback(async () => {
+    try {
+      await requireDeviceRemindersCleared();
+    } catch (error) {
+      if (!(error instanceof DeviceReminderCleanupError)) {
+        throw error;
+      }
+
+      setSignOutPrompt({ open: true, unsentCaptures: 0, notificationError: error.message });
+
+      return;
+    }
+
     // The key this device signs in with (phone and desktop), read before it is dropped below.
     // The stored copy when none is in memory: the app can sign out before the keystore restore
     // lands. A desktop whose keychain could not be read at start never loaded it at all. Deleting
@@ -1223,6 +1242,12 @@ function useAuth(): ReturnValue {
           setAccessToken(data?.accessToken ?? null);
         }
       } catch (err: unknown) {
+        // Dropping a declined credential first clears this phone's scheduled
+        // reminders; when that fails, say so rather than continue silently.
+        if (err instanceof DeviceReminderCleanupError) {
+          setLoginError(err);
+        }
+
         // No valid session cookie, user will need to log in. Unless Memory did not
         // answer at all, which says nothing about the session: retry instead.
         if (isUnansweredAuthError(err)) {

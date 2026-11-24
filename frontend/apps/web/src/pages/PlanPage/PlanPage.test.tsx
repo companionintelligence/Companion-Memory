@@ -92,6 +92,16 @@ vi.mock('@/components/ChatWithAgent/AgentActionItems', async (importOriginal) =>
 vi.mock('@/hooks/useLiveChanges', () => ({ useLiveChanges: vi.fn() }));
 vi.mock('@/hooks/useRefetchOnReturn', () => ({ useRefetchOnReturn: vi.fn() }));
 
+// The reminder panel lists every task again in its task picker and runs its
+// own reminders query, which would break these board queries by text and
+// need mocks of its own. ReminderPanel.test.tsx covers it; here only its place
+// on the page matters.
+vi.mock('./ReminderPanel', () => ({
+  ReminderPanel: ({ tasks }: { tasks: readonly unknown[] }) => (
+    <div data-testid="reminder-panel" data-tasks={tasks.length} />
+  ),
+}));
+
 vi.mock('@/common/feature', () => ({
   useFeatures: () => ({
     isFeatureEnabled: (name: string) => (name === 'planning.emptyState' ? featureState.emptyState : false),
@@ -411,6 +421,13 @@ describe('PlanPage', () => {
     await waitFor(() => {
       expect(screen.getByRole('checkbox', { name: /reopen write the migration/i })).toBeChecked();
     });
+  });
+
+  it('offers reminders for the board tasks beside the new-task form', async () => {
+    renderWithProviders(<PlanPage />, { mocks: [tasksMock([node({ title: 'Remind me' })])] });
+
+    expect(await screen.findByText('Remind me')).toBeInTheDocument();
+    expect(screen.getByTestId('reminder-panel')).toHaveAttribute('data-tasks', '1');
   });
 
   it('disables the add button until a title is typed', async () => {

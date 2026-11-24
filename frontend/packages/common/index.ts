@@ -301,6 +301,7 @@ export {
   requestNotificationPermission,
   scanQrCode,
   scheduleLocalNotification,
+  cancelLocalNotification,
   secureStorageGet,
   secureStorageRemove,
   secureStorageSet,
