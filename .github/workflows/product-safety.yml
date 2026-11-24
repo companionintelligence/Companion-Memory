@@ -1,0 +1,90 @@
+name: Product safety
+
+# Restore, erasure and delivery checks that need real services.
+#
+# Dispatch-only, like every workflow in this repository (see docs/CI.md), so
+# nothing runs until someone starts it:
+#
+#   gh workflow run product-safety.yml --repo companionintelligence/Companion-Memory --ref <branch-or-tag>
+#
+#   recovery  restores a database record, an uploaded file and the master
+#             encryption key into disposable Docker projects. See
+#             docs/operations/backup-and-recovery.md.
+#   database  runs the account-erasure, reminder-delivery, recovery-code and
+#             memory-compaction suites against a throwaway Postgres. `make
+#             test-db` fails when a suite cannot reach its database or skips, so
+#             a green run is not a silent skip.
+#
+# This is NOT a release gate. publish.yml's GATED_WORKFLOWS list decides what
+# blocks a release; add `product-safety.yml:required` there once a dispatch has
+# gone green on the commit you intend to ship.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  recovery:
+    name: Restore database, uploaded files and encryption key
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # The same image and pin as ci.yml and consent-path-gate.yml. Bump the
+      # three together; the pull needs no credentials.
+      CI_RECOVERY_DATABASE_IMAGE: ghcr.io/companionintelligence/companion/database:2026.8.20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Pull the pinned database and fixture helper
+        run: |
+          docker pull "$CI_RECOVERY_DATABASE_IMAGE"
+          docker pull alpine:3.21
+
+      - name: Run the safety checks and the isolated restore drill
+        run: make test-recovery-docker
+
+  database:
+    name: Erasure, reminder delivery and recovery codes against real Postgres
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22.15.1'
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Cache Yarn artifacts
+        uses: actions/cache@v6
+        with:
+          # PnP install: there is no node_modules tree to cache.
+          path: |
+            .yarn/cache
+            .yarn/unplugged
+          key: ${{ runner.os }}-yarn-pnp-${{ hashFiles('yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-pnp-
+
+      - name: Install dependencies
+        run: yarn install --immutable
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run the fail-loud disposable database suites
+        run: >-
+          make test-db WORKERS=2
+          DB_IMAGE=ghcr.io/companionintelligence/companion/database:2026.8.20
+          ARGS='AccountPurgeService.integration dataDeletionPlan.integration ReminderDispatchService.claim.integration AccountRecovery.integration AgentMemoryService.compactionEligibility.integration'
