@@ -53,6 +53,13 @@ in memory. `argument_contains` checks substrings of the tool arguments.
 `anywhere` applies the same tool checks across the whole thread, which is how
 a lookup on turn 1 still counts after a follow-up.
 
+`require_grounding` requires a successful retrieval, stored source references,
+and at least one `[M#]` citation that points to an admitted source. `source_contains`
+checks the admitted source text separately from `answer_contains`. A right tool
+call or a plausible answer alone cannot pass these checks. Citation existence
+does **not** prove entailment; the expected facts and forbidden claims still need
+their own checks.
+
 `turns` is optional and lines up with `conversation`. A turn object overrides
 the case-level `expected` for that turn. The case-level `expected` applies to
 the last turn when that turn has no checks of its own.
@@ -75,6 +82,21 @@ python -m agent_eval run --out reports/latest.md
 generation is idle, reads the stored messages, and writes
 `reports/latest.md` plus `reports/latest.json`. The process exits non-zero
 when any deterministic check fails. Reports are gitignored.
+
+Use a **dedicated disposable evaluation account**. Cases under `cases/memory/`
+write labelled synthetic records through `/api/memory/write`, wait for those
+records to appear through the actual recall API, then ask the model in a fresh
+thread. They cover temporal correction, third-party attribution, and instructions
+embedded in a retrieved source. Fixtures remain available for inspection; the
+runner never deletes an account or unrelated data. Repeated runs add fixtures.
+Grounded recall must be enabled. A missing model, unavailable API, indexing
+timeout, empty evidence, wrong answer, or invented citation fails the run.
+
+`setup_memories` contains the synthetic fragments, `setup_query` is the readiness
+query, and `readiness_contains` lists facts that must be retrievable before the
+chat begins. This is an actual API/index/model gate; unit-test success or
+`validate` success is **not** evidence that this gate has passed. Record the
+server commit, configured model and hardware alongside any release baseline.
 
 Score a trace you already saved, without calling the model:
 
@@ -104,6 +126,8 @@ The report counts each of these on its own. It does not average them.
 | tool_avoidance | a forbidden tool or family was not called |
 | tool_arguments | a required substring was in the arguments |
 | retrieval | every tool call has a stored result |
+| grounding | the answer cites source numbers admitted to this turn |
+| source_correctness | cited source text contains the expected fixture facts (all admitted sources when grounding is not required) |
 | answer | required phrases are in the final text of that turn |
 | hallucination | a forbidden phrase is absent, or an unknown fact was admitted |
 | run | the thread finished and has one trace turn per user message |

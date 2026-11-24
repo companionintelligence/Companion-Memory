@@ -263,6 +263,11 @@ export class AgentMemoryRetentionService {
   /**
    * Users whose unprocessed fragments predate the cutoff.
    *
+   * Only fragments compaction would pick up count (see
+   * `AgentMemoryService.findUnprocessed`): one that is superseded, conflicted,
+   * not valid yet or expired is never compacted, so its age says nothing about
+   * whether the pipeline is keeping up.
+   *
    * Raw SQL rather than the repository because this is an aggregate over the
    * whole table and the aggregate is the answer — pulling every unprocessed row
    * into the process to count them in JS would be reading the very backlog the
@@ -276,6 +281,9 @@ export class AgentMemoryRetentionService {
          FROM ci.agent_memories
         WHERE processed_at IS NULL
           AND created_at < $1
+          AND status = 'active'
+          AND (valid_from IS NULL OR valid_from <= now())
+          AND (valid_until IS NULL OR valid_until > now())
         GROUP BY user_id
         ORDER BY COUNT(*) DESC`,
       [cutoff],

@@ -35,6 +35,10 @@ def run_case(case: Case, client: ChatClient, *, score_incomplete: bool) -> CaseR
         )
     thread_id: str | None = None
     try:
+        if case.setup_memories:
+            client.seed_memories(
+                case.setup_memories, case.setup_query, case.readiness_contains
+            )
         for turn in case.conversation:
             thread_id = client.turn(turn.content, thread_id)
         assert thread_id is not None

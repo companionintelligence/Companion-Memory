@@ -17,6 +17,8 @@ METRICS = (
     "tool_avoidance",
     "tool_arguments",
     "retrieval",
+    "grounding",
+    "source_correctness",
     "answer",
     "hallucination",
     "run",

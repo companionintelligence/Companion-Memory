@@ -1,0 +1,15 @@
+{
+  "id": "memory_temporal_correction",
+  "capability": "memory",
+  "title": "A fresh chat retrieves a dated correction and cites its source",
+  "setup_memories": ["Synthetic evaluation subject Mira Solano: On 2025-01-03 Mira worked at Acme Labs. Correction recorded on 2026-10-01: Mira Solano no longer works at Acme Labs; she now works at Orbit Research. This is a synthetic test fact."],
+  "setup_query": "Mira Solano employer Orbit Research",
+  "readiness_contains": ["Mira", "Orbit Research"],
+  "conversation": [{"role": "user", "content": "Where does Mira Solano currently work? Answer from saved memory, distinguish the older employer from the current employer, and cite the memory source."}],
+  "expected": {
+    "answer_contains": ["Orbit Research"],
+    "answer_must_not_contain": ["currently works at Acme Labs", "still works at Acme Labs"],
+    "require_grounding": true,
+    "source_contains": ["Mira", "Orbit Research"]
+  }
+}

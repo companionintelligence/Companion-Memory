@@ -52,8 +52,8 @@ function makeFragment(content: string): AgentMemory {
 
 function makeService(options: {
   chatResponse: { message: { content: string } };
-  searchResult?: Array<{ id: string; name: string | null }>;
-  findAllResult?: Array<{ id: string; name: string | null }>;
+  searchResult?: Array<{ id: string; name: string | null; description?: string | null }>;
+  findAllResult?: Array<{ id: string; name: string | null; description?: string | null }>;
 }) {
   const ollamaService = {
     chat: jest.fn().mockResolvedValue(options.chatResponse),
@@ -113,7 +113,7 @@ function makeService(options: {
     logger,
   );
 
-  return { service, personCreate, personUpdate, personSearch, personFindAll };
+  return { service, personCreate, personUpdate, personSearch, personFindAll, agentMemoryService };
 }
 
 describe('MemoryCompactionService — person merge/dedupe', () => {
@@ -128,14 +128,14 @@ describe('MemoryCompactionService — person merge/dedupe', () => {
     expect(personCreate).not.toHaveBeenCalled();
   });
 
-  it('an unambiguous shorter name variant reuses the existing node instead of creating a duplicate', async () => {
+  it('a corroborated shorter name variant reuses the existing identity', async () => {
     // "Priya" against a single "Priya Sharma" candidate is a token-subset
     // match — the audit's core worry (silently creating a second "Priya"
     // node instead of the graph noticing it's the same person).
     const { service, personCreate, personUpdate } = makeService({
-      chatResponse: extractionResponse([{ type: 'person', name: 'Priya', description: 'friend' }]),
+      chatResponse: extractionResponse([{ type: 'person', name: 'Priya', description: "the user's sister" }]),
       searchResult: [], // no EXACT "Priya" match
-      findAllResult: [{ id: 'existing-priya', name: 'Priya Sharma' }],
+      findAllResult: [{ id: 'existing-priya', name: 'Priya Sharma', description: "the user's sister" }],
     });
 
     await service.compactForUser(CONTEXT, [makeFragment('Priya said hi')]);
@@ -148,9 +148,11 @@ describe('MemoryCompactionService — person merge/dedupe', () => {
 
   it('a fuller name variant reuses the existing node AND promotes it to the fuller form', async () => {
     const { service, personCreate, personUpdate } = makeService({
-      chatResponse: extractionResponse([{ type: 'person', name: 'Priya Sharma', description: 'friend' }]),
+      chatResponse: extractionResponse([
+        { type: 'person', name: 'Priya Sharma', description: "the user's sister" },
+      ]),
       searchResult: [],
-      findAllResult: [{ id: 'existing-priya', name: 'Priya' }],
+      findAllResult: [{ id: 'existing-priya', name: 'Priya', description: "the user's sister" }],
     });
 
     await service.compactForUser(CONTEXT, [makeFragment('Priya Sharma said hi')]);
@@ -196,20 +198,69 @@ describe('MemoryCompactionService — person merge/dedupe', () => {
     // Neither name is a token-subset of the other ("sharma" vs "patel"), so
     // this must create a distinct node, not fold into Priya Sharma's.
     expect(personCreate).toHaveBeenCalledTimes(1);
-    expect(personCreate).toHaveBeenCalledWith(CONTEXT, { name: 'Priya Patel', description: 'coworker' });
+    expect(personCreate).toHaveBeenCalledWith(CONTEXT, {
+      name: 'Priya Patel',
+      description: expect.stringContaining('coworker'),
+    });
   });
 
   it('a relational descriptor ("Priya\'s brother") never merges with the head name and never blocks it', async () => {
     const { service, personCreate } = makeService({
       chatResponse: extractionResponse([{ type: 'person', name: "Priya's brother", description: 'sibling' }]),
       searchResult: [],
-      findAllResult: [{ id: 'existing-priya', name: 'Priya' }],
+      findAllResult: [{ id: 'existing-priya', name: 'Priya', description: "the user's sister" }],
     });
 
     await service.compactForUser(CONTEXT, [makeFragment("Priya's brother visited")]);
 
     // Must create its own node — "Priya's brother" is a different person
     // from "Priya", not a name variant of her.
-    expect(personCreate).toHaveBeenCalledWith(CONTEXT, { name: "Priya's brother", description: 'sibling' });
+    expect(personCreate).toHaveBeenCalledWith(CONTEXT, {
+      name: "Priya's brother",
+      description: expect.stringContaining('sibling'),
+    });
+  });
+  it('does not merge an uncorroborated first name simply because only one full name is saved', async () => {
+    const { service, personCreate, personUpdate } = makeService({
+      chatResponse: extractionResponse([{ type: 'person', name: 'Priya', description: 'a new coworker' }]),
+      findAllResult: [{ id: 'priya-sharma', name: 'Priya Sharma', description: "the user's sister" }],
+    });
+    await service.compactForUser(CONTEXT, [makeFragment('Priya joined the team')]);
+    expect(personCreate).toHaveBeenCalledTimes(1);
+    expect(personUpdate).not.toHaveBeenCalled();
+  });
+
+  it('retains old facts and appends a dated correction with source fragment identity', async () => {
+    const { service, personCreate, personUpdate } = makeService({
+      chatResponse: extractionResponse([
+        { type: 'person', name: 'Jane Smith', description: 'no longer works at Acme; now works at Orbit' },
+      ]),
+      searchResult: [{ id: 'jane', name: 'Jane Smith', description: 'works at Acme; likes hiking' }],
+    });
+    const fragment = makeFragment('Jane Smith now works at Orbit');
+    await service.compactForUser(CONTEXT, [fragment]);
+    expect(personCreate).not.toHaveBeenCalled();
+    expect(personUpdate).toHaveBeenCalledWith(
+      CONTEXT,
+      'jane',
+      { description: expect.stringContaining('works at Acme; likes hiking') },
+      { source: 'MemoryCompactionService.appendPersonObservation' },
+    );
+    const written = personUpdate.mock.calls[0][2] as { description?: string };
+    expect(written.description).toContain('no longer works at Acme; now works at Orbit');
+    expect(written.description).toContain(fragment.id);
+    expect(written.description).toContain(fragment.createdAt.toISOString());
+  });
+
+  it('does not mark a batch processed when the graph update fails', async () => {
+    const { service, personUpdate, agentMemoryService } = makeService({
+      chatResponse: extractionResponse([
+        { type: 'person', name: 'Jane Smith', description: 'works at Orbit' },
+      ]),
+      searchResult: [{ id: 'jane', name: 'Jane Smith', description: 'likes hiking' }],
+    });
+    personUpdate.mockRejectedValue(new Error('database unavailable'));
+    await service.compactForUser(CONTEXT, [makeFragment('Jane Smith now works at Orbit')]);
+    expect(agentMemoryService.markProcessed).not.toHaveBeenCalled();
   });
 });

@@ -8,6 +8,7 @@ here.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from .schema import Case, Expected, expand_spec
@@ -123,6 +124,44 @@ def _evaluate_turn(index: int, expected: Expected, turn: TurnTrace) -> list[Chec
     checks.extend(_must_not_use(expected.must_not_use, names, index))
     checks.extend(_arguments(expected.argument_contains, turn, index))
     answer = turn.assistant_text
+    grounding = turn.grounding or {}
+    sources = grounding.get("sources") or []
+    sources = [source for source in sources if isinstance(source, dict)]
+    cited = {int(number) for number in re.findall(r"\[M(\d+)\]", answer)}
+    if expected.require_grounding:
+        allowed = {source.get("citation") for source in sources}
+        valid = (
+            grounding.get("status") == "retrieved"
+            and bool(sources)
+            and bool(cited)
+            and cited.issubset(allowed)
+        )
+        checks.append(
+            Check(
+                metric="grounding",
+                passed=valid,
+                detail="answer cites admitted memory sources"
+                if valid
+                else "missing retrieval, sources, citation, or citation refers to an absent source",
+                turn_index=index,
+            )
+        )
+    checked_sources = (
+        [source for source in sources if source.get("citation") in cited]
+        if expected.require_grounding
+        else sources
+    )
+    source_text = " ".join(str(source.get("text") or "") for source in checked_sources)
+    for phrase in expected.source_contains:
+        found = _fold(phrase) in _fold(source_text)
+        checks.append(
+            Check(
+                metric="source_correctness",
+                passed=found,
+                detail=f"checked sources {'contain' if found else 'do not contain'} {phrase!r}",
+                turn_index=index,
+            )
+        )
     for phrase in expected.answer_contains:
         found = _fold(phrase) in _fold(answer)
         checks.append(

@@ -30,6 +30,7 @@ class TurnTrace:
     # How many tool-result rows came back. Compared with calls so a dropped
     # result is visible separately from a wrong answer.
     tool_results: int = 0
+    grounding: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -37,6 +38,7 @@ class TurnTrace:
             "assistant_text": self.assistant_text,
             "tool_calls": [call.to_dict() for call in self.tool_calls],
             "tool_results": self.tool_results,
+            "grounding": self.grounding,
         }
 
 
@@ -83,6 +85,8 @@ def messages_to_trace(
         if current is None:
             continue
         if role == "assistant":
+            if isinstance(message.get("grounding"), dict):
+                current.grounding = message["grounding"]
             text = _visible_text(content)
             if text:
                 current.assistant_text = (

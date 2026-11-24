@@ -243,6 +243,18 @@ describe('AgentMemoryRetentionService stuck-pipeline signal', () => {
     expect(backlogQuery?.params).toStrictEqual([new Date('2026-08-23T02:20:33.000Z')]);
   });
 
+  it('counts only fragments compaction would pick up, so a superseded one is not a stuck pipeline', async () => {
+    const { service, queries } = build({ stuck: backlogs });
+
+    await service.sweep(NOW);
+
+    const sql = queries.find((query) => isBacklogQuery(query.sql))?.sql ?? '';
+
+    expect(sql).toContain("status = 'active'");
+    expect(sql).toContain('valid_from IS NULL OR valid_from <= now()');
+    expect(sql).toContain('valid_until IS NULL OR valid_until > now()');
+  });
+
   it('raises one deduped card per user and totals the backlog', async () => {
     const { service, actionService } = build({ stuck: backlogs });
 

@@ -93,6 +93,51 @@ class ChatClient:
         messages = payload.get("messages") or []
         return [item for item in messages if isinstance(item, dict)]
 
+    def seed_memories(
+        self, memories: list[str], query: str, readiness_contains: list[str]
+    ) -> None:
+        """Seed synthetic records and require real indexed retrieval before chat.
+
+        Use a dedicated test account: these records intentionally remain for
+        inspection, and no account-wide deletion is ever performed by the eval.
+        """
+        self.require_token()
+        for text in memories:
+            status, _headers, _payload = self._request(
+                "POST",
+                "/api/memory/write",
+                {
+                    "content": text,
+                    "source": "agent-eval",
+                    "title": "Synthetic memory evaluation fixture",
+                },
+                timeout=30.0,
+            )
+            if status >= 400:
+                raise RuntimeError(f"seeding memory failed with HTTP {status}")
+        deadline = time.monotonic() + min(self.timeout, 120.0)
+        while time.monotonic() < deadline:
+            status, _headers, payload = self._request(
+                "POST",
+                "/api/memory/recall",
+                {"query": query, "maxResults": 20},
+                timeout=30.0,
+            )
+            block = payload.get("block", "") if isinstance(payload, dict) else ""
+            if (
+                status < 400
+                and isinstance(block, str)
+                and all(
+                    phrase.casefold() in block.casefold()
+                    for phrase in readiness_contains
+                )
+            ):
+                return
+            time.sleep(1.0)
+        raise RuntimeError(
+            "seeded records were not retrievable before the readiness deadline"
+        )
+
     def _wait_until_idle(self, thread_id: str) -> None:
         deadline = time.monotonic() + 30.0
         while time.monotonic() < deadline:
