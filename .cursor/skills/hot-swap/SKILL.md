@@ -31,9 +31,11 @@ Run from that checkout:
 ./scripts/dev/hub-pr-test-deploy.sh --frontend
 
 # API, HBPE, summary, or a migration. Takes a backup first (runbook).
-./scripts/backup/appliance-backup.sh --project ci-memory_ci-marketplace ~/ci-backups
+./scripts/backup/database-backup.sh --project ci-memory_ci-marketplace ~/ci-backups
 ./scripts/dev/hub-pr-test-deploy.sh
 ```
+
+The quick backup is `database-backup.sh`, which dumps the database and copies the master secrets while Memory keeps running; `appliance-backup.sh` now takes a complete snapshot and stops the project while it copies, so it is not a quick pre-swap step.
 
 - `--skip-build` when `make build ENV=production` already ran.
 - `--skip-migrate` to recreate containers without applying SQL.
