@@ -118,6 +118,9 @@ describeWithDatabase(
       await dataSource.query('DELETE FROM ci.product_models WHERE user_id = ANY($1::uuid[])', [users]);
       await dataSource.query('DELETE FROM ci.federated_identities WHERE user_id = ANY($1::uuid[])', [users]);
       await dataSource.query('DELETE FROM ci.mcp_server_configs WHERE user_id = ANY($1::uuid[])', [users]);
+      await dataSource.query('DELETE FROM ci.bluebubbles_config WHERE owner_user_id = ANY($1::uuid[])', [
+        users,
+      ]);
       await dataSource.query('DELETE FROM ci.messages WHERE user_id = ANY($1::uuid[])', [users]);
       await dataSource.query('DELETE FROM ci.threads WHERE user_id = ANY($1::uuid[])', [users]);
       await dataSource.query('DELETE FROM ci.relationships WHERE owner_user_id = ANY($1::uuid[])', [users]);
@@ -437,6 +440,64 @@ describeWithDatabase(
 
       expect(identities.n).toBe(0);
       expect(servers.n).toBe(0);
+      expect(await notesFor()).toEqual([{ id: noteId, title: 'kept' }]);
+    });
+
+    // Its password is BlueBubbles' own, in plain text: full control of that Mac's iMessage.
+    it("neither exports BlueBubbles' password nor restores a BlueBubbles connection from an archive", async () => {
+      await dataSource.query(
+        `INSERT INTO ci.bluebubbles_config (host, port, password, webhook_secret, owner_user_id)
+              VALUES ('bluebubbles.local', 1234, 'bb-password-in-plain-text', 'bb-webhook-secret', $1::uuid)`,
+        [testUserId],
+      );
+      noopServices.userService.findById = jest.fn().mockResolvedValue(null);
+
+      const res = Object.assign(new PassThrough(), { setHeader: () => undefined });
+      let text = '';
+
+      res.on('data', (chunk: Buffer) => {
+        text += chunk.toString();
+      });
+      await service.writeExportStream({ userId: testUserId } as never, res as never);
+
+      expect(text).not.toContain('ci.bluebubbles_config');
+      expect(text).not.toContain('bb-password-in-plain-text');
+      expect(text).not.toContain('bb-webhook-secret');
+
+      await dataSource.query('DELETE FROM ci.bluebubbles_config WHERE owner_user_id = $1::uuid', [
+        testUserId,
+      ]);
+      noopServices.userService.findById = jest.fn().mockResolvedValue({ email: 'jane@example.com' });
+      const noteId = randomUUID();
+
+      // An archive written before the table was left out, or by hand: its row is dropped, the rest imports.
+      await service.importNdjsonStream(
+        { userId: testUserId } as never,
+        streamOf([
+          manifest(),
+          {
+            type: 'row',
+            table: 'ci.bluebubbles_config',
+            row: {
+              id: randomUUID(),
+              host: 'attacker.example',
+              port: 443,
+              password: 'their-password',
+              webhook_secret: 'their-secret',
+              owner_user_id: testUserId,
+            },
+          },
+          { type: 'row', table: 'ci.notes', row: { id: noteId, title: 'kept', user_id: testUserId } },
+        ]),
+        'jane@example.com',
+      );
+
+      const [configs] = await dataSource.query(
+        'SELECT count(*)::int AS n FROM ci.bluebubbles_config WHERE owner_user_id = $1::uuid',
+        [testUserId],
+      );
+
+      expect(configs.n).toBe(0);
       expect(await notesFor()).toEqual([{ id: noteId, title: 'kept' }]);
     });
 

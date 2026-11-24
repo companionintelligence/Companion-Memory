@@ -24,7 +24,11 @@ import type { UserColumn, UserScopedTable } from './types';
  *   back on the job bus verbatim, and the listeners act for whichever account
  *   or record the payload names, so an archive could queue work against
  *   another account's data;
- * - `ci.account_purges`: the record of an account the purge already destroyed.
+ * - `ci.account_purges`: the record of an account the purge already destroyed;
+ * - `ci.bluebubbles_config`: BlueBubbles' own server password in plain text (full
+ *   control of that Mac's iMessage) and the secret in this appliance's webhook
+ *   URL. Restored, an archive would also point the server's message sync at a
+ *   host and password of the archive author's choosing.
  */
 export const EXCLUDED_TABLES = new Set([
   'ci.sessions',
@@ -41,6 +45,7 @@ export const EXCLUDED_TABLES = new Set([
   'ci.pending_actions',
   'ci.pipeline_dead_letters',
   'ci.account_purges',
+  'ci.bluebubbles_config',
 ]);
 
 export const USER_DATA_SCHEMAS = ['ci', 'ci_search', 'hbpe'] as const;
