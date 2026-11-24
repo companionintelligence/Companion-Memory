@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { usePageTitle, LoadingPage, GlobalUID } from '@ci/common';
 import {
   Button,
@@ -21,6 +21,7 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import logo from '@/assets/logo.png';
+import { AppToaster } from '@/components/AppToaster';
 import { ErrorState } from '@/components/ErrorState';
 import { InlineModal } from '@/components/InlineModal';
 import { ThemeToggle } from '@/components/ThemePicker';
@@ -79,13 +80,18 @@ export function ProviderPage() {
 
   const provider = data?.provider;
 
-  const [{ authorizationUrl, loading: connectLoading, error, apiKey, setApiKey }, { connect }] =
-    useConnectService();
+  const [
+    { authorizationUrl, loading: connectLoading, error, apiKey, setApiKey, account, setAccount },
+    { connect },
+  ] = useConnectService();
 
   const isOpenId = provider?.authType === 'openid';
   const isApiKey = provider?.authType === 'api_key';
   const requiresApiKey = isOpenId || isApiKey;
-  const isConnectDisabled = requiresApiKey && (apiKey == null || apiKey.length === 0);
+  // An api_key provider (Signal) serves several accounts, so the number to connect is named too.
+  const isConnectDisabled =
+    (requiresApiKey && (apiKey == null || apiKey.length === 0)) ||
+    (isApiKey && (account == null || account.trim().length === 0));
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -188,6 +194,14 @@ export function ProviderPage() {
 
   return (
     <>
+      {/* This page is routed outside MainLayout (App.tsx), which holds the
+          app's only other toaster, so without its own every toast here went
+          nowhere: a refused or failed Connect looked like a button that did
+          nothing. AppToaster, not a bare Toaster, so on a phone the toast
+          sits under the header like everywhere else instead of over the Back
+          control and the home indicator. */}
+      <AppToaster />
+
       <InlineModal open={connectLoading || !!authorizationUrl}>
         <LoadingPage />
       </InlineModal>
@@ -279,6 +293,24 @@ export function ProviderPage() {
                           value={apiKey ?? ''}
                           onChange={(e) => setApiKey(e.target.value)}
                         />
+                      </div>
+                    )}
+
+                    {isApiKey && (
+                      <div className="mt-4 space-y-2">
+                        <Label htmlFor="provider-account">{`Your ${provider.name} number`}</Label>
+                        <Input
+                          id="provider-account"
+                          type="tel"
+                          autoComplete="off"
+                          placeholder="+15551234567"
+                          value={account ?? ''}
+                          onChange={(e) => setAccount(e.target.value)}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          The number registered with the service. Only an administrator can connect it, and
+                          each number can belong to one account.
+                        </p>
                       </div>
                     )}
                   </div>

@@ -1,6 +1,9 @@
 const hubForwardAuth = {
   enabled: true,
   secret: 'shared-secret',
+  identitySecret: '',
+  audience: '',
+  requireAudience: 'true' as 'auto' | 'true' | 'false',
   maxSkewMs: 300000,
 };
 
@@ -23,7 +26,7 @@ jest.mock('@ci/configuration', () => {
 
 import { UnauthorizedException, type ExecutionContext } from '@nestjs/common';
 
-import { signForwardAuthUser } from '@ci/common/crypto';
+import { formatForwardAuthAssertion, signForwardAuthAssertion, signForwardAuthUser } from '@ci/common/crypto';
 
 import { HubForwardAuthGuard } from '../HubForwardAuthGuard';
 
@@ -54,8 +57,22 @@ describe('HubForwardAuthGuard', () => {
     guard = new HubForwardAuthGuard();
     hubForwardAuth.enabled = true;
     hubForwardAuth.secret = 'shared-secret';
+    hubForwardAuth.identitySecret = '';
+    hubForwardAuth.audience = '';
+    // The cases below are an older Hub's unbound triple, which only the explicit legacy opt-in accepts.
+    hubForwardAuth.requireAudience = 'false';
     hubForwardAuth.maxSkewMs = 300000;
   });
+
+  it.each(['true', 'auto'] as const)(
+    'rejects a validly signed unbound header under requireAudience %s (the default is true)',
+    (requireAudience) => {
+      hubForwardAuth.requireAudience = requireAudience;
+      const { ctx, req } = contextWithHeaders(signedHeaders('alice'));
+      expect(() => guard.canActivate(ctx)).toThrow(/unbound/);
+      expect(req.hubForwardAuthUser).toBeUndefined();
+    },
+  );
 
   it('allows a request carrying a validly signed header and attaches the username', () => {
     const { ctx, req } = contextWithHeaders(signedHeaders('alice'));
@@ -84,5 +101,42 @@ describe('HubForwardAuthGuard', () => {
     hubForwardAuth.enabled = false;
     const { ctx } = contextWithHeaders(signedHeaders('alice'));
     expect(() => guard.canActivate(ctx)).toThrow(/not enabled/);
+  });
+
+  describe('once the Hub has given this app its own key', () => {
+    const audience = 'ci-memory:ci-marketplace';
+    const nonce = 'nB7cS0fTq3kz1XyH9wA2eQ';
+
+    function boundHeaders(username: string, forAudience = audience) {
+      const now = Date.now();
+      const signature = signForwardAuthAssertion('memory-own-secret', forAudience, nonce, now, username);
+
+      return {
+        ...signedHeaders(username, 'shared-secret', now),
+        'x-ci-hub-user-assertion': formatForwardAuthAssertion(nonce, signature),
+      };
+    }
+
+    beforeEach(() => {
+      hubForwardAuth.identitySecret = 'memory-own-secret';
+      hubForwardAuth.audience = audience;
+      hubForwardAuth.requireAudience = 'true';
+    });
+
+    it('accepts the bound assertion', () => {
+      const { ctx, req } = contextWithHeaders(boundHeaders('alice'));
+      expect(guard.canActivate(ctx)).toBe(true);
+      expect(req.hubForwardAuthUser).toBe('alice');
+    });
+
+    it('rejects headers signed only with the shared secret', () => {
+      const { ctx } = contextWithHeaders(signedHeaders('alice'));
+      expect(() => guard.canActivate(ctx)).toThrow(/unbound/);
+    });
+
+    it('rejects an assertion signed for another app', () => {
+      const { ctx } = contextWithHeaders(boundHeaders('alice', 'importer:ci-marketplace'));
+      expect(() => guard.canActivate(ctx)).toThrow(/bad_signature/);
+    });
   });
 });

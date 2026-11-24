@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_background"
+    android:clickable="true"
+    android:focusable="true"
+    android:orientation="vertical"
+    android:padding="14dp">
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="PLAN"
+            android:textColor="#70E1D8"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+        <TextView
+            android:id="@+id/plan_open_count"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="2 open"
+            android:textColor="#DCE8EC"
+            android:textSize="12sp" />
+    </LinearLayout>
+    <TextView
+        android:id="@+id/plan_task_one"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:text="Review your week"
+        android:textColor="#F5F8FA"
+        android:textSize="14sp"
+        android:textStyle="bold" />
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+        <TextView
+            android:id="@+id/plan_due_one"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Today"
+            android:textColor="#9EADB6"
+            android:textSize="11sp" />
+        <TextView
+            android:id="@+id/plan_done_one"
+            android:layout_width="36dp"
+            android:layout_height="34dp"
+            android:gravity="center"
+            android:text="✓"
+            android:textColor="#70E1D8"
+            android:textSize="19sp" />
+    </LinearLayout>
+    <TextView
+        android:id="@+id/plan_task_two"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="5dp"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:text="Capture a quick idea"
+        android:textColor="#F5F8FA"
+        android:textSize="14sp" />
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+        <TextView
+            android:id="@+id/plan_due_two"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Tomorrow"
+            android:textColor="#9EADB6"
+            android:textSize="11sp" />
+        <TextView
+            android:id="@+id/plan_done_two"
+            android:layout_width="36dp"
+            android:layout_height="34dp"
+            android:gravity="center"
+            android:text="✓"
+            android:textColor="#70E1D8"
+            android:textSize="19sp" />
+    </LinearLayout>
+    <TextView
+        android:id="@+id/plan_freshness"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="3dp"
+        android:text="Preview · sync from Memory"
+        android:textColor="#788891"
+        android:textSize="10sp" />
+</LinearLayout>

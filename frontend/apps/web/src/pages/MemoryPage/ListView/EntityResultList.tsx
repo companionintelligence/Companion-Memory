@@ -1,10 +1,17 @@
-import { useEffect, useMemo, useRef, type ReactNode } from 'react';
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from 'react';
+
+import { useLocation } from 'react-router-dom';
 
 import { MemoryChatAbout } from '@/components/ChatWithAgent';
+import { LoadMoreFailed } from '@/components/InfiniteList';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+import { useLoadMoreSentinel } from '@/hooks/useLoadMoreSentinel';
+import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
 import {
   DateGroupHeader,
   ErrorState,
   ListSkeleton,
+  NameSortCutShortNote,
   formatLoadedCount,
   formatRowTime,
   getEntityTimestamp,
@@ -30,6 +37,103 @@ import { ReceiptRow } from './rows/ReceiptRow';
 import { ThreadRow } from './rows/ThreadRow';
 
 /**
+ * Where the list was scrolled to, per history entry (`location.key`), until the
+ * page reloads. The list scrolls inside its own box rather than the window, so
+ * the browser's own scroll restoration never sees it. Opening a full page also
+ * unmounts it. Back to the same entry puts the list where it was.
+ */
+const scrollTopByHistoryEntry = new Map<string, number>();
+
+/**
+ * One row, memoised. The list re-renders whenever its own state moves — a page
+ * arriving, a failed page, the scroll bookkeeping — and without this every
+ * loaded row re-ran its time formatting and rebuilt its chat context each
+ * time. `item` is the node Apollo's cache hands back, which keeps its identity
+ * until the record itself changes; `fmt` is the one formatter from context;
+ * `open` is the service's setter, which never changes.
+ */
+const ResultRow = memo(function ResultRow({
+  item,
+  fmt,
+  open,
+}: {
+  item: EntityItem;
+  fmt: DateTimeFormatter;
+  open: (item: EntityItem) => void;
+}) {
+  const time = formatRowTime(getEntityTimestamp(item), fmt);
+  const onClick = () => open(item);
+  let row: ReactNode;
+
+  switch (item.__typename) {
+    case 'AnswerType':
+      row = <AnswerRow answer={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'BrowserActivityType':
+      row = <BrowserActivityRow browserActivity={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'CommunicationType':
+      row = <CommunicationRow communication={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'ConceptType':
+      row = <ConceptRow concept={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'ContentType':
+      row = <ContentRow content={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'EventType':
+      row = <EventRow event={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'FileChunkType':
+      row = <FileChunkRow fileChunk={item} onClick={onClick} />;
+      break;
+
+    case 'FileType':
+      row = <FileRow file={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'ItemType':
+      row = <ItemRow item={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'NoteType':
+      row = <NoteRow note={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'PersonType':
+      row = <PersonRow person={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'PlaceType':
+      row = <PlaceRow place={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'ProductModelType':
+      row = <ProductRow product={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'ReceiptType':
+      row = <ReceiptRow receipt={item} time={time} onClick={onClick} />;
+      break;
+
+    case 'ThreadType':
+      row = <ThreadRow thread={item} time={time} onClick={onClick} />;
+      break;
+
+    default:
+      return null;
+  }
+
+  return <MemoryChatAbout entity={item}>{row}</MemoryChatAbout>;
+});
+
+/**
  * The scrolling result list every list-shaped explorer view is built on: the
  * per-type rows, cursor paging on scroll, and the skeleton / error / empty
  * states. `grouped` puts date headings between runs of same-day rows and
@@ -40,144 +144,106 @@ import { ThreadRow } from './rows/ThreadRow';
  */
 export function EntityResultList({ grouped, emptyState }: { grouped: boolean; emptyState: ReactNode }) {
   const [
-    { data, loading, hasNextPage, loadingMore, loadMore, error, refetch, totalCount },
+    { data, loading, hasNextPage, loadingMore, loadMore, error, refetch, totalCount, nameSortCutShort },
     { setActiveEntity },
   ] = useEntityService();
+  const fmt = useDateTimeFormat();
 
   const scrollRef = useRef<HTMLDivElement>(null);
-  const sentinelRef = useRef<HTMLDivElement>(null);
 
-  // Fetch the next server page (cursor-based) when the sentinel scrolls into view.
+  // Remember the scroll position under the history entry it belongs to. Give it
+  // back when that entry is shown again (Back from a full page). The position
+  // is saved as the entry is left, from the last scroll seen, because the
+  // scroll box is already gone by the time an unmount's cleanup runs. A restore
+  // still under way when the entry is left keeps its target.
+  const { key: historyKey } = useLocation();
+  const lastScrollTopRef = useRef(0);
+  const pendingRestoreRef = useRef<number | null>(scrollTopByHistoryEntry.get(historyKey) ?? null);
+
   useEffect(() => {
-    const sentinel = sentinelRef.current;
+    return () => {
+      scrollTopByHistoryEntry.set(historyKey, pendingRestoreRef.current ?? lastScrollTopRef.current);
+    };
+  }, [historyKey]);
 
-    if (!sentinel || !hasNextPage) {
+  // Re-applied as pages arrive, until the list is tall enough to reach the
+  // saved position or there is nothing more to load. Not settled while a
+  // request is in flight: on Back the cache answers first with every page
+  // loaded before, then the network's first page replaces them all.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const target = pendingRestoreRef.current;
+
+    if (!el || target == null || data.length === 0) {
       return;
     }
 
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting) {
-          loadMore();
-        }
-      },
-      { root: scrollRef.current, rootMargin: '400px' },
-    );
+    el.scrollTop = target;
+    lastScrollTopRef.current = el.scrollTop;
 
-    observer.observe(sentinel);
+    if (!loading && (el.scrollTop >= target - 1 || !hasNextPage)) {
+      pendingRestoreRef.current = null;
+    }
+  }, [data.length, hasNextPage, loading]);
 
-    return () => observer.disconnect();
-  }, [hasNextPage, loadMore]);
+  // The reader's own wheel, touch or key ends a restore. A page landing later
+  // must not pull the list back from where they took it.
+  const stopRestoring = () => {
+    pendingRestoreRef.current = null;
+  };
+
+  // Every state below renders this one box. React keeps the same element
+  // across them, so the scroll handler is on all of them: a skeleton that
+  // shortens the box moves its scrollTop too.
+  const scrollBox = (children: ReactNode) => (
+    <div
+      ref={scrollRef}
+      className="min-h-0 flex-1 overflow-y-auto px-2 pb-2"
+      data-list-scroll=""
+      onScroll={(event) => {
+        lastScrollTopRef.current = event.currentTarget.scrollTop;
+      }}
+      onWheel={stopRestoring}
+      onPointerDown={stopRestoring}
+      onKeyDown={stopRestoring}
+    >
+      {children}
+    </div>
+  );
+
+  // Fetch the next server page (cursor-based) when the sentinel scrolls into
+  // view. A failed page unwatches it — `error` carries a rejected loadMore —
+  // and the retry below is the only way to ask again.
+  const pageFailed = error != null && data.length > 0;
+  const sentinelRef = useLoadMoreSentinel({ enabled: hasNextPage && !pageFailed, loadMore, root: scrollRef });
 
   // groupEntitiesByBucket already collects undated entities into one trailing
   // group; the flat branch keeps the server's order.
   const groups = useMemo(() => (grouped ? groupEntitiesByBucket(data) : null), [grouped, data]);
 
   // Every row opens the same shared details drawer (incl. File/Item media).
-  const renderRow = (item: EntityItem) => {
-    const time = formatRowTime(getEntityTimestamp(item));
-    let row: ReactNode;
-
-    switch (item.__typename) {
-      case 'AnswerType':
-        row = <AnswerRow answer={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'BrowserActivityType':
-        row = <BrowserActivityRow browserActivity={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'CommunicationType':
-        row = <CommunicationRow communication={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'ConceptType':
-        row = <ConceptRow concept={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'ContentType':
-        row = <ContentRow content={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'EventType':
-        row = <EventRow event={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'FileChunkType':
-        row = <FileChunkRow fileChunk={item} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'FileType':
-        row = <FileRow file={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'ItemType':
-        row = <ItemRow item={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'NoteType':
-        row = <NoteRow note={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'PersonType':
-        row = <PersonRow person={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'PlaceType':
-        row = <PlaceRow place={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'ProductModelType':
-        row = <ProductRow product={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'ReceiptType':
-        row = <ReceiptRow receipt={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      case 'ThreadType':
-        row = <ThreadRow thread={item} time={time} onClick={() => setActiveEntity(item)} />;
-        break;
-
-      default:
-        return null;
-    }
-
-    return (
-      <MemoryChatAbout key={item.id} entity={item}>
-        {row}
-      </MemoryChatAbout>
-    );
-  };
+  const renderRow = (item: EntityItem) => (
+    <ResultRow key={item.id} item={item} fmt={fmt} open={setActiveEntity} />
+  );
 
   // First load (no data yet): skeletons over a bare spinner.
   if (loading && data.length === 0) {
-    return (
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2" data-list-scroll="">
-        <ListSkeleton count={10} />
-      </div>
-    );
+    return scrollBox(<ListSkeleton count={10} />);
   }
 
   // Hard error with nothing to show.
   if (error && data.length === 0) {
-    return (
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2" data-list-scroll="">
-        <ErrorState onRetry={refetch} />
-      </div>
-    );
+    return scrollBox(<ErrorState onRetry={refetch} />);
   }
 
   if (data.length === 0) {
-    return (
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2" data-list-scroll="">
-        {emptyState}
-      </div>
-    );
+    return scrollBox(emptyState);
   }
 
-  return (
-    <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-2 pb-2" data-list-scroll="">
+  return scrollBox(
+    <>
+      {nameSortCutShort && <NameSortCutShortNote />}
+
       <div className="flex flex-col">
         {groups
           ? groups.map((group) => (
@@ -191,11 +257,15 @@ export function EntityResultList({ grouped, emptyState }: { grouped: boolean; em
 
       {loadingMore && <ListSkeleton count={3} showHeader={false} />}
 
-      {hasNextPage && <div ref={sentinelRef} className="h-8" />}
+      {hasNextPage && !pageFailed && <div ref={sentinelRef} className="h-8" />}
+
+      {pageFailed && (
+        <LoadMoreFailed noun="results" message={error.message} onRetry={hasNextPage ? loadMore : refetch} />
+      )}
 
       <div className="py-3 text-center text-xs text-muted-foreground">
         {formatLoadedCount({ loaded: data.length, totalCount, loadingMore, hasNextPage })}
       </div>
-    </div>
+    </>,
   );
 }

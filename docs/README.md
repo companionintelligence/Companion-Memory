@@ -1,7 +1,5 @@
 # CI-Server documentation index
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 Map of everything documented in this repo, plus where the cross-repo docs live.
 Orientation and quickstart are in the [root README](../README.md); the backend
 developer guide is [`backend/apps/api/README.md`](../backend/apps/api/README.md).
@@ -50,7 +48,7 @@ codegen): [graphql-api.md](graphql-api.md).
 | [architecture/adr-pipeline-ledger.md](architecture/adr-pipeline-ledger.md)                               | **ADR-0004:** `ci.pipeline_state` as a versioned ledger replacing "is the column I write still NULL?" as the completion test (filed alongside, not inside, `adr/`)                                                                                                                                                                                                                                                                                               | accepted 2026-08-09                                                                                                  |
 | [architecture/event-ingest-spec.md](architecture/event-ingest-spec.md)                                   | Unified capture-event ingest (`/v1/events`) spec                                                                                                                                                                                                                                                                                                                                                                                                                 | partially implemented — see status header                                                                            |
 | [architecture/hub-inference-integration.md](architecture/hub-inference-integration.md)                   | Historical design for LLM + embedding config from CI-Hub's inference proxy; current operator contract is [setup/companion-memory.md](setup/companion-memory.md)                                                                                                                                                                                                                                                                                                  | historical design                                                                                                    |
-| [architecture/test-strategy.md](architecture/test-strategy.md)                                           | Test layers, priorities, conventions, coverage ratchet — **plus which runner each workspace uses, the sixteen `*_TEST_DATABASE_URL` variables, and the two suites that are red on `main` before you touch anything**                                                                                                                                                                                                                                             | active; §1 re-surveyed 2026-08-23                                                                                    |
+| [architecture/test-strategy.md](architecture/test-strategy.md)                                           | Test layers, priorities, conventions, coverage ratchet — **plus which runner each workspace uses, the per-suite `*_TEST_DATABASE_URL` variables, and the two suites that are red on `main` before you touch anything**                                                                                                                                                                                                                                             | active; §1 re-surveyed 2026-08-23                                                                                    |
 
 ### Architecture decision records — [`docs/architecture/adr/`](architecture/adr/)
 
@@ -88,6 +86,9 @@ ADR-0004 lives one level up as [`architecture/adr-pipeline-ledger.md`](architect
 
 - [spikes/webbed-feet-graph-view.md](spikes/webbed-feet-graph-view.md) — spike: a full-bleed
   force-layout graph view for the Explorer, over the unchanged graph read APIs
+- [vtc.md](vtc.md) — Verifiable Trust Community credentials (OpenVTC / DTG v1): a tested library that
+  issues, revokes and recognises membership credentials. Kept beside, not on top of, the KERI-shaped
+  peer code; not wired into the API and not yet run against OpenVTC's software.
 - [`docs/scratch1-bdc/`](scratch1-bdc/) — the 2026-08-09 prediction/planning proposal set,
   for team review rather than as a record of what shipped:
   [system map](scratch1-bdc/ci-prediction-doc-map.md) (start here — how the four systems relate) ·
@@ -110,12 +111,30 @@ ADR-0004 lives one level up as [`architecture/adr-pipeline-ledger.md`](architect
 - [peer-federation.md](peer-federation.md) — asking questions across two Companion memories:
   Portal discovery, the three ask archetypes, the consent gate, free/busy without leaking a
   calendar.
+- [trust-tasks.md](trust-tasks.md) — Trust Tasks (Trust Over IP) as a second door onto the
+  same ask pipeline: signed task documents with the proof inside, `POST /agent/v1/trust-tasks`,
+  off by default; what is implemented, how a request is checked, and what is not here.
+- [didcomm.md](didcomm.md) — DIDComm Messaging v2.1: authcrypt/anoncrypt/signed envelopes, mediator
+  routing, trust-ping and friends, `did:key`/`did:peer`/`did:web`, pinned to the specification's and
+  the Rust reference's test vectors. A tested library kept beside the KERI design, which it does not
+  depend on and refuses to impersonate; not wired into the API yet.
+- [pws.md](pws.md) — Portable Web Spaces (W3C CCG storage API and zCap authorization): Spaces,
+  Collections and Resources controlled by a DID, shared by attenuated expiring capabilities. A tested
+  library kept beside, not on top of, the KERI-shaped peer code (`did:keri` is refused); not wired into
+  the API. It passes 203 of the Interop Alliance's 305 conformance checks; the suite reports
+  `conformant: false` because the failures trace to features that are not built.
 - [asks-threat-model.md](asks-threat-model.md) — the adversaries the ask feature does and
   does not defend against: coercion in a shared household, stalking via repeated free/busy,
   social engineering at the consent moment, prompt injection (traced, none today),
   cumulative disclosure, and the default tier. Read before changing a ceiling. Companion to
   [asks-system-guide.md](asks-system-guide.md): that one is how the feature works, this one
   is what it does not defend.
+- [identikey.md](identikey.md) — the IdentiKey protocol tier, Phase 1 of 5: a challenge/response
+  authentication library (Ed25519 or P-256, optional ML-DSA co-signature) that is **not wired to
+  anything yet**. What `verifyResponse` checks and in what order, where it is deliberately stricter
+  than the Rust reference, what a caller must still supply (post-quantum key pins recorded at
+  enrollment, a rate limit on issuing, a shared nonce store), and what was and was not cross-checked.
+  Sits beside, and replaces nothing in, [peer-federation.md](peer-federation.md).
 
 ## Import & ETL — [`docs/import/`](import/)
 

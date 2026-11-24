@@ -4,7 +4,6 @@ import { fetchJson } from '@ci/common';
 import {
   Badge,
   Button,
-  Card,
   Checkbox,
   Dialog,
   IconButton,
@@ -23,6 +22,7 @@ import {
   ChevronRight,
   Clock,
   Pencil,
+  Plug,
   Plus,
   RefreshCw,
   Trash,
@@ -30,7 +30,20 @@ import {
 } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 
+import { useNeedsWebSignIn, WebSignInRequired } from '@/components/WebSignInRequired';
 import { useAuth, useCurrentUser } from '@/hooks';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
+
+import {
+  SettingsCard,
+  SettingsEmpty,
+  SettingsGroup,
+  SettingsLoading,
+  SettingsNotice,
+  SettingsRow,
+  SettingsSection,
+} from '../kit';
 
 type McpTransport = 'stdio' | 'http';
 type McpConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
@@ -46,24 +59,31 @@ interface McpTool {
  * deliberately NOT recomputed here — a second canonicalisation implementation in the browser would
  * silently disagree with the backend's on key order and turn every reconnect into false drift.
  */
-type McpToolApprovalState = 'approved' | 'new' | 'schema_changed' | 'unavailable' | 'legacy';
+type McpToolApprovalState =
+  'approved' | 'new' | 'schema_changed' | 'description_changed' | 'unavailable' | 'legacy';
 
 interface McpToolApproval {
   name: string;
   schemaDigest: string | null;
+  /** Absent from a server that predates description pinning. */
+  descriptionDigest?: string | null;
   state: McpToolApprovalState;
   approvedAt: string | null;
   approvedDigest: string | null;
 }
 
 /** States that mean the tool is NOT currently reachable by chat and wants a human decision. */
-const PENDING_APPROVAL_STATES = new Set<McpToolApprovalState>(['new', 'schema_changed']);
+const PENDING_APPROVAL_STATES = new Set<McpToolApprovalState>([
+  'new',
+  'schema_changed',
+  'description_changed',
+]);
 
 function approvalBadge(state: McpToolApprovalState) {
   switch (state) {
     case 'approved':
       return (
-        <Badge variant="outline" className="text-[10px] text-green-700 dark:text-green-400">
+        <Badge variant="outline" className="text-[10px] text-teal-700 dark:text-teal-300">
           Approved
         </Badge>
       );
@@ -77,6 +97,12 @@ function approvalBadge(state: McpToolApprovalState) {
       return (
         <Badge variant="outline" className="text-[10px] text-amber-700 dark:text-amber-400">
           Schema changed
+        </Badge>
+      );
+    case 'description_changed':
+      return (
+        <Badge variant="outline" className="text-[10px] text-amber-700 dark:text-amber-400">
+          Description changed
         </Badge>
       );
     case 'unavailable':
@@ -165,8 +191,9 @@ interface McpCatalogResponse {
   highRisk: CatalogEntry[];
 }
 
+/** Mirrors the API's `McpProbeResult` (`{ success, tools?, error? }`) for both test-connection routes. */
 interface TestConnectionResult {
-  ok: boolean;
+  success: boolean;
   tools?: McpTool[];
   error?: string;
 }
@@ -419,16 +446,24 @@ function buildServerPayload(
   return body;
 }
 
+/**
+ * A server added from the catalog carries the entry's `catalogSlug`; rows created before the API
+ * derived `source: 'catalog'` from it were stored as `user_added`, so accept either signal.
+ */
+function isFromCatalog(server: Pick<McpServerConfig, 'source' | 'catalogSlug'>): boolean {
+  return server.source === 'catalog' || Boolean(server.catalogSlug);
+}
+
 function connectionIcon(status: McpConnectionStatus) {
   switch (status) {
     case 'connected':
-      return <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-500 flex-shrink-0" />;
+      return <CheckCircle2 className="size-4 shrink-0 text-teal-700 dark:text-teal-300" aria-hidden="true" />;
     case 'connecting':
-      return <RefreshCw className="h-4 w-4 animate-spin text-blue-600 dark:text-blue-500 flex-shrink-0" />;
+      return <RefreshCw className="size-4 shrink-0 animate-spin text-muted-foreground" aria-hidden="true" />;
     case 'error':
-      return <AlertCircle className="h-4 w-4 text-red-600 dark:text-red-500 flex-shrink-0" />;
+      return <AlertCircle className="size-4 shrink-0 text-destructive" aria-hidden="true" />;
     default:
-      return <Clock className="h-4 w-4 text-muted-foreground flex-shrink-0" />;
+      return <Clock className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />;
   }
 }
 
@@ -445,14 +480,12 @@ function connectionLabel(status: McpConnectionStatus): string {
   }
 }
 
-function formatDateTime(value: string | undefined | null): string | null {
+function formatDateTime(value: string | undefined | null, fmt: DateTimeFormatter): string | null {
   if (!value) {
     return null;
   }
 
-  const date = new Date(value);
-
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+  return fmt.tryDateTime(value) ?? value;
 }
 
 interface EnvRowsEditorProps {
@@ -486,7 +519,7 @@ function EnvRowsEditor({ rows, onChange }: EnvRowsEditorProps) {
                 placeholder="KEY"
                 value={row.key}
                 onChange={(e) => updateRow(index, { key: e.target.value })}
-                className="font-mono text-sm"
+                className="font-mono text-base md:text-sm"
               />
               {showMasked ? (
                 <div className="flex items-center gap-2">
@@ -526,7 +559,7 @@ function EnvRowsEditor({ rows, onChange }: EnvRowsEditorProps) {
               variant="ghost"
               size="icon-sm"
               label="Remove variable"
-              className="text-red-600 hover:text-red-700"
+              className="text-destructive hover:text-destructive"
               onClick={() => removeRow(index)}
             >
               <X className="h-4 w-4" />
@@ -659,6 +692,7 @@ function AuthFieldsEditor({ auth, onChange }: AuthFieldsEditorProps) {
 export function McpSection() {
   const { t } = useTranslation();
   const [{ authToken }] = useAuth();
+  const fmt = useDateTimeFormat();
 
   /**
    * Every route that CHANGES a server config is admin-gated server-side (`AdminOnlyGuard` on
@@ -679,6 +713,9 @@ export function McpSection() {
   const [servers, setServers] = useState<McpServerConfig[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Set only by the list load failing. `error` is shared with enable/disable/approve, so it cannot say
+  // whether an empty list is real or just what a failed load left behind.
+  const [serversLoadFailed, setServersLoadFailed] = useState(false);
   const [togglingId, setTogglingId] = useState<string | null>(null);
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
   const [approvingId, setApprovingId] = useState<string | null>(null);
@@ -712,6 +749,11 @@ export function McpSection() {
   const [highRiskSaving, setHighRiskSaving] = useState(false);
   const [highRiskError, setHighRiskError] = useState<string | null>(null);
 
+  // The native shell holds only a device key, and every `/api/mcp/servers` and `/api/mcp/catalog`
+  // route takes a session JWT or a Portal bearer — never a key: a stdio server is arbitrary command
+  // execution on the appliance, more than a key should ever reach.
+  const needsWebSignIn = useNeedsWebSignIn();
+
   const headers = useCallback(
     () => ({
       Authorization: `Bearer ${authToken}`,
@@ -724,10 +766,12 @@ export function McpSection() {
     try {
       setLoading(true);
       setError(null);
+      setServersLoadFailed(false);
       const data = await fetchJson<McpServerConfig[]>('/api/mcp/servers', { headers: headers() });
       setServers(data ?? []);
     } catch {
       setError('Failed to load MCP servers');
+      setServersLoadFailed(true);
     } finally {
       setLoading(false);
     }
@@ -746,13 +790,18 @@ export function McpSection() {
     }
   }, [headers]);
 
+  // Requests that can only 401 are not worth sending; the notice below says why.
   useEffect(() => {
-    fetchServers();
-  }, [fetchServers]);
+    if (!needsWebSignIn) {
+      fetchServers();
+    }
+  }, [fetchServers, needsWebSignIn]);
 
   useEffect(() => {
-    fetchCatalog();
-  }, [fetchCatalog]);
+    if (!needsWebSignIn) {
+      fetchCatalog();
+    }
+  }, [fetchCatalog, needsWebSignIn]);
 
   const toggleToolsExpanded = (id: string) => {
     setExpandedTools((prev) => {
@@ -785,16 +834,19 @@ export function McpSection() {
   };
 
   /**
-   * Approving is the grant — adding the server never was. `tools[]` carries back the exact digest
-   * this list was rendered from, and the server rejects it if the schema moved in between, so a
-   * tool cannot be approved on the strength of a description the user is no longer looking at.
+   * Approving is the grant — adding the server never was. `tools[]` carries back the exact digests
+   * this list was rendered from, and the server rejects it if the schema or the description moved
+   * in between, so a tool cannot be approved on the strength of a description the user is no
+   * longer looking at.
    *
    * `approveAll` is the one-click path for a legitimately-updated upstream server. Without it a
    * strict pin is the kind of thing people switch off wholesale after the second false alarm.
    */
   const handleApproveTools = async (
     server: McpServerConfig,
-    body: { approveAll: true } | { tools: Array<{ name: string; schemaDigest: string }> },
+    body:
+      | { approveAll: true }
+      | { tools: Array<{ name: string; schemaDigest: string; descriptionDigest?: string }> },
   ) => {
     try {
       setApprovingId(server.id);
@@ -865,10 +917,10 @@ export function McpSection() {
             body: JSON.stringify(buildServerPayload(form, { includeCatalogSlug: false })),
           });
 
-      setDialogTestResult(result ?? { ok: false, error: 'No response from server' });
+      setDialogTestResult(result ?? { success: false, error: 'No response from server' });
     } catch (err) {
       setDialogTestResult({
-        ok: false,
+        success: false,
         error: err instanceof Error ? err.message : 'Test connection failed',
       });
     } finally {
@@ -1053,62 +1105,65 @@ export function McpSection() {
     }
   };
 
-  return (
-    <>
-      <div className="mb-6">
-        <h2 className="text-xl font-semibold">MCP Servers</h2>
-        <p className="text-sm text-muted-foreground mt-1">
-          Connect Model Context Protocol servers to give the assistant more tools.
-        </p>
-      </div>
+  if (needsWebSignIn) {
+    return (
+      <SettingsSection
+        title="MCP servers"
+        description="Connect Model Context Protocol servers to give the assistant more tools."
+      >
+        <WebSignInRequired>
+          MCP servers are listed and changed from a web sign-in only. A server can run commands on your
+          appliance, so a device key — which is all this app signs in with — is never allowed to manage them.
+          Open Companion Memory in a web browser and sign in to manage them.
+        </WebSignInRequired>
+      </SettingsSection>
+    );
+  }
 
+  return (
+    <SettingsSection
+      title="MCP servers"
+      description="Connect Model Context Protocol servers to give the assistant more tools."
+      actions={
+        // Only beside the configured list, as before: the catalog tab adds through its own entries.
+        activeTab === 'servers' ? (
+          <Button variant="outline" onClick={openCreate} disabled={!canManageServers}>
+            <Plus aria-hidden="true" />
+            {t('SETTINGS_MCP_CREATE')}
+          </Button>
+        ) : null
+      }
+    >
       {user != null && !canManageServers && (
-        <div className="mb-4 flex items-start gap-2 rounded-md border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
-          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-          <p>
-            Only the appliance owner can add or change MCP servers. You can see what is configured here, but
-            the controls are disabled.
-          </p>
-        </div>
+        <SettingsNotice>
+          Only the appliance owner can add or change MCP servers. You can see what is configured here, but the
+          controls are disabled.
+        </SettingsNotice>
       )}
 
       <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as 'servers' | 'catalog')}>
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <Tabs.List>
-            <Tabs.Trigger value="servers">Configured</Tabs.Trigger>
-            <Tabs.Trigger value="catalog">Browse suggested MCPs</Tabs.Trigger>
-          </Tabs.List>
-          {activeTab === 'servers' && (
-            <IconButton
-              variant="outline"
-              label={t('SETTINGS_MCP_CREATE')}
-              onClick={openCreate}
-              disabled={!canManageServers}
-            >
-              <Plus className="h-4 w-4" />
-            </IconButton>
-          )}
-        </div>
+        <Tabs.List className="mb-4">
+          <Tabs.Trigger value="servers">Configured</Tabs.Trigger>
+          <Tabs.Trigger value="catalog">Browse suggested MCPs</Tabs.Trigger>
+        </Tabs.List>
 
-        <Tabs.Content value="servers">
-          {error && (
-            <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-400">
-              {error}
-            </div>
-          )}
+        <Tabs.Content value="servers" className="flex flex-col gap-4">
+          {error ? <SettingsNotice tone="error">{error}</SettingsNotice> : null}
 
           {loading ? (
-            <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">
-              Loading…
-            </div>
+            <SettingsCard>
+              <SettingsLoading />
+            </SettingsCard>
           ) : servers.length === 0 ? (
-            <Card>
-              <Card.Content className="flex flex-col items-center justify-center py-12 text-center">
-                <p className="text-sm text-muted-foreground">No MCP servers configured yet.</p>
-              </Card.Content>
-            </Card>
+            // A failed load leaves the list empty. The banner above already says so; "No MCP servers
+            // configured yet." under it would contradict it.
+            serversLoadFailed ? null : (
+              <SettingsCard>
+                <SettingsEmpty icon={<Plug />} title="No MCP servers configured yet." />
+              </SettingsCard>
+            )
           ) : (
-            <div className="space-y-3">
+            <SettingsCard>
               {servers.map((server) => {
                 const expanded = expandedTools.has(server.id);
                 const toolCount = server.discoveredTools?.length;
@@ -1119,181 +1174,228 @@ export function McpSection() {
                 const pending = approvals.filter((entry) => PENDING_APPROVAL_STATES.has(entry.state));
 
                 return (
-                  <Card key={server.id}>
-                    <Card.Content className="space-y-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="min-w-0 flex-1 space-y-1.5">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="font-medium truncate">{server.name}</span>
-                            <Badge variant="outline" className="text-xs uppercase">
-                              {server.transport}
-                            </Badge>
-                            {server.source === 'catalog' && (
-                              <Badge variant="outline" className="text-xs">
-                                From catalog
-                              </Badge>
+                  <SettingsRow
+                    key={server.id}
+                    label={<span className="block truncate">{server.name}</span>}
+                    meta={
+                      <>
+                        <Badge variant="outline" className="text-xs">
+                          {server.transport}
+                        </Badge>
+                        {isFromCatalog(server) && (
+                          <Badge variant="outline" className="text-xs">
+                            From catalog
+                          </Badge>
+                        )}
+                      </>
+                    }
+                    align="start"
+                    control={
+                      <>
+                        <Switch
+                          aria-label={`Enable ${server.name}`}
+                          checked={server.enabled}
+                          onCheckedChange={() => void handleToggleEnabled(server)}
+                          disabled={togglingId === server.id || !canManageServers}
+                        />
+                        <IconButton
+                          variant="ghost"
+                          onClick={() => openEdit(server)}
+                          disabled={!canManageServers}
+                          label={t('SETTINGS_MCP_EDIT_SERVER', { name: server.name })}
+                        >
+                          <Pencil />
+                        </IconButton>
+                        <IconButton
+                          variant="ghost"
+                          className="text-destructive hover:text-destructive"
+                          onClick={() => openDelete(server)}
+                          disabled={!canManageServers}
+                          label={t('SETTINGS_MCP_DELETE_SERVER', { name: server.name })}
+                        >
+                          <Trash />
+                        </IconButton>
+                      </>
+                    }
+                  >
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                        <span className="flex items-center gap-1.5">
+                          {connectionIcon(server.connectionStatus)}
+                          {connectionLabel(server.connectionStatus)}
+                        </span>
+                        {server.lastConnectedAt && (
+                          <span>Last connected {formatDateTime(server.lastConnectedAt, fmt)}</span>
+                        )}
+                      </div>
+                      {server.lastError && <p className="text-xs text-destructive">{server.lastError}</p>}
+                      {toolCount != null && (
+                        <div>
+                          <button
+                            type="button"
+                            onClick={() => toggleToolsExpanded(server.id)}
+                            className="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-medium text-foreground hover:bg-accent cursor-pointer"
+                          >
+                            {expanded ? (
+                              <ChevronDown className="h-3 w-3" />
+                            ) : (
+                              <ChevronRight className="h-3 w-3" />
                             )}
-                          </div>
-                          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                            <span className="flex items-center gap-1.5">
-                              {connectionIcon(server.connectionStatus)}
-                              {connectionLabel(server.connectionStatus)}
+                            {toolCount} {toolCount === 1 ? 'tool' : 'tools'}
+                          </button>
+                          {pending.length > 0 && (
+                            <span className="ml-2 inline-flex items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-800 dark:text-amber-200">
+                              <AlertTriangle className="h-3 w-3" />
+                              {pending.length} awaiting approval
                             </span>
-                            {server.lastConnectedAt && (
-                              <span>Last connected {formatDateTime(server.lastConnectedAt)}</span>
-                            )}
-                          </div>
-                          {server.lastError && (
-                            <p className="text-xs text-red-600 dark:text-red-400">{server.lastError}</p>
                           )}
-                          {toolCount != null && (
-                            <div>
-                              <button
-                                type="button"
-                                onClick={() => toggleToolsExpanded(server.id)}
-                                className="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-medium text-foreground hover:bg-accent cursor-pointer"
-                              >
-                                {expanded ? (
-                                  <ChevronDown className="h-3 w-3" />
-                                ) : (
-                                  <ChevronRight className="h-3 w-3" />
-                                )}
-                                {toolCount} {toolCount === 1 ? 'tool' : 'tools'}
-                              </button>
+                          {expanded && approvals.length > 0 && (
+                            <div className="mt-2 space-y-2 rounded-md border bg-muted/40 p-3">
                               {pending.length > 0 && (
-                                <span className="ml-2 inline-flex items-center gap-1 rounded-md border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-400">
-                                  <AlertTriangle className="h-3 w-3" />
-                                  {pending.length} awaiting approval
-                                </span>
-                              )}
-                              {expanded && approvals.length > 0 && (
-                                <div className="mt-2 space-y-2 rounded-md border bg-muted/40 p-3">
-                                  {pending.length > 0 && (
-                                    <div className="flex flex-wrap items-center justify-between gap-2 border-b pb-2">
-                                      <p className="text-xs text-muted-foreground">
-                                        Tools awaiting approval are not available to the assistant.
-                                      </p>
-                                      <Button
-                                        size="sm"
-                                        variant="outline"
-                                        disabled={approvingId === server.id || !canManageServers}
-                                        onClick={() => void handleApproveTools(server, { approveAll: true })}
-                                      >
-                                        Approve all changes
-                                      </Button>
-                                    </div>
-                                  )}
-                                  <ul className="space-y-1.5">
-                                    {approvals.map((approval) => (
-                                      <li
-                                        key={approval.name}
-                                        className="flex items-start justify-between gap-2 text-xs"
-                                      >
-                                        <span className="min-w-0">
-                                          <span className="font-mono font-medium">{approval.name}</span>{' '}
-                                          {approvalBadge(approval.state)}
-                                          <span className="block text-muted-foreground">
-                                            {descriptionOf.get(approval.name) ??
-                                              'This tool is no longer offered by the server.'}
-                                          </span>
-                                        </span>
-                                        {approval.schemaDigest && approval.state !== 'approved' && (
-                                          <Button
-                                            size="sm"
-                                            variant="ghost"
-                                            className="shrink-0"
-                                            disabled={approvingId === server.id || !canManageServers}
-                                            onClick={() =>
-                                              void handleApproveTools(server, {
-                                                tools: [
-                                                  {
-                                                    name: approval.name,
-                                                    schemaDigest: approval.schemaDigest!,
-                                                  },
-                                                ],
-                                              })
-                                            }
-                                          >
-                                            Approve
-                                          </Button>
-                                        )}
-                                      </li>
-                                    ))}
-                                  </ul>
+                                <div className="flex flex-wrap items-center justify-between gap-2 border-b pb-2">
+                                  <p className="text-xs text-muted-foreground">
+                                    Tools awaiting approval are not available to the assistant.
+                                  </p>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    disabled={approvingId === server.id || !canManageServers}
+                                    onClick={() => void handleApproveTools(server, { approveAll: true })}
+                                  >
+                                    Approve all changes
+                                  </Button>
                                 </div>
                               )}
+                              <ul className="space-y-1.5">
+                                {approvals.map((approval) => (
+                                  <li
+                                    key={approval.name}
+                                    className="flex items-start justify-between gap-2 text-xs"
+                                  >
+                                    <span className="min-w-0">
+                                      <span className="font-mono font-medium">{approval.name}</span>{' '}
+                                      {approvalBadge(approval.state)}
+                                      <span className="block text-muted-foreground">
+                                        {descriptionOf.get(approval.name) ??
+                                          'This tool is no longer offered by the server.'}
+                                      </span>
+                                    </span>
+                                    {approval.schemaDigest && approval.state !== 'approved' && (
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        className="shrink-0"
+                                        disabled={approvingId === server.id || !canManageServers}
+                                        onClick={() =>
+                                          void handleApproveTools(server, {
+                                            tools: [
+                                              {
+                                                name: approval.name,
+                                                schemaDigest: approval.schemaDigest!,
+                                                // The prose shown here is pinned too; the
+                                                // server refuses the approval if it moved.
+                                                ...(approval.descriptionDigest
+                                                  ? { descriptionDigest: approval.descriptionDigest }
+                                                  : {}),
+                                              },
+                                            ],
+                                          })
+                                        }
+                                      >
+                                        Approve
+                                      </Button>
+                                    )}
+                                  </li>
+                                ))}
+                              </ul>
                             </div>
                           )}
                         </div>
-                        <div className="flex shrink-0 items-center gap-1">
-                          <Switch
-                            checked={server.enabled}
-                            onCheckedChange={() => void handleToggleEnabled(server)}
-                            disabled={togglingId === server.id || !canManageServers}
-                          />
-                          <IconButton
-                            variant="ghost"
-                            className="h-8 w-8"
-                            onClick={() => openEdit(server)}
-                            disabled={!canManageServers}
-                            label={t('SETTINGS_MCP_EDIT_SERVER', { name: server.name })}
-                          >
-                            <Pencil className="h-4 w-4" />
-                          </IconButton>
-                          <IconButton
-                            variant="ghost"
-                            className="h-8 w-8 text-red-600 hover:text-red-700"
-                            onClick={() => openDelete(server)}
-                            disabled={!canManageServers}
-                            label={t('SETTINGS_MCP_DELETE_SERVER', { name: server.name })}
-                          >
-                            <Trash className="h-4 w-4" />
-                          </IconButton>
-                        </div>
-                      </div>
-                    </Card.Content>
-                  </Card>
+                      )}
+                    </div>
+                  </SettingsRow>
                 );
               })}
-            </div>
+            </SettingsCard>
           )}
         </Tabs.Content>
 
-        <Tabs.Content value="catalog">
-          {catalogError && (
-            <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-400">
-              {catalogError}
-            </div>
-          )}
+        <Tabs.Content value="catalog" className="flex flex-col gap-4">
+          {catalogError ? <SettingsNotice tone="error">{catalogError}</SettingsNotice> : null}
 
           {catalogLoading ? (
-            <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">
-              Loading…
-            </div>
+            <SettingsCard>
+              <SettingsLoading />
+            </SettingsCard>
           ) : (
-            <div className="space-y-6">
-              <div className="space-y-3">
-                {catalog.normal.length === 0 && (
-                  <p className="text-sm text-muted-foreground">No suggested servers yet.</p>
-                )}
-                {catalog.normal.map((entry) => (
-                  <Card key={entry.slug}>
-                    <Card.Content className="space-y-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0 space-y-1">
-                          <h4 className="font-medium">{entry.name}</h4>
-                          <p className="text-sm text-muted-foreground">{entry.description}</p>
-                        </div>
+            <>
+              {catalog.normal.length > 0 || !catalogError ? (
+                <SettingsGroup title="Suggested">
+                  {catalog.normal.length === 0 ? <SettingsEmpty title="No suggested servers yet." /> : null}
+                  {catalog.normal.map((entry) => (
+                    <SettingsRow
+                      key={entry.slug}
+                      label={entry.name}
+                      hint={entry.description}
+                      align="start"
+                      control={
                         <Button
-                          size="sm"
+                          variant="outline"
                           onClick={() => openCreateFromCatalog(entry)}
                           disabled={!canManageServers}
                         >
-                          <Plus className="h-4 w-4 mr-1" />
+                          <Plus aria-hidden="true" />
                           Add
                         </Button>
-                      </div>
-                      {entry.tags.length > 0 && (
+                      }
+                    >
+                      {entry.tags.length > 0 || (entry.requires?.hostSoftware?.length ?? 0) > 0 ? (
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {entry.tags.map((tag) => (
+                            <Badge key={tag} variant="outline" className="text-xs">
+                              {tag}
+                            </Badge>
+                          ))}
+                          {entry.requires?.hostSoftware && entry.requires.hostSoftware.length > 0 && (
+                            <span className="text-xs text-muted-foreground">
+                              Requires: {entry.requires.hostSoftware.join(', ')}
+                            </span>
+                          )}
+                        </div>
+                      ) : null}
+                    </SettingsRow>
+                  ))}
+                </SettingsGroup>
+              ) : null}
+
+              {catalog.highRisk.length > 0 && (
+                <SettingsGroup
+                  title="Full device access"
+                  description="Advanced. These servers can run anything on your appliance."
+                  cardClassName="border-destructive/30"
+                >
+                  {catalog.highRisk.map((entry) => (
+                    <SettingsRow
+                      key={entry.slug}
+                      label={
+                        <span className="inline-flex items-center gap-1.5">
+                          <AlertTriangle className="size-4 shrink-0 text-destructive" aria-hidden="true" />
+                          {entry.name}
+                        </span>
+                      }
+                      hint={entry.description}
+                      align="start"
+                      control={
+                        <Button
+                          variant="outline"
+                          className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                          onClick={() => openHighRisk(entry)}
+                        >
+                          Learn more
+                        </Button>
+                      }
+                    >
+                      {entry.tags.length > 0 ? (
                         <div className="flex flex-wrap gap-1.5">
                           {entry.tags.map((tag) => (
                             <Badge key={tag} variant="outline" className="text-xs">
@@ -1301,60 +1403,12 @@ export function McpSection() {
                             </Badge>
                           ))}
                         </div>
-                      )}
-                      {entry.requires?.hostSoftware && entry.requires.hostSoftware.length > 0 && (
-                        <p className="text-xs text-muted-foreground">
-                          Requires: {entry.requires.hostSoftware.join(', ')}
-                        </p>
-                      )}
-                    </Card.Content>
-                  </Card>
-                ))}
-              </div>
-
-              {catalog.highRisk.length > 0 && (
-                <div className="space-y-3">
-                  <h3 className="text-sm font-semibold text-muted-foreground">
-                    Advanced — full device access
-                  </h3>
-                  {catalog.highRisk.map((entry) => (
-                    <Card
-                      key={entry.slug}
-                      className="border-red-300 bg-red-50/50 dark:border-red-800 dark:bg-red-950/20"
-                    >
-                      <Card.Content className="space-y-3">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="flex min-w-0 items-start gap-2">
-                            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600 dark:text-red-400" />
-                            <div className="min-w-0 space-y-1">
-                              <h4 className="font-medium">{entry.name}</h4>
-                              <p className="text-sm text-muted-foreground">{entry.description}</p>
-                            </div>
-                          </div>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="shrink-0 border-red-300 text-red-700 hover:bg-red-100 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950"
-                            onClick={() => openHighRisk(entry)}
-                          >
-                            Learn more
-                          </Button>
-                        </div>
-                        {entry.tags.length > 0 && (
-                          <div className="flex flex-wrap gap-1.5">
-                            {entry.tags.map((tag) => (
-                              <Badge key={tag} variant="outline" className="text-xs">
-                                {tag}
-                              </Badge>
-                            ))}
-                          </div>
-                        )}
-                      </Card.Content>
-                    </Card>
+                      ) : null}
+                    </SettingsRow>
                   ))}
-                </div>
+                </SettingsGroup>
               )}
-            </div>
+            </>
           )}
         </Tabs.Content>
       </Tabs>
@@ -1363,7 +1417,7 @@ export function McpSection() {
       <Dialog open={dialogOpen} onOpenChange={(open) => (open ? setDialogOpen(true) : closeDialog())}>
         <Dialog.Content className="sm:max-w-[560px] max-h-[85vh] overflow-y-auto">
           <Dialog.Header>
-            <Dialog.Title>{dialogMode === 'create' ? 'Add MCP Server' : 'Edit MCP Server'}</Dialog.Title>
+            <Dialog.Title>{dialogMode === 'create' ? 'Add MCP server' : 'Edit MCP server'}</Dialog.Title>
             {form.catalogSlug && dialogMode === 'create' && (
               <Dialog.Description>
                 From the suggested MCP catalog. Fill in any credentials it needs before adding.
@@ -1372,11 +1426,7 @@ export function McpSection() {
           </Dialog.Header>
 
           <div className="space-y-4 py-2">
-            {dialogError && (
-              <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-400">
-                {dialogError}
-              </div>
-            )}
+            {dialogError && <SettingsNotice tone="error">{dialogError}</SettingsNotice>}
 
             <div className="grid gap-2">
               <Label htmlFor="mcp-name">Name</Label>
@@ -1412,7 +1462,7 @@ export function McpSection() {
                     placeholder="uvx some-mcp-server@latest"
                     value={form.command}
                     onChange={(e) => setForm({ ...form, command: e.target.value })}
-                    className="font-mono text-sm"
+                    className="font-mono text-base md:text-sm"
                   />
                 </div>
                 <div className="grid gap-2">
@@ -1422,7 +1472,7 @@ export function McpSection() {
                     rows={3}
                     value={form.argsText}
                     onChange={(e) => setForm({ ...form, argsText: e.target.value })}
-                    className="font-mono text-sm"
+                    className="font-mono text-base md:text-sm"
                   />
                 </div>
                 <div className="grid gap-2">
@@ -1476,12 +1526,12 @@ export function McpSection() {
               {dialogTestResult && (
                 <div
                   className={`rounded-md border p-3 text-sm ${
-                    dialogTestResult.ok
-                      ? 'border-teal-300 bg-teal-50 text-teal-800 dark:border-teal-800 dark:bg-teal-950 dark:text-teal-300'
-                      : 'border-red-300 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-300'
+                    dialogTestResult.success
+                      ? 'border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-300'
+                      : 'border-destructive/30 bg-destructive/10 text-destructive'
                   }`}
                 >
-                  {dialogTestResult.ok ? (
+                  {dialogTestResult.success ? (
                     <>
                       <p className="font-medium">
                         Connected
@@ -1526,7 +1576,7 @@ export function McpSection() {
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <Dialog.Content>
           <Dialog.Header>
-            <Dialog.Title>Delete MCP Server</Dialog.Title>
+            <Dialog.Title>Delete MCP server?</Dialog.Title>
             <Dialog.Description>
               Are you sure you want to delete <strong>{deleteTarget?.name}</strong>? Any agent relying on its
               tools will lose access. This action cannot be undone.
@@ -1552,7 +1602,7 @@ export function McpSection() {
         <Dialog.Content className="sm:max-w-[520px] max-h-[85vh] overflow-y-auto">
           <Dialog.Header>
             <Dialog.Title className="flex items-center gap-2">
-              <AlertTriangle className="h-5 w-5 text-red-600 dark:text-red-400" />
+              <AlertTriangle className="h-5 w-5 text-destructive" />
               {highRiskEntry?.name}
             </Dialog.Title>
             <Dialog.Description>{highRiskEntry?.description}</Dialog.Description>
@@ -1567,7 +1617,7 @@ export function McpSection() {
             </div>
 
             {highRiskEntry?.warning && (
-              <div className="flex items-start gap-2 rounded-md border border-red-300 bg-red-50 px-3 py-2.5 text-sm text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
+              <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-sm text-destructive">
                 <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
                 <span>{highRiskEntry.warning}</span>
               </div>
@@ -1663,6 +1713,6 @@ export function McpSection() {
           </Dialog.Footer>
         </Dialog.Content>
       </Dialog>
-    </>
+    </SettingsSection>
   );
 }

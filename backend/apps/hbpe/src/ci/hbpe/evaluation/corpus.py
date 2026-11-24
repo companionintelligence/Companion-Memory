@@ -30,9 +30,21 @@ from collections.abc import Sequence
 
 from ci.hbpe.buckets import BUCKETS_PER_DAY
 from ci.hbpe.pipeline.baselines import _as_date
+from ci.hbpe.pipeline.rhythm import DEFAULT_BACKGROUND, densify
 from ci.hbpe.tokenizer.vocab_registry import L0_CLASSES
 
 _L0_SET = frozenset(L0_CLASSES)
+
+# Re-exported: densification moved to ``pipeline.rhythm`` so the serving
+# path can densify its own history without importing an evaluation module.
+__all__ = [
+    "DEFAULT_BACKGROUND",
+    "actuals_for_day",
+    "corpus_dates",
+    "densify",
+    "eval_dates",
+    "history_before",
+]
 
 
 def corpus_dates(rows: Sequence[dict]) -> list[datetime.date]:

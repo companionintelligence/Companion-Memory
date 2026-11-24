@@ -21,17 +21,17 @@
    and the plan / billing / device tables are internal bookkeeping whose
    timestamps mix unstated timezones — noise on a timeline at best, wrong at
    worst. See the section map in `_hulu_report.ts`. */
-import crypto from 'node:crypto';
 import type { Stats } from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { cellValue, parseHuluReport, parseHuluTimestamp, type HuluReport } from './_hulu_report';
 import { pdfToLayoutText, pdftotextKnownMissing, PdftotextMissingError } from './_pdftotext';
+import { Occurrences, WATCH_MEDIA_TYPE, composeWatchTitle, normTitle, titleUri } from './_watch';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { Graph, ImportParams } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 const FILENAME_RE = /^rtk-report-\d+\.pdf$/i;
 
@@ -40,69 +40,6 @@ const MAX_REPORT_BYTES = 8 * 1024 * 1024;
 
 /** First-page text that names the document: the cover blurb mentions the account. */
 const COVER_RE = /personal information report[\s\S]{0,600}your hulu account/i;
-
-/**
- * Stable per-title identity for the content row: case/whitespace-insensitive
- * hash of the composed title, so every play of one episode (and every
- * re-export) lands on ONE content row while each play stays its own event.
- * sha256 like netflix.ts, so Postgres can recompute it by hand.
- */
-function titleUri(title: string): string {
-  const norm = title.replace(/\s+/g, ' ').trim().toLowerCase();
-
-  return `hulu:title:${crypto.createHash('sha256').update(norm).digest('hex').slice(0, 16)}`;
-}
-
-function norm(s: string): string {
-  return s.replace(/\s+/g, ' ').trim().toLowerCase();
-}
-
-/**
- * Netflix's title shape, "Series: Season N: Episode", so the two services'
- * watch rows read alike. Movies and live events have no series and become the
- * bare name; a season of 0 (a news broadcast) or N/A is left out.
- */
-export function composeWatchTitle(episode: string, series: string, season: string): string {
-  if (!series) {
-    return episode;
-  }
-
-  const parts = [series];
-  if (/^[1-9]\d*$/.test(season)) {
-    parts.push(`Season ${season}`);
-  }
-
-  parts.push(episode);
-
-  return parts.join(': ');
-}
-
-/**
- * What the content row says it is. Hulu streams over MPEG-DASH, so the row
- * carries the DASH manifest type rather than the `text/plain` of the title
- * placeholder the importer writes as its body (the netflix.ts/letterboxd.ts
- * habit). It is a statement about the thing watched, not about those bytes.
- */
-const WATCH_MEDIA_TYPE = 'application/dash+xml';
-
-function textContent(filename: string, body: string) {
-  return { filename, mediaType: WATCH_MEDIA_TYPE, data: async () => Buffer.from(body) };
-}
-
-/**
- * Distinct, stable ids for rows that are byte-identical within one report.
- * Shared with disney_plus.ts, whose report has the same habit.
- */
-export class Occurrences {
-  private readonly seen = new Map<string, number>();
-
-  id(base: string): string {
-    const n = this.seen.get(base) ?? 0;
-    this.seen.set(base, n + 1);
-
-    return n === 0 ? base : `${base}:${n}`;
-  }
-}
 
 export class HuluFileImporter implements FileImporter {
   async recognize(_ctx: unknown, entry: DirEntry): Promise<Recognition> {
@@ -280,7 +217,7 @@ export class HuluFileImporter implements FileImporter {
       // (embed/streamingTitle.ts) both want.
       const metadata = {
         Title: title,
-        URI: titleUri(title),
+        URI: titleUri('hulu', title),
         SeriesName: series || undefined,
         Season: season || undefined,
         EpisodeName: episode || undefined,
@@ -291,9 +228,9 @@ export class HuluFileImporter implements FileImporter {
         // Watched, date unknown: content alone (see the file comment).
         params.pipeline.push({
           item: {
-            id: occurrences.id(`hulu:watched:${norm(title)}`),
+            id: occurrences.id(`hulu:watched:${normTitle(title)}`),
             classification: 'saved_media',
-            content: textContent('watched.txt', title),
+            content: textContent('watched.txt', title, WATCH_MEDIA_TYPE),
             metadata: { ...metadata, Kind: 'watched' },
           },
         } satisfies Graph);
@@ -312,7 +249,7 @@ export class HuluFileImporter implements FileImporter {
           id: occurrences.id(`hulu:watch:${when}:${title}`),
           classification: 'watch',
           timestamp: ts,
-          content: textContent('watch.txt', title),
+          content: textContent('watch.txt', title, WATCH_MEDIA_TYPE),
           metadata,
         },
       } satisfies Graph);

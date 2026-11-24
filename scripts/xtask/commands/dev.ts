@@ -15,6 +15,7 @@ import { computeProjectName } from '../lib/identity';
 import { readUvVersion } from '../lib/uv';
 import { computeBuildPlan, runBuild, type BuildStep } from './build';
 import { ok, note } from '../../dev-stack/log';
+import { liveStackMessage, readLiveHolder, socketIsLive } from '../../dev-stack/supervisor-lock';
 
 const GREEN = '\x1b[0;32m';
 const YELLOW = '\x1b[0;33m';
@@ -112,11 +113,8 @@ function checkOllamaReachableFromContainers(): void {
   }
 
   console.log(`  ${YELLOW}•${RESET} ollama is listening on loopback only, so containers cannot reach it`);
-  console.log('    through host.docker.internal and the summary service will crash-loop on model');
-  console.log(
-    `    discovery. Restart it bound to all interfaces:  ${YELLOW}OLLAMA_HOST=0.0.0.0 ollama serve${RESET}`,
-  );
-  console.log(`    (or pin ${YELLOW}LLM_DEFAULT_CHAT_MODEL${RESET} in .env to skip discovery entirely).\n`);
+  console.log('    through host.docker.internal and summary jobs will wait in the queue until they can.');
+  console.log(`    Restart it bound to all interfaces:  ${YELLOW}OLLAMA_HOST=0.0.0.0 ollama serve${RESET}\n`);
 }
 
 /** `ollama list`'s columns are padded with runs of whitespace, so the model
@@ -204,6 +202,13 @@ export interface DevOptions {
 
 export async function runDev(root: string, opts: DevOptions): Promise<void> {
   console.log('🧑‍💻 Starting development environment...\n');
+
+  // The supervisor refuses a second stack in this worktree anyway; asking here
+  // saves the health checks and any image rebuild before it says so.
+  const holder = readLiveHolder(root);
+  if (holder || (await socketIsLive(`${root}/.overmind.sock`))) {
+    throw new Error(liveStackMessage(holder, '.overmind.sock'));
+  }
 
   // `make health`, not an in-process call: health is the toolchain diagnostic,
   // so it stays pure shell in the Makefile and must keep working on a checkout

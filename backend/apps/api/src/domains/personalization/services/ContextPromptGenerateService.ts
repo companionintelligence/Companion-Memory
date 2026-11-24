@@ -1,7 +1,7 @@
 import { Injectable, Optional } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { type RequestContext, type UserServiceContext } from '@ci/common/context';
 import { FeatureService } from '@ci/common/feature';
@@ -95,6 +95,24 @@ type GapRow = {
 };
 
 type RecentHistory = { prompts: string[]; sourceKeys: Set<string> };
+
+/**
+ * A WHERE clause leaving out the owner's own Person, so a prompt never asks
+ * the owner how they know themselves.
+ *
+ * By identity, not by key: an account onboarded before onboarding created its
+ * self Person under the import's `import:self` key holds it with no linked key
+ * at all, so excluding `import:self` alone missed every one of those. The
+ * pointer is compared with IS DISTINCT FROM because it is NULL until the
+ * account has a self Person, and `<> NULL` would leave out every row.
+ */
+function notTheOwnerSql(alias: string, userIdParam: string): string {
+  return (
+    `${alias}.entity_id IS DISTINCT FROM (SELECT u.entity_id FROM ci.users u WHERE u.id = ${userIdParam}) ` +
+    `AND ${alias}.is_self IS NOT TRUE ` +
+    `AND COALESCE(${alias}.linked_table, '') <> 'import:self'`
+  );
+}
 
 @Injectable()
 export class ContextPromptGenerateService {
@@ -270,20 +288,22 @@ export class ContextPromptGenerateService {
     ) {
       const { candidates } = await this.homeConfirmService.snapshot({ userId });
       const placeOptions = this.homeConfirmService.candidateOptions(candidates);
-      if (placeOptions.length >= 2) {
+      const top = this.homeConfirmService.topHomeCandidate(candidates);
+      // A yes/no may only name `top`: the answer arrives as a bare "yes", which
+      // HomeConfirmService resolves to topHomeCandidate. Without a `home`
+      // candidate, even a single named place is offered as a choice, so the
+      // answer is its id.
+      if (placeOptions.length >= 2 || (placeOptions.length === 1 && !top)) {
         type = 'home_work_other';
         options = placeOptions;
-      } else if (placeOptions.length === 1) {
+      } else if (top) {
         type = 'yes_no';
         options = DEFAULT_SELECTOR_OPTIONS.yes_no;
-        prompt = `Is ${placeOptions[0].label} home?`;
+        prompt = `Is ${top.label} home?`;
       } else {
-        const top = this.homeConfirmService.topHomeCandidate(candidates);
-        if (top) {
-          type = 'yes_no';
-          options = DEFAULT_SELECTOR_OPTIONS.yes_no;
-          prompt = `Is ${top.label} home?`;
-        }
+        // No answer could be written: the generic Home/Work/Other chips name
+        // no place, and a "home" resolves to no candidate.
+        return null;
       }
     } else if (type === 'home_work_other' || type === 'what_did_you_do_here') {
       const places = await this.loadEntities(userId, 'Location');
@@ -337,7 +357,7 @@ export class ContextPromptGenerateService {
       FROM ci.entities
       WHERE owner_user_id = $1
         AND merged_into_entity_id IS NULL
-        AND COALESCE(linked_table, '') <> 'import:self'
+        AND ${notTheOwnerSql('ci.entities', '$1')}
         AND ($2::text IS NULL OR entity_type = $2)
       ORDER BY updated_at DESC
       LIMIT 12
@@ -599,7 +619,7 @@ export class ContextPromptGenerateService {
       WHERE e.owner_user_id = $1
         AND e.merged_into_entity_id IS NULL
         AND e.entity_type = 'Person'
-        AND COALESCE(e.linked_table, '') <> 'import:self'
+        AND ${notTheOwnerSql('e', '$1')}
         AND NOT EXISTS (
           SELECT 1
           FROM ci.relationships r
@@ -793,6 +813,11 @@ export class ContextPromptGenerateService {
 
       const top = this.homeConfirmService.topHomeCandidate(candidates);
       const options = this.homeConfirmService.candidateOptions(candidates);
+      // No `home` candidate to name and no named place to choose from.
+      if (!top && options.length === 0) {
+        return [];
+      }
+
       const label =
         options.length >= 2
           ? 'Which of these places is home? Prefer home_work_other. Options are the listed places, not role chips.'

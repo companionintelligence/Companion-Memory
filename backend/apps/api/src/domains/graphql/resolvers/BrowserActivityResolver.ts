@@ -1,5 +1,6 @@
 import { UseGuards } from '@nestjs/common';
-import { Args, ID, Mutation, Parent, Query, Resolver, ResolveField } from '@nestjs/graphql';
+import { Args, ID, Info, Mutation, Parent, Query, Resolver, ResolveField } from '@nestjs/graphql';
+import type { GraphQLResolveInfo } from 'graphql';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
@@ -9,6 +10,7 @@ import { adoptIngestIdentity } from '@ci/domains/memory';
 
 import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { TagLoader } from '../loaders/TagLoader';
+import { selectsField } from '../selectsField';
 import { BrowserActivityConnection } from '../types/BrowserActivityConnection';
 import { BrowserActivityEdge } from '../types/BrowserActivityEdge';
 import { BrowserActivityType } from '../types/BrowserActivityType';
@@ -17,6 +19,7 @@ import { DeleteByIdInput } from '../types/DeleteByIdInput';
 import { DeleteByIdPayload } from '../types/DeleteByIdPayload';
 import { EntityTagType } from '../types/EntityTagType';
 import { GlobalUID } from '../types/GlobalUID';
+import type { OptionalTotal } from '../types/OptionalTotal';
 import { PaginationArgs } from '../types/PaginationArgs';
 import { UpdateBrowserActivityInput } from '../types/UpdateBrowserActivityInput';
 
@@ -32,7 +35,8 @@ export class BrowserActivityResolver {
   async browserActivities(
     @Context() context: RequestContext,
     @Args() pagination: PaginationArgs,
-  ): Promise<BrowserActivityConnection> {
+    @Info() info?: GraphQLResolveInfo,
+  ): Promise<OptionalTotal<BrowserActivityConnection>> {
     const serviceContext = toServiceContext(context);
 
     const { entities, hasNextPage, hasPreviousPage, totalCount } = await this.browserActivityService.findPage(
@@ -43,6 +47,7 @@ export class BrowserActivityResolver {
         afterId: pagination.after ? GlobalUID.decode(pagination.after).id : null,
         beforeId: pagination.before ? GlobalUID.decode(pagination.before).id : null,
       },
+      { countTotal: selectsField(info, 'totalCount') },
     );
 
     const edges: BrowserActivityEdge[] = entities.map((entity) => {
@@ -64,7 +69,7 @@ export class BrowserActivityResolver {
     return {
       edges,
       pageInfo,
-      totalCount,
+      ...(totalCount != null ? { totalCount } : {}),
     };
   }
 

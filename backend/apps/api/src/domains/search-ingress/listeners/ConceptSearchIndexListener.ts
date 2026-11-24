@@ -95,6 +95,21 @@ export class ConceptSearchIndexListener {
       return;
     }
 
+    // A concept the user asked Memory to forget (memory.forget in archive mode
+    // sets is_active false and un-indexes it) must stay out of the index, and so
+    // must a merge tombstone, which is inactive too. Any later write to the row
+    // sends ConceptUpdatedEvent, and indexing it then put the forgotten concept
+    // back in search. No skip marker: it is absent by the user's choice, and the
+    // backfill sweep leaves inactive concepts alone (see entitySourceMap).
+    if (concept.isActive === false) {
+      this.logger.log('Concept is archived, removing from search index', { conceptId: concept.id });
+
+      await this.embeddingService.remove(context, { entityType: 'concept', entityId: concept.id });
+      await this.vectorService.remove(context, { entityType: 'concept', entityId: concept.id });
+
+      return;
+    }
+
     if (concept.userId == null) {
       this.logger.warn('Concept has no associated user, cannot index');
 
@@ -134,17 +149,10 @@ export class ConceptSearchIndexListener {
         entityId: concept.id,
       });
     } else {
-      const embedding = await this.embeddingGenerationService.generateEmbedding(searchDocument);
-
-      await this.embeddingService.upsert(
-        {
-          userId: concept.userId,
-        },
-        {
-          entityType: 'concept',
-          entityId: concept.id,
-          embedding,
-        },
+      await this.embeddingService.upsertDocument(
+        { userId: concept.userId },
+        { entityType: 'concept', entityId: concept.id, text: searchDocument },
+        (text) => this.embeddingGenerationService.generateEmbedding(text),
       );
 
       // An updated concept that became embeddable is no longer skipped.

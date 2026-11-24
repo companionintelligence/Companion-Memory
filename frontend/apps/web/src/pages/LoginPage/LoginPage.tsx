@@ -65,7 +65,7 @@ export function LoginPage() {
     <div className="w-full max-w-sm">
       <Card>
         <Card.Header>
-          <Card.Title>Log In</Card.Title>
+          <h1 className="text-base font-semibold leading-4">Log in</h1>
           <Card.Description>Sign in to access your account</Card.Description>
         </Card.Header>
 
@@ -79,7 +79,9 @@ export function LoginPage() {
             </Alert>
           )}
           {oidcError && error == null && (
-            <p className="text-destructive mb-4 text-center text-sm">{oidcErrorMessage(oidcError)}</p>
+            <p role="alert" className="text-destructive mb-4 text-center text-sm">
+              {oidcErrorMessage(oidcError)}
+            </p>
           )}
 
           <OidcButton label="Sign in with Companion account" redirect={from} />
@@ -90,7 +92,7 @@ export function LoginPage() {
                 <div className="absolute inset-0 flex items-center">
                   <Separator className="w-full" />
                 </div>
-                <div className="relative flex justify-center text-xs uppercase">
+                <div className="relative flex justify-center text-xs ">
                   <span className="bg-card text-muted-foreground px-2">Or</span>
                 </div>
               </div>
@@ -110,9 +112,11 @@ export function LoginPage() {
       </Card>
 
       <div className="mt-2 text-center text-sm">
-        Don't have an account?{' '}
+        Don’t have an account?{' '}
         <Button variant="link" className="p-0" asChild>
-          <Link to="/signup">Sign up</Link>
+          <Link to="/signup" className="underline">
+            Sign up
+          </Link>
         </Button>
       </div>
     </div>

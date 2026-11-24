@@ -111,7 +111,9 @@ describe('PlaceService boundary persistence (#2161)', () => {
     expect(statement(harness, 'INSERT INTO ci.entities')?.params?.[6]).toBe('neighborhood');
   });
 
-  it('writes no boundary and stays an address when the provider returned no box', async () => {
+  // A bare point gets no kind (#3025): calling every geocode "address" filled the places
+  // list with Address badges. The user picks the kind.
+  it('writes no boundary and leaves the kind unset when the provider returned no box', async () => {
     const harness = makeHarness({});
 
     await harness.service.findOrCreateForGeocode(CONTEXT, {
@@ -121,7 +123,7 @@ describe('PlaceService boundary persistence (#2161)', () => {
     });
 
     const insert = statement(harness, 'INSERT INTO ci.entities');
-    expect(insert?.params?.[6]).toBe('address');
+    expect(insert?.params?.[6]).toBeNull();
     expect(insert?.params?.[7]).toBe(false);
   });
 
@@ -142,7 +144,7 @@ describe('PlaceService boundary persistence (#2161)', () => {
 
     const insert = statement(harness, 'INSERT INTO ci.entities');
     expect(insert?.params?.[7]).toBe(false);
-    expect(insert?.params?.[6]).toBe('address');
+    expect(insert?.params?.[6]).toBeNull();
   });
 
   it('backfills a boundary onto an existing place without overwriting one it already has', async () => {

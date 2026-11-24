@@ -4,7 +4,8 @@ import { ModelRoutingModule } from '@ci/domains/model-routing';
 import { ToolsModule } from '@ci/domains/tools';
 
 import { ChatModelPreferenceModule } from './chat-model-preference.module';
-import { LlmEndpointService } from './services/LlmEndpointService';
+import { LlmEndpointModule } from './llm-endpoint.module';
+import { DesktopAppService } from './services/DesktopAppService';
 import { OllamaService } from './services/OllamaService';
 import { ResidencyPlannerService } from './services/ResidencyPlannerService';
 
@@ -18,8 +19,14 @@ import { ResidencyPlannerService } from './services/ResidencyPlannerService';
  * to resolve a user's effective chat model.
  */
 @Module({
-  imports: [ToolsModule, ModelRoutingModule, ChatModelPreferenceModule],
-  providers: [LlmEndpointService, ResidencyPlannerService, OllamaService],
-  exports: [OllamaService, LlmEndpointService, ResidencyPlannerService],
+  imports: [ToolsModule, ModelRoutingModule, ChatModelPreferenceModule, LlmEndpointModule],
+  providers: [ResidencyPlannerService, OllamaService, DesktopAppService],
+  exports: [
+    OllamaService,
+    DesktopAppService,
+    LlmEndpointModule,
+    ResidencyPlannerService,
+    ChatModelPreferenceModule,
+  ],
 })
 export class LlmCoreModule {}

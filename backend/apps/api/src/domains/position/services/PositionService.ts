@@ -1,10 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Between, Point, In } from 'typeorm';
+import type { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 import { v7 as uuidv7 } from 'uuid';
 
 import { SYSTEM_USER, UserServiceContext, type ServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import { type OwnedLink, refuseForeignLinks } from '@ci/common/persistence';
+import { executeInsertWithRawConflict } from '@ci/common/persistence/insertWithRawConflict';
 import { DeviceService } from '@ci/domains/devices';
 import { EventService } from '@ci/domains/events';
 import {
@@ -92,6 +95,32 @@ export interface TrackOptions {
   maxPoints?: number;
 }
 
+/**
+ * What a fix links to, for {@link refuseForeignLinks}: the links an import of the account's export
+ * checks. Each key only asks that the device or the place exists.
+ */
+function positionLinks(rows: readonly CreatePositionDto[]): OwnedLink[] {
+  const entity = (field: string, pick: (row: CreatePositionDto) => string | undefined): OwnedLink => ({
+    field,
+    table: 'ci.entities',
+    key: 'entity_id',
+    ownerColumn: 'owner_user_id',
+    ids: rows.map(pick),
+  });
+
+  return [
+    {
+      field: 'device_id',
+      table: 'ci.devices',
+      key: 'device_id',
+      ownerColumn: 'user_id',
+      ids: rows.map((row) => row.device_id),
+    },
+    entity('location_entity_id', (row) => row.location_entity_id),
+    entity('reference_entity_id', (row) => row.reference_entity_id),
+  ];
+}
+
 /** Shape of one raw/bucketed row as Postgres hands it back. */
 interface TrackRow {
   started_at: Date;
@@ -159,6 +188,13 @@ export class PositionService {
       count: data.length,
     });
 
+    await refuseForeignLinks(
+      this.positionRepository.manager,
+      context.userId,
+      positionLinks(data),
+      'position',
+    );
+
     const uniquePositions = this.deduplicateByTime(data);
 
     if (uniquePositions.length < data.length) {
@@ -169,61 +205,68 @@ export class PositionService {
       });
     }
 
-    const times = uniquePositions.map((item) => new Date(item.time));
-    const existingPositions = await this.findExistingByTimes(context, times);
-    const existingTimesSet = new Set(existingPositions.map((p) => p.time.toISOString()));
-    const newPositions: CreatePositionDto[] = [];
+    // The device lookup only feeds a warning; one read for the batch's distinct
+    // devices, not one per fix.
+    const deviceIds = [
+      ...new Set(uniquePositions.flatMap((item) => (item.device_id ? [item.device_id] : []))),
+    ];
 
-    for (const item of uniquePositions) {
-      const itemTime = new Date(item.time).toISOString();
+    if (deviceIds.length > 0) {
+      const devices = await this.deviceService.findByIds(context, deviceIds);
 
-      if (!existingTimesSet.has(itemTime)) {
-        if (item.device_id) {
-          const device = await this.deviceService.findById(context, item.device_id);
-
-          if (!device) {
-            this.logger.warn('Device not found for position', {
-              deviceId: item.device_id,
-              userId: context.userId,
-            });
-          }
+      deviceIds.forEach((deviceId, i) => {
+        if (!devices[i]) {
+          this.logger.warn('Device not found for position', { deviceId, userId: context.userId });
         }
+      });
+    }
 
-        // createPositionEntity() reads item.heading_degrees (snake_case, the
-        // DTO's own field), not a headingDegrees key -- normalizing onto the
-        // wrong key here was a no-op that let out-of-range headings through
-        // to storage unfiltered. Overwrite the field it actually reads.
-        const normalizedItem = {
-          ...item,
-          heading_degrees: this.normalizeHeading(item.heading_degrees),
-        };
+    // createPositionEntity() reads item.heading_degrees (snake_case, the DTO's
+    // own field), not a headingDegrees key -- normalizing onto the wrong key
+    // here was a no-op that let out-of-range headings through to storage
+    // unfiltered. Overwrite the field it actually reads.
+    const entities = uniquePositions.map((item) =>
+      this.createPositionEntity(context, {
+        ...item,
+        heading_degrees: this.normalizeHeading(item.heading_degrees),
+      }),
+    );
 
-        newPositions.push(normalizedItem);
+    // One statement for the batch, and the dedupe is the database's: a fix
+    // already stored for the instant is left as it is (`(time, user_id)` is
+    // the primary key), so two writers racing on the same instant no longer
+    // read "nothing there" together and then collide. Only the rows that went
+    // in come back; the batch is then read once, existing and new together.
+    const inserted = await executeInsertWithRawConflict(
+      this.positionRepository
+        .createQueryBuilder()
+        .insert()
+        .into(PositionEntity)
+        // The entities carry a GeoJSON `location`; the builder's deep-partial type does not name one.
+        .values(entities as unknown as QueryDeepPartialEntity<PositionEntity>[])
+        .returning(['id']),
+      '("time", "user_id") DO NOTHING',
+    );
+    const createdIds = new Set((inserted as Array<{ id: string }>).map((row) => row.id));
+    const stored = await this.positionRepository.find({
+      where: { userId: context.userId, time: In(entities.map((entity) => entity.time)) },
+    });
+    const createdEntities = stored.filter((entity) => createdIds.has(entity.id));
+
+    // emitCreated:false is the bulk-ingest path (#1672): a GPS-track import is
+    // tens of thousands of rows, and a PositionCreatedEvent per row hammers
+    // the job queue for listeners that bulk clients drive via
+    // POST /v1/ingest/finish anyway (mirrors the emitCreated:false services
+    // behind the other /v1 routes).
+    if (options.emitCreated !== false) {
+      for (const position of createdEntities) {
+        await this.eventService.send(PositionCreatedEvent, {
+          positionId: position.id,
+        });
       }
     }
 
-    const createdEntities: PositionEntity[] = [];
-
-    if (newPositions.length > 0) {
-      const entitiesToSave = newPositions.map((item) => this.createPositionEntity(context, item));
-      const saved = await this.positionRepository.save(entitiesToSave);
-      // emitCreated:false is the bulk-ingest path (#1672): a GPS-track import is
-      // tens of thousands of rows, and a PositionCreatedEvent per row hammers
-      // the job queue for listeners that bulk clients drive via
-      // POST /v1/ingest/finish anyway (mirrors the emitCreated:false services
-      // behind the other /v1 routes).
-      if (options.emitCreated !== false) {
-        for (const position of saved) {
-          await this.eventService.send(PositionCreatedEvent, {
-            positionId: position.id,
-          });
-        }
-      }
-
-      createdEntities.push(...saved);
-    }
-
-    const allPositions = [...existingPositions, ...createdEntities]
+    const allPositions = stored
       .sort((a, b) => b.time.getTime() - a.time.getTime())
       .map((entity) => PositionEntity.toEgressType(entity));
 
@@ -231,7 +274,7 @@ export class PositionService {
       userId: context.userId,
       totalCount: allPositions.length,
       newCount: createdEntities.length,
-      existingCount: existingPositions.length,
+      existingCount: allPositions.length - createdEntities.length,
     });
 
     return allPositions;
@@ -481,9 +524,11 @@ export class PositionService {
       const firstCoord = polygonGeofence.coordinates[0];
       const polygonWKT = `POLYGON((${coordinatesStr}, ${firstCoord.longitude} ${firstCoord.latitude}))`;
 
-      whereClause += ` AND ST_Within(
-        location::geography,
-        ST_GeogFromText($${paramIndex})::geography
+      // ST_Within has no geography overload, so it raised "function
+      // st_within(geography, geography) does not exist". ST_Covers does.
+      whereClause += ` AND ST_Covers(
+        ST_GeogFromText($${paramIndex}),
+        location::geography
       )`;
       params.push(`SRID=4326;${polygonWKT}`);
       paramIndex += 1;
@@ -500,8 +545,13 @@ export class PositionService {
       params.push(endDate.toISOString());
     }
 
+    // A raw query hands geography back as hex EWKB, which parseLocation can't
+    // read, so the location also comes back as GeoJSON.
     const rawResults = await this.positionRepository.query(
-      `SELECT * FROM ci.position WHERE ${whereClause} ORDER BY time DESC`,
+      `SELECT *, ST_AsGeoJSON(location)::json AS location_geojson
+         FROM ci.position
+        WHERE ${whereClause}
+        ORDER BY time DESC`,
       params,
     );
 
@@ -856,19 +906,6 @@ export class PositionService {
     });
   }
 
-  private async findExistingByTimes(context: UserServiceContext, times: Date[]): Promise<PositionEntity[]> {
-    if (times.length === 0) {
-      return [];
-    }
-
-    return this.positionRepository.find({
-      where: {
-        userId: context.userId,
-        time: In(times),
-      },
-    });
-  }
-
   private deduplicateByTime(positions: CreatePositionDto[]): CreatePositionDto[] {
     // Key on the parsed instant, not the raw string: two rows for the same
     // moment written with different timestamp formatting (with/without
@@ -893,10 +930,11 @@ export class PositionService {
   private mapRawResultsToPositions(rawResults: Array<Record<string, unknown>>): Position[] {
     return rawResults.map((row) => {
       const entity = new PositionEntity();
+      entity.id = row.id as string;
       entity.time = new Date(row.time as string);
       entity.userId = row.user_id as string;
       entity.deviceId = row.device_id as string | null;
-      entity.location = this.parseLocation(row.location);
+      entity.location = this.parseLocation(row.location_geojson ?? row.location);
       entity.altitudeMeters = row.altitude_meters as number | null;
       entity.accuracyMeters = row.accuracy_meters as number | null;
       entity.hdop = row.hdop as number | null;

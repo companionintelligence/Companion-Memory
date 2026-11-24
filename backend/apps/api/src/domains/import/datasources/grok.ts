@@ -4,10 +4,9 @@
 
    1. THE REAL ONE — `data/grok-chat-item.js` inside an X (Twitter) archive.
       Verified against a June 2026 export; parsed by _x_archive.ts
-      importGrokChats, which the twitter importer also calls so the Twitter card
-      captures these chats as part of the whole archive. This card exists so a
-      user who only wants their Grok history can drop the same .zip and get
-      nothing else out of it.
+      importGrokChats. This importer is the only one that reads these chats:
+      every importer that claims an upload runs, so the twitter importer imports
+      the rest of the same archive and leaves the chats to this one.
 
    2. A standalone `grok*.json` array of conversations, kept below. No xAI export
       is known to produce this; it predates the archive shape above and stays as
@@ -30,14 +29,16 @@
 */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { hasGrokChats, importGrokChats, GROK_CHAT_STORE } from './_x_archive';
+import { parseFlexibleDate } from './dates';
+import { readJsonFile } from './readers';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 interface GrokMessage {
   role?: unknown;
@@ -57,25 +58,6 @@ interface GrokConversation {
   messages?: unknown;
   responses?: unknown;
   conversation?: unknown;
-}
-
-async function readJSON(fpath: string): Promise<unknown> {
-  let raw: string;
-  try {
-    raw = await readFile(fpath, 'utf8');
-  } catch {
-    return undefined;
-  }
-
-  if (raw.charCodeAt(0) === 0xfeff) {
-    raw = raw.slice(1);
-  } // strip UTF-8 BOM
-
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return undefined;
-  }
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -209,31 +191,7 @@ function extractTimestamp(msg: GrokMessage): Date | undefined {
 }
 
 function parseTimestamp(raw: unknown): Date | undefined {
-  if (raw == null) {
-    return undefined;
-  }
-
-  if (typeof raw === 'number' && isFinite(raw)) {
-    // Heuristic: values >= 1e12 are ms, otherwise seconds.
-    const ms = raw >= 1e12 ? raw : raw * 1000;
-    const d = new Date(ms);
-
-    return isNaN(d.getTime()) ? undefined : d;
-  }
-
-  if (typeof raw === 'string' && raw.trim()) {
-    const s = raw.trim();
-    // All-digits string: treat as a numeric epoch.
-    if (/^\d+$/.test(s)) {
-      return parseTimestamp(Number(s));
-    }
-
-    const d = new Date(s);
-
-    return isNaN(d.getTime()) ? undefined : d;
-  }
-
-  return undefined;
+  return parseFlexibleDate(raw, { epoch: 'auto', numericStrings: true });
 }
 
 export class GrokFileImporter implements FileImporter {
@@ -256,7 +214,7 @@ export class GrokFileImporter implements FileImporter {
         return { confidence: 0 };
       }
 
-      const parsed = await readJSON(root);
+      const parsed = await readJsonFile(root);
       if (!isGrokExport(parsed)) {
         return { confidence: 0 };
       }
@@ -287,14 +245,12 @@ export class GrokFileImporter implements FileImporter {
 
       // An X archive. Deliberately LOW, and deliberately not zero.
       //
-      // Not zero, because findImportRoots resolves an explicitly-chosen
-      // importer's roots with `confidence > 0` — this is what lets the Grok card
-      // accept the X .zip and import only the chats out of it.
+      // Not zero, because this importer is what reads the archive's Grok chats:
+      // the parse stage runs every importer that claims an upload, and the
+      // twitter importer no longer reads them itself.
       //
-      // Low, because dataSourcesRecognize ranks by confidence, and a bare drop
-      // of an X archive should go to the twitter importer (0.9+), which imports
-      // the whole archive INCLUDING these chats. Ranking above it would silently
-      // reduce a Twitter import to Grok messages alone.
+      // Low, because dataSourcesRecognize ranks by confidence and the archive is
+      // mostly X's: the twitter importer (0.9+) should lead the run's matches.
       if (await hasGrokChats(root)) {
         return { confidence: 0.3 };
       }
@@ -311,7 +267,7 @@ export class GrokFileImporter implements FileImporter {
       return;
     }
 
-    let isDir = false;
+    let isDir: boolean;
     let fpath: string | undefined;
     try {
       const stat = fs.statSync(root);
@@ -325,9 +281,8 @@ export class GrokFileImporter implements FileImporter {
       return;
     }
 
-    // An X archive: import ONLY the Grok chats out of it. The user picked the
-    // Grok card, so tweets and DMs are not what they asked for — the Twitter
-    // card is what imports the rest of the same .zip.
+    // An X archive: import ONLY the Grok chats out of it. The twitter importer
+    // claims the same archive and imports its tweets and DMs.
     if (isDir && (await hasGrokChats(root))) {
       importGrokChats(root, params);
 
@@ -411,7 +366,7 @@ export class GrokFileImporter implements FileImporter {
           id: `grok:${convKey}:${i}:${contentHash}`,
           classification: 'message',
           timestamp: ts,
-          content: { filename: 'message.txt', mediaType: 'text/plain', data: async () => Buffer.from(text) },
+          content: textContent('message.txt', text),
           metadata: {
             Role: role,
             Direction: role === 'user' ? 'outgoing' : 'incoming',
@@ -439,7 +394,7 @@ export class GrokFileImporter implements FileImporter {
     for (const name of names) {
       if (name.toLowerCase().startsWith('grok') && name.toLowerCase().endsWith('.json')) {
         const full = path.join(dir, name);
-        if (isGrokExport(await readJSON(full))) {
+        if (isGrokExport(await readJsonFile(full))) {
           return full;
         }
       }
@@ -452,7 +407,7 @@ export class GrokFileImporter implements FileImporter {
       }
 
       const full = path.join(dir, name);
-      if (isGrokExport(await readJSON(full))) {
+      if (isGrokExport(await readJsonFile(full))) {
         return full;
       }
     }

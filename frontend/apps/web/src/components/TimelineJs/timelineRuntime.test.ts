@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  MOBILE_TIMELINE_INITIAL_SCALE_FACTOR,
+  MOBILE_TIMELINE_INITIAL_ZOOM_INDEX,
+  MOBILE_TIMELINE_NAV_PERCENT,
+  MOBILE_TIMELINE_OPTIMAL_TICK_WIDTH,
   TIMELINE_INITIAL_SCALE_FACTOR,
   TIMELINE_INITIAL_ZOOM_INDEX,
   TIMELINE_MAX_SCALE_FACTOR,
@@ -45,7 +49,7 @@ describe('timelineDeckKey', () => {
 describe('timelineJsOptions', () => {
   it('turns off the 1s Knight Lab easing and analytics-adjacent extras', () => {
     const options = timelineJsOptions({
-      width: 800,
+      width: 896,
       startAtSlide: 0,
       bg: { r: 1, g: 2, b: 3 },
       languageUrl: '/locale/en.json',
@@ -73,6 +77,25 @@ describe('timelineJsOptions', () => {
     expect(options.scale_factor).toBe(8);
     expect(options.initial_zoom).toBe(TIMELINE_INITIAL_ZOOM_INDEX);
     expect(options.zoom_sequence).toEqual([0.5, 1, 2, 3, 5, 8, 13]);
+  });
+
+  it('gives a phone a balanced story/axis split with calmer labels and swipe navigation', () => {
+    const options = timelineJsOptions({
+      width: 390,
+      height: 640,
+      startAtSlide: 0,
+      bg: { r: 250, g: 250, b: 248 },
+      languageUrl: '/locale/en.json',
+    });
+
+    expect(options.timenav_height_percentage).toBe(MOBILE_TIMELINE_NAV_PERCENT);
+    expect(options.timenav_mobile_height_percentage).toBe(MOBILE_TIMELINE_NAV_PERCENT);
+    expect(options.timenav_height).toBe(307);
+    expect(options.optimal_tick_width).toBe(MOBILE_TIMELINE_OPTIMAL_TICK_WIDTH);
+    expect(options.initial_zoom).toBe(MOBILE_TIMELINE_INITIAL_ZOOM_INDEX);
+    expect(options.scale_factor).toBe(MOBILE_TIMELINE_INITIAL_SCALE_FACTOR);
+    expect(options.marker_height_min).toBe(32);
+    expect(options.dragging).toBe(true);
   });
 
   it('does not pull Knight Lab fonts, theme, or locale from their CDN', () => {

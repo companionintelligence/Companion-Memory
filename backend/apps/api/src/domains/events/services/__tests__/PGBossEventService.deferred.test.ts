@@ -72,8 +72,63 @@ describe('PGBossEventService deferred completion', () => {
     await service.completeJob('py-fn-summary', 'job-9', { ok: true });
     expect(boss.complete).toHaveBeenCalledWith('py-fn-summary', 'job-9', { ok: true });
 
+    await service.completeJob('py-fn-summary', 'job-9', { ok: true }, { includeQueued: true });
+    expect(boss.complete).toHaveBeenLastCalledWith(
+      'py-fn-summary',
+      'job-9',
+      { ok: true },
+      { includeQueued: true },
+    );
+
     await service.failJob('py-fn-summary', 'job-9', { message: 'runner died' });
-    expect(boss.fail).toHaveBeenCalledWith('py-fn-summary', 'job-9', { message: 'runner died' });
+    expect(boss.fail).toHaveBeenCalledWith('py-fn-summary', 'job-9', {
+      message: 'runner died',
+      queue: 'py-fn-summary',
+    });
+  });
+
+  it("hasLiveJobForUser counts the user's waiting, retrying or running jobs, not finished ones", async () => {
+    const findJobs = jest.fn();
+    (service as unknown as { boss: { findJobs: jest.Mock } }).boss = { findJobs };
+
+    findJobs.mockResolvedValue([{ state: 'completed' }, { state: 'failed' }, { state: 'cancelled' }]);
+    await expect(service.hasLiveJobForUser('py-fn-hbpe', 'u')).resolves.toBe(false);
+    // By the payload's user, so a job sent under any singleton key counts.
+    expect(findJobs).toHaveBeenCalledWith('py-fn-hbpe', { data: { userId: 'u' } });
+
+    for (const state of ['created', 'retry', 'active']) {
+      findJobs.mockResolvedValue([{ state: 'completed' }, { state }]);
+      await expect(service.hasLiveJobForUser('py-fn-hbpe', 'u')).resolves.toBe(true);
+    }
+  });
+
+  it("touchJob reports whether pg-boss moved an active job's heartbeat", async () => {
+    const touch = jest.fn();
+    (service as unknown as { boss: { touch: jest.Mock } }).boss = { touch };
+
+    touch.mockResolvedValue({ jobs: ['job-1'], requested: 1, affected: 1 });
+    await expect(service.touchJob('py-fn-hbpe', 'job-1')).resolves.toBe(true);
+    expect(touch).toHaveBeenCalledWith('py-fn-hbpe', 'job-1');
+
+    // Finished, failed or waiting for a retry: pg-boss touches only active jobs.
+    touch.mockResolvedValue({ jobs: ['job-1'], requested: 1, affected: 0 });
+    await expect(service.touchJob('py-fn-hbpe', 'job-1')).resolves.toBe(false);
+  });
+
+  it('failJob always names its own queue in the output, which is how a dead letter knows where it died', async () => {
+    const boss = { fail: jest.fn().mockResolvedValue(undefined) };
+
+    (service as unknown as { boss: typeof boss }).boss = boss;
+
+    await service.failJob('py-fn-summary', 'job-9');
+    expect(boss.fail).toHaveBeenLastCalledWith('py-fn-summary', 'job-9', { queue: 'py-fn-summary' });
+
+    // The queue the job is actually on wins over anything the caller passed.
+    await service.failJob('py-fn-summary', 'job-9', { message: 'runner died', queue: 'py-fn-hbpe' });
+    expect(boss.fail).toHaveBeenLastCalledWith('py-fn-summary', 'job-9', {
+      message: 'runner died',
+      queue: 'py-fn-summary',
+    });
   });
 
   /**

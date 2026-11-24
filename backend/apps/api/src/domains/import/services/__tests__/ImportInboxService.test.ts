@@ -1,9 +1,9 @@
-import { chmod, mkdtemp, mkdir, realpath, stat, symlink, writeFile } from 'node:fs/promises';
-import os from 'node:os';
+import { chmod, mkdir, readFile, realpath, stat, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import config from '@ci/configuration';
 
+import { tempDirsRemovedAfterEach } from '../../__tests__/support/tempDirs';
 import { ImportInboxService, MAX_INBOX_BATCH_UNITS, SCAN_RECOGNITION_TIMING } from '../ImportInboxService';
 
 /**
@@ -49,9 +49,9 @@ const stubLogger = () =>
 
 const ctx = { userId: '00000000-0000-0000-0000-000000000001' };
 
-/** The one account these tests act as, and the folder its email derives. */
+/** The one account these tests act as. Its inbox folder is keyed on the id. */
 const USER_EMAIL = 'tester@example.com';
-const USER_FOLDER = 'tester_example.com';
+const USER_FOLDER = ctx.userId;
 
 /** Keep the large-directory fixture from spending its timeout on serial I/O. */
 async function writeFilesInBatches(files: readonly string[], batchSize = 128): Promise<void> {
@@ -60,21 +60,29 @@ async function writeFilesInBatches(files: readonly string[], batchSize = 128): P
   }
 }
 
-function build(overrides?: { startRun?: jest.Mock; findActiveByPaths?: jest.Mock }) {
+function build(overrides?: {
+  startRun?: jest.Mock;
+  findActiveByPaths?: jest.Mock;
+  rebaseInboxClaims?: jest.Mock;
+  accounts?: Array<{ id: string; email: string }>;
+}) {
   const startRun = overrides?.startRun ?? jest.fn(async () => ({ run: { id: 'run-1', label: 'x' } }));
   const findActiveByPaths = overrides?.findActiveByPaths ?? jest.fn(async () => []);
+  const rebaseInboxClaims = overrides?.rebaseInboxClaims ?? jest.fn(async () => 0);
+  const accounts = overrides?.accounts ?? [{ id: ctx.userId, email: USER_EMAIL }];
   const users = {
-    findById: jest.fn(async () => ({ id: ctx.userId, email: USER_EMAIL })),
-    findAll: jest.fn(async () => [{ id: ctx.userId, email: USER_EMAIL }]),
+    findById: jest.fn(async () => accounts.find((a) => a.id === ctx.userId) ?? accounts[0]),
+    findAll: jest.fn(async () => accounts),
   };
+  const logger = stubLogger();
   const service = new ImportInboxService(
     { startRun } as never,
-    { findActiveByPaths } as never,
+    { findActiveByPaths, rebaseInboxClaims } as never,
     users as never,
-    stubLogger(),
+    logger,
   );
 
-  return { service, startRun, findActiveByPaths, users };
+  return { service, startRun, findActiveByPaths, rebaseInboxClaims, users, logger };
 }
 
 /**
@@ -94,9 +102,13 @@ async function withInbox<T>(userDir: string, run: () => Promise<T>): Promise<T> 
   }
 }
 
+// Two minutes for the cleanup, not jest's 5-second default: the large-directory case writes 25,000
+// files. On a slow or busy disk removing them can take longer than that.
+const { make: tempDir, removeAfterTest } = tempDirsRemovedAfterEach(120_000);
+
 /** A fresh shared root with the caller's subtree already in it. */
 async function freshInbox(): Promise<string> {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'ci-inbox-scan-'));
+  const root = await tempDir('ci-inbox-scan-');
   const dir = path.join(root, USER_FOLDER);
 
   await mkdir(dir);
@@ -180,7 +192,7 @@ describe('ImportInboxService.scan', () => {
     // The api container runs as root: without the chmod the folder lands on
     // the host root-owned 755 and the desktop user cannot move archives in —
     // which is the entire point of the folder.
-    const parent = await mkdtemp(path.join(os.tmpdir(), 'ci-inbox-scan-'));
+    const parent = await tempDir('ci-inbox-scan-');
     const inbox = path.join(parent, USER_FOLDER);
     const { service } = build();
 
@@ -292,7 +304,7 @@ describe('ImportInboxService.scan', () => {
 
   it('never follows symlinks, and counts what it skipped', async () => {
     const inbox = await freshInbox();
-    const outside = await mkdtemp(path.join(os.tmpdir(), 'ci-outside-'));
+    const outside = await tempDir('ci-outside-');
 
     await writeFile(path.join(outside, 'secret.zip'), 'secret');
     await symlink(path.join(outside, 'secret.zip'), path.join(inbox, 'link.zip'));
@@ -331,10 +343,11 @@ describe('ImportInboxService.scan', () => {
     // a run records the path the resolver produced — a realpath — so a lookup
     // spelled the configured way matches nothing once the inbox crosses a
     // symlink, and a unit another run is already importing reads as free.
-    const real = await mkdtemp(path.join(os.tmpdir(), 'ci-inbox-real-'));
+    const real = await tempDir('ci-inbox-real-');
     const linkRoot = `${real}-link`;
 
     await symlink(real, linkRoot);
+    removeAfterTest(linkRoot);
     await mkdir(path.join(real, USER_FOLDER), { recursive: true });
     await writeFile(path.join(real, USER_FOLDER, 'export.zip'), 'bytes');
 
@@ -643,9 +656,10 @@ describe('service drop folders', () => {
     //
     // macOS hides this in plain sight (/tmp and /var are symlinks to /private),
     // and any bind-mounted appliance data dir does the same.
-    const real = await mkdtemp(path.join(os.tmpdir(), 'ci-inbox-real-'));
+    const real = await tempDir('ci-inbox-real-');
     const linkRoot = `${real}-link`;
     await symlink(real, linkRoot);
+    removeAfterTest(linkRoot);
 
     const userDirReal = path.join(real, USER_FOLDER);
     await mkdir(path.join(userDirReal, 'reddit'), { recursive: true });
@@ -694,7 +708,7 @@ describe('ImportInboxService.onModuleInit', () => {
     // The folders are drop targets for files moved in BEFORE the app is ever
     // opened, so boot — not the first scan — must be what creates them, for
     // every account the appliance already has.
-    const root = await mkdtemp(path.join(os.tmpdir(), 'ci-inbox-scan-'));
+    const root = await tempDir('ci-inbox-scan-');
     const inbox = path.join(root, USER_FOLDER);
     const { service, users } = build();
 
@@ -708,7 +722,7 @@ describe('ImportInboxService.onModuleInit', () => {
   });
 
   it('boots quietly when the inbox cannot be prepared', async () => {
-    const dir = await mkdtemp(path.join(os.tmpdir(), 'ci-inbox-scan-'));
+    const dir = await tempDir('ci-inbox-scan-');
     const notADir = path.join(dir, 'inbox');
 
     await writeFile(notADir, 'a file where the inbox root should be');
@@ -723,16 +737,157 @@ describe('ImportInboxService.onModuleInit', () => {
   it('provisions a single new account without touching boot', async () => {
     // The onboarding path: a user row was just created, and their folders
     // must exist without a restart or a first visit to the Inbox panel.
-    const root = await mkdtemp(path.join(os.tmpdir(), 'ci-inbox-scan-'));
+    const root = await tempDir('ci-inbox-scan-');
     const inbox = path.join(root, USER_FOLDER);
     const { service } = build();
 
     await withInbox(inbox, async () => {
-      await service.provisionUserInbox(USER_EMAIL);
+      await service.provisionUserInbox(ctx.userId);
     });
 
     expect((await stat(inbox)).mode & 0o7777).toBe(0o1777);
     expect((await stat(path.join(inbox, 'reddit'))).isDirectory()).toBe(true);
+  });
+});
+
+describe('inbox folder migration at boot', () => {
+  const USER_ID = ctx.userId;
+
+  it('moves an account from its old email-named folder onto its id, keeping the contents', async () => {
+    const root = await tempDir('ci-inbox-migrate-');
+    // The old layout: a folder named after the sanitized, lowercased email.
+    const oldDir = path.join(root, 'tester_example.com');
+    await mkdir(path.join(oldDir, 'reddit'), { recursive: true });
+    await writeFile(path.join(oldDir, 'reddit', 'export.zip'), 'owner bytes');
+
+    const { service } = build({ accounts: [{ id: USER_ID, email: USER_EMAIL }] });
+
+    await withInbox(path.join(root, USER_ID), async () => {
+      await service.onModuleInit();
+    });
+
+    // The account's archive is now under the id folder, byte for byte.
+    expect(await readFile(path.join(root, USER_ID, 'reddit', 'export.zip'), 'utf8')).toBe('owner bytes');
+    // And the old folder is gone.
+    await expect(stat(oldDir)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('points claims made before the move at the new folder', async () => {
+    // A run that claimed `reddit/export.zip` before the upgrade recorded the old
+    // folder's real path. Its unpack stage moves exactly that path, so the
+    // claim has to follow the folder or the run fails to find its unit.
+    const root = await tempDir('ci-inbox-migrate-');
+    const oldDir = path.join(root, 'tester_example.com');
+    await mkdir(path.join(oldDir, 'reddit'), { recursive: true });
+    await writeFile(path.join(oldDir, 'reddit', 'export.zip'), 'owner bytes');
+    const oldReal = await realpath(oldDir);
+
+    const rebaseInboxClaims = jest.fn(async () => 1);
+    const { service } = build({ accounts: [{ id: USER_ID, email: USER_EMAIL }], rebaseInboxClaims });
+
+    await withInbox(path.join(root, USER_ID), async () => {
+      await service.onModuleInit();
+    });
+
+    expect(rebaseInboxClaims).toHaveBeenCalledTimes(1);
+    expect(rebaseInboxClaims).toHaveBeenCalledWith(
+      USER_ID,
+      oldReal,
+      await realpath(path.join(root, USER_ID)),
+    );
+  });
+
+  it('still moves the folder and provisions it when the claim rewrite fails', async () => {
+    // The rewrite is best-effort like the rest of boot provisioning. The
+    // folder has already moved, so the account's inbox must be ready anyway.
+    const root = await tempDir('ci-inbox-migrate-');
+    const oldDir = path.join(root, 'tester_example.com');
+    await mkdir(oldDir, { recursive: true });
+    await writeFile(path.join(oldDir, 'export.zip'), 'owner bytes');
+
+    const rebaseInboxClaims = jest.fn(async () => {
+      throw new Error('database is down');
+    });
+    const { service, logger } = build({ accounts: [{ id: USER_ID, email: USER_EMAIL }], rebaseInboxClaims });
+
+    await withInbox(path.join(root, USER_ID), async () => {
+      await service.onModuleInit();
+    });
+
+    expect(await readFile(path.join(root, USER_ID, 'export.zip'), 'utf8')).toBe('owner bytes');
+    // A service folder exists, so the per-account provisioning still ran.
+    expect((await stat(path.join(root, USER_ID, 'reddit'))).isDirectory()).toBe(true);
+    expect((logger as unknown as { warn: jest.Mock }).warn).toHaveBeenCalledWith(
+      'Could not point in-flight inbox claims at the moved folder',
+      expect.objectContaining({ userId: USER_ID }),
+    );
+  });
+
+  it('leaves a folder two accounts map to in place, for an administrator to split', async () => {
+    const root = await tempDir('ci-inbox-migrate-');
+    // `a+b@example.com` and `a_b@example.com` both sanitize to `a_b_example.com`.
+    const shared = path.join(root, 'a_b_example.com');
+    await mkdir(shared, { recursive: true });
+    await writeFile(path.join(shared, 'export.zip'), 'whose is this');
+
+    const first = '00000000-0000-7000-8000-00000000000a';
+    const second = '00000000-0000-7000-8000-00000000000b';
+    const { service } = build({
+      accounts: [
+        { id: first, email: 'a+b@example.com' },
+        { id: second, email: 'a_b@example.com' },
+      ],
+    });
+
+    await withInbox(path.join(root, first), async () => {
+      await service.onModuleInit();
+    });
+
+    // The shared folder is untouched, and neither id folder received its bytes.
+    expect(await readFile(path.join(shared, 'export.zip'), 'utf8')).toBe('whose is this');
+    await expect(stat(path.join(root, first, 'export.zip'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(path.join(root, second, 'export.zip'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('does not move the old folder onto an id folder that already exists, even an empty one', async () => {
+    // The id folder exists (an account provisioned under the new scheme) while
+    // an old email folder also exists. Which holds the real archives is
+    // ambiguous, so the old one is left for an administrator. The target is
+    // EMPTY on purpose: `rename` onto a non-empty directory fails anyway, so
+    // only the empty case proves the guard is doing the refusing.
+    const root = await tempDir('ci-inbox-migrate-');
+    const oldDir = path.join(root, 'tester_example.com');
+    const newDir = path.join(root, USER_ID);
+    await mkdir(oldDir, { recursive: true });
+    await writeFile(path.join(oldDir, 'old.zip'), 'old');
+    await mkdir(newDir, { recursive: true });
+
+    const { service } = build({ accounts: [{ id: USER_ID, email: USER_EMAIL }] });
+
+    await withInbox(newDir, async () => {
+      await service.onModuleInit();
+    });
+
+    // The old folder and its archive still stand where they were.
+    expect(await readFile(path.join(oldDir, 'old.zip'), 'utf8')).toBe('old');
+    await expect(stat(path.join(newDir, 'old.zip'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('leaves a plain file at the old name alone and still provisions the id folder', async () => {
+    // Only a directory is an old inbox folder. Moving a file onto the id path
+    // would leave the account a file where its drop folder belongs.
+    const root = await tempDir('ci-inbox-migrate-');
+    const oldPath = path.join(root, 'tester_example.com');
+    await writeFile(oldPath, 'not a folder');
+
+    const { service } = build({ accounts: [{ id: USER_ID, email: USER_EMAIL }] });
+
+    await withInbox(path.join(root, USER_ID), async () => {
+      await service.onModuleInit();
+    });
+
+    expect(await readFile(oldPath, 'utf8')).toBe('not a folder');
+    expect((await stat(path.join(root, USER_ID, 'reddit'))).isDirectory()).toBe(true);
   });
 });
 

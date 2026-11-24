@@ -22,12 +22,16 @@ jest.mock('@ci/common/persistence', () => ({
 
 const bulkInsertMock = bulkInsertIdempotent as jest.Mock;
 
+// refuseForeignLinks refuses an event id that is not a uuid before it asks anything.
+const EVENT = '00000000-0000-4000-8000-0000000000e9';
+const EXPLICIT_EVENT = '00000000-0000-4000-8000-0000000000ee';
+
 describe('ContentService.create — event link (single, per-row path)', () => {
   let service: ContentService;
   let repo: {
     create: jest.Mock;
     save: jest.Mock;
-    manager: { transaction: jest.Mock };
+    manager: { transaction: jest.Mock; query: jest.Mock };
   };
   let baseRepo: {
     create: jest.Mock;
@@ -49,6 +53,8 @@ describe('ContentService.create — event link (single, per-row path)', () => {
       create: jest.fn((x: unknown) => x),
       save: jest.fn(async (x: { id?: string }) => ({ ...x, id: x.id ?? 'content-1' })),
       manager: {
+        // refuseForeignLinks: the named event is not another account's.
+        query: jest.fn(async () => []),
         transaction: jest.fn(async (cb: (m: unknown) => unknown) =>
           cb({
             getRepository: (cls: unknown): unknown => (cls === ContentBaseEntity ? baseRepo : repo),
@@ -75,13 +81,13 @@ describe('ContentService.create — event link (single, per-row path)', () => {
       type: 'attachment',
       mimetype: 'image/jpeg',
       url: 'https://store/abc.jpg',
-      event: { id: 'event-9' },
+      event: { id: EVENT },
     } as CreateContentDto);
 
     expect(repo.create.mock.calls[0][0]).toMatchObject({
       type: 'attachment',
       mimetype: 'image/jpeg',
-      event: { id: 'event-9' },
+      event: { id: EVENT },
       userId: 'user-1',
     });
   });
@@ -122,13 +128,14 @@ describe('ContentService.createMany — set-based batch + event auto-link', () =
   let service: ContentService;
   let contentRepo: {
     create: jest.Mock;
-    manager: { transaction: jest.Mock };
+    manager: { transaction: jest.Mock; query: jest.Mock };
   };
   let baseRepo: {
     create: jest.Mock;
     find: jest.Mock;
     metadata: { columns: unknown[] };
     createQueryBuilder: jest.Mock;
+    query: jest.Mock;
   };
   let eventQb: {
     select: jest.Mock;
@@ -160,6 +167,8 @@ describe('ContentService.createMany — set-based batch + event auto-link', () =
       find: jest.fn(async () => []),
       metadata: { columns: Array.from({ length: 10 }) },
       createQueryBuilder: jest.fn(() => makeInsertBuilder(baseInsert)),
+      // insertBaseRows' ownership check: no base row held by another owner.
+      query: jest.fn(async () => []),
     };
 
     // contentRepository.create returns the object it is given (with the service's
@@ -167,6 +176,8 @@ describe('ContentService.createMany — set-based batch + event auto-link', () =
     contentRepo = {
       create: jest.fn((x: Partial<ContentEntity>) => x as ContentEntity),
       manager: {
+        // refuseForeignLinks: the named event is not another account's.
+        query: jest.fn(async () => []),
         transaction: jest.fn(async (cb: (m: unknown) => unknown) =>
           cb({
             getRepository: (cls: unknown): unknown => (cls === ContentBaseEntity ? baseRepo : contentRepo),
@@ -284,7 +295,7 @@ describe('ContentService.createMany — set-based batch + event auto-link', () =
         source_type: 'import',
         source_system: 'facebook',
         source_id: 'photo-7',
-        event: { id: 'explicit-event' },
+        event: { id: EXPLICIT_EVENT },
       } as CreateContentDto,
     ]);
 
@@ -292,7 +303,7 @@ describe('ContentService.createMany — set-based batch + event auto-link', () =
     // so the set-based event query is not even issued.
     expect(eventRepo.createQueryBuilder).not.toHaveBeenCalled();
     const entities = bulkInsertMock.mock.calls[0][0].entities;
-    expect(entities[0].event).toEqual({ id: 'explicit-event' });
+    expect(entities[0].event).toEqual({ id: EXPLICIT_EVENT });
   });
 
   it('leaves event undefined when nothing matches the triple', async () => {

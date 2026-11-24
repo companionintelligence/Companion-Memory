@@ -1,18 +1,26 @@
 import { createHash, randomBytes } from 'crypto';
 
-import { ConflictException, ForbiddenException, Injectable } from '@nestjs/common';
+import { ConflictException, ForbiddenException, Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/common/context';
-import { DEFAULT_API_KEY_CAPABILITY, coerceApiKeyCapability } from '@ci/common/decorators';
+import {
+  type ApiKeyCapability,
+  DEFAULT_API_KEY_CAPABILITY,
+  FULL_CAPABILITY,
+  coerceApiKeyCapability,
+} from '@ci/common/decorators';
 import { LoggerService } from '@ci/common/logging';
+import { LiveChangesService } from '@ci/domains/live-changes';
 
 import { ApiKey, ApiKeyEntity } from '../entities/ApiKeyEntity';
 import {
   CONNECT_KEY_NAME_PREFIX,
   CONNECT_PROVENANCE,
+  PHONE_KEY_NAME,
+  SIGN_IN_PROVENANCE,
   type ApiKeyProvenance,
   type CreateApiKeyDto,
   type ValidatedApiKey,
@@ -25,14 +33,39 @@ const API_KEY_HEX_LENGTH = API_KEY_BYTE_LENGTH * 2;
 const API_KEY_HEX_REGEX = /^[0-9a-f]+$/;
 const PREFIX_LENGTH = 5;
 
+/**
+ * The level for a key whose request names none. A key nobody expressed an opinion about gets what
+ * every key could always do: everything except destroying data.
+ *
+ * The phone's own key is the exception. App builds before v2026.9.14 (#2661) mint it with a name
+ * and nothing else, and every later build asks for `full`, because the app deletes notes, merges
+ * people and renames tags. So an old build signing in gets what the app means instead of a key
+ * that 403s those. That widens nothing: only a session or a Portal bearer carrying the user's full
+ * authority reaches `POST /keys`, and either could ask for `full` outright. Settings always sends a
+ * capability, so a key made there never lands here.
+ */
+function defaultCapabilityFor(data: CreateApiKeyDto): ApiKeyCapability {
+  const unscoped = (data.scopes ?? []).length === 0;
+
+  return unscoped && PHONE_KEY_NAME.test(data.name) ? FULL_CAPABILITY : DEFAULT_API_KEY_CAPABILITY;
+}
+
 @Injectable()
 export class ApiKeyService {
   constructor(
     @InjectRepository(ApiKeyEntity)
     private readonly apiKeyRepository: Repository<ApiKeyEntity>,
     private readonly logger: LoggerService,
+    @Optional() private readonly liveChanges?: LiveChangesService,
   ) {
     this.logger.setContext(ApiKeyService.name);
+  }
+
+  /** Tell the user's open live-update streams to check their key now; see `LiveChangesService.publishRevoked`. */
+  private async announceRevoked(userId: string, removed: number): Promise<void> {
+    if (removed > 0) {
+      await this.liveChanges?.publishRevoked(userId);
+    }
   }
 
   async create(
@@ -50,14 +83,14 @@ export class ApiKeyService {
       prefix,
       hashed_key: hashedKey,
       scopes: data.scopes ?? [],
-      // A key nobody expressed an opinion about gets what every key could always do: everything
-      // except destroying data.
-      capability: data.capability ?? DEFAULT_API_KEY_CAPABILITY,
+      capability: data.capability ?? defaultCapabilityFor(data),
       expires_at: data.expires_at ? new Date(data.expires_at) : null,
       user_id: context.userId,
-      // Defaults to null — a key created through the REST API is the user's own.
-      // Only the connect flow passes a provenance, and it is never accepted from
-      // request input.
+      // Defaults to null: a key created through the REST API is the user's own.
+      // The connect flow passes 'connect', which is never accepted from request
+      // input. 'sign_in' is (`POST /keys` with `sign_in: true`), because it grants
+      // nothing: it only marks a key that a password change and "Sign out
+      // everywhere" revoke.
       managed_by: managedBy,
     });
 
@@ -139,12 +172,14 @@ export class ApiKeyService {
     name: string,
     managedBy: ApiKeyProvenance | null,
   ): Promise<void> {
-    await this.apiKeyRepository.delete({
+    const result = await this.apiKeyRepository.delete({
       user_id: userId,
       name,
       // TypeORM equality criteria never match NULL — an explicit IsNull() is required.
       managed_by: managedBy ?? IsNull(),
     });
+
+    await this.announceRevoked(userId, result.affected ?? 0);
   }
 
   /** Whether a caught error is a Postgres unique-violation (SQLSTATE 23505). */
@@ -175,7 +210,7 @@ export class ApiKeyService {
   async findUserIdByName(name: string): Promise<string | null> {
     const keys = await this.apiKeyRepository.find({
       where: { name, managed_by: CONNECT_PROVENANCE },
-      select: ['user_id'],
+      select: { user_id: true },
     });
 
     if (keys.length === 0) {
@@ -316,11 +351,49 @@ export class ApiKeyService {
     return a.every((scope) => other.has(scope));
   }
 
+  /**
+   * Revoke every key the phone and desktop apps minted at sign-in for `userId`: the signed-in
+   * devices a password change signs out. Returns how many went.
+   */
+  async revokeSignInKeys(userId: string): Promise<number> {
+    const result = await this.apiKeyRepository.delete({ user_id: userId, managed_by: SIGN_IN_PROVENANCE });
+
+    await this.announceRevoked(userId, result.affected ?? 0);
+
+    return result.affected ?? 0;
+  }
+
+  /**
+   * Revoke every key of `userId` except the ones CI-Hub minted for installed apps: sign-in keys
+   * and the keys the user made in Settings. "Sign out everywhere" is for someone who no longer
+   * knows who holds what, and a key someone made with a borrowed session looks exactly like one
+   * the owner made. Connect keys stay, because the Hub owns their lifecycle and revokes them when
+   * the app is disconnected.
+   */
+  async revokeAllExceptConnect(userId: string): Promise<number> {
+    const result = await this.apiKeyRepository
+      .createQueryBuilder()
+      .delete()
+      .from(ApiKeyEntity)
+      .where('user_id = :userId', { userId })
+      .andWhere('managed_by IS DISTINCT FROM :connect', { connect: CONNECT_PROVENANCE })
+      .execute();
+
+    await this.announceRevoked(userId, result.affected ?? 0);
+
+    return result.affected ?? 0;
+  }
+
   async remove(context: ServiceContext, keyId: string): Promise<boolean> {
     const result = await this.apiKeyRepository.delete({
       id: keyId,
       ...(context.userId !== SYSTEM_USER && { user_id: context.userId }),
     });
+
+    // A system-level revoke does not know the owner; that stream ends at its next keep-alive.
+    if (context.userId !== SYSTEM_USER) {
+      await this.announceRevoked(context.userId, result.affected ?? 0);
+    }
 
     return (result.affected ?? 0) > 0;
   }
@@ -364,7 +437,15 @@ export class ApiKeyService {
 
     const key = await this.apiKeyRepository.findOne({
       where: { hashed_key: hashed },
-      select: ['id', 'user_id', 'expires_at', 'scopes', 'capability', 'name', 'managed_by'],
+      select: {
+        id: true,
+        user_id: true,
+        expires_at: true,
+        scopes: true,
+        capability: true,
+        name: true,
+        managed_by: true,
+      },
     });
 
     if (!key) {

@@ -1,5 +1,8 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { DateTimeFormatOverride } from '@/hooks/useDateTimeFormat';
+import { createDateTimeFormatter, type TimeFormat } from '@/lib/dateTimeFormat';
 
 import { TimelineJsHost } from './TimelineJsHost';
 import type { TimelineJsData } from './types';
@@ -34,6 +37,7 @@ class FakeTimeline {
   constructor(
     _elem: HTMLElement,
     private readonly deck: { events: Array<{ unique_id?: string }> },
+    readonly options: Record<string, unknown> = {},
   ) {
     FakeTimeline.instances.push(this);
   }
@@ -75,6 +79,7 @@ describe('TimelineJsHost', () => {
     vi.unstubAllGlobals();
     delete (window as unknown as { TL?: unknown }).TL;
     document.querySelector('link[data-timelinejs-css]')?.remove();
+    document.querySelectorAll('script[data-timelinejs]').forEach((tag) => tag.remove());
   });
 
   it('does not add slides until TimelineJS reports itself loaded', async () => {
@@ -101,5 +106,97 @@ describe('TimelineJsHost', () => {
     await waitFor(() => expect(instance.add).toHaveBeenCalledTimes(1));
     expect(instance.add).toHaveBeenCalledWith(expect.objectContaining({ unique_id: 'c' }));
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it("writes TimelineJS's own dates in 24-hour only when 24-hour is chosen", async () => {
+    const languageFor = async (timeFormat: TimeFormat) => {
+      FakeTimeline.instances = [];
+      const { unmount } = render(
+        <DateTimeFormatOverride formatter={createDateTimeFormatter({ timeFormat })}>
+          <TimelineJsHost data={deck('a')} startAtSlide={0} sessionKey={timeFormat} />
+        </DateTimeFormatOverride>,
+      );
+
+      releaseStylesheet();
+      await waitFor(() => expect(FakeTimeline.instances).toHaveLength(1));
+      const language = FakeTimeline.instances[0].options.language;
+      unmount();
+
+      return language;
+    };
+
+    // The library's own English file, as before the preference existed…
+    expect(await languageFor('auto')).toMatch(/locale\/en\.json$/);
+    expect(await languageFor('h12')).toMatch(/locale\/en\.json$/);
+    // …and the 24-hour patterns only when asked for.
+    expect(await languageFor('h23')).toMatch(/locale\/en-h23\.json$/);
+  });
+
+  it('fetches the script again on Try again after it failed to load once', async () => {
+    delete (window as unknown as { TL?: unknown }).TL;
+    render(<TimelineJsHost data={deck('a')} startAtSlide={0} sessionKey="retry" />);
+
+    const failed = document.querySelector<HTMLScriptElement>('script[data-timelinejs]');
+
+    expect(failed).not.toBeNull();
+    act(() => {
+      failed?.dispatchEvent(new Event('error'));
+    });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Failed to load TimelineJS script');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+    // A new tag, not the dead one: a script element fetches only when it is
+    // inserted, so the failed one could never load.
+    const retried = document.querySelector<HTMLScriptElement>('script[data-timelinejs]');
+
+    expect(retried).not.toBeNull();
+    expect(retried).not.toBe(failed);
+    expect(failed?.isConnected).toBe(false);
+    expect(document.querySelectorAll('script[data-timelinejs]')).toHaveLength(1);
+
+    (window as unknown as { TL: unknown }).TL = { Timeline: FakeTimeline };
+    act(() => {
+      retried?.dispatchEvent(new Event('load'));
+    });
+    releaseStylesheet();
+
+    await waitFor(() => expect(FakeTimeline.instances).toHaveLength(1));
+  });
+
+  it('fetches the stylesheet again on Try again when it failed along with the script', async () => {
+    // Offline: both requests fail. A link fires load or error once, so reusing the dead one
+    // left Try again waiting on it with the script already back.
+    delete (window as unknown as { TL?: unknown }).TL;
+    render(<TimelineJsHost data={deck('a')} startAtSlide={0} sessionKey="offline" />);
+
+    const failedSheet = document.querySelector<HTMLLinkElement>('link[data-timelinejs-css]');
+    const failedScript = document.querySelector<HTMLScriptElement>('script[data-timelinejs]');
+
+    expect(failedSheet).not.toBeNull();
+    expect(failedScript).not.toBeNull();
+    act(() => {
+      failedSheet?.dispatchEvent(new Event('error'));
+      failedScript?.dispatchEvent(new Event('error'));
+    });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Failed to load TimelineJS script');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+    const sheet = document.querySelector<HTMLLinkElement>('link[data-timelinejs-css]');
+
+    expect(sheet).not.toBeNull();
+    expect(sheet).not.toBe(failedSheet);
+    expect(failedSheet?.isConnected).toBe(false);
+
+    (window as unknown as { TL: unknown }).TL = { Timeline: FakeTimeline };
+    act(() => {
+      document.querySelector('script[data-timelinejs]')?.dispatchEvent(new Event('load'));
+    });
+    releaseStylesheet();
+
+    await waitFor(() => expect(FakeTimeline.instances).toHaveLength(1));
   });
 });

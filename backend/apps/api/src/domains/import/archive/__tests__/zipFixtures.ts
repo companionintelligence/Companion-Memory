@@ -61,6 +61,13 @@ export interface FixtureEntry {
    * exactly what the parser reads leaves it as an ordinary entry.
    */
   zip64?: boolean;
+  /**
+   * Make this entry a symbolic link to the given path, the way a UNIX `zip -y`
+   * stores one: host 3 in "version made by", `S_IFLNK` in the external
+   * attributes, and the link target as the payload. Info-ZIP `unzip` restores
+   * such an entry as a real link. `contents` is ignored.
+   */
+  symlinkTo?: string;
 }
 
 interface ZipChunks {
@@ -86,7 +93,12 @@ function buildZipChunks(entries: FixtureEntry[]): ZipChunks {
 
   for (const entry of entries) {
     const name = Buffer.isBuffer(entry.name) ? entry.name : Buffer.from(entry.name, 'utf8');
-    const raw = Buffer.isBuffer(entry.contents) ? entry.contents : Buffer.from(entry.contents ?? '', 'utf8');
+    const raw =
+      entry.symlinkTo != null
+        ? Buffer.from(entry.symlinkTo, 'utf8')
+        : Buffer.isBuffer(entry.contents)
+          ? entry.contents
+          : Buffer.from(entry.contents ?? '', 'utf8');
     const deflate = entry.deflate ?? false;
     const payload = deflate ? zlib.deflateRawSync(raw) : raw;
     const method = deflate ? 8 : 0;
@@ -107,7 +119,9 @@ function buildZipChunks(entries: FixtureEntry[]): ZipChunks {
 
     const central = Buffer.alloc(46);
     central.writeUInt32LE(0x02014b50, 0); // central directory signature
-    central.writeUInt16LE(20, 4);
+    // Version made by: the high byte is the host. 0 (MS-DOS) is what Takeout
+    // writes; 3 (UNIX) is the only host whose mode bits `unzip` honours.
+    central.writeUInt16LE(entry.symlinkTo != null ? (3 << 8) | 20 : 20, 4);
     central.writeUInt16LE(20, 6);
     central.writeUInt16LE(flags, 8);
     central.writeUInt16LE(method, 10);
@@ -134,6 +148,11 @@ function buildZipChunks(entries: FixtureEntry[]): ZipChunks {
       central.writeUInt16LE(name.length, 28);
       central.writeUInt16LE(extra.length, 30);
       central.writeUInt32LE(localHeaderOffset, 42);
+    }
+
+    if (entry.symlinkTo != null) {
+      // External attributes: the UNIX mode in the high 16 bits, S_IFLNK | 0777.
+      central.writeUInt32LE((0o120777 << 16) >>> 0, 38);
     }
 
     centrals.push(Buffer.concat([central, name, extra]));

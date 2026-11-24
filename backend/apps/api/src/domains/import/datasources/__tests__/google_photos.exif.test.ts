@@ -66,7 +66,7 @@ describe('google_photos camera-side EXIF', () => {
   beforeEach(() => parseMock.mockReset());
 
   it('merges Make/Model/Lens/F-Number/Exposure Time/ISO/Focal Length/Orientation onto item.metadata alongside the sidecar fields', async () => {
-    // Vocabulary mirrors generic.ts (see _exif.ts extractCameraFields):
+    // Vocabulary mirrors generic.ts (see common/media/exif.ts extractCameraFields):
     //   LensModel -> 'Lens', FNumber -> 'F-Number', ExposureTime -> 'Exposure Time',
     //   FocalLength -> 'Focal Length'. Make/Model/ISO/Orientation pass through.
     parseMock.mockResolvedValue({

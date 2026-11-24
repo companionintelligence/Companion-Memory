@@ -4,8 +4,8 @@ import { InboxProvisionListener } from '../InboxProvisionListener';
  * Best-effort by design (see the class doc): an unavailable inbox mount must
  * not make signup fail, so every failure path here asserts a swallow, not a
  * throw. What is tested is exactly that contract — provision the right
- * user's inbox, look the user up by the payload's id (not trust a stale
- * email), stay quiet when the user is already gone, and survive a pg-boss
+ * user's inbox, keyed on the id of the account the lookup found, stay quiet
+ * when the user is already gone, and survive a pg-boss
  * redelivery of the same `user.created` job without erroring or double-
  * provisioning anything the service itself does not already dedupe.
  */
@@ -45,13 +45,13 @@ function makeListener(
 describe('InboxProvisionListener.provisionForNewUser', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it("provisions the new user's inbox by their looked-up email", async () => {
+  it("provisions the new user's inbox under their account id", async () => {
     const { listener, users, inbox, logger } = makeListener();
 
     await listener.provisionForNewUser(payload);
 
     expect(users.findById).toHaveBeenCalledWith({ userId: payload.userId }, payload.userId);
-    expect(inbox.provisionUserInbox).toHaveBeenCalledWith(user.email);
+    expect(inbox.provisionUserInbox).toHaveBeenCalledWith(user.id);
     expect(logger.log).toHaveBeenCalledWith(
       expect.stringContaining('Provisioned'),
       expect.objectContaining({ userId: payload.userId }),
@@ -116,8 +116,8 @@ describe('InboxProvisionListener.provisionForNewUser', () => {
     await listener.provisionForNewUser(payload);
 
     expect(users.findById).toHaveBeenCalledTimes(2);
-    expect(inbox.provisionUserInbox).toHaveBeenNthCalledWith(1, user.email);
-    expect(inbox.provisionUserInbox).toHaveBeenNthCalledWith(2, user.email);
+    expect(inbox.provisionUserInbox).toHaveBeenNthCalledWith(1, user.id);
+    expect(inbox.provisionUserInbox).toHaveBeenNthCalledWith(2, user.id);
     expect(logger.log).toHaveBeenCalledTimes(2);
     expect(logger.warn).not.toHaveBeenCalled();
   });

@@ -1,6 +1,5 @@
 # HBPE landing — paper as contract, appliance as product
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
 >
 > Status: **landed.** `feat/hbpe-landing` merged to `main` on 2026-08-17 as
 > [#2045](https://github.com/companionintelligence/CI-Server/pull/2045)

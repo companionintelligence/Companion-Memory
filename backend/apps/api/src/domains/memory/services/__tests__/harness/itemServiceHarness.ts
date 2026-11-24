@@ -43,6 +43,8 @@ export function makeItemHarness() {
     ),
     metadata: { target: ItemBaseEntity, columns: { length: 10 } },
     createQueryBuilder: jest.fn(() => makeInsertBuilder(baseInsert)),
+    // insertBaseRows' ownership check: no base row held by another owner.
+    query: jest.fn(async () => []),
   };
 
   // The transactional manager dispatches by entity class, so both halves of the
@@ -57,6 +59,7 @@ export function makeItemHarness() {
 
   const send = jest.fn(async () => []);
   const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
+  const deltas = noopGraphDeltaWriter();
 
   const service = new ItemService(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -68,8 +71,8 @@ export function makeItemHarness() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     { send } as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    noopGraphDeltaWriter() as any,
+    deltas as any,
   );
 
-  return { service, detailRepo, baseRepo, baseInsert, send };
+  return { service, detailRepo, baseRepo, baseInsert, send, deltas };
 }

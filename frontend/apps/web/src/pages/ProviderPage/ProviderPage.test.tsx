@@ -1,6 +1,7 @@
 import { GlobalUID } from '@ci/common';
+import { sonnerToast } from '@ci/shadcn';
 import { screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '@/test/renderWithProviders';
 
@@ -14,10 +15,10 @@ vi.mock('@ci/common', async (importOriginal) => {
   return { ...actual, usePageTitle: () => {} };
 });
 
-// Sonner's toast only renders behind a mounted <Toaster>, which this page
-// does not own — mocking the hook directly is the established pattern here
-// (see PlanPage.test.tsx) for asserting a toast fired without fighting
-// portal/animation timing.
+// Mocking the hook is the established pattern here (see PlanPage.test.tsx)
+// for asserting a toast fired without fighting portal/animation timing. The
+// page does mount its own Toaster; the last test below routes the mock through
+// to sonner to prove a toast it raises is painted.
 vi.mock('@ci/shadcn', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
 
@@ -105,5 +106,33 @@ describe('ProviderPage — error toast names the provider and the cause', () => 
     expect(toastError).toHaveBeenCalledWith('Could not connect to Google Photos. Invalid API key');
 
     connectService.error = null;
+  });
+});
+
+/**
+ * This page is routed outside MainLayout, which holds the app's only other
+ * Toaster, so every toast it raised (a 409 for Google through Portal, Reddit's
+ * 500) painted nowhere. It mounts its own now. The hook is mocked above, so
+ * this test hands the page's own `toast.error` call on to sonner: the text can
+ * only be found if the page's failed Connect reaches a mounted Toaster.
+ */
+describe('ProviderPage — its toasts are visible', () => {
+  afterEach(() => {
+    connectService.error = null;
+    toastError.mockReset();
+    // sonner's store is module-wide and replays every active toast to the next
+    // Toaster that mounts, so a toast left here would greet the next test.
+    sonnerToast.dismiss();
+  });
+
+  it('shows the error toast a failed Connect raises', async () => {
+    toastError.mockImplementation((message: string) => sonnerToast.error(message));
+    connectService.error = new Error('Internal server error');
+
+    renderProvider();
+
+    expect(
+      await screen.findByText('Could not connect to Google Photos. Internal server error'),
+    ).toBeInTheDocument();
   });
 });

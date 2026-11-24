@@ -156,7 +156,7 @@ test('a duplicate group can be merged from the review card', async ({ page }) =>
 test('receipts list and detail are reachable from the memory hub', async ({ page }) => {
   await page.goto('/memory/receipts');
 
-  await expect(page.getByPlaceholder('Search by merchant...')).toBeVisible();
+  await expect(page.getByPlaceholder('Search by merchant…')).toBeVisible();
 
   const count = page.getByText(/^\d+ receipts$/);
   await expect(count).toBeVisible();

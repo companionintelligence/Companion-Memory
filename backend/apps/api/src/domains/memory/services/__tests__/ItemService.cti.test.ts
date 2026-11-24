@@ -113,6 +113,38 @@ describe('ItemService CTI update', () => {
   });
 });
 
+describe('ItemService update Change History', () => {
+  function stored() {
+    const { service, detailRepo, baseRepo, deltas } = makeItemHarness();
+    const row = Object.assign(new ItemEntity(), { id: 'i1', userId: USER, brand: 'Canon' });
+    detailRepo.findOne.mockResolvedValue(row);
+    baseRepo.findOne.mockResolvedValue(
+      Object.assign(new ItemBaseEntity(), { id: 'i1', name: 'Lamp', description: 'Desk lamp' }),
+    );
+
+    return { service, deltas };
+  }
+
+  it('records nothing for a save that hands back what is stored', async () => {
+    const { service, deltas } = stored();
+
+    await service.update(CONTEXT, 'i1', { name: 'Lamp', description: 'Desk lamp', brand: 'Canon' });
+
+    expect(deltas.entityUpdated).not.toHaveBeenCalled();
+  });
+
+  it('records only the description when the save also sends the unchanged name', async () => {
+    // The thing page's description save has to send the name too.
+    const { service, deltas } = stored();
+
+    await service.update(CONTEXT, 'i1', { name: 'Lamp', description: 'Bedside lamp' });
+
+    expect(deltas.entityUpdated).toHaveBeenCalledWith(
+      expect.objectContaining({ changedFields: { description: { old: 'Desk lamp', new: 'Bedside lamp' } } }),
+    );
+  });
+});
+
 describe('ItemService CTI remove', () => {
   it('deletes via the BASE row (FK cascades the detail)', async () => {
     const { service, detailRepo, baseRepo } = makeItemHarness();

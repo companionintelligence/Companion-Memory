@@ -18,8 +18,13 @@ import {
   dropWhenUserOptedOut,
   gateSentryTransport,
   isCrashReportsUserEnabled,
+  isKeyInUrlRequest,
   resolveTelemetrySettings,
+  scrubBreadcrumb,
   scrubEvent,
+  scrubLog,
+  scrubSpan,
+  scrubTransaction,
 } from '@ci/common/telemetry';
 
 export const COMPONENT = 'ci-server-api';
@@ -59,13 +64,21 @@ if (telemetry.enabled && telemetry.dsn) {
     release: telemetry.release,
     enabled: true,
     tracesSampleRate: sampleRate('SENTRY_TRACES_SAMPLE_RATE', 0.1),
-    profilesSampleRate: sampleRate('SENTRY_PROFILES_SAMPLE_RATE', 0.1),
-    enableMetrics: process.env.SENTRY_ENABLE_METRICS !== 'false',
-    enableLogs: process.env.SENTRY_ENABLE_LOGS !== 'false',
+    profileSessionSampleRate: sampleRate('SENTRY_PROFILES_SAMPLE_RATE', 0.1),
+    // Sentry 11 replaced sendDefaultPii with dataCollection, and its defaults collect
+    // user info, cookies, request bodies, query strings, GenAI content and GraphQL
+    // variables. Each is turned off explicitly so the privacy posture is unchanged.
+    dataCollection: {
+      userInfo: false,
+      cookies: false,
+      httpBodies: [],
+      urlQueryParams: false,
+      genAI: { inputs: false, outputs: false },
+      graphQL: { document: false, variables: false },
+    },
     // Never attach IPs, cookies or request bodies. This is deliberate and
     // differs from CI-Hub's current setting — see
     // CI-Engineering/architecture/subsystems/security-trust-and-ops.md gap #7.
-    sendDefaultPii: false,
     // The machine hostname identifies the household as surely as a home path.
     includeServerName: false,
     // Off by default in @sentry/node today — the localVariables integration
@@ -74,19 +87,47 @@ if (telemetry.enabled && telemetry.dsn) {
     // note bodies and message text. Mirrors include_local_variables=False in
     // the Python services.
     includeLocalVariables: false,
+    // The two outbound-request integrations are rebuilt with one option set:
+    // requests to hosts that take the owner's API key in the URL are not
+    // recorded as spans or breadcrumbs at all. See
+    // `common/telemetry/outgoingRequests.ts`. Every other option keeps the SDK
+    // default, which is what `httpIntegration()` and
+    // `nativeNodeFetchIntegration()` with no arguments give.
     integrations: (defaults) =>
-      defaults.filter((integration) => !MANUALLY_HANDLED_INTEGRATIONS.has(integration.name)),
+      defaults
+        .filter((integration) => !MANUALLY_HANDLED_INTEGRATIONS.has(integration.name))
+        .map((integration) => {
+          if (integration.name === 'Http') {
+            return Sentry.httpIntegration({ ignoreOutgoingRequests: isKeyInUrlRequest });
+          }
+
+          if (integration.name === 'NodeFetch') {
+            return Sentry.nativeNodeFetchIntegration({ ignoreOutgoingRequests: isKeyInUrlRequest });
+          }
+
+          return integration;
+        }),
     // The user's runtime switch (Settings -> Privacy -> "What leaves your
     // appliance"), on top of the env kill switches that decided whether we got
     // here at all. `Sentry.init` has run before Nest, so the choice cannot
     // decide whether to initialise — it decides whether anything is SENT. The
-    // four hooks are the early drop; the transport wrapper is the guarantee for
-    // everything the hooks do not see (sessions, client reports, profiles).
-    // See `common/telemetry/runtimeGate.ts`.
+    // four beforeSend* hooks are the early drop; the transport wrapper is the
+    // guarantee for everything the hooks do not see (sessions, client reports,
+    // profiles). See `common/telemetry/runtimeGate.ts`.
+    //
+    // Every item type that can carry request data is also scrubbed, not just
+    // errors. A sampled request's transaction holds `request.url` and the
+    // query string, and its outbound fetch spans hold `url.full`/`url.query`
+    // (the user's search terms, an address being geocoded). beforeSendSpan has
+    // no opt-out branch because it cannot drop a span: the SDK keeps the
+    // original when it returns null. beforeSendTransaction drops the whole
+    // transaction instead.
     beforeSend: (event) => (isCrashReportsUserEnabled() ? scrubEvent(event) : null),
-    beforeSendTransaction: dropWhenUserOptedOut,
-    beforeSendLog: dropWhenUserOptedOut,
+    beforeSendTransaction: (event) => (isCrashReportsUserEnabled() ? scrubTransaction(event) : null),
+    beforeSendSpan: scrubSpan,
+    beforeSendLog: (log) => (isCrashReportsUserEnabled() ? scrubLog(log) : null),
     beforeSendMetric: dropWhenUserOptedOut,
+    beforeBreadcrumb: scrubBreadcrumb,
     transport: (transportOptions) => gateSentryTransport(Sentry.makeNodeTransport(transportOptions)),
   });
 

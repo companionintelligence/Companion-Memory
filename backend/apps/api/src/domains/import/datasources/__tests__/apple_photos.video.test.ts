@@ -22,7 +22,7 @@ const mockExecFile = execFile as unknown as jest.Mock;
 jest.mock('exifr', () => ({ __esModule: true, default: { parse: jest.fn() } }));
 import exifr from 'exifr';
 
-import { _resetFfprobeAvailability } from '../_exif';
+import { _resetFfprobeAvailability } from '@ci/common/media/exif';
 import { allDataSources } from '../registry';
 import type { ImportParams } from '../timeline';
 import '../apple_photos';

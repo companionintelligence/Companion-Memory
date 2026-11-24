@@ -4,16 +4,37 @@ import { EntityManager, Repository } from 'typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import { countAffected } from '@ci/common/persistence';
+import { stableJson } from '@ci/common/stableJson';
+import { USER_EDITED_KEYS, userEditedKeys } from '@ci/common/userEditedProperties';
 import { EventService } from '@ci/domains/events';
 import { PersonUpdatedEvent } from '@ci/domains/memory/events';
 
 import { type Person, PersonEntity } from '../entities/PersonEntity';
+import {
+  type PersonAddress,
+  PERSON_ADDRESS_MIRROR_KEYS,
+  ensureSinglePrimary,
+  personAddressMirror,
+  readPersonAddresses,
+  readStoredPersonAddress,
+  serializePersonAddress,
+} from '../types';
 
-import { GraphDeltaWriter } from './GraphDeltaWriter';
+import { GraphDeltaWriter, mergeDeltaInputs } from './GraphDeltaWriter';
+import { sweepLeftoverEdges } from './mergeEdgeSweep';
+import { withoutSyncStamps } from './PersonService';
+
+/** The `change_source` of the Change History rows a person merge writes. */
+export const PERSON_MERGE_CHANGE_SOURCE = 'PersonMergeService.mergePeople';
 
 /** Per-table re-point counts recorded in the ci.entity_merges audit row. */
 export interface MergeCounts {
   identifiers: number;
+  /** `ci.identifier_claims` rows whose resolution moved from a source to the target. */
+  claims: number;
+  /** `ci.entity_merge_blocks` a source held against someone, newly recorded for the target. */
+  blocksCarried: number;
   communicationsFrom: number;
   communicationsTo: number;
   eventsOrganizer: number;
@@ -21,6 +42,14 @@ export interface MergeCounts {
   relationshipsFrom: number;
   relationshipsTo: number;
   relationshipsDropped: number;
+  /**
+   * Edges a concurrent writer committed to a source AFTER the guarded re-point's
+   * snapshot (the edge projection, most often), which the final sweep moved onto
+   * the target instead of dropping. Not part of `relationshipsFrom/To`, which
+   * count the rows that UPDATE moved. Zero on almost every merge; a non-zero
+   * value is the race this count exists to make visible.
+   */
+  relationshipsRescued: number;
 }
 
 /**
@@ -32,18 +61,31 @@ export interface MergeCounts {
  * ci.entity_identifiers is first-writer-wins.
  *
  * A merge, in one transaction:
- * 1. re-points ci.entity_identifiers claims to the target,
+ * 1. re-points ci.entity_identifiers claims to the target, and the
+ *    resolution (entity_id) of every ci.identifier_claims row that resolved
+ *    to a source; carries each source's ci.entity_merge_blocks over to the
+ *    target,
  * 2. re-points communications.from_entity_id / to_entity_ids[],
  * 3. re-points events.organizer_entity_id / participant_entity_ids[],
  * 4. re-points ci.relationships endpoints (dropping edges that would become
- *    self-references or duplicate an existing active edge),
+ *    self-references or duplicate an existing active edge), then sweeps what
+ *    that left behind — moving, not dropping, any edge a concurrent writer
+ *    committed to a source after the re-point's snapshot (see
+ *    {@link sweepLeftoverEdges}),
  * 5. folds source properties into the target (target wins scalars;
- *    emails/phones/names arrays are unioned),
+ *    emails/phones/names arrays and the address list are unioned),
  * 6. tombstones each source (is_active = FALSE, merged_into_entity_id =
  *    target) and deletes its search-index embedding,
  * 7. re-points any tombstone that already aimed at a source, so
  *    merged_into_entity_id stays exactly one hop deep,
  * 8. writes one ci.entity_merges audit row per source.
+ *
+ * The audit row is also what re-opens the pipeline's decisions about the
+ * target: the pipeline's IdentifierArrivalService re-opens its
+ * enrich.person_self_claim and clean.duplicate_detect rows decided before the
+ * merge, so the survivor is re-examined with the claims step 1 moved onto it.
+ * Nothing here writes ci.pipeline_state — PipelineStateService is its only
+ * writer, and the pipeline domain depends on this one, not the reverse.
  *
  * The user's self person may be a merge TARGET (folding a stub of yourself
  * into you) but never a SOURCE — users.entity_id must keep pointing at a live
@@ -78,8 +120,9 @@ export class PersonMergeService {
         description: string | null;
         properties: Record<string, unknown>;
         merged_into_entity_id: string | null;
+        is_active: boolean | null;
       }> = await em.query(
-        `SELECT entity_id, entity_type, name, description, properties, merged_into_entity_id
+        `SELECT entity_id, entity_type, name, description, properties, merged_into_entity_id, is_active
            FROM ci.entities
           WHERE owner_user_id = $1 AND entity_id = ANY($2::uuid[])
           FOR UPDATE`,
@@ -123,10 +166,6 @@ export class PersonMergeService {
       // already has; emails/phones/names accumulate. This preserves the
       // identifiers a stub carried even though its identifier ROWS were
       // re-pointed above (properties stay the readable record).
-      const mergedProperties = foldProperties(
-        target.properties ?? {},
-        sources.map((id) => byId.get(id)?.properties ?? {}),
-      );
 
       // Target's name always wins when present — a merge SOURCE (e.g. a
       // communications-participant stub) must never overwrite the target's
@@ -139,6 +178,14 @@ export class PersonMergeService {
         target.description,
         ...sources.map((id) => byId.get(id)?.description),
       ]);
+      const mergedProperties = withHandSetColumns(
+        foldProperties(
+          target.properties ?? {},
+          sources.map((id) => byId.get(id)?.properties ?? {}),
+        ),
+        target,
+        sources.map((id) => byId.get(id)),
+      );
 
       await em.query(
         `UPDATE ci.entities
@@ -154,36 +201,28 @@ export class PersonMergeService {
         [ownerUserId, sources, targetId],
       );
 
+      // Real before and after values, as PersonService records an edit, sync
+      // stamps aside like there: carrying a source's stamp over has not changed
+      // the person, so the kept row lists only the merge itself.
       await this.graphDeltaWriter.recordMany(
-        [
-          {
-            nodeType: 'entity' as const,
-            changeType: 'updated' as const,
-            entityId: targetId,
-            entityType: 'Person',
-            ownerUserId,
-            changeSource: 'PersonMergeService.mergePeople',
-            changedByUserId: ownerUserId,
-            changedFields: {
-              name: { new: mergedName },
-              description: { new: mergedDescription },
-              properties: { new: mergedProperties },
-            },
+        mergeDeltaInputs({
+          entityType: 'Person',
+          ownerUserId,
+          changeSource: PERSON_MERGE_CHANGE_SOURCE,
+          targetId,
+          columns: {
+            before: { name: target.name, description: target.description },
+            after: { name: mergedName, description: mergedDescription },
           },
-          ...sources.map((sourceId) => ({
-            nodeType: 'entity' as const,
-            changeType: 'merged' as const,
+          properties: {
+            before: withoutSyncStamps(target.properties ?? {}) as Record<string, unknown>,
+            after: withoutSyncStamps(mergedProperties) as Record<string, unknown>,
+          },
+          sources: sources.map((sourceId) => ({
             entityId: sourceId,
-            entityType: 'Person',
-            ownerUserId,
-            changeSource: 'PersonMergeService.mergePeople',
-            changedByUserId: ownerUserId,
-            changedFields: {
-              name: { old: byId.get(sourceId)?.name ?? null },
-              merged_into_entity_id: { new: targetId },
-            },
+            isActive: byId.get(sourceId)?.is_active,
           })),
-        ],
+        }),
         em,
       );
 
@@ -253,7 +292,14 @@ export class PersonMergeService {
             ownerUserId,
             id,
             targetId,
-            JSON.stringify({ counts, sourceProperties: byId.get(id)?.properties ?? {} }),
+            // `addressesFolded`: this merge put the source's addresses on the
+            // target, so the repair of merges that dropped them leaves it out
+            // (MergedAddressRepairService).
+            JSON.stringify({
+              counts,
+              sourceProperties: byId.get(id)?.properties ?? {},
+              [ADDRESSES_FOLDED]: true,
+            }),
           ],
         );
       }
@@ -283,6 +329,18 @@ export class PersonMergeService {
    * statements are owner-scoped; array columns are rewritten set-based with a
    * DISTINCT unnest so a row referencing both a source and the target ends up
    * with a single target element.
+   *
+   * Every count goes through {@link countAffected}, never `….length` of a bare
+   * `UPDATE/DELETE … RETURNING`: TypeORM resolves that to `[rows, rowCount]`,
+   * which made each of these a constant 2 in the audit row (and
+   * `relationshipsDropped` a constant 6).
+   *
+   * The relationship statements run in a fixed order: the self-reference drop,
+   * both guarded re-points, and only THEN the two sweeps. Each statement of a
+   * READ COMMITTED transaction takes its own snapshot, and the re-points are the
+   * long ones (a person with thousands of edges moves them all in one UPDATE) —
+   * the sweeps are short and read last, so the span in which a concurrent commit
+   * can slip past every statement is as small as it can be made here.
    */
   private async repointReferences(
     em: EntityManager,
@@ -290,75 +348,137 @@ export class PersonMergeService {
     sources: string[],
     targetId: string,
   ): Promise<MergeCounts> {
-    // Historical communications live in COMPRESSED TimescaleDB chunks; the
-    // re-point UPDATEs decompress them and can exceed the default per-txn cap
-    // (100k tuples), aborting the merge. Lift the cap for this txn only — the
-    // compression policy recompacts the touched chunks later. (Same pattern as
-    // CommunicationLinkBackfillService.)
-    await em.query('SET LOCAL timescaledb.max_tuples_decompressed_per_dml_transaction = 0');
-
-    const identifiers: unknown[] = await em.query(
-      `UPDATE ci.entity_identifiers SET entity_id = $3
-        WHERE owner_user_id = $1 AND entity_id = ANY($2::uuid[])
-        RETURNING 1`,
+    const identifiers = await countAffected(
+      em,
+      `WITH repointed AS (
+         UPDATE ci.entity_identifiers SET entity_id = $3
+          WHERE owner_user_id = $1 AND entity_id = ANY($2::uuid[])
+          RETURNING 1
+       )
+       SELECT count(*)::int AS count FROM repointed`,
       [ownerUserId, sources, targetId],
     );
 
-    const communicationsFrom: unknown[] = await em.query(
-      `UPDATE ci.communications SET from_entity_id = $3
-        WHERE user_id = $1 AND from_entity_id = ANY($2::uuid[])
-        RETURNING 1`,
+    // The EVIDENCE behind those index rows. A claim's entity_id is WHO an
+    // observation resolved to, and after a merge that is the target; everything
+    // describing the observation stays put. Left on the tombstone, the source's
+    // claims stop counting: clean.duplicate_detect joins holders to live
+    // entities only. A plain UPDATE cannot collide: entity_id is not part of
+    // identifier_claims_observation_uniq. Rejected claims move too and stay
+    // rejected; every reader excludes them on both sides.
+    const claims = await countAffected(
+      em,
+      `WITH repointed AS (
+         UPDATE ci.identifier_claims SET entity_id = $3
+          WHERE owner_user_id = $1 AND entity_id = ANY($2::uuid[])
+          RETURNING 1
+       )
+       SELECT count(*)::int AS count FROM repointed`,
       [ownerUserId, sources, targetId],
     );
 
-    // Hypertable-safe array rewrite: the subquery carries the full surrogate
-    // PK (time, user_id, id) so the outer UPDATE stays chunk-excluded.
-    const communicationsTo: unknown[] = await em.query(
-      `UPDATE ci.communications c
-          SET to_entity_ids = sub.new_ids
-         FROM (
-           SELECT time, user_id, id,
-                  ARRAY(SELECT DISTINCT CASE WHEN x = ANY($2::uuid[]) THEN $3::uuid ELSE x END
-                          FROM unnest(to_entity_ids) AS x) AS new_ids
-             FROM ci.communications
-            WHERE user_id = $1 AND to_entity_ids && $2::uuid[]
-         ) sub
-        WHERE c.time = sub.time AND c.user_id = sub.user_id AND c.id = sub.id
-        RETURNING 1`,
+    // A human's "these two are NOT the same person" about a source now holds
+    // for the target. Carried as a new (target, other) row; the source's own
+    // row stays for an unmerge replay, and a block between people this merge
+    // folds together is not carried.
+    const blocksCarried = await countAffected(
+      em,
+      `WITH carried AS (
+         INSERT INTO ci.entity_merge_blocks (owner_user_id, entity_id_a, entity_id_b, reason)
+         SELECT DISTINCT ON (LEAST($3::uuid, blocked.other_id), GREATEST($3::uuid, blocked.other_id))
+                $1::uuid, LEAST($3::uuid, blocked.other_id), GREATEST($3::uuid, blocked.other_id),
+                blocked.reason
+           FROM (
+             SELECT CASE WHEN b.entity_id_a = ANY($2::uuid[]) THEN b.entity_id_b ELSE b.entity_id_a END
+                      AS other_id,
+                    b.reason, b.created_at
+               FROM ci.entity_merge_blocks b
+              WHERE b.owner_user_id = $1
+                AND (b.entity_id_a = ANY($2::uuid[]) OR b.entity_id_b = ANY($2::uuid[]))
+           ) blocked
+          WHERE blocked.other_id <> $3::uuid AND NOT (blocked.other_id = ANY($2::uuid[]))
+          ORDER BY LEAST($3::uuid, blocked.other_id), GREATEST($3::uuid, blocked.other_id),
+                   blocked.created_at ASC
+         ON CONFLICT (owner_user_id, entity_id_a, entity_id_b) DO NOTHING
+         RETURNING 1
+       )
+       SELECT count(*)::int AS count FROM carried`,
       [ownerUserId, sources, targetId],
     );
 
-    const eventsOrganizer: unknown[] = await em.query(
-      `UPDATE ci.events SET organizer_entity_id = $3
-        WHERE user_id = $1 AND organizer_entity_id = ANY($2::uuid[])
-        RETURNING 1`,
+    const communicationsFrom = await countAffected(
+      em,
+      `WITH repointed AS (
+         UPDATE ci.communications SET from_entity_id = $3
+          WHERE user_id = $1 AND from_entity_id = ANY($2::uuid[])
+          RETURNING 1
+       )
+       SELECT count(*)::int AS count FROM repointed`,
       [ownerUserId, sources, targetId],
     );
 
-    const eventsParticipants: unknown[] = await em.query(
-      `UPDATE ci.events e
-          SET participant_entity_ids = sub.new_ids
-         FROM (
-           SELECT event_id,
-                  ARRAY(SELECT DISTINCT CASE WHEN x = ANY($2::uuid[]) THEN $3::uuid ELSE x END
-                          FROM unnest(participant_entity_ids) AS x) AS new_ids
-             FROM ci.events
-            WHERE user_id = $1 AND participant_entity_ids && $2::uuid[]
-         ) sub
-        WHERE e.event_id = sub.event_id
-        RETURNING 1`,
+    const communicationsTo = await countAffected(
+      em,
+      `WITH repointed AS (
+         UPDATE ci.communications c
+            SET to_entity_ids = sub.new_ids
+           FROM (
+             SELECT time, user_id, id,
+                    ARRAY(SELECT DISTINCT CASE WHEN x = ANY($2::uuid[]) THEN $3::uuid ELSE x END
+                            FROM unnest(to_entity_ids) AS x) AS new_ids
+               FROM ci.communications
+              WHERE user_id = $1 AND to_entity_ids && $2::uuid[]
+           ) sub
+          WHERE c.time = sub.time AND c.user_id = sub.user_id AND c.id = sub.id
+          RETURNING 1
+       )
+       SELECT count(*)::int AS count FROM repointed`,
+      [ownerUserId, sources, targetId],
+    );
+
+    const eventsOrganizer = await countAffected(
+      em,
+      `WITH repointed AS (
+         UPDATE ci.events SET organizer_entity_id = $3
+          WHERE user_id = $1 AND organizer_entity_id = ANY($2::uuid[])
+          RETURNING 1
+       )
+       SELECT count(*)::int AS count FROM repointed`,
+      [ownerUserId, sources, targetId],
+    );
+
+    const eventsParticipants = await countAffected(
+      em,
+      `WITH repointed AS (
+         UPDATE ci.events e
+            SET participant_entity_ids = sub.new_ids
+           FROM (
+             SELECT event_id,
+                    ARRAY(SELECT DISTINCT CASE WHEN x = ANY($2::uuid[]) THEN $3::uuid ELSE x END
+                            FROM unnest(participant_entity_ids) AS x) AS new_ids
+               FROM ci.events
+              WHERE user_id = $1 AND participant_entity_ids && $2::uuid[]
+           ) sub
+          WHERE e.event_id = sub.event_id
+          RETURNING 1
+       )
+       SELECT count(*)::int AS count FROM repointed`,
       [ownerUserId, sources, targetId],
     );
 
     // Relationships: drop edges that a re-point would turn into
     // self-references (from and to both land on the target) or that only
     // connected the duplicates to each other.
-    const droppedSelfRef: unknown[] = await em.query(
-      `DELETE FROM ci.relationships
-        WHERE owner_user_id = $1
-          AND ( (from_entity_id = ANY($2::uuid[]) AND (to_entity_id = $3 OR to_entity_id = ANY($2::uuid[])))
-             OR (to_entity_id = ANY($2::uuid[]) AND from_entity_id = $3) )
-        RETURNING 1`,
+    const droppedSelfRef = await countAffected(
+      em,
+      `WITH dropped AS (
+         DELETE FROM ci.relationships
+          WHERE owner_user_id = $1
+            AND ( (from_entity_id = ANY($2::uuid[]) AND (to_entity_id = $3 OR to_entity_id = ANY($2::uuid[])))
+               OR (to_entity_id = ANY($2::uuid[]) AND from_entity_id = $3) )
+          RETURNING 1
+       )
+       SELECT count(*)::int AS count FROM dropped`,
       [ownerUserId, sources, targetId],
     );
 
@@ -371,73 +491,116 @@ export class PersonMergeService {
     //    (to, type) shape (DISTINCT ON, oldest wins) — two duplicate people
     //    with the same edge would otherwise collapse onto the index mid-UPDATE.
     // Inactive rows are outside the index and re-point unconditionally.
-    const relationshipsFrom: unknown[] = await em.query(
-      `UPDATE ci.relationships r SET from_entity_id = $3
-        WHERE r.owner_user_id = $1 AND r.from_entity_id = ANY($2::uuid[])
-          AND (
-            r.is_active IS DISTINCT FROM TRUE
-            OR (
-              NOT EXISTS (
-                SELECT 1 FROM ci.relationships d
-                 WHERE d.from_entity_id = $3 AND d.to_entity_id = r.to_entity_id
-                   AND d.relationship_type = r.relationship_type AND d.is_active = TRUE)
-              AND r.relationship_id IN (
-                SELECT DISTINCT ON (to_entity_id, relationship_type) relationship_id
-                  FROM ci.relationships
-                 WHERE owner_user_id = $1 AND from_entity_id = ANY($2::uuid[]) AND is_active = TRUE
-                 ORDER BY to_entity_id, relationship_type, created_at ASC)
+    const relationshipsFrom = await countAffected(
+      em,
+      `WITH repointed AS (
+         UPDATE ci.relationships r SET from_entity_id = $3
+          WHERE r.owner_user_id = $1 AND r.from_entity_id = ANY($2::uuid[])
+            AND (
+              r.is_active IS DISTINCT FROM TRUE
+              OR (
+                NOT EXISTS (
+                  SELECT 1 FROM ci.relationships d
+                   WHERE d.from_entity_id = $3 AND d.to_entity_id = r.to_entity_id
+                     AND d.relationship_type = r.relationship_type AND d.is_active = TRUE)
+                AND r.relationship_id IN (
+                  SELECT DISTINCT ON (to_entity_id, relationship_type) relationship_id
+                    FROM ci.relationships
+                   WHERE owner_user_id = $1 AND from_entity_id = ANY($2::uuid[]) AND is_active = TRUE
+                   ORDER BY to_entity_id, relationship_type, created_at ASC)
+              )
             )
-          )
-        RETURNING 1`,
+          RETURNING 1
+       )
+       SELECT count(*)::int AS count FROM repointed`,
       [ownerUserId, sources, targetId],
     );
 
-    const droppedFromDupes: unknown[] = await em.query(
-      `DELETE FROM ci.relationships
-        WHERE owner_user_id = $1 AND from_entity_id = ANY($2::uuid[])
-        RETURNING 1`,
-      [ownerUserId, sources],
-    );
-
-    const relationshipsTo: unknown[] = await em.query(
-      `UPDATE ci.relationships r SET to_entity_id = $3
-        WHERE r.owner_user_id = $1 AND r.to_entity_id = ANY($2::uuid[])
-          AND (
-            r.is_active IS DISTINCT FROM TRUE
-            OR (
-              NOT EXISTS (
-                SELECT 1 FROM ci.relationships d
-                 WHERE d.from_entity_id = r.from_entity_id AND d.to_entity_id = $3
-                   AND d.relationship_type = r.relationship_type AND d.is_active = TRUE)
-              AND r.relationship_id IN (
-                SELECT DISTINCT ON (from_entity_id, relationship_type) relationship_id
-                  FROM ci.relationships
-                 WHERE owner_user_id = $1 AND to_entity_id = ANY($2::uuid[]) AND is_active = TRUE
-                 ORDER BY from_entity_id, relationship_type, created_at ASC)
+    const relationshipsTo = await countAffected(
+      em,
+      `WITH repointed AS (
+         UPDATE ci.relationships r SET to_entity_id = $3
+          WHERE r.owner_user_id = $1 AND r.to_entity_id = ANY($2::uuid[])
+            AND (
+              r.is_active IS DISTINCT FROM TRUE
+              OR (
+                NOT EXISTS (
+                  SELECT 1 FROM ci.relationships d
+                   WHERE d.from_entity_id = r.from_entity_id AND d.to_entity_id = $3
+                     AND d.relationship_type = r.relationship_type AND d.is_active = TRUE)
+                AND r.relationship_id IN (
+                  SELECT DISTINCT ON (from_entity_id, relationship_type) relationship_id
+                    FROM ci.relationships
+                   WHERE owner_user_id = $1 AND to_entity_id = ANY($2::uuid[]) AND is_active = TRUE
+                   ORDER BY from_entity_id, relationship_type, created_at ASC)
+              )
             )
-          )
-        RETURNING 1`,
+          RETURNING 1
+       )
+       SELECT count(*)::int AS count FROM repointed`,
       [ownerUserId, sources, targetId],
     );
 
-    const droppedToDupes: unknown[] = await em.query(
-      `DELETE FROM ci.relationships
-        WHERE owner_user_id = $1 AND to_entity_id = ANY($2::uuid[])
-        RETURNING 1`,
-      [ownerUserId, sources],
-    );
+    // Any edge that still holds a source after the re-points is swept. This used
+    // to be a plain DELETE of every such row, on the premise that the guarded
+    // UPDATEs had declined it as a duplicate — true of each row the UPDATEs
+    // saw, false of a row committed after their snapshots (see
+    // sweepLeftoverEdges). Both sweeps come after both re-points on purpose.
+    const sweep = {
+      ownerUserId,
+      sources,
+      targetId,
+      changeSource: PERSON_MERGE_CHANGE_SOURCE,
+      changeReason: 'person_merge.rescued_edge',
+    };
+    const sweptFrom = await sweepLeftoverEdges(em, this.graphDeltaWriter, { ...sweep, end: 'from' });
+    const sweptTo = await sweepLeftoverEdges(em, this.graphDeltaWriter, { ...sweep, end: 'to' });
 
     return {
-      identifiers: identifiers.length,
-      communicationsFrom: communicationsFrom.length,
-      communicationsTo: communicationsTo.length,
-      eventsOrganizer: eventsOrganizer.length,
-      eventsParticipants: eventsParticipants.length,
-      relationshipsFrom: relationshipsFrom.length,
-      relationshipsTo: relationshipsTo.length,
-      relationshipsDropped: droppedSelfRef.length + droppedFromDupes.length + droppedToDupes.length,
+      identifiers,
+      claims,
+      blocksCarried,
+      communicationsFrom,
+      communicationsTo,
+      eventsOrganizer,
+      eventsParticipants,
+      relationshipsFrom,
+      relationshipsTo,
+      relationshipsDropped: droppedSelfRef + sweptFrom.dropped + sweptTo.dropped,
+      relationshipsRescued: sweptFrom.rescued + sweptTo.rescued,
     };
   }
+}
+
+/**
+ * `folded` with `name` / `description` added to its hand-set list when the
+ * merge took that column from a source whose person had set it by hand (the
+ * target had none of its own), so a later import keeps it as it would have on
+ * the source.
+ */
+function withHandSetColumns(
+  folded: Record<string, unknown>,
+  target: { name: string | null; description: string | null },
+  sources: Array<
+    | { name: string | null; description: string | null; properties: Record<string, unknown> | null }
+    | undefined
+  >,
+): Record<string, unknown> {
+  const handSet = new Set(userEditedKeys(folded));
+
+  for (const column of ['name', 'description'] as const) {
+    if (firstNonEmpty([target[column]]) != null) {
+      continue;
+    }
+
+    const giver = sources.find((source) => source != null && firstNonEmpty([source[column]]) != null);
+
+    if (giver && userEditedKeys(giver.properties).includes(column)) {
+      handSet.add(column);
+    }
+  }
+
+  return handSet.size > 0 ? { ...folded, [USER_EDITED_KEYS]: [...handSet] } : folded;
 }
 
 function firstNonEmpty(values: Array<string | null | undefined>): string | null {
@@ -450,23 +613,312 @@ function firstNonEmpty(values: Array<string | null | undefined>): string | null 
   return null;
 }
 
-/** Target wins scalars; emails/phones/names arrays are unioned across all rows. */
+/** A value the fold may fill: missing, null, '' or an empty list. */
+function isBlank(value: unknown): boolean {
+  return value == null || value === '' || (Array.isArray(value) && value.length === 0);
+}
+
+/**
+ * The `ci.entity_merges.details` flag of a merge whose source's addresses are
+ * on the person it went into: every merge from this fold on, and each older
+ * one once MergedAddressRepairService has put them back.
+ */
+export const ADDRESSES_FOLDED = 'addressesFolded';
+
+/** `addresses` and the flat keys that mirror its primary entry. */
+export const ADDRESS_KEYS: ReadonlySet<string> = new Set(['addresses', ...PERSON_ADDRESS_MIRROR_KEYS]);
+
+/** What the scalar fill leaves alone when no one has an address: only the list. */
+const ADDRESS_LIST_KEY: ReadonlySet<string> = new Set(['addresses']);
+
+/** The keys of a stored address entry, as {@link serializePersonAddress} writes them. */
+const STORED_ADDRESS_KEYS: ReadonlySet<string> = new Set([
+  'label',
+  'street_address',
+  'street_address_2',
+  'city',
+  'region',
+  'postal_code',
+  'country',
+  'is_primary',
+]);
+
+/** One part of an address as {@link addressKey} compares it: case and spacing aside, a non-string as blank. */
+export function addressPartKey(part: unknown): string {
+  return (typeof part === 'string' ? part : '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+/** Two copies of one address match whatever their label, case or spacing. */
+export function addressKey(address: PersonAddress): string {
+  return [
+    address.streetAddress,
+    address.streetAddress2,
+    address.city,
+    address.region,
+    address.postalCode,
+    address.country,
+  ]
+    .map(addressPartKey)
+    .join('|');
+}
+
+/**
+ * An `addresses` entry that is another writer's data rather than a blank: not
+ * null or empty text, and not an entry in this app's own shape with no address
+ * line, which is a blank row and would otherwise come across as a second primary.
+ */
+function isForeignAddressEntry(entry: unknown): boolean {
+  if (entry == null || (typeof entry === 'string' && entry.trim() === '')) {
+    return false;
+  }
+
+  if (typeof entry !== 'object' || Array.isArray(entry)) {
+    return true;
+  }
+
+  return Object.keys(entry).some((key) => !STORED_ADDRESS_KEYS.has(key));
+}
+
+/**
+ * Stored `addresses` entries that do not read as an address (another importer's
+ * shape), kept as they are. A lone value stored in place of a list is one such
+ * entry, so the list a merge writes does not drop it.
+ */
+function unreadableAddressEntries(properties: Record<string, unknown>): unknown[] {
+  const list = properties.addresses;
+
+  if (!Array.isArray(list)) {
+    return readStoredPersonAddress(list) != null || isForeignAddressEntry(list) ? [list] : [];
+  }
+
+  return list.filter((entry) => readStoredPersonAddress(entry) == null && isForeignAddressEntry(entry));
+}
+
+/**
+ * Every address of the target and the sources, each once: the target's first,
+ * its primary still primary, then each source's it lacks. A copy the target
+ * already has gives it only a label it had none for. When no source adds
+ * anything, `list` is null and the target's address keys stay as they are. So
+ * they do when the target's person cleared its address by hand, which leaves
+ * no address but an address key in its hand-set list.
+ *
+ * `ownedKeys` are the keys the scalar fill must leave alone: `addresses` always,
+ * and the flat mirror keys whenever anyone has an address, so they follow the
+ * merged list rather than a mix of two people's parts. `firstFrom` is the
+ * source the first address came from, or null when it is the target's own.
+ */
+function foldAddresses(
+  target: Record<string, unknown>,
+  sources: Array<Record<string, unknown>>,
+): {
+  list: unknown[] | null;
+  first: PersonAddress | null;
+  firstFrom: number | null;
+  givers: number[];
+  ownedKeys: ReadonlySet<string>;
+} {
+  const own = readPersonAddresses(target);
+
+  if (own.length === 0 && userEditedKeys(target).some((key) => ADDRESS_KEYS.has(key))) {
+    return { list: null, first: null, firstFrom: null, givers: [], ownedKeys: ADDRESS_KEYS };
+  }
+
+  const merged: PersonAddress[] = [];
+  const at = new Map<string, number>();
+  const unreadable: unknown[] = [];
+  const seenUnreadable = new Set<string>();
+
+  // Adds the addresses and unreadable entries of one person that the list
+  // lacks, and labels a copy it has without one. True when the list changed.
+  const take = (properties: Record<string, unknown>, addresses: PersonAddress[]): boolean => {
+    let changed = false;
+
+    for (const address of addresses) {
+      const key = addressKey(address);
+      const existing = at.get(key);
+
+      if (existing === undefined) {
+        at.set(key, merged.length);
+        merged.push({ ...address, isPrimary: false });
+        changed = true;
+      } else if (merged[existing].label == null && address.label != null) {
+        merged[existing] = { ...merged[existing], label: address.label };
+        changed = true;
+      }
+    }
+
+    for (const entry of unreadableAddressEntries(properties)) {
+      const key = stableJson(entry);
+
+      if (!seenUnreadable.has(key)) {
+        seenUnreadable.add(key);
+        unreadable.push(entry);
+        changed = true;
+      }
+    }
+
+    return changed;
+  };
+
+  take(target, own);
+
+  const givers: number[] = [];
+  let firstFrom: number | null = null;
+
+  for (const [index, source] of sources.entries()) {
+    const hadAddress = merged.length > 0;
+
+    if (take(source, readPersonAddresses(source))) {
+      givers.push(index);
+    }
+
+    if (!hadAddress && merged.length > 0) {
+      firstFrom = index;
+    }
+  }
+
+  const ownedKeys = merged.length > 0 ? ADDRESS_KEYS : ADDRESS_LIST_KEY;
+
+  if (givers.length === 0) {
+    return { list: null, first: null, firstFrom: null, givers, ownedKeys };
+  }
+
+  // The target's primary is first in `merged` (readPersonAddresses puts it
+  // there); with no address of its own, the first source's primary is.
+  // Every entry was added unflagged, so the first one becomes the primary.
+  const ordered = ensureSinglePrimary(merged);
+
+  return {
+    list: [...ordered.map((address) => serializePersonAddress(address)), ...unreadable],
+    first: ordered[0] ?? null,
+    firstFrom,
+    givers,
+    ownedKeys,
+  };
+}
+
+/**
+ * Writes the folded address list onto `out`, a target's folded properties,
+ * with the flat keys that mirror its first address and the hand-set claims
+ * that come with them, into `handSet`. Nothing when no source added one.
+ */
+function applyFoldedAddresses(
+  out: Record<string, unknown>,
+  handSet: Set<string>,
+  targetHandSet: ReadonlySet<string>,
+  sources: Array<Record<string, unknown>>,
+  addresses: ReturnType<typeof foldAddresses>,
+): void {
+  if (!addresses.list) {
+    return;
+  }
+
+  out.addresses = addresses.list;
+
+  // A flat key the target's person set or cleared by hand keeps the
+  // target's value, as any scalar does, even where it no longer matches the
+  // list (an edit through the flat fields leaves the list as it was).
+  if (addresses.first) {
+    for (const [key, value] of Object.entries(personAddressMirror(addresses.first))) {
+      if (!targetHandSet.has(key)) {
+        out[key] = value;
+      }
+    }
+  }
+
+  // As for a scalar, a key a source's person set by hand stays hand-set when
+  // its value came from that source: `addresses` from any source that added
+  // to it, the flat mirror keys only from the one whose address they mirror.
+  for (const giver of addresses.givers) {
+    for (const key of userEditedKeys(sources[giver])) {
+      if (key === 'addresses' || (giver === addresses.firstFrom && ADDRESS_KEYS.has(key))) {
+        handSet.add(key);
+      }
+    }
+  }
+}
+
+/**
+ * `target` with the addresses `sources` bring, folded exactly as a merge folds
+ * them (see {@link foldAddresses}), or null when they bring none. Only the
+ * address keys and the hand-set list change. For the repair of merges made
+ * before the fold kept addresses (MergedAddressRepairService).
+ */
+export function withFoldedAddresses(
+  target: Record<string, unknown>,
+  sources: Array<Record<string, unknown>>,
+): Record<string, unknown> | null {
+  const addresses = foldAddresses(target, sources);
+
+  if (!addresses.list) {
+    return null;
+  }
+
+  const out: Record<string, unknown> = { ...target };
+  const targetHandSet = new Set(userEditedKeys(target));
+  const handSet = new Set(targetHandSet);
+
+  applyFoldedAddresses(out, handSet, targetHandSet, sources, addresses);
+
+  if (handSet.size > 0) {
+    out[USER_EDITED_KEYS] = [...handSet];
+  }
+
+  return out;
+}
+
+/**
+ * Target wins scalars; emails/phones/names arrays are unioned across all rows,
+ * and so are addresses (see {@link foldAddresses}). An empty list is as empty as
+ * a null: a person made in the app carries `addresses: []`, which used to keep
+ * every address of the person merged into it out.
+ *
+ * The hand-set list ({@link USER_EDITED_KEYS}) is not a scalar to fill: a key
+ * the target's person cleared or set by hand keeps the target's value, and the
+ * list the target ends with is its own plus each key a source had set by hand
+ * whose value the fold took from that source. Copied whole, a source's list
+ * would freeze the target's own imported values against later imports.
+ */
 function foldProperties(
   target: Record<string, unknown>,
   sources: Array<Record<string, unknown>>,
 ): Record<string, unknown> {
   const out: Record<string, unknown> = { ...target };
+  const targetHandSet = new Set(userEditedKeys(target));
+  const handSet = new Set(targetHandSet);
+  const addresses = foldAddresses(target, sources);
 
   for (const source of sources) {
+    const sourceHandSet = new Set(userEditedKeys(source));
+
     for (const [key, value] of Object.entries(source)) {
-      if (value == null) {
+      if (
+        value == null ||
+        key === USER_EDITED_KEYS ||
+        targetHandSet.has(key) ||
+        addresses.ownedKeys.has(key)
+      ) {
         continue;
       }
 
-      if (out[key] == null || out[key] === '') {
+      if (isBlank(out[key])) {
         out[key] = value;
+
+        // An earlier source's blank may have filled this key first; its claim
+        // goes with the value it gave.
+        if (sourceHandSet.has(key)) {
+          handSet.add(key);
+        } else {
+          handSet.delete(key);
+        }
       }
     }
+  }
+
+  applyFoldedAddresses(out, handSet, targetHandSet, sources, addresses);
+
+  if (handSet.size > 0) {
+    out[USER_EDITED_KEYS] = [...handSet];
   }
 
   for (const key of ['emails', 'phones', 'names']) {
@@ -493,29 +945,36 @@ function foldProperties(
   // keys were unioned above, and the phone adjudicator (utils/phoneIdentity.ts)
   // would then read a UK key as an inferred +1. So union it too, de-duplicated
   // on the digit string with the first-seen formatting kept.
-  const typedPhones: string[] = [];
-  const seenDigits = new Set<string>();
+  //
+  // `Faxes` for the same reason one step on: it is the only record that a
+  // number is office equipment, and the adjudicator refuses it as evidence.
+  // Target-wins would let the source's fax — often the very number its
+  // `phones` key holds — reach the target as an ordinary line.
+  for (const key of ['Phones', 'Faxes']) {
+    const typed: string[] = [];
+    const seenDigits = new Set<string>();
 
-  for (const props of [target, ...sources]) {
-    const raw = props.Phones;
-    const list = Array.isArray(raw) ? raw : typeof raw === 'string' ? [raw] : [];
+    for (const props of [target, ...sources]) {
+      const raw = props[key];
+      const list = Array.isArray(raw) ? raw : typeof raw === 'string' ? [raw] : [];
 
-    for (const item of list) {
-      if (typeof item !== 'string' || item.trim() === '') {
-        continue;
-      }
+      for (const item of list) {
+        if (typeof item !== 'string' || item.trim() === '') {
+          continue;
+        }
 
-      const key = item.replace(/\D/g, '') || item.trim();
+        const digits = item.replace(/\D/g, '') || item.trim();
 
-      if (!seenDigits.has(key)) {
-        seenDigits.add(key);
-        typedPhones.push(item);
+        if (!seenDigits.has(digits)) {
+          seenDigits.add(digits);
+          typed.push(item);
+        }
       }
     }
-  }
 
-  if (typedPhones.length > 0) {
-    out.Phones = typedPhones;
+    if (typed.length > 0) {
+      out[key] = typed;
+    }
   }
 
   // A tombstone's self flag must never leak onto the target: gate on the

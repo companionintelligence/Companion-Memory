@@ -5,18 +5,20 @@
  * local cache, or nothing at all yet. Mirrors the design doc's degradation
  * ladder (2g / A3 stories):
  *
- *   1. "connected" — the configured remote CI-Server origin (the existing
- *      `buildApiUrl()` target) answers its health endpoint.
+ *   1. "connected" — the configured remote origin answers its health endpoint
+ *      and a real Memory GraphQL query. Health alone only proves that a web
+ *      server is alive; identity hosts can answer it without serving Memory.
  *   2. "local"     — the remote is unreachable, but the on-device LocalHub
  *      sidecar (native only — see `frontend/packages/capacitor-local-hub`)
  *      is running and answers its own health endpoint.
  *   3. "cached"    — neither is reachable, but there is local data to show.
  *   4. "fresh"     — nothing is available yet.
  *
- * Both probes run in parallel. Remote health wins whenever it succeeds — the
- * sidecar is a fallback, not a faster path to "local" while the appliance is
- * up. On iOS the sidecar answers in milliseconds, so first-wins painted
- * "On this phone" against a Memory Server the rest of the app was using.
+ * The remote Memory checks and the local sidecar probe run in parallel. A
+ * Memory API response wins whenever it succeeds — the sidecar is a fallback,
+ * not a faster path to "local" while the appliance is up. On iOS the sidecar
+ * answers in milliseconds, so first-wins painted "On this phone" against a
+ * Memory Server the rest of the app was using.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -50,17 +52,62 @@ export const REMOTE_PROBE_TIMEOUT_MS = 3_000;
 export const CONNECTION_REPROBE_INTERVAL_MS = 30_000;
 
 /**
- * Runs a health request under a bound that covers the whole exchange, and
- * reports only whether it succeeded.
+ * The last mode the probe settled on, readable outside React — for code that hands the mode to a
+ * native plugin at a moment of its own (loading the on-device model). `fresh` until a probe answers.
+ */
+let latestConnectionMode: ConnectionMode = 'fresh';
+let latestConnectionModeResolved = false;
+let latestRefresh: (() => void) | null = null;
+
+export function getLatestConnectionMode(): ConnectionMode {
+  return latestConnectionMode;
+}
+
+/**
+ * Whether any probe has answered yet. `getLatestConnectionMode()` says "fresh" both before the
+ * first probe and when nothing is reachable; code that must not act on the former (the write
+ * guard in `offlineWrites.ts`, which would otherwise refuse the first click of every load) asks
+ * this first.
+ */
+export function isConnectionModeResolved(): boolean {
+  return latestConnectionModeResolved;
+}
+
+/**
+ * Store a probe's answer where non-React code can read it. The provider hook below calls this
+ * for every settled probe; tests that exercise the readers above call it directly.
+ */
+export function recordResolvedConnectionMode(mode: ConnectionMode): void {
+  latestConnectionMode = mode;
+  latestConnectionModeResolved = true;
+}
+
+/** Back to the pre-probe state. For tests that share a module instance. */
+export function resetRecordedConnectionMode(): void {
+  latestConnectionMode = 'fresh';
+  latestConnectionModeResolved = false;
+}
+
+/**
+ * Re-run the connection check from outside React, if a provider is mounted. The write guard calls
+ * this when it refuses a write: the mode it refused on may be up to one re-probe interval old,
+ * and the person who just tried is the one who most wants it current.
+ */
+export function requestConnectionRefresh(): void {
+  latestRefresh?.();
+}
+
+/**
+ * Runs one or more requests under a bound that covers their full exchanges,
+ * and reports only whether the complete probe succeeded.
  *
  * The probes own their `AbortController` rather than passing `fetchJson`'s
- * `timeout`, because that option clears its timer the moment response headers
- * arrive (see `fetchJson`) and so never covers reading the body. A server that
- * answers and then stalls mid-body would outlive its budget — and since the
- * re-probe timer fires regardless, every tick would leave another hung request
- * open against the same origin until the browser's per-host connection pool is
- * full and the app's own requests queue behind them. Aborting cancels the body
- * read too, so each probe releases its connection when its budget expires.
+ * `timeout`. That option covers a success body, but it still ends at an error
+ * response's headers (see `fetchJson`), and the error body is then read under
+ * `fetchJson`'s own 3 s bound rather than the probe's budget, so a server that
+ * answers an error and then stalls its body would outlive that budget. One
+ * signal for the whole probe keeps every request inside its budget. Aborting
+ * also cancels body reads and any sibling request when one check fails.
  *
  * `fetchJson` only installs its own timer when the caller passes no signal, so
  * handing it one is the supported way to take over.
@@ -80,12 +127,46 @@ async function probeHealth<T>(
     return { ok: false };
   } finally {
     clearTimeout(timer);
+    if (!controller.signal.aborted) {
+      controller.abort();
+    }
   }
 }
 
-/** Probes the configured remote CI-Server origin's `/api/health` endpoint. */
+interface MemoryGraphQLProbeResponse {
+  data?: { __typename?: unknown };
+  errors?: unknown[];
+}
+
+/** Checks liveness and a Memory-only API operation; a portal health page is not enough. */
 function probeRemote(): Promise<HealthProbe<unknown>> {
-  return probeHealth(REMOTE_PROBE_TIMEOUT_MS, (signal) => fetchJson(buildApiUrl('/api/health'), { signal }));
+  return probeHealth(REMOTE_PROBE_TIMEOUT_MS, async (signal) => {
+    const [health, graphql] = await Promise.all([
+      fetchJson(buildApiUrl('/api/health'), { signal }),
+      fetchJson<MemoryGraphQLProbeResponse>(buildApiUrl('/api/graphql'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: 'query ConnectionModeProbe { __typename }' }),
+        signal,
+      }),
+    ]);
+
+    if (graphql?.data?.__typename !== 'Query' || (graphql.errors?.length ?? 0) > 0) {
+      throw new Error('The configured origin is not answering as a Memory API.');
+    }
+
+    return health;
+  });
+}
+
+/**
+ * Whether the configured Memory API answers now: a fresh probe under the
+ * remote probe's budget, not the mode a probe settled on up to {@link CONNECTION_REPROBE_INTERVAL_MS}
+ * ago, and not `navigator.onLine`, which only says a network is there. For a choice that turns on
+ * the answer at this moment, like reloading the page onto a view whose code failed to download.
+ */
+export async function memoryAnswers(): Promise<boolean> {
+  return (await probeRemote()).ok;
 }
 
 /**
@@ -117,6 +198,40 @@ async function probeLocal(): Promise<boolean> {
   return probed.ok;
 }
 
+/**
+ * Answers "does this device hold data it could show with no server?" — the
+ * difference between "cached" and "fresh" when neither probe succeeds. The
+ * PowerSync provider in the web app registers one (how many documents its
+ * replica holds); this package knows nothing about that storage, so the probe
+ * is injected rather than imported. Absent, the answer is "fresh".
+ */
+export type CachedDataProbe = () => Promise<boolean>;
+
+let cachedDataProbe: CachedDataProbe | null = null;
+
+/** Install the probe; returns the uninstaller. The latest registration wins. */
+export function registerCachedDataProbe(probe: CachedDataProbe): () => void {
+  cachedDataProbe = probe;
+
+  return () => {
+    if (cachedDataProbe === probe) {
+      cachedDataProbe = null;
+    }
+  };
+}
+
+async function hasCachedData(): Promise<boolean> {
+  if (!cachedDataProbe) {
+    return false;
+  }
+
+  try {
+    return await cachedDataProbe();
+  } catch {
+    return false;
+  }
+}
+
 interface ConnectionSnapshot {
   mode: ConnectionMode;
   /** Set only when the remote health body says the two sides cannot talk. */
@@ -136,11 +251,12 @@ async function inspectConnection(): Promise<ConnectionSnapshot> {
     return { mode: 'local', contractNotice: null };
   }
 
-  // TODO(cached-detection): once a durable local cache/outbox exists (LocalHub
-  // Phase 2+ SQLite outbox, or the PowerSync local DB), check here whether it
-  // holds any data and resolve "cached" instead of "fresh". There is no such
-  // signal yet, so — per this pass's scope — we do not invent one and always
-  // fall through to "fresh".
+  // Neither side answers. "cached" when the device holds synced data the
+  // search box and lists can still show; "fresh" when it holds nothing.
+  if (await hasCachedData()) {
+    return { mode: 'cached', contractNotice: null };
+  }
+
   return { mode: 'fresh', contractNotice: null };
 }
 
@@ -153,11 +269,12 @@ export async function resolveConnectionMode(): Promise<ConnectionMode> {
   return (await inspectConnection()).mode;
 }
 
-// Nothing bounds a resolve as a whole. `fetchJson` clears its abort timer the
-// moment response headers arrive, so a server that answers and then stalls its
-// body leaves the probe pending indefinitely; on native, the sidecar's `start()`
-// bridge call has no timeout of its own either. Left unbounded, one such hang
-// pins `inFlightRef` below for the life of the page, and every later refresh —
+// Nothing bounds a resolve as a whole. A probe's abort ends only a request that
+// honours its signal, and CapacitorHttp on native does not take one, so a server
+// that answers and then stalls leaves the probe pending for as long as the
+// native request runs; on native, the sidecar's `start()` bridge call has no
+// timeout of its own either. Left unbounded, one such hang pins `inFlightRef`
+// below for the life of the page, and every later refresh —
 // including the re-probe timer that exists to recover from exactly this — would
 // short-circuit and never run again. Twice the slowest probe budget: long enough
 // that a healthy-but-distant appliance is never cut off, short enough that a
@@ -228,6 +345,7 @@ function useConnectionModeState(): ConnectionModeState {
           return;
         }
 
+        recordResolvedConnectionMode(resolved.mode);
         setMode(resolved.mode);
         setContractNotice(resolved.contractNotice);
         setIsResolved(true);
@@ -249,11 +367,16 @@ function useConnectionModeState(): ConnectionModeState {
 
   useEffect(() => {
     mountedRef.current = true;
+    latestRefresh = refresh;
 
     return () => {
       mountedRef.current = false;
+
+      if (latestRefresh === refresh) {
+        latestRefresh = null;
+      }
     };
-  }, []);
+  }, [refresh]);
 
   useEffect(() => {
     refresh();
@@ -311,6 +434,14 @@ function useConnectionModeState(): ConnectionModeState {
   return { mode, contractNotice, isResolved, refresh };
 }
 
-const { Provider, useHookContext } = createHookContext(useConnectionModeState, 'useConnectionMode');
+const { Provider, useHookContext, useOptionalHookContext } = createHookContext(
+  useConnectionModeState,
+  'useConnectionMode',
+);
 
-export { Provider as ConnectionModeProvider, useHookContext as useConnectionMode };
+export {
+  Provider as ConnectionModeProvider,
+  useHookContext as useConnectionMode,
+  /** The mode when a provider is mounted, null otherwise — for UI that is also rendered outside one. */
+  useOptionalHookContext as useOptionalConnectionMode,
+};

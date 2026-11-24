@@ -1,5 +1,5 @@
 import { DeviceLayoutProvider } from '@ci/common';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { curatedQuestionKeys, curatedQuestions, type CuratedQuestion } from './lifeDetails';
@@ -356,15 +356,64 @@ describe('LifeDetailsSection', () => {
     expect(within(rowFor(HOBBY_KEY)).getByText('Answered by you')).toBeInTheDocument();
   });
 
-  it('marks a question with no answer yet with the red status dot', async () => {
+  it('marks a question with no answer yet with a neutral ring from `sm` up, and with nothing on a phone', async () => {
     fetchJson.mockResolvedValue(fullCataloguePage());
 
     render(<LifeDetailsSection />);
 
     await screen.findByText('What is your blood type?');
     const row = rowFor(BLOOD_TYPE_KEY);
-    expect(within(row).getByText('No answer yet')).toBeInTheDocument();
-    expect(row.querySelector('span.rounded-full')).toHaveClass('bg-red-500');
+    const status = within(row).getByText('No answer yet').closest('[title="No answer yet"]');
+    const dot = row.querySelector('span.rounded-full');
+
+    // Red under every empty field read as a validation error on a phone.
+    expect(dot).toHaveClass('border');
+    expect(dot).not.toHaveClass('bg-red-500');
+    expect(status).toHaveClass('hidden', 'sm:inline-flex');
+  });
+
+  it('explains the dots once, above the questions, since a phone cannot hover for the tooltip', async () => {
+    fetchJson.mockResolvedValue(fullCataloguePage());
+
+    render(<LifeDetailsSection />);
+
+    const legend = (await screen.findByText('Inferred by Memory')).closest('p');
+
+    expect(legend).toHaveTextContent('Answered by you');
+    expect(legend).toHaveTextContent('No answer yet');
+  });
+
+  it("puts an answer's badge on its question's line when the rows stack on a phone", async () => {
+    const realMatchMedia = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      matches: query === '(width < 40rem)',
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })) as unknown as typeof window.matchMedia;
+
+    try {
+      fetchJson.mockResolvedValue(
+        cataloguePage([
+          catalogueEntry(BLOOD_TYPE_KEY, 'O negative', { source: 'inferred', confidence: 0.72 }),
+        ]),
+      );
+
+      render(<LifeDetailsSection />);
+
+      const badge = await screen.findByText('good');
+      const [questionLine, answerCell] = Array.from(rowFor(BLOOD_TYPE_KEY).children);
+
+      expect(questionLine).toContainElement(badge);
+      expect(answerCell).not.toContainElement(badge);
+      expect(screen.getAllByText('good')).toHaveLength(1);
+    } finally {
+      window.matchMedia = realMatchMedia;
+    }
   });
 
   it('edits an existing answer with a PATCH carrying text alone, so the API re-stamps it as user-authored', async () => {
@@ -488,6 +537,416 @@ describe('LifeDetailsSection', () => {
     expect(screen.queryByText('Health')).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText('Answer…')).not.toBeInTheDocument();
     expect(consoleError).toHaveBeenCalledWith(expect.stringContaining('29 curated question(s) are missing'));
+  });
+});
+
+/** A promise settled from outside, for holding a fetch open while the test reads the screen. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+
+  return { promise, resolve };
+}
+
+describe('LifeDetailsSection — saving does not reload the section', () => {
+  /**
+   * The saved answer as its row shows it once nothing is being typed: the button
+   * that edits it. Not `findByText` — while a save is in flight the SAME words
+   * sit in the field being typed into, and a query that finds those finds a node
+   * that is gone a moment later.
+   */
+  function savedAnswer(questionKey: string) {
+    return within(rowFor(questionKey)).findByRole('button', { name: /Edit your answer to/ });
+  }
+
+  /**
+   * The first GET returns `firstPage`; every later GET is held open until the
+   * test settles it, and every write succeeds at once. That makes the refetch
+   * after a save a thing the test can stand inside and look at.
+   */
+  function holdRefetches(firstPage: unknown = fullCataloguePage()) {
+    const refetches: Array<ReturnType<typeof deferred<unknown>>> = [];
+    let gets = 0;
+
+    fetchJson.mockImplementation((_url: string, init?: FetchCallInit) => {
+      if (init?.method) {
+        return Promise.resolve({});
+      }
+
+      gets += 1;
+
+      if (gets === 1) {
+        return Promise.resolve(firstPage);
+      }
+
+      const held = deferred<unknown>();
+      refetches.push(held);
+
+      return held.promise;
+    });
+
+    return refetches;
+  }
+
+  it('keeps every row mounted while a save refetches, instead of swapping the grid for "Loading…"', async () => {
+    // REFL-04: the refetch after a save put the WHOLE grid behind "Loading…". The
+    // section collapsed to one line, the page's scroll position was clamped to
+    // the end of the (now short) page — on an iPhone, the Delete account area —
+    // and the keyboard went with the field.
+    const refetches = holdRefetches();
+
+    render(<LifeDetailsSection />);
+
+    await screen.findByText('Do you volunteer for any organization?');
+    const bystander = rowFor(BLOOD_TYPE_KEY);
+
+    fireEvent.click(within(rowFor(VOLUNTEER_KEY)).getByRole('radio', { name: 'Yes' }));
+
+    // The POST has gone and the refetch is in flight.
+    await waitFor(() => expect(refetches).toHaveLength(1));
+
+    expect(screen.queryByText('Loading…')).not.toBeInTheDocument();
+    expect(rowFor(BLOOD_TYPE_KEY)).toBe(bystander);
+    expect(bystander).toBeInTheDocument();
+
+    refetches[0]!.resolve(fullCataloguePage({ [VOLUNTEER_KEY]: 'Yes' }));
+
+    expect(await savedAnswer(VOLUNTEER_KEY)).toHaveTextContent('Yes');
+    // The very same node the whole way through: never unmounted and rebuilt.
+    expect(rowFor(BLOOD_TYPE_KEY)).toBe(bystander);
+  });
+
+  it('leaves what was typed in the field until the saved answer replaces it', async () => {
+    const refetches = holdRefetches();
+
+    render(<LifeDetailsSection />);
+
+    await screen.findByText('What is your blood type?');
+    fireEvent.change(within(rowFor(BLOOD_TYPE_KEY)).getByPlaceholderText('Answer…'), {
+      target: { value: 'O negative' },
+    });
+
+    await waitFor(() => expect(refetches).toHaveLength(1), { timeout: 3000 });
+
+    // Clearing the draft as soon as the POST returned left an empty field on
+    // screen for the length of the fetch.
+    expect(within(rowFor(BLOOD_TYPE_KEY)).getByPlaceholderText('Answer…')).toHaveValue('O negative');
+
+    refetches[0]!.resolve(fullCataloguePage({ [BLOOD_TYPE_KEY]: 'O negative' }));
+
+    expect(await savedAnswer(BLOOD_TYPE_KEY)).toHaveTextContent('O negative');
+    expect(within(rowFor(BLOOD_TYPE_KEY)).queryByPlaceholderText('Answer…')).not.toBeInTheDocument();
+  });
+
+  it('keeps the grid, and the editor, in place while an edit refetches', async () => {
+    const refetches = holdRefetches(
+      cataloguePage([
+        catalogueEntry(BLOOD_TYPE_KEY, 'AB positive, I think?', { source: 'inferred', confidence: 0.41 }),
+      ]),
+    );
+
+    render(<LifeDetailsSection />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Edit your answer to/ }));
+
+    const row = rowFor(BLOOD_TYPE_KEY);
+    fireEvent.change(within(row).getByRole('textbox'), { target: { value: 'O negative' } });
+    fireEvent.click(within(row).getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(refetches).toHaveLength(1));
+
+    expect(screen.queryByText('Loading…')).not.toBeInTheDocument();
+    // Still the editor, still saving: closing it first showed the OLD answer
+    // again for as long as the fetch took.
+    expect(within(rowFor(BLOOD_TYPE_KEY)).getByRole('textbox')).toBeInTheDocument();
+    expect(screen.queryByText('AB positive, I think?')).not.toBeInTheDocument();
+
+    refetches[0]!.resolve(cataloguePage([catalogueEntry(BLOOD_TYPE_KEY, 'O negative')]));
+
+    expect(await savedAnswer(BLOOD_TYPE_KEY)).toHaveTextContent('O negative');
+    expect(within(rowFor(BLOOD_TYPE_KEY)).queryByRole('textbox')).not.toBeInTheDocument();
+  });
+
+  it('does not let a slow earlier refetch put a later save back to "no answer yet"', async () => {
+    // With the grid no longer hidden behind "Loading…", a second row can be
+    // answered while the first one's refetch is still out. Whichever refetch was
+    // STARTED last is the one that knows about both.
+    const refetches = holdRefetches();
+
+    render(<LifeDetailsSection />);
+
+    await screen.findByText('Do you volunteer for any organization?');
+
+    fireEvent.click(within(rowFor(VOLUNTEER_KEY)).getByRole('radio', { name: 'Yes' }));
+    await waitFor(() => expect(refetches).toHaveLength(1));
+
+    fireEvent.click(within(rowFor(MORNING_PERSON_KEY)).getByRole('radio', { name: 'Night owl' }));
+    await waitFor(() => expect(refetches).toHaveLength(2));
+
+    // The newer refetch lands first and knows about both answers...
+    refetches[1]!.resolve(fullCataloguePage({ [VOLUNTEER_KEY]: 'Yes', [MORNING_PERSON_KEY]: 'Night owl' }));
+    expect(await savedAnswer(MORNING_PERSON_KEY)).toHaveTextContent('Night owl');
+
+    // ...then the older one arrives, from before the second save.
+    await act(async () => {
+      refetches[0]!.resolve(fullCataloguePage({ [VOLUNTEER_KEY]: 'Yes' }));
+    });
+
+    expect(await savedAnswer(MORNING_PERSON_KEY)).toHaveTextContent('Night owl');
+    expect(await savedAnswer(VOLUNTEER_KEY)).toHaveTextContent('Yes');
+  });
+});
+
+describe('LifeDetailsSection — the 5,000-character cap', () => {
+  const OVER = 'a'.repeat(5200);
+  const AT_CAP = 'a'.repeat(5000);
+
+  it.each([
+    ['a single-line answer', BLOOD_TYPE_KEY, 'Answer…'],
+    ['a narrative answer', HOBBY_KEY, 'Your answer…'],
+  ])('stops %s at 5,000 characters, however the text got there', async (_name, key, placeholder) => {
+    // REFL-07: a QA run saw a 5,003-character run accepted whole on an iPhone.
+    // The `maxLength` attribute is not what this asserts — jsdom ignores it —
+    // the value the component keeps is.
+    fetchJson.mockResolvedValue(fullCataloguePage());
+
+    render(<LifeDetailsSection />);
+
+    await screen.findByText(questionFor(key).text);
+    const field = within(rowFor(key)).getByPlaceholderText(placeholder);
+
+    fireEvent.change(field, { target: { value: OVER } });
+
+    expect(field).toHaveValue(AT_CAP);
+  });
+
+  it('stops the editor at 5,000 characters, and saves exactly that much', async () => {
+    fetchJson.mockResolvedValue(cataloguePage([catalogueEntry(BLOOD_TYPE_KEY, 'AB positive')]));
+
+    render(<LifeDetailsSection />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Edit your answer to/ }));
+
+    const row = rowFor(BLOOD_TYPE_KEY);
+    const editor = within(row).getByRole('textbox');
+
+    fireEvent.change(editor, { target: { value: OVER } });
+    expect(editor).toHaveValue(AT_CAP);
+
+    fireEvent.click(within(row).getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => {
+      const [patchCall] = callsWithMethod('PATCH');
+      expect(patchCall).toBeDefined();
+      expect(JSON.parse(patchCall![1]!.body!)).toEqual({ text: AT_CAP });
+    });
+  });
+
+  it('never leaves half of an emoji at the cut', async () => {
+    fetchJson.mockResolvedValue(cataloguePage([catalogueEntry(BLOOD_TYPE_KEY, 'AB positive')]));
+
+    render(<LifeDetailsSection />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Edit your answer to/ }));
+
+    const editor = within(rowFor(BLOOD_TYPE_KEY)).getByRole('textbox');
+
+    // The 5,000th UTF-16 unit is the emoji's high surrogate; keeping it would
+    // store half a character.
+    fireEvent.change(editor, { target: { value: `${'a'.repeat(4999)}😀${'b'.repeat(10)}` } });
+
+    expect(editor).toHaveValue('a'.repeat(4999));
+  });
+
+  it('lets an answer already over the cap be cut down, without eating its tail', async () => {
+    // Written before the cap existed (or through a door that did not enforce
+    // it). Truncating it to 5,000 on the first keystroke would delete text the
+    // person never chose to delete.
+    const legacy = 'x'.repeat(6000);
+    fetchJson.mockResolvedValue(cataloguePage([catalogueEntry(BLOOD_TYPE_KEY, legacy)]));
+
+    render(<LifeDetailsSection />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Edit your answer to/ }));
+
+    const row = rowFor(BLOOD_TYPE_KEY);
+    const editor = within(row).getByRole('textbox');
+    expect(editor).toHaveValue(legacy);
+
+    fireEvent.change(editor, { target: { value: legacy.slice(0, 5999) } });
+    expect(editor).toHaveValue(legacy.slice(0, 5999));
+
+    // It can shrink but not grow.
+    fireEvent.change(editor, { target: { value: `${legacy.slice(0, 5999)}yyyy` } });
+    expect(editor).toHaveValue(legacy.slice(0, 5999));
+
+    // And it still cannot be saved over the cap: the person is told, nothing is sent.
+    fireEvent.click(within(row).getByRole('button', { name: 'Save' }));
+
+    expect(await within(row).findByRole('alert')).toHaveTextContent('Keep it under 5,000 characters.');
+    expect(callsWithMethod('PATCH')).toHaveLength(0);
+  });
+});
+
+describe('LifeDetailsSection — the page after the editor closes', () => {
+  // A long answer is as tall as its text, so cancelling a long draft collapses
+  // the editor in one step. WebKit has no scroll anchoring: the scroller kept its
+  // scrollTop and the page landed on whatever used to sit below the row — on an
+  // iPhone ~1,400pt past it at 2,500 characters, the end of the page at 5,000.
+  // jsdom has no layout, so these pin the mechanism: once the editor is gone, the
+  // row is brought back into view.
+
+  /** What `scrollIntoView` was asked to reveal, and whether the row still had its editor at that moment. */
+  function trackReveals() {
+    const revealed: Array<{ target: Element; options: unknown; editorStillOpen: boolean }> = [];
+
+    vi.spyOn(Element.prototype, 'scrollIntoView').mockImplementation(function (
+      this: Element,
+      options?: boolean | ScrollIntoViewOptions,
+    ) {
+      revealed.push({
+        target: this,
+        options,
+        editorStillOpen: document.querySelector('[data-question-key] textarea') !== null,
+      });
+    });
+
+    return revealed;
+  }
+
+  /** The question cell: the top of the row (the row wrapper itself has no box). */
+  const rowTop = (questionKey: string) => rowFor(questionKey).firstElementChild;
+
+  const LONG_DRAFT = 'lorem ipsum dolor sit amet '.repeat(100);
+
+  async function openEditor() {
+    fetchJson.mockResolvedValue(cataloguePage([catalogueEntry(BLOOD_TYPE_KEY, 'AB positive')]));
+
+    render(<LifeDetailsSection />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Edit your answer to/ }));
+
+    return within(rowFor(BLOOD_TYPE_KEY));
+  }
+
+  it('brings the row back into view when a long draft is cancelled', async () => {
+    const revealed = trackReveals();
+    const row = await openEditor();
+
+    fireEvent.change(row.getByRole('textbox'), { target: { value: LONG_DRAFT } });
+
+    // Opening the editor and typing never scroll the page: the browser follows the caret.
+    expect(revealed).toEqual([]);
+
+    fireEvent.click(row.getByRole('button', { name: 'Cancel' }));
+
+    expect(revealed).toHaveLength(1);
+    expect(revealed[0]!.target).toBe(rowTop(BLOOD_TYPE_KEY));
+    expect(revealed[0]!.options).toEqual({ block: 'nearest' });
+    // After the collapse, not before it: revealing a row whose tall editor is
+    // still in place would measure the wrong layout.
+    expect(revealed[0]!.editorStillOpen).toBe(false);
+  });
+
+  it('does the same when the editor is dismissed with Escape', async () => {
+    const revealed = trackReveals();
+    const row = await openEditor();
+
+    fireEvent.keyDown(row.getByRole('textbox'), { key: 'Escape' });
+
+    expect(revealed).toHaveLength(1);
+    expect(revealed[0]!.target).toBe(rowTop(BLOOD_TYPE_KEY));
+  });
+
+  it('does the same once a saved answer has replaced the editor', async () => {
+    const revealed = trackReveals();
+    const row = await openEditor();
+
+    fireEvent.change(row.getByRole('textbox'), { target: { value: LONG_DRAFT } });
+    fireEvent.click(row.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(revealed).toHaveLength(1));
+
+    expect(revealed[0]!.target).toBe(rowTop(BLOOD_TYPE_KEY));
+    expect(revealed[0]!.editorStillOpen).toBe(false);
+  });
+
+  it('leaves the page alone while a save is still in flight, or when it fails', async () => {
+    const revealed = trackReveals();
+    const row = await openEditor();
+
+    fetchJson.mockRejectedValue(new Error('offline'));
+    fireEvent.change(row.getByRole('textbox'), { target: { value: LONG_DRAFT } });
+    fireEvent.click(row.getByRole('button', { name: 'Save' }));
+
+    // The editor stays open with the draft, so there is nothing to bring back.
+    expect(await row.findByRole('alert')).toHaveTextContent("Couldn't save that. Try again.");
+    expect(revealed).toEqual([]);
+  });
+
+  it('does not scroll at all on first render, or when an answer is merely saved from its field', async () => {
+    const revealed = trackReveals();
+    fetchJson.mockResolvedValue(fullCataloguePage());
+
+    render(<LifeDetailsSection />);
+
+    await screen.findByText('Do you volunteer for any organization?');
+    fireEvent.click(within(rowFor(VOLUNTEER_KEY)).getByRole('radio', { name: 'Yes' }));
+    await waitFor(() => expect(callsWithMethod('POST')).toHaveLength(1));
+
+    expect(revealed).toEqual([]);
+  });
+});
+
+describe('LifeDetailsSection — telling the page an answer changed', () => {
+  it('reports a saved answer, once the section has refreshed', async () => {
+    const onAnswersChanged = vi.fn();
+    fetchJson.mockResolvedValue(fullCataloguePage());
+
+    render(<LifeDetailsSection onAnswersChanged={onAnswersChanged} />);
+
+    await screen.findByText('Do you volunteer for any organization?');
+    fireEvent.click(within(rowFor(VOLUNTEER_KEY)).getByRole('radio', { name: 'Yes' }));
+
+    await waitFor(() => expect(onAnswersChanged).toHaveBeenCalledTimes(1));
+  });
+
+  it('reports an edited answer', async () => {
+    const onAnswersChanged = vi.fn();
+    fetchJson.mockResolvedValue(cataloguePage([catalogueEntry(BLOOD_TYPE_KEY, 'AB positive')]));
+
+    render(<LifeDetailsSection onAnswersChanged={onAnswersChanged} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Edit your answer to/ }));
+    const row = within(rowFor(BLOOD_TYPE_KEY));
+    fireEvent.change(row.getByRole('textbox'), { target: { value: 'O negative' } });
+    fireEvent.click(row.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(onAnswersChanged).toHaveBeenCalledTimes(1));
+    expect(callsWithMethod('PATCH')).toHaveLength(1);
+  });
+
+  it('says nothing when the write failed, or the edit was cancelled', async () => {
+    const onAnswersChanged = vi.fn();
+    fetchJson.mockResolvedValue(cataloguePage([catalogueEntry(BLOOD_TYPE_KEY, 'AB positive')]));
+
+    render(<LifeDetailsSection onAnswersChanged={onAnswersChanged} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Edit your answer to/ }));
+    const row = within(rowFor(BLOOD_TYPE_KEY));
+
+    fireEvent.change(row.getByRole('textbox'), { target: { value: 'O negative' } });
+    fireEvent.click(row.getByRole('button', { name: 'Cancel' }));
+
+    fireEvent.click(await screen.findByRole('button', { name: /Edit your answer to/ }));
+    fetchJson.mockRejectedValue(new Error('offline'));
+    fireEvent.change(row.getByRole('textbox'), { target: { value: 'O negative' } });
+    fireEvent.click(row.getByRole('button', { name: 'Save' }));
+
+    expect(await row.findByRole('alert')).toBeInTheDocument();
+    expect(onAnswersChanged).not.toHaveBeenCalled();
   });
 });
 

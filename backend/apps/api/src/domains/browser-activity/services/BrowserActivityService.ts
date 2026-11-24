@@ -12,8 +12,11 @@ import {
   INGEST_MERGE_KINDS,
   INGEST_PRODUCER_PREFERENCE,
   INGEST_REFRESH_COLUMNS,
+  keysetOrderOf,
   keysetPaginate,
+  keysetSeek,
   type KeysetPageArgs,
+  type KeysetCountOptions,
   type KeysetPage,
 } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
@@ -220,7 +223,7 @@ export class BrowserActivityService {
       order: {
         time: 'DESC',
       },
-      relations: ['user'],
+      relations: { user: true },
     });
 
     return results.map((entity) => BrowserActivityEntity.toEgressType(entity));
@@ -232,8 +235,13 @@ export class BrowserActivityService {
    * the whole 330k-row table, and drops the eager `user` join the in-memory path
    * carried (only user_id is needed downstream).
    */
-  async findPage(context: UserServiceContext, args: KeysetPageArgs): Promise<KeysetPage<BrowserActivity>> {
+  async findPage(
+    context: UserServiceContext,
+    args: KeysetPageArgs,
+    options: KeysetCountOptions = {},
+  ): Promise<KeysetPage<BrowserActivity>> {
     const page = await keysetPaginate(this.browserActivityRepository, args, {
+      ...options,
       alias: 'browserActivity',
       timeProp: 'time',
       userIdProp: 'user_id',
@@ -255,7 +263,7 @@ export class BrowserActivityService {
         }),
       },
       order: { time: 'DESC' },
-      relations: ['user'],
+      relations: { user: true },
     });
 
     const map = new Map(results.map((entity) => [entity.id, BrowserActivityEntity.toEgressType(entity)]));
@@ -264,15 +272,17 @@ export class BrowserActivityService {
   }
 
   async findById(context: ServiceContext, id: string): Promise<BrowserActivity | null> {
-    return this.browserActivityRepository.findOne({
+    const entity = await this.browserActivityRepository.findOne({
       where: {
         id,
         ...(context.userId !== SYSTEM_USER && {
           user_id: context.userId,
         }),
       },
-      relations: ['user'],
+      relations: { user: true },
     });
+
+    return entity == null ? null : BrowserActivityEntity.toEgressType(entity);
   }
 
   async update(
@@ -367,7 +377,7 @@ export class BrowserActivityService {
         time: MoreThanOrEqual(since),
       },
       order: { time: 'DESC' },
-      select: ['category', 'productivity_score'],
+      select: { category: true, productivity_score: true },
     });
   }
 
@@ -385,20 +395,29 @@ export class BrowserActivityService {
       query = query.limit(options.limit);
     }
 
+    // The direction `order` asks for (its first key, as for the primary sort); the tiebreak and the
+    // keyset below run the same way, so a page is always the rows PAST the cursor in that direction.
+    const direction = keysetOrderOf(options.order);
+
     if (options.order) {
-      for (const [field, direction] of Object.entries(options.order)) {
-        query = query.orderBy(`browser-activity.${field}`, direction as 'ASC' | 'DESC');
+      for (const [field, fieldDirection] of Object.entries(options.order)) {
+        query = query.orderBy(`browser-activity.${field}`, fieldDirection as 'ASC' | 'DESC');
       }
 
       // Deterministic tiebreak so same-timestamp rows page consistently.
-      query = query.addOrderBy('browser-activity.id', 'DESC');
+      query = query.addOrderBy('browser-activity.id', direction);
     }
 
-    // Composite keyset: page strictly past (afterTime, afterId) in (time DESC, id DESC).
+    // Composite keyset: page strictly past (afterTime, afterId) in (time, id), in `order` — see keysetSeek.
     if (options.afterTime && options.afterId) {
       query = query.andWhere(
-        '(browser-activity.time < :afterTime OR (browser-activity.time = :afterTime AND browser-activity.id < :afterId))',
-        { afterTime: options.afterTime, afterId: options.afterId },
+        ...keysetSeek(
+          'browser-activity.time',
+          'browser-activity.id',
+          direction,
+          options.afterTime,
+          options.afterId,
+        ),
       );
     }
 

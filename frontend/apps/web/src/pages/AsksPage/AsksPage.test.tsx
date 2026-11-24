@@ -1,5 +1,6 @@
 import type { MockedResponse } from '@apollo/client/testing';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { print } from 'graphql';
 import { describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '@/test/renderWithProviders';
@@ -7,18 +8,23 @@ import { renderWithProviders } from '@/test/renderWithProviders';
 import {
   APPROVE_ASK,
   ASK_ANSWER,
+  ASK_AUDIT_RECEIPT,
   ASK_DISCLOSURE_HISTORY,
+  ASK_DISCLOSURE_HISTORY_HIDDEN_CHARACTERS,
   ASK_DISCLOSURE_SUMMARY,
   MY_HOUSEHOLD_TIERS,
   ASK_INBOX,
+  ASK_INBOX_HIDDEN_CHARACTERS,
   ASK_OUTBOX,
   CREATE_ASK,
   CREATE_ASK_GRANT,
+  COLLECT_PEER_ANSWER,
   CREATE_PEER_LINK,
   MY_ASK_GRANTS,
   MY_PEER_LINKS,
   REVOKE_PEER_LINK,
   RUN_ASK,
+  SEND_PEER_ASK,
   UPDATE_ASK_GRANT,
   UPDATE_PEER_LINK,
 } from './asksOperations';
@@ -79,13 +85,15 @@ function peerRow(overrides: Record<string, unknown> = {}) {
     id: 'peer-link-1',
     peerHandle: 'ada',
     displayName: null,
-    memoryEndpoint: 'https://ada.example/api/peer',
+    memoryEndpoint: 'https://ada.example/api/agent/v1',
     personEntityId: null,
     avatarUrl: null,
     trustTier: 'stranger',
     status: 'active',
     revokedAt: null,
     createdAt: '2026-08-01T00:00:00.000Z',
+    linkedByKey: false,
+    safetyCode: null,
     ...overrides,
   };
 }
@@ -140,6 +148,41 @@ const historyOk = (rows: unknown[], counterpartyKey = SUMMARY_KEY) => ({
 });
 
 const SUMMARY_KEY = 'peer:link-1';
+
+/** The note's own read: which of these ids had characters that render as nothing removed. */
+const hiddenRows = (typename: string, flags: Record<string, boolean>) =>
+  Object.entries(flags).map(([id, removed]) => ({
+    __typename: typename,
+    id,
+    query: { __typename: 'AskQueryType', promptHiddenCharactersRemoved: removed },
+  }));
+const inboxHiddenOk = (flags: Record<string, boolean>) => ({
+  request: { query: ASK_INBOX_HIDDEN_CHARACTERS },
+  result: { data: { askInbox: hiddenRows('AskType', flags) } },
+});
+const historyHiddenOk = (flags: Record<string, boolean>, counterpartyKey = SUMMARY_KEY) => ({
+  request: { query: ASK_DISCLOSURE_HISTORY_HIDDEN_CHARACTERS, variables: { input: { counterpartyKey } } },
+  result: {
+    data: {
+      askDisclosureHistory: {
+        __typename: 'AskDisclosureHistoryPayload',
+        rows: hiddenRows('AskAuditType', flags),
+      },
+    },
+  },
+});
+/** What a Memory from before `promptHiddenCharactersRemoved` answers when asked for it. */
+const inboxHiddenUnknownField = {
+  request: { query: ASK_INBOX_HIDDEN_CHARACTERS },
+  result: {
+    errors: [
+      {
+        message: 'Cannot query field "promptHiddenCharactersRemoved" on type "AskQueryType".',
+        extensions: { code: 'GRAPHQL_VALIDATION_FAILED' },
+      },
+    ],
+  },
+};
 
 /** The owner's own verdicts about other LOCAL accounts. Absent = the default. */
 const householdTiersOk = (rows: unknown[] = []) => ({
@@ -248,9 +291,10 @@ describe('AsksPage', () => {
 
     await screen.findByText('For you (2)');
 
-    // The peer-handled ask joins against myPeerLinks and gets a real photo.
+    // The peer-handled ask joins against myPeerLinks and gets a real photo. That is its own query
+    // and can land after the inbox, so Ada shows initials until it does.
+    await waitFor(() => expect(screen.getByRole('img', { name: 'ada' }).tagName).toBe('IMG'));
     const photo = screen.getByRole('img', { name: 'ada' });
-    expect(photo.tagName).toBe('IMG');
     expect(photo).toHaveAttribute('src', '/static/avatars/ada.png');
 
     // The local, opaque-id ask has nothing to resolve a photo from — it still
@@ -264,7 +308,13 @@ describe('AsksPage', () => {
   it('shows the structured scope, which is all that is on the wire', async () => {
     renderPage(defaultMocks);
 
-    await waitFor(() => expect(screen.getByText(/photos · photos/)).toBeInTheDocument());
+    // Each part is the asker's own text, so each is shown attributed and
+    // isolated rather than joined into one line of app copy.
+    const kind = await screen.findByText('Would search:');
+    const dataClass = screen.getByText('Data class they named:');
+
+    expect(kind.parentElement).toHaveTextContent('Would search: photos');
+    expect(dataClass.parentElement).toHaveTextContent('Data class they named: photos');
   });
 
   it('never lets the declared data class read as a narrower search than runs', async () => {
@@ -405,7 +455,7 @@ describe('AsksPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Sent' }));
 
     expect(await screen.findByText(/Couldn.t load the asks you have sent/i)).toBeInTheDocument();
-    expect(screen.queryByText(/haven't asked anyone anything yet/i)).toBeNull();
+    expect(screen.queryByText(/haven’t asked anyone anything yet/i)).toBeNull();
   });
 
   it('does not claim there are no standing grants while that query is in flight', async () => {
@@ -684,7 +734,7 @@ describe('AsksPage', () => {
       ...repeated(grantsOk([grantRow({ granteeId: 'globaluid-sam001' })])),
       ...repeated(peersOk([])),
       ...repeated(historyOk([])),
-      { request: { query: CREATE_ASK }, variableMatcher: () => true, error: new Error('send rejected') },
+      { request: { query: CREATE_ASK, variables: () => true }, error: new Error('send rejected') },
     ]);
 
     await screen.findByText(/No one is waiting on you/i);
@@ -701,8 +751,7 @@ describe('AsksPage', () => {
 
   it('retires the green “Sent.” the moment the NEXT ask is sent, not when it lands', async () => {
     const ok = {
-      request: { query: CREATE_ASK },
-      variableMatcher: () => true,
+      request: { query: CREATE_ASK, variables: () => true },
       result: {
         data: {
           createAsk: {
@@ -734,7 +783,7 @@ describe('AsksPage', () => {
       ...repeated(peersOk([])),
       ...repeated(historyOk([])),
       ok,
-      { request: { query: CREATE_ASK }, variableMatcher: () => true, error: new Error('send rejected') },
+      { request: { query: CREATE_ASK, variables: () => true }, error: new Error('send rejected') },
     ]);
 
     await screen.findByText(/No one is waiting on you/i);
@@ -769,8 +818,7 @@ describe('AsksPage', () => {
       ...repeated(peersOk([])),
       ...repeated(historyOk([])),
       {
-        request: { query: CREATE_ASK },
-        variableMatcher: () => true,
+        request: { query: CREATE_ASK, variables: () => true },
         result: (variables: Record<string, unknown>) => {
           created.push(variables);
 
@@ -870,8 +918,7 @@ describe('AsksPage', () => {
       ...repeated(peersOk([])),
       ...repeated(historyOk([])),
       {
-        request: { query: CREATE_ASK_GRANT },
-        variableMatcher: () => true,
+        request: { query: CREATE_ASK_GRANT, variables: () => true },
         result: (variables: Record<string, unknown>) => {
           created.push(variables);
 
@@ -945,7 +992,101 @@ describe('AsksPage', () => {
     // Dropping them silently would render "you have no relationship with this
     // person", which is a claim and not a loading state.
     expect(await screen.findByText(/cannot ask from here/i)).toBeInTheDocument();
+    expect(screen.getByText(/link again with an invite/i)).toBeInTheDocument();
     expect(screen.getByText(/ada/)).toBeInTheDocument();
+  });
+
+  it('asks a peer linked by key across boxes, as a signed peer ask with no token', async () => {
+    const sent: Record<string, unknown>[] = [];
+
+    renderPage([
+      ...repeated(inboxOk([])),
+      ...repeated(outboxOk),
+      ...repeated(grantsOk([])),
+      ...repeated(peersOk([peerRow({ linkedByKey: true, displayName: 'Ada' })])),
+      ...repeated(historyOk([])),
+      {
+        request: {
+          query: SEND_PEER_ASK,
+          variables: {
+            input: {
+              handle: 'ada',
+              archetype: 'relationship',
+              subject: 'Do you know Carol?',
+              dataClass: undefined,
+              prompt: 'Do you know Carol?',
+            },
+          },
+        },
+        result: (variables: Record<string, unknown>) => {
+          sent.push(variables);
+
+          return {
+            data: {
+              sendPeerAsk: {
+                __typename: 'SendPeerAskPayload',
+                success: true,
+                status: 'delivered',
+                reason: 'Peer unreachable',
+                ask: { __typename: 'AskType', id: 'ask-new', status: 'delivered' },
+              },
+            },
+          };
+        },
+      },
+    ]);
+
+    await screen.findByText(/No one is waiting on you/i);
+    openTab('Ask someone');
+
+    // A peer is offered only what the peer protocol can carry.
+    expect(await screen.findByRole('radio', { name: /Do you know…\?/ })).toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: /Are you free/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: /What is…\?/ })).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText(/lake trip/i), { target: { value: 'Do you know Carol?' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send ask' }));
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).not.toHaveProperty('input.peerAccessToken');
+    expect(await screen.findByText(/did not take it yet \(Peer unreachable\)/)).toBeInTheDocument();
+  });
+
+  it('offers to check for an answer on a sent peer ask that has none yet', async () => {
+    const collected: Record<string, unknown>[] = [];
+
+    renderPage([
+      ...repeated(inboxOk([])),
+      ...repeated(outboxAsks([askRow({ id: 'ask-out', peerHandle: 'ada', responderId: null })])),
+      ...repeated(grantsOk([])),
+      ...repeated(peersOk([peerRow({ linkedByKey: true })])),
+      ...repeated(historyOk([])),
+      {
+        request: { query: COLLECT_PEER_ANSWER, variables: { askId: 'ask-out' } },
+        result: (variables: Record<string, unknown>) => {
+          collected.push(variables);
+
+          return {
+            data: {
+              collectPeerAnswer: {
+                __typename: 'SendPeerAskPayload',
+                success: true,
+                status: 'delivered',
+                reason: null,
+                ask: { __typename: 'AskType', id: 'ask-out', status: 'delivered' },
+              },
+            },
+          };
+        },
+      },
+    ]);
+
+    await screen.findByText(/No one is waiting on you/i);
+    openTab('Sent');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Check for an answer' }));
+
+    await waitFor(() => expect(collected).toEqual([{ askId: 'ask-out' }]));
   });
 
   // ── Reading an answer ─────────────────────────────────────────────────────
@@ -1358,7 +1499,7 @@ describe('AsksPage', () => {
       id: 'peer-link-1',
       peerHandle: 'ada',
       displayName: null,
-      memoryEndpoint: 'https://ada.example/api/peer',
+      memoryEndpoint: 'https://ada.example/api/agent/v1',
       avatarUrl: null,
       trustTier: tier,
       status: 'active',
@@ -1431,7 +1572,7 @@ describe('AsksPage', () => {
                   id: 'peer-link-1',
                   peerHandle: 'ada',
                   displayName: null,
-                  memoryEndpoint: 'https://ada.example/api/peer',
+                  memoryEndpoint: 'https://ada.example/api/agent/v1',
                   avatarUrl: null,
                   trustTier: 'family',
                   status: 'active',
@@ -1471,8 +1612,7 @@ describe('AsksPage', () => {
       ...repeated(peersOk([])),
       ...repeated(historyOk([])),
       {
-        request: { query: CREATE_PEER_LINK },
-        variableMatcher: () => true,
+        request: { query: CREATE_PEER_LINK, variables: () => true },
         result: (variables: Record<string, unknown>) => {
           created.push(variables);
 
@@ -1486,7 +1626,7 @@ describe('AsksPage', () => {
                   id: 'peer-link-9',
                   peerHandle: 'bo',
                   displayName: null,
-                  memoryEndpoint: 'https://bo.example/api/peer',
+                  memoryEndpoint: 'https://bo.example/api/agent/v1',
                   avatarUrl: null,
                   trustTier: 'stranger',
                   status: 'active',
@@ -1504,7 +1644,7 @@ describe('AsksPage', () => {
 
     fireEvent.change(await screen.findByPlaceholderText('ada'), { target: { value: 'bo' } });
     fireEvent.change(screen.getByPlaceholderText(/bo|https:/i), {
-      target: { value: 'https://bo.example/api/peer' },
+      target: { value: 'https://bo.example/api/agent/v1' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Add peer' }));
 
@@ -1612,5 +1752,239 @@ describe('AsksPage', () => {
     // and that characters which render as nothing were in it.
     expect(await screen.findByText(/not the whole message they sent/i)).toBeInTheDocument();
     expect(screen.getByText(/render as nothing were removed/i)).toBeInTheDocument();
+  });
+
+  it('says hidden characters were removed when the SERVER stripped them before storing the prompt', async () => {
+    // A local ask's prompt reaches the inbox already clean (asks/askInput.ts
+    // strips zero-width characters), so the quote has nothing left to detect.
+    // The flag is the only record that the text was altered on the way in.
+    renderPage([
+      ...repeated(
+        inboxOk([
+          askRow({
+            query: {
+              __typename: 'AskQueryType',
+              queryType: 'relationship',
+              dataClass: null,
+              prompt: 'Do you have the lake photos?',
+            },
+          }),
+        ]),
+      ),
+      ...repeated(inboxHiddenOk({ 'ask-1': true })),
+      ...repeated(outboxOk),
+      ...repeated(grantsOk([])),
+      ...repeated(peersOk([])),
+      ...repeated(historyOk([])),
+    ]);
+
+    expect(await screen.findByText(/Do you have the lake photos\?/)).toBeInTheDocument();
+    expect(await screen.findByText(/render as nothing were removed/i)).toBeInTheDocument();
+  });
+
+  it('still shows the inbox from a Memory too old to know the hidden-characters field', async () => {
+    // The phone apps ship this web build to whichever Memory the person runs.
+    // When the field sat inside ASK_INBOX, that server refused the whole query
+    // and the owner saw "We couldn't load your inbox" instead of the ask.
+    renderPage([
+      ...repeated(
+        inboxOk([
+          askRow({
+            query: {
+              __typename: 'AskQueryType',
+              queryType: 'relationship',
+              dataClass: null,
+              prompt: 'Do you have the lake photos?',
+            },
+          }),
+        ]),
+      ),
+      ...repeated(inboxHiddenUnknownField),
+      ...repeated(outboxOk),
+      ...repeated(grantsOk([])),
+      ...repeated(peersOk([])),
+      ...repeated(historyOk([])),
+    ]);
+
+    expect(await screen.findByText(/Do you have the lake photos\?/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: /Approve/i })).toBeEnabled());
+    expect(screen.queryByText(/render as nothing were removed/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/couldn.t be checked/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/couldn.t load your inbox/i)).not.toBeInTheDocument();
+  });
+
+  it('holds Approve until the hidden-characters check has answered', async () => {
+    // The note arrives on its own query. Approve used to be live while it was
+    // in flight, so an owner could approve before the warning could show.
+    renderPage([
+      ...repeated(
+        inboxOk([
+          askRow({
+            query: {
+              __typename: 'AskQueryType',
+              queryType: 'relationship',
+              dataClass: null,
+              prompt: 'Do you have the lake photos?',
+            },
+          }),
+        ]),
+      ),
+      ...repeated({ ...inboxHiddenOk({ 'ask-1': true }), delay: 60_000 }),
+      ...repeated(outboxOk),
+      ...repeated(grantsOk([])),
+      ...repeated(peersOk([])),
+      ...repeated(historyOk([])),
+    ]);
+
+    expect(await screen.findByText(/Do you have the lake photos\?/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Approve/i })).toBeDisabled();
+    expect(
+      screen.getByText(/Checking this message for characters that render as nothing/i),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Decline/i })).toBeEnabled();
+  });
+
+  it('says a message could not be checked when the check fails on a current Memory', async () => {
+    renderPage([
+      ...repeated(
+        inboxOk([
+          askRow({
+            query: {
+              __typename: 'AskQueryType',
+              queryType: 'relationship',
+              dataClass: null,
+              prompt: 'Do you have the lake photos?',
+            },
+          }),
+        ]),
+      ),
+      ...repeated({ request: { query: ASK_INBOX_HIDDEN_CHARACTERS }, error: new Error('502 Bad Gateway') }),
+      ...repeated(outboxOk),
+      ...repeated(grantsOk([])),
+      ...repeated(peersOk([])),
+      ...repeated(historyOk([])),
+    ]);
+
+    expect(
+      await screen.findByText(/This message couldn.t be checked for characters that render as nothing/i),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Approve/i })).toBeEnabled();
+    expect(screen.queryByText(/render as nothing were removed/i)).not.toBeInTheDocument();
+  });
+
+  it('keeps the inbox query free of the hidden-characters field, so an older Memory can answer it', () => {
+    const source = print(ASK_INBOX);
+    const historySource = print(ASK_DISCLOSURE_HISTORY);
+
+    expect(source).toContain('prompt');
+    expect(source).not.toContain('promptHiddenCharactersRemoved');
+    expect(historySource).not.toContain('promptHiddenCharactersRemoved');
+  });
+
+  it('says hidden characters were removed in the disclosure history too', async () => {
+    renderPage([
+      ...repeated(inboxOk([])),
+      ...repeated(outboxOk),
+      ...repeated(grantsOk([])),
+      ...repeated(peersOk([])),
+      ...repeated(summaryOk([summaryRow()])),
+      ...repeated(
+        historyOk([
+          auditRow({
+            query: {
+              __typename: 'AskQueryType',
+              queryType: 'relationship',
+              dataClass: null,
+              prompt: 'Do you have the lake photos?',
+            },
+          }),
+        ]),
+      ),
+      ...repeated(historyHiddenOk({ 'audit-1': true })),
+    ]);
+
+    await screen.findByText(/No one is waiting on you/i);
+    await openRelationship();
+
+    expect(await screen.findByText(/Do you have the lake photos\?/)).toBeInTheDocument();
+    expect(await screen.findByText(/render as nothing were removed/i)).toBeInTheDocument();
+  });
+
+  it('shows no hidden-characters note for a prompt nobody altered', async () => {
+    renderPage([
+      ...repeated(
+        inboxOk([
+          askRow({
+            query: {
+              __typename: 'AskQueryType',
+              queryType: 'relationship',
+              dataClass: null,
+              prompt: 'Do you have the lake photos?',
+            },
+          }),
+        ]),
+      ),
+      ...repeated(inboxHiddenOk({ 'ask-1': false })),
+      ...repeated(outboxOk),
+      ...repeated(grantsOk([])),
+      ...repeated(peersOk([])),
+      ...repeated(historyOk([])),
+    ]);
+
+    expect(await screen.findByText(/Do you have the lake photos\?/)).toBeInTheDocument();
+    expect(screen.queryByText(/render as nothing were removed/i)).not.toBeInTheDocument();
+  });
+
+  it('loads an ISO 27560 + SAID receipt lazily from ConsentDetailModal inside disclosure history', async () => {
+    renderPage([
+      ...repeated(inboxOk([])),
+      ...repeated(outboxOk),
+      ...repeated(grantsOk([])),
+      ...repeated(peersOk([])),
+      ...repeated(summaryOk([summaryRow()])),
+      ...repeated(historyOk([auditRow({ id: 'audit-receipt-1', outcome: 'answered' })])),
+      ...repeated(historyHiddenOk({ 'audit-receipt-1': false })),
+      {
+        request: { query: ASK_AUDIT_RECEIPT, variables: { id: 'audit-receipt-1' } },
+        result: {
+          data: {
+            askAuditReceipt: {
+              __typename: 'AskAuditReceiptPayload',
+              auditId: 'audit-receipt-1',
+              askId: 'ask-1',
+              auditSaid: 'I-audit-said-integration-123',
+              receipt: {
+                __typename: 'AskConsentReceiptType',
+                d: 'I-receipt-said-integration-456',
+                schemaVersion: 'iso-27560:2023+dpv:v2',
+                recordId: 'audit-receipt-1',
+                piiPrincipalId: 'globaluid-owner-1',
+                recipient: 'globaluid-abc123',
+                legalBasis: 'dpv:Consent',
+                purposes: ['dpv:ServiceProvision'],
+                processing: ['dpv:Disclose'],
+                consentBasis: 'explicit-approval',
+                outcome: 'answered',
+                disclosedCount: 1,
+                issuedAt: '2026-08-20T00:00:00.000Z',
+              },
+            },
+          },
+        },
+      },
+    ]);
+
+    await screen.findByText(/No one is waiting on you/i);
+    await openRelationship();
+
+    const detailsButton = await screen.findByRole('button', { name: /Open consent details/i });
+    fireEvent.click(detailsButton);
+
+    const loadReceiptButton = await screen.findByRole('button', { name: /Load consent receipt & SAID/i });
+    fireEvent.click(loadReceiptButton);
+
+    expect(await screen.findByText('I-audit-said-integration-123')).toBeInTheDocument();
+    expect(screen.getByText('I-receipt-said-integration-456')).toBeInTheDocument();
+    expect(screen.getByText('dpv:Consent')).toBeInTheDocument();
   });
 });

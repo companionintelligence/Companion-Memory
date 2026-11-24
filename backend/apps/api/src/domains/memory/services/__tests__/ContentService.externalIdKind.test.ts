@@ -27,7 +27,7 @@ describe('ContentService external_id_kind stamping', () => {
     save: jest.Mock;
     update: jest.Mock;
     createQueryBuilder: jest.Mock;
-    manager: { transaction: jest.Mock };
+    manager: { transaction: jest.Mock; query: jest.Mock };
   };
   let baseRepo: {
     create: jest.Mock;
@@ -62,6 +62,8 @@ describe('ContentService external_id_kind stamping', () => {
       update: jest.fn(async () => ({ affected: 1 })),
       createQueryBuilder: jest.fn(),
       manager: {
+        // refuseForeignLinks: no named event or file is another account's.
+        query: jest.fn(async () => []),
         transaction: jest.fn(async (cb: (m: unknown) => unknown) =>
           cb({
             getRepository: (cls: unknown): unknown => (cls === ContentBaseEntity ? baseRepo : repo),

@@ -157,7 +157,7 @@ describe('SignupForm signup code requirement', () => {
 
     render(<SignupForm />);
 
-    expect(screen.getByLabelText('Signup Code')).toBeInTheDocument();
+    expect(screen.getByLabelText('Signup code')).toBeInTheDocument();
   });
 
   it('hides the signup code field when the appliance does not require one', () => {
@@ -166,7 +166,20 @@ describe('SignupForm signup code requirement', () => {
 
     render(<SignupForm />);
 
-    expect(screen.queryByLabelText('Signup Code')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Signup code')).not.toBeInTheDocument();
+  });
+
+  it('keeps the signup code input controlled from the first render', () => {
+    h.codesRequired = true;
+    h.error = null;
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    render(<SignupForm />);
+
+    fireEvent.change(screen.getByLabelText('Signup code'), { target: { value: 'abc' } });
+
+    expect(consoleError.mock.calls.map((call) => String(call[0]))).not.toContainEqual(
+      expect.stringMatching(/uncontrolled input to be controlled/),
+    );
   });
 
   it('maps a signup_code issue onto its own field once the field exists, instead of the alert', async () => {
@@ -200,5 +213,67 @@ describe('SignupForm signup code requirement', () => {
       expect(screen.getByText('That signup code has already been used')).toBeInTheDocument(),
     );
     expect(screen.getByRole('alert')).toHaveTextContent('You must accept the terms');
+  });
+});
+
+describe('SignupForm empty fields', () => {
+  it("says Required under each empty field, not zod's message for a missing value", async () => {
+    h.error = null;
+    const onSubmit = vi.fn();
+    render(<SignupForm onSubmit={onSubmit} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /sign up/i }));
+
+    expect(await screen.findAllByText('Required')).toHaveLength(3);
+    expect(screen.queryByText(/expected string/i)).not.toBeInTheDocument();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it('says Required under a field that was filled in and cleared again', async () => {
+    h.error = null;
+    const onSubmit = vi.fn();
+    render(<SignupForm onSubmit={onSubmit} />);
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Test User' } });
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'user@example.com' } });
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'secret' } });
+    fireEvent.click(screen.getByRole('button', { name: /sign up/i }));
+
+    expect(await screen.findAllByText('Required')).toHaveLength(1);
+    expect(screen.getByLabelText('Name')).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByLabelText('Email')).toHaveAttribute('aria-invalid', 'false');
+    expect(screen.getByLabelText('Password')).toHaveAttribute('aria-invalid', 'false');
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+});
+
+describe('SignupForm email field', () => {
+  it('configures the email field for an address on a touch keyboard', () => {
+    h.error = null;
+    render(<SignupForm />);
+
+    const email = screen.getByLabelText('Email');
+
+    expect(email).toHaveAttribute('type', 'email');
+    expect(email).toHaveAttribute('inputmode', 'email');
+    expect(email).toHaveAttribute('autocapitalize', 'none');
+    expect(email).toHaveAttribute('autocorrect', 'off');
+    expect(email).toHaveAttribute('spellcheck', 'false');
+    expect(email).toHaveAttribute('autocomplete', 'username');
+  });
+
+  it('still shows the schema message, not the browser bubble, for an invalid address', async () => {
+    // type="email" alone would make the browser block the submit with its own tooltip.
+    h.error = null;
+    const onSubmit = vi.fn();
+    render(<SignupForm onSubmit={onSubmit} />);
+
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'not-an-email' } });
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'secret' } });
+    fireEvent.click(screen.getByRole('button', { name: /sign up/i }));
+
+    expect(await screen.findByText('Invalid email.')).toBeInTheDocument();
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 });

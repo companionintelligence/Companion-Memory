@@ -202,8 +202,15 @@ describe('PGBossEventService queue provisioning', () => {
       expect(call.options).not.toHaveProperty('role');
       expect(call.options).not.toHaveProperty('yieldsTo');
       expect(call.options).not.toHaveProperty('lane');
-      // The real pg-boss options rode through untouched.
-      expect(call.options).toMatchObject({ policy: 'short', expireInSeconds: 600 });
+      // The real pg-boss options rode through untouched. The policy is fixed at
+      // creation and pg-boss 12's updateQueue rejects it.
+      expect(call.options).toMatchObject({ expireInSeconds: 600 });
+
+      if (createQueueCalls.includes(call)) {
+        expect(call.options).toMatchObject({ policy: 'short' });
+      } else {
+        expect(call.options).not.toHaveProperty('policy');
+      }
     }
   });
 
@@ -221,7 +228,7 @@ describe('PGBossEventService queue provisioning', () => {
 
     for (const call of workQueues) {
       expect(call.options).toMatchObject({
-        retentionMinutes: EXPECTED_WORK_QUEUE_RETENTION_MINUTES,
+        retentionSeconds: EXPECTED_WORK_QUEUE_RETENTION_MINUTES * 60,
       });
     }
   });
@@ -238,21 +245,18 @@ describe('PGBossEventService queue provisioning', () => {
 
     for (const call of updateQueueCalls.filter((c) => c.queue !== DEAD_LETTER_QUEUE)) {
       expect(call.options).toMatchObject({
-        retentionMinutes: EXPECTED_WORK_QUEUE_RETENTION_MINUTES,
+        retentionSeconds: EXPECTED_WORK_QUEUE_RETENTION_MINUTES * 60,
       });
     }
   });
 
-  it('states the retention in MINUTES, the only unit pg-boss v10 persists', async () => {
+  it('states the retention in SECONDS, the unit pg-boss 12 persists', async () => {
     const { createQueueCalls, updateQueueCalls } = await boot();
 
     for (const call of [...createQueueCalls, ...updateQueueCalls]) {
-      expect(call.options).toHaveProperty('retentionMinutes');
-      expect(typeof call.options.retentionMinutes).toBe('number');
-      // `retentionDays` and `retentionSeconds` are both accepted by the type
-      // and both silently discarded by createQueue/updateQueue.
+      expect(typeof call.options.retentionSeconds).toBe('number');
       expect(call.options).not.toHaveProperty('retentionDays');
-      expect(call.options).not.toHaveProperty('retentionSeconds');
+      expect(call.options).not.toHaveProperty('retentionMinutes');
     }
   });
 
@@ -260,10 +264,10 @@ describe('PGBossEventService queue provisioning', () => {
     const { createQueueCalls, updateQueueCalls } = await boot();
 
     expect(optionsFor(createQueueCalls, DEAD_LETTER_QUEUE)).toMatchObject({
-      retentionMinutes: EXPECTED_DEAD_LETTER_RETENTION_MINUTES,
+      retentionSeconds: EXPECTED_DEAD_LETTER_RETENTION_MINUTES * 60,
     });
     expect(optionsFor(updateQueueCalls, DEAD_LETTER_QUEUE)).toMatchObject({
-      retentionMinutes: EXPECTED_DEAD_LETTER_RETENTION_MINUTES,
+      retentionSeconds: EXPECTED_DEAD_LETTER_RETENTION_MINUTES * 60,
     });
   });
 
@@ -281,12 +285,12 @@ describe('PGBossEventService queue provisioning', () => {
     // The default is placed BEFORE the `...queueOptions` spread precisely so a
     // listener can still override it. Placed after, this would be 129600 and a
     // queue asking for an hour would silently get a quarter.
-    expect(optionsFor(createQueueCalls, 'fixture-ephemeral')).toMatchObject({ retentionMinutes: 60 });
-    expect(optionsFor(updateQueueCalls, 'fixture-ephemeral')).toMatchObject({ retentionMinutes: 60 });
+    expect(optionsFor(createQueueCalls, 'fixture-ephemeral')).toMatchObject({ retentionSeconds: 3600 });
+    expect(optionsFor(updateQueueCalls, 'fixture-ephemeral')).toMatchObject({ retentionSeconds: 3600 });
 
     // …and its neighbours are unaffected.
     expect(optionsFor(createQueueCalls, 'fixture-plain')).toMatchObject({
-      retentionMinutes: EXPECTED_WORK_QUEUE_RETENTION_MINUTES,
+      retentionSeconds: EXPECTED_WORK_QUEUE_RETENTION_MINUTES * 60,
     });
   });
 

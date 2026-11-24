@@ -8,7 +8,7 @@ import {
 import { EventEmitter2, EventEmitterReadinessWatcher } from '@nestjs/event-emitter';
 import { InjectDataSource } from '@nestjs/typeorm';
 import plimit from 'p-limit';
-import PgBoss, { JobWithMetadata } from 'pg-boss';
+import { type JobInsert, PgBoss, type JobWithMetadata, type SendOptions } from 'pg-boss';
 import { DataSource } from 'typeorm';
 
 import { ContextService } from '@ci/common/context';
@@ -29,7 +29,7 @@ import {
 import { JobSlotPool } from '../jobSlotPool';
 import { queueInventory } from '../queueInventory';
 import { EventRegistry } from '../registry';
-import type { EventSendOptions, QueueOptions } from '../types';
+import type { EventSendOptions, QueuedJob, QueuedJobState, QueueOptions } from '../types';
 import { YieldGateRegistry } from '../yieldGates';
 
 import { EventService } from './EventService';
@@ -66,6 +66,9 @@ const ENFORCING_QUEUE_POLICIES: ReadonlySet<NonNullable<QueueOptions['policy']>>
   'stately',
 ]);
 
+// The states a job is still pending or running in, as `hasLiveJobForUser` counts them.
+const LIVE_JOB_STATES: ReadonlySet<QueuedJobState> = new Set(['created', 'retry', 'active']);
+
 // Serializes queue PROVISIONING across processes. The web and worker halves
 // both create/update every queue at boot, and pg-boss's create_queue
 // deadlocks when two sessions race the same queue name (the insert into
@@ -78,6 +81,14 @@ const QUEUE_PROVISION_LOCK_KEY = 804_551_297;
 // minutes is the only retention unit pg-boss v10 persists on a queue row (see
 // the createQueue call in onModuleInit).
 const DEAD_LETTER_RETENTION_MINUTES = 30 * 24 * 60;
+
+// Default expiry for a job on a work queue: 12 hours, the window pg-boss v10 applied
+// to every job through the constructor (`expireInHours`), which v12 only takes per queue.
+const JOB_EXPIRE_SECONDS = 12 * 60 * 60;
+
+// Finished jobs are deleted this long after completion. v10 applied it through the
+// constructor (`deleteAfterHours: 24`) to its archive table, which v12 no longer has.
+const FINISHED_JOB_RETENTION_SECONDS = 24 * 60 * 60;
 
 /**
  * How long an UNFINISHED job may sit on a work queue before pg-boss discards
@@ -273,6 +284,11 @@ export class PGBossEventService
   // backstop and becomes a dead-letter generator for the whole appliance.
   private static readonly MIN_JOB_DEADLINE_MS = 60_000;
 
+  // Bound on one complete()/fail() round trip — see `boundedBookkeeping`. Each
+  // is a single-row statement, so thirty seconds is far past healthy and still
+  // releases a held lane long before anyone would notice it had stopped.
+  private static readonly BOOKKEEPING_TIMEOUT_MS = 30_000;
+
   // Bulk-import escape hatch: even with per-event routing, one imported row can
   // legitimately fan out to several enrichment queues. During a bulk load, set
   // CI_QUEUE_SUPPRESS to a comma-separated list of queues to skip enqueuing
@@ -317,8 +333,6 @@ export class PGBossEventService
     password: config.db.password,
     schema: 'pgboss',
     ...QUEUE_RETRY_POLICY,
-    expireInHours: 12,
-    deleteAfterHours: 24,
     max: 10,
     // pg-boss's cron scheduler, off. Nothing in this codebase calls
     // `boss.schedule()` — every recurring job is a NestJS `@Cron` — so leaving
@@ -413,15 +427,13 @@ export class PGBossEventService
       // carried `retention_minutes = NULL`. Same 30 days, expressed in the one
       // unit that survives the trip.
       await this.boss.createQueue(PGBossEventService.DEAD_LETTER_QUEUE, {
-        name: PGBossEventService.DEAD_LETTER_QUEUE,
-        retentionMinutes: DEAD_LETTER_RETENTION_MINUTES,
+        retentionSeconds: DEAD_LETTER_RETENTION_MINUTES * 60,
       });
 
       // createQueue is a no-op when the queue already exists, so a DLQ created
       // before this fix keeps its NULL retention forever without this line.
       await this.boss.updateQueue(PGBossEventService.DEAD_LETTER_QUEUE, {
-        name: PGBossEventService.DEAD_LETTER_QUEUE,
-        retentionMinutes: DEAD_LETTER_RETENTION_MINUTES,
+        retentionSeconds: DEAD_LETTER_RETENTION_MINUTES * 60,
       });
 
       // Create all discovered queues, routing exhausted-retry jobs to the DLQ and
@@ -441,6 +453,7 @@ export class PGBossEventService
           role,
           yieldsTo: _yieldsTo,
           lane,
+          retentionMinutes,
           ...queueOptions
         } = EventListenerRegistry.getQueueOptions(queue) ?? {};
 
@@ -457,13 +470,19 @@ export class PGBossEventService
           // `keep_until` falling through to pg-boss's 14-day default and
           // deleting never-run jobs off a paused or backlogged queue — see
           // WORK_QUEUE_RETENTION_MINUTES.
-          retentionMinutes: WORK_QUEUE_RETENTION_MINUTES,
+          retentionSeconds: WORK_QUEUE_RETENTION_MINUTES * 60,
+          deleteAfterSeconds: FINISHED_JOB_RETENTION_SECONDS,
+          expireInSeconds: JOB_EXPIRE_SECONDS,
           ...QUEUE_RETRY_POLICY,
           ...queueOptions,
+          ...(retentionMinutes !== undefined ? { retentionSeconds: retentionMinutes * 60 } : {}),
         };
 
         await this.boss.createQueue(queue, options);
-        await this.boss.updateQueue(queue, options);
+        // pg-boss 12's updateQueue rejects any `policy` key, even an unchanged one. The
+        // policy is fixed when the queue is created, so the merge leaves it out.
+        const { policy: _creationPolicy, ...mergeable } = options;
+        await this.boss.updateQueue(queue, mergeable);
 
         if (localConcurrency != null) {
           this.declaredQueueCeilings.set(queue, localConcurrency);
@@ -659,10 +678,12 @@ export class PGBossEventService
     // pg-boss fetches ORDER BY priority DESC, so a higher number is worked
     // sooner. Every job carries an explicit priority rather than leaning on the
     // column default, so the ordering is legible from the enqueue side.
-    const sendOptions: PgBoss.SendOptions = {
+    const sendOptions: SendOptions = {
       priority: options?.priority ?? DEFAULT_JOB_PRIORITY,
       ...(options?.singletonKey ? { singletonKey: options.singletonKey } : {}),
       ...(options?.startAfter !== undefined ? { startAfter: options.startAfter } : {}),
+      ...(options?.retentionMinutes !== undefined ? { retentionSeconds: options.retentionMinutes * 60 } : {}),
+      ...(options?.heartbeatSeconds !== undefined ? { heartbeatSeconds: options.heartbeatSeconds } : {}),
     };
 
     // If a specific queue is provided and that queue exists, send only to that queue.
@@ -780,7 +801,7 @@ export class PGBossEventService
     name: string,
     queue: string,
     data: EventData,
-    sendOptions: PgBoss.SendOptions,
+    sendOptions: SendOptions,
   ): Promise<string | null> {
     const policy = this.enforcingPolicyFor(queue);
 
@@ -889,8 +910,7 @@ export class PGBossEventService
     // it identically.
     const priority = options?.priority ?? DEFAULT_JOB_PRIORITY;
 
-    const jobs: PgBoss.JobInsert[] = events.map((event) => ({
-      name: queue,
+    const jobs: JobInsert[] = events.map((event) => ({
       data: { ...event.data, name: event.name },
       priority,
       ...(options?.singletonKey ? { singletonKey: options.singletonKey } : {}),
@@ -899,7 +919,7 @@ export class PGBossEventService
       // extracts it as text, then `now() + interval` — see plans.js) — send()'s
       // SendOptions (via JobOptions) declares the correct three-way union.
       ...(options?.startAfter !== undefined
-        ? { startAfter: options.startAfter as PgBoss.JobInsert['startAfter'] }
+        ? { startAfter: options.startAfter as JobInsert['startAfter'] }
         : {}),
     }));
 
@@ -936,7 +956,7 @@ export class PGBossEventService
       // JOINs pgboss.queue, so an unprovisioned queue silently swallows the
       // whole batch. That is what the getRegisteredQueues() check at the top of
       // sendMany is for.
-      await this.boss.insert(chunk);
+      await this.boss.insert(queue, chunk);
     }
 
     this.logger.debug(`Bulk-enqueued ${jobs.length} events onto queue ${queue}`);
@@ -1464,7 +1484,7 @@ export class PGBossEventService
       }
 
       try {
-        await this.boss.complete(queueName, job.id);
+        await this.boundedBookkeeping(this.boss.complete(queueName, job.id), 'complete', queueName, job.id);
       } catch (err: unknown) {
         this.logger.error(
           `Job ${job.id} on queue ${queueName} succeeded but could not be marked complete; ` +
@@ -1563,11 +1583,18 @@ export class PGBossEventService
     );
 
     try {
-      await this.boss.fail(queueName, jobId, {
-        message: reason instanceof Error ? reason.message : String(reason),
-        stack: reason instanceof Error ? reason.stack : undefined,
-        failedAt: new Date().toISOString(),
-      });
+      await this.boundedBookkeeping(
+        this.boss.fail(queueName, jobId, {
+          message: reason instanceof Error ? reason.message : String(reason),
+          stack: reason instanceof Error ? reason.stack : undefined,
+          failedAt: new Date().toISOString(),
+          // See failJob for why the failure names its queue.
+          queue: queueName,
+        }),
+        'fail',
+        queueName,
+        jobId,
+      );
     } catch (err: unknown) {
       this.logger.error(
         `Could not record the failure of job ${jobId} on queue ${queueName}; ` +
@@ -1575,6 +1602,52 @@ export class PGBossEventService
         err instanceof Error ? err : new Error(String(err)),
       );
     }
+  }
+
+  /**
+   * Settle a pg-boss acknowledgement round trip, or reject once
+   * {@link BOOKKEEPING_TIMEOUT_MS} has passed.
+   *
+   * `complete()` and `fail()` run INSIDE the job's semaphores — the global slot,
+   * and the per-queue slot (for a lane member, the lane's one shared slot) —
+   * after the listener's own deadline has already been and gone. pg-boss sets no
+   * statement timeout and its pool waits for a connection without limit, so a
+   * round trip that never came back held those slots exactly as a hung listener
+   * did before {@link withDeadline} existed: the row stays `active`, the lane
+   * fetches nothing, and the senders keep enqueueing behind it. Found while
+   * chasing core-1's `llm-background` backlog on 2026-10-17 — which turned out
+   * to be plain saturation, not this — but nothing bounded these two awaits.
+   *
+   * On timeout the callers' existing catches apply: logged, and the row left to
+   * pg-boss's own lease expiry, which is the same outcome as a crash. The round
+   * trip itself is abandoned, not cancelled. If it lands late it settles the
+   * row it was meant for — or, if pg-boss has meanwhile expired the lease and a
+   * worker has re-fetched the same id, that retry's run: the at-least-once edge
+   * {@link withDeadline} already accepts, and a far smaller one than a lane held
+   * for hours.
+   */
+  private boundedBookkeeping<T>(
+    roundTrip: Promise<T>,
+    what: string,
+    queue: string,
+    jobId: string,
+  ): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        reject(
+          new Error(
+            `pg-boss ${what}() for job ${jobId} on queue ${queue} did not return within ` +
+              `${PGBossEventService.BOOKKEEPING_TIMEOUT_MS} ms`,
+          ),
+        );
+      }, PGBossEventService.BOOKKEEPING_TIMEOUT_MS);
+    });
+
+    return Promise.race([roundTrip, deadline]).finally(() => {
+      clearTimeout(timer);
+    });
   }
 
   private async flush(): Promise<void> {
@@ -1610,18 +1683,98 @@ export class PGBossEventService
    * Called out-of-band, typically by a webhook controller once the external
    * executor reports success.
    */
-  async completeJob(queue: string, jobId: string, output?: Record<string, unknown>): Promise<void> {
-    await this.boss.complete(queue, jobId, output);
+  async completeJob(
+    queue: string,
+    jobId: string,
+    output?: Record<string, unknown>,
+    options?: { includeQueued?: boolean },
+  ): Promise<void> {
+    // pg-boss completes only an `active` job unless told otherwise; with
+    // `includeQueued` it takes one waiting for a retry too (`state < completed`).
+    await (options?.includeQueued
+      ? this.boss.complete(queue, jobId, output, { includeQueued: true })
+      : this.boss.complete(queue, jobId, output));
     this.logger.log('Completed deferred job', { queue, jobId });
   }
 
   /**
-   * Fail a deferred job so pg-boss applies its retry/dead-letter policy. The
-   * output is persisted on the job row so the failure stays diagnosable.
+   * Fail a job this call stack is not running, so pg-boss applies its
+   * retry/dead-letter policy: a deferred job whose executor reported failure,
+   * or an `active` job whose worker is gone. The output is persisted on the job
+   * row so the failure stays diagnosable.
+   *
+   * pg-boss decides what the failure becomes, and nothing here second-guesses
+   * it: `retry_count < retry_limit` re-inserts the row as `retry` — same id,
+   * same `created_on`, so it keeps its place at the head of the queue — after
+   * the queue's backoff; otherwise it becomes `failed` and a copy goes to the
+   * dead-letter queue.
+   *
+   * The return value is pg-boss's own count, read past its type declaration:
+   * `fail()` is typed `Promise<void>` but resolves `{ jobs, requested,
+   * affected }` (manager.js `mapCommandResponse`), and `affected` is the only
+   * way to tell a job that transitioned from one that had already finished —
+   * the plan only touches `state < 'completed'`.
+   *
+   * The output always names the queue. When the job is out of retries, pg-boss
+   * copies it onto the `dead-letter` queue. pg-boss 10 kept only `data` and
+   * `output` on that copy, so without this a dead letter could not say where it
+   * died. pg-boss 12 keeps the output in `source_output` and the queue in
+   * `source_name`. `DeadLetterReaperListener` reads this field first and
+   * `source_name` after it. Replay sends the letter to that queue alone rather
+   * than to every queue that listens for the event.
    */
-  async failJob(queue: string, jobId: string, output?: Record<string, unknown>): Promise<void> {
-    await this.boss.fail(queue, jobId, output);
-    this.logger.warn(`Failed deferred job ${jobId} on queue ${queue}`);
+  async failJob(queue: string, jobId: string, output?: Record<string, unknown>): Promise<boolean> {
+    const result = (await this.boss.fail(queue, jobId, { ...output, queue })) as unknown as
+      { affected?: number } | undefined;
+    const failed = (result?.affected ?? 0) > 0;
+
+    if (failed) {
+      this.logger.warn(
+        `Failed job ${jobId} on queue ${queue}; pg-boss's retry and dead-letter policy applies`,
+      );
+    } else {
+      this.logger.debug(
+        `failJob(${queue}, ${jobId}) found nothing to fail; the job was already finished or gone`,
+      );
+    }
+
+    return failed;
+  }
+
+  /**
+   * One job's state, read through pg-boss rather than off `pgboss.job`, so the
+   * table's column names stay this domain's business.
+   */
+  async getJob(queue: string, jobId: string): Promise<QueuedJob | null> {
+    const job = await this.boss.getJobById(queue, jobId);
+
+    if (job == null) {
+      return null;
+    }
+
+    return {
+      id: job.id,
+      queue: job.name,
+      state: job.state,
+      retryCount: job.retryCount,
+      retryLimit: job.retryLimit,
+      startedOn: job.startedOn ?? null,
+    };
+  }
+
+  async hasLiveJobForUser(queue: string, userId: string): Promise<boolean> {
+    // Every payload names its user at the top level (`executeJob` reads
+    // `job.data.userId`), so this finds them whatever key each was sent with.
+    const jobs = await this.boss.findJobs(queue, { data: { userId } });
+
+    return jobs.some((job) => LIVE_JOB_STATES.has(job.state));
+  }
+
+  async touchJob(queue: string, jobId: string): Promise<boolean> {
+    // pg-boss touches only an `active` job and `affected` counts the ones it moved.
+    const { affected } = await this.boss.touch(queue, jobId);
+
+    return affected > 0;
   }
 
   private async executeJob(
@@ -1677,7 +1830,14 @@ export class PGBossEventService
         const queueSpecificEventName = `${name}:${queue}`;
 
         if (this.eventEmitter.hasListeners(queueSpecificEventName)) {
-          this.eventEmitter.emit(queueSpecificEventName, data, { jobId: job.id, done, fail, defer });
+          this.eventEmitter.emit(queueSpecificEventName, data, {
+            jobId: job.id,
+            // Fetched with includeMetadata, so the row's created_on rides along.
+            enqueuedAt: job.createdOn,
+            done,
+            fail,
+            defer,
+          });
         } else {
           skip();
         }

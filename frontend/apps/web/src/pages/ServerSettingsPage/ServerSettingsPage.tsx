@@ -1,7 +1,7 @@
 import { type FormEvent, useState } from 'react';
 
 import { getApiBaseUrl, isIosPlatform, isLocalApplianceOrigin } from '@ci/common';
-import { Button, Card, Input, Label, LoadingButton, PasswordInput } from '@ci/shadcn';
+import { Button, Card, EmailInput, Input, Label, LoadingButton, PasswordInput } from '@ci/shadcn';
 import { useNavigate } from 'react-router-dom';
 
 import { useAuth } from '@/hooks';
@@ -115,13 +115,11 @@ export function ServerSettingsPage() {
                 Sign in with email and pass unlocks this already-paired Memory when you are offline. It does
                 not connect a new device.
               </p>
-              <Input
-                type="email"
+              <EmailInput
                 className={TOUCH}
                 aria-label="Email"
                 placeholder="you@example.com"
                 autoComplete="username"
-                inputMode="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required

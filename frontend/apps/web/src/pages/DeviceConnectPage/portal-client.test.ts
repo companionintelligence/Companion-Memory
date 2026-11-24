@@ -3,8 +3,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_PORTAL_URL,
   listMemoryServers,
+  listMemoryServersByCode,
   persistPortalUrl,
+  PortalSignInExpiredError,
   probeMemoryOrigin,
+  probePortalOrigin,
   readPersistedPortalUrl,
   signInToPortal,
 } from './portal-client';
@@ -13,6 +16,7 @@ describe('device-connect portal-client', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     localStorage.removeItem('ci.deviceConnect.portalUrl');
+    localStorage.removeItem('ci.deviceConnect.portalUrl.v2');
   });
 
   it('signs in with email and returns a session token', async () => {
@@ -61,6 +65,113 @@ describe('device-connect portal-client', () => {
     expect(devices).toEqual([
       { id: 'home', name: 'Home', status: 'active', memoryUrl: 'https://memory.example.com' },
     ]);
+  });
+
+  it("keeps the Memory's resource when the Portal lists one", async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            apps: [
+              {
+                url: 'https://memory.example.com',
+                deviceName: 'Home',
+                deviceSlug: 'home',
+                resource: 'urn:ci:device:home-device',
+              },
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      ),
+    );
+
+    const devices = await listMemoryServers(
+      { token: 'oidc-at', cookie: null, kind: 'oauth' },
+      'https://hub.example.com',
+    );
+
+    expect(devices).toEqual([
+      {
+        id: 'home',
+        name: 'Home',
+        status: 'active',
+        memoryUrl: 'https://memory.example.com',
+        resource: 'urn:ci:device:home-device',
+      },
+    ]);
+  });
+
+  describe('listMemoryServersByCode (the list before the code is spent)', () => {
+    const SIGN_IN = { code: 'auth-code-1', verifier: 'v'.repeat(43) };
+    const json = (body: unknown, status = 200) =>
+      new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+    const HOME_APP = {
+      slug: 'ci-memory',
+      url: 'https://memory.example.com',
+      deviceName: 'Home',
+      deviceSlug: 'home',
+      resource: 'urn:ci:device:home-device',
+    };
+
+    it('posts the code and its verifier, and lists what the Portal answers', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json({ apps: [HOME_APP] })));
+
+      await expect(listMemoryServersByCode(SIGN_IN, 'https://hub.example.com/')).resolves.toEqual([
+        {
+          id: 'home',
+          name: 'Home',
+          status: 'active',
+          memoryUrl: 'https://memory.example.com',
+          resource: 'urn:ci:device:home-device',
+        },
+      ]);
+
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('https://hub.example.com/api/users/me/apps/by-code?slug=ci-memory');
+      expect(init.method).toBe('POST');
+      expect(init.headers).toMatchObject({ 'Content-Type': 'application/json' });
+      expect(JSON.parse(String(init.body))).toEqual({ code: 'auth-code-1', code_verifier: SIGN_IN.verifier });
+      // The code is the credential here: no Portal token travels with it.
+      expect((init.headers as Record<string, string>).Authorization).toBeUndefined();
+    });
+
+    it('tries the next Memory slug when one lists nothing, as the token list does', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi
+          .fn()
+          .mockResolvedValueOnce(json({ apps: [] }))
+          .mockResolvedValueOnce(json({ apps: [HOME_APP] })),
+      );
+
+      await expect(listMemoryServersByCode(SIGN_IN, 'https://hub.example.com')).resolves.toHaveLength(1);
+      expect(String(vi.mocked(fetch).mock.calls[1]?.[0])).toContain('slug=companion-memory');
+    });
+
+    it('answers null for an older Portal, which has no such route', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json({ error: 'not_found' }, 404)));
+
+      await expect(listMemoryServersByCode(SIGN_IN, 'https://hub.example.com')).resolves.toBeNull();
+      expect(fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('says the sign-in expired when the Portal no longer takes the code', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json({ error: 'invalid_grant' }, 400)));
+
+      await expect(listMemoryServersByCode(SIGN_IN, 'https://hub.example.com')).rejects.toBeInstanceOf(
+        PortalSignInExpiredError,
+      );
+    });
+
+    it('reports any other failure with its status', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json({ error: 'server_error' }, 500)));
+
+      await expect(listMemoryServersByCode(SIGN_IN, 'https://hub.example.com')).rejects.toThrow(
+        'Could not load your Memory Servers (500).',
+      );
+    });
   });
 
   it('filters session-device lists down to a Memory app URL', async () => {
@@ -112,6 +223,50 @@ describe('device-connect portal-client', () => {
     await expect(probeMemoryOrigin('https://memory.example.com')).rejects.toThrow(/503/);
   });
 
+  describe('probePortalOrigin (the check before the sign-in sheet opens)', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('goes to the Companion origin itself, over the same native HTTP bridge as the other Portal calls', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+
+      await probePortalOrigin('https://hub.example.com/');
+
+      expect(fetch).toHaveBeenCalledWith(
+        'https://hub.example.com/api/auth/ok',
+        expect.objectContaining({ method: 'GET' }),
+      );
+    });
+
+    it.each([404, 500, 503])(
+      'counts an HTTP %i as reachable: something is listening there',
+      async (status) => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status })));
+
+        await expect(probePortalOrigin('https://hub.example.com')).resolves.toBeUndefined();
+      },
+    );
+
+    it('rejects when the request gets no answer at all (refused, DNS, offline)', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Load failed')));
+
+      await expect(probePortalOrigin('http://192.168.0.4:9')).rejects.toThrow('Load failed');
+    });
+
+    it('gives up on a host that swallows the request, even where nothing honours an abort signal', async () => {
+      vi.useFakeTimers();
+      // Never settles, and ignores the signal — what the native bridge does.
+      vi.stubGlobal('fetch', vi.fn().mockReturnValue(new Promise(() => {})));
+
+      const probe = probePortalOrigin('http://192.168.0.4:9');
+      const settled = expect(probe).rejects.toThrow(/No answer from http:\/\/192\.168\.0\.4:9/);
+
+      await vi.advanceTimersByTimeAsync(8_000);
+      await settled;
+    });
+  });
+
   it('defaults cloud connect to production, not the internal Hub appliance Portal', () => {
     expect(DEFAULT_PORTAL_URL).toBe('https://hub.ci.computer');
     expect(readPersistedPortalUrl()).toBe('https://hub.ci.computer');
@@ -123,8 +278,21 @@ describe('device-connect portal-client', () => {
     expect(readPersistedPortalUrl()).toBe('https://hub.ci.computer');
   });
 
-  it('does not restore the internal dev cloud host as the Companion URL', () => {
+  it('does not restore an internal dev cloud host left by an older build', () => {
     localStorage.setItem('ci.deviceConnect.portalUrl', 'https://hub.companionintelligence.com');
     expect(readPersistedPortalUrl()).toBe('https://hub.ci.computer');
+  });
+
+  it('keeps an internal host the person saved', () => {
+    localStorage.setItem('ci.deviceConnect.portalUrl', 'https://hub.ci.computer');
+    persistPortalUrl('https://hub.companionintelligence.com');
+
+    expect(readPersistedPortalUrl()).toBe('https://hub.companionintelligence.com');
+    expect(localStorage.getItem('ci.deviceConnect.portalUrl')).toBeNull();
+  });
+
+  it('still honours a non-internal host saved by an older build', () => {
+    localStorage.setItem('ci.deviceConnect.portalUrl', 'https://other.example.com/');
+    expect(readPersistedPortalUrl()).toBe('https://other.example.com');
   });
 });

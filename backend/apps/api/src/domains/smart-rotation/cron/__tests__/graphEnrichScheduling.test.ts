@@ -1,7 +1,6 @@
-import { SCHEDULE_CRON_OPTIONS } from '@nestjs/schedule/dist/schedule.constants';
-
 import { FeatureService } from '@ci/common/feature';
 import { LoggerService } from '@ci/common/logging';
+import { SCHEDULE_CRON_OPTIONS } from '@ci/common/schedule/metadataKeys';
 import { EventService } from '@ci/domains/events';
 import { QuestionService } from '@ci/domains/intelligence';
 
@@ -73,8 +72,7 @@ function discoverCronSites(): CronSite[] {
       }
 
       const options = Reflect.getMetadata(SCHEDULE_CRON_OPTIONS, descriptor.value) as
-        | { cronTime?: unknown }
-        | undefined;
+        { cronTime?: unknown } | undefined;
 
       if (typeof options?.cronTime !== 'string') {
         continue;

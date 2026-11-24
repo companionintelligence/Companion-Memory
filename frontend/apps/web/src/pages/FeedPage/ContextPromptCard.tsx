@@ -10,7 +10,7 @@ import {
   type SelectorSpec,
   type SelectorValue,
 } from '@/components/selectors';
-import { useAuth } from '@/hooks';
+import { useSessionAuth } from '@/hooks';
 
 type ContextPrompt = {
   id: string;
@@ -46,7 +46,10 @@ function initialValue(selector: SelectorSpec): SelectorValue {
 }
 
 export function ContextPromptCard() {
-  const [{ authToken }] = useAuth();
+  // `ready`, not `authToken`: the token is the web JWT, which the native shell never has — its
+  // credential is a keystore API key that `fetchJson` attaches as `x-api-key`. Gating on the token
+  // meant the phone's feed never showed a context prompt, though `/context-prompts/*` takes the key.
+  const { ready, headers: sessionHeaders } = useSessionAuth();
   const [prompt, setPrompt] = useState<ContextPrompt | null>(null);
   const [value, setValue] = useState<SelectorValue>(null);
   const [loading, setLoading] = useState(true);
@@ -56,14 +59,14 @@ export function ContextPromptCard() {
   const [reloadToken, setReloadToken] = useState(0);
 
   const load = useCallback(async () => {
-    if (!authToken) {
+    if (!ready) {
       return null;
     }
 
     setError(null);
     try {
       const row = await fetchJson<ContextPrompt | null>('/api/context-prompts/pending', {
-        headers: { Authorization: `Bearer ${authToken}` },
+        headers: sessionHeaders,
       });
       const next = row ?? null;
       setPrompt(next);
@@ -75,10 +78,10 @@ export function ContextPromptCard() {
 
       return null;
     }
-  }, [authToken]);
+  }, [ready, sessionHeaders]);
 
   useEffect(() => {
-    if (!authToken) {
+    if (!ready) {
       return;
     }
 
@@ -109,10 +112,10 @@ export function ContextPromptCard() {
     return () => {
       cancelled = true;
     };
-  }, [authToken, load, reloadToken]);
+  }, [ready, load, reloadToken]);
 
   const respond = async (path: 'respond' | 'skip', response?: SelectorValue) => {
-    if (!authToken || !prompt || submittingRef.current) {
+    if (!ready || !prompt || submittingRef.current) {
       return;
     }
 
@@ -123,7 +126,7 @@ export function ContextPromptCard() {
       await fetchJson(`/api/context-prompts/${prompt.id}/${path}`, {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${authToken}`,
+          ...sessionHeaders,
           ...(path === 'respond' ? { 'Content-Type': 'application/json' } : {}),
         },
         body: path === 'respond' ? JSON.stringify({ response }) : undefined,

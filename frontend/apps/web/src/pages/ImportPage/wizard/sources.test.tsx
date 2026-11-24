@@ -5,11 +5,13 @@ import { describe, expect, it } from 'vitest';
 
 import type { CatalogSource } from '../useImportApi';
 
+import { BUNDLES } from './bundles.fixture';
 import {
-  BUNDLES,
   ECOSYSTEM_LABELS,
   PICKER_SECTIONS,
   SERVICE_LOGO,
+  bundleLogoUrl,
+  bundleToGuide,
   exportEntries,
   mergeObjects,
   objectsFor,
@@ -56,8 +58,12 @@ describe('SERVICE_LOGO', () => {
   });
 
   it('every bundle logo ships too', () => {
+    // The bundles themselves are authored in the backend (sources/bundles.ts);
+    // their ids are what the logo is resolved from, so these must track them.
     for (const bundle of BUNDLES) {
-      expect(existsSync(path.join(LOGO_DIR, bundle.logo))).toBe(true);
+      const file = bundleLogoUrl(bundle).replace('/import-logos/', '');
+
+      expect(existsSync(path.join(LOGO_DIR, file)), `${bundle.id} → ${file}`).toBe(true);
     }
   });
 });
@@ -101,7 +107,7 @@ describe('pickableSections', () => {
   ];
 
   it('collapses bundle members into the bundle button', () => {
-    const sections = pickableSections(catalog);
+    const sections = pickableSections(catalog, BUNDLES);
     const google = sections.find((section) => section.key === 'google');
 
     // gmail and google_photos are Takeout members: one bundle button, no
@@ -110,7 +116,7 @@ describe('pickableSections', () => {
   });
 
   it('keeps a service NOT covered by its ecosystem’s bundle as its own button', () => {
-    const sections = pickableSections(catalog);
+    const sections = pickableSections(catalog, BUNDLES);
     const social = sections.find((section) => section.key === 'social');
 
     // WhatsApp exports separately from the Meta bundle.
@@ -123,7 +129,7 @@ describe('pickableSections', () => {
       source({ id: 'pandora', title: 'Pandora', ecosystem: 'music', importerReady: false }),
       source({ id: 'last_fm', title: 'Last.fm', ecosystem: 'music' }),
     ];
-    const sections = pickableSections(withPandora);
+    const sections = pickableSections(withPandora, BUNDLES);
     const music = sections.find((section) => section.key === 'music');
 
     // Alphabetical is predictable to scan, but a tile that can import today
@@ -134,7 +140,7 @@ describe('pickableSections', () => {
   });
 
   it("names the bundle's members on its tile", () => {
-    const sections = pickableSections(catalog);
+    const sections = pickableSections(catalog, BUNDLES);
     const google = sections.find((section) => section.key === 'google');
 
     // The tile must say what the one download stands for, by display name —
@@ -144,7 +150,7 @@ describe('pickableSections', () => {
 
   it('shows a STANDALONE member as its own button, still covered by the bundle', () => {
     const withInstagram = [...catalog, source({ id: 'instagram', title: 'Instagram', ecosystem: 'meta' })];
-    const sections = pickableSections(withInstagram);
+    const sections = pickableSections(withInstagram, BUNDLES);
     const social = sections.find((section) => section.key === 'social');
     const meta = social?.items.find((item) => item.key === 'b:meta');
 
@@ -156,9 +162,10 @@ describe('pickableSections', () => {
   });
 
   it('gives an ecosystem no section claims its own group', () => {
-    const sections = pickableSections([
-      source({ id: 'novel_service', title: 'Novel', ecosystem: 'brand-new-ecosystem' }),
-    ]);
+    const sections = pickableSections(
+      [source({ id: 'novel_service', title: 'Novel', ecosystem: 'brand-new-ecosystem' })],
+      BUNDLES,
+    );
 
     expect(sections.map((section) => section.key)).toContain('brand-new-ecosystem');
   });
@@ -180,7 +187,7 @@ describe('the Amazon bundle', () => {
   ];
 
   it('collapses all five sources into one button claiming every importer', () => {
-    const sections = pickableSections(amazonCatalog);
+    const sections = pickableSections(amazonCatalog, BUNDLES);
     const amazon = sections.find((section) => section.key === 'amazon');
 
     expect(amazon?.items.map((item) => item.key)).toEqual(['b:amazon']);
@@ -194,7 +201,7 @@ describe('the Amazon bundle', () => {
   });
 
   it('shows every kind its members bring, Orders & payments included', () => {
-    const sections = pickableSections(amazonCatalog);
+    const sections = pickableSections(amazonCatalog, BUNDLES);
     const tile = sections.find((section) => section.key === 'amazon')?.items[0];
 
     expect(tile?.objects.map((o) => o.label)).toEqual([
@@ -282,13 +289,13 @@ describe('exportEntries', () => {
   ];
 
   it('one card per pick: a bundle is one card, walked in picker order', () => {
-    const entries = exportEntries(catalog, new Set(['b:google', 'spotify', 'whatsapp']));
+    const entries = exportEntries(catalog, BUNDLES, new Set(['b:google', 'spotify', 'whatsapp']));
 
     expect(entries.map((entry) => entry.key)).toEqual(['b:google', 'whatsapp', 'spotify']);
   });
 
   it('a bundle member picked THROUGH the bundle does not also get its own card', () => {
-    const entries = exportEntries(catalog, new Set(['b:meta']));
+    const entries = exportEntries(catalog, BUNDLES, new Set(['b:meta']));
 
     expect(entries).toHaveLength(1);
     expect(entries[0].kind).toBe('bundle');
@@ -296,7 +303,7 @@ describe('exportEntries', () => {
 
   it('a STANDALONE member picked on its own gets its own card, declaring itself', () => {
     const withInstagram = [...catalog, source({ id: 'instagram', ecosystem: 'meta' })];
-    const entries = exportEntries(withInstagram, new Set(['instagram']));
+    const entries = exportEntries(withInstagram, BUNDLES, new Set(['instagram']));
 
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({ kind: 'service', key: 'instagram', importers: ['instagram'] });
@@ -304,9 +311,46 @@ describe('exportEntries', () => {
 
   it('the bundle still declares a standalone member picked through the bundle', () => {
     const withInstagram = [...catalog, source({ id: 'instagram', ecosystem: 'meta' })];
-    const entries = exportEntries(withInstagram, new Set(['b:meta']));
+    const entries = exportEntries(withInstagram, BUNDLES, new Set(['b:meta']));
 
     expect(entries).toHaveLength(1);
     expect(entries[0].importers).toEqual(expect.arrayContaining(['facebook', 'instagram']));
+  });
+});
+
+describe('bundleToGuide', () => {
+  it("keeps the steps heading and the alternative path, so the card renders them like a source's", () => {
+    const guide = bundleToGuide({
+      ...BUNDLES[1],
+      url: 'https://accountscenter.facebook.com/',
+      stepsTitle: 'One-time export',
+      steps: ['Open Accounts Center.'],
+      altPath: {
+        title: 'Ongoing transfer',
+        url: 'https://example.invalid/transfer',
+        steps: ['Set up a transfer.'],
+      },
+      notes: ['WhatsApp is separate.'],
+    });
+
+    expect(guide).toMatchObject({
+      title: 'Meta (Facebook, Instagram)',
+      url: 'https://accountscenter.facebook.com/',
+      stepsTitle: 'One-time export',
+      steps: ['Open Accounts Center.'],
+      altPath: {
+        title: 'Ongoing transfer',
+        url: 'https://example.invalid/transfer',
+        steps: ['Set up a transfer.'],
+      },
+      notes: ['WhatsApp is separate.'],
+    });
+  });
+
+  it('leaves both out when the bundle has neither', () => {
+    const guide = bundleToGuide(BUNDLES[0]);
+
+    expect(guide.stepsTitle).toBeUndefined();
+    expect(guide.altPath).toBeUndefined();
   });
 });

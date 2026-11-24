@@ -76,7 +76,7 @@ export function migrationVersionsOnDisk(dir: string = resolveMigrationsDir()): s
 export function resolveMigrationsDir(): string {
   const suffix = path.join('db', 'postgres', 'migrations');
 
-  for (let dir = __dirname; ; ) {
+  for (let dir = __dirname; ;) {
     if (existsSync(path.join(dir, suffix))) {
       return path.join(dir, suffix);
     }
@@ -311,6 +311,7 @@ export async function verifyDatabaseSchema(connection: DatabaseConnection): Prom
     throw new Error(
       `Could not reach ${connection.host}:${connection.port}/${connection.database} to verify the schema: ` +
         (err instanceof Error ? err.message : String(err)),
+      { cause: err },
     );
   }
 

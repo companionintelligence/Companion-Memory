@@ -1,7 +1,8 @@
-import { ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 
-import { AskEntity, GrantService, TERMINAL_ASK_STATUSES } from '@ci/domains/asks';
+import { AskEntity, AskExecutorService, GrantService, TERMINAL_ASK_STATUSES } from '@ci/domains/asks';
 
+import { PeerIdentityKeyEntity } from '../entities/PeerIdentityKeyEntity';
 import { PEER_ASK_NO_ANSWER_REASON, PEER_ASK_PENDING, type PeerAskBody } from '../protocol';
 
 import { requestDigest } from './PeerAskCorrelationService';
@@ -54,6 +55,8 @@ function makeService(
     storedAnswer?: unknown;
     /** The status the persisted ask row starts at (a replay reads it). */
     askStatus?: string;
+    /** Live did:keys on this box, by owner: what a named `recipient` is looked up in. */
+    keys?: Record<string, string>;
   } = {},
 ) {
   const peerLinkService = {
@@ -153,10 +156,21 @@ function makeService(
     create: jest.fn().mockImplementation((row: unknown) => row),
     save: jest.fn().mockImplementation((row: unknown) => Promise.resolve(row)),
   };
+  const identityKeyRepository = {
+    findOne: jest.fn().mockImplementation(({ where }: { where: { didKey: string; status: string } }) => {
+      const owner = Object.entries(opts.keys ?? {}).find(([, didKey]) => didKey === where.didKey)?.[0];
+
+      return Promise.resolve(owner != null && where.status === 'active' ? { userId: owner } : null);
+    }),
+  };
   const eventRepository = {
     find: jest.fn().mockResolvedValue(opts.events ?? []),
     manager: {
-      getRepository: jest.fn().mockReturnValue(correlationRepository),
+      getRepository: jest
+        .fn()
+        .mockImplementation((entity: unknown) =>
+          entity === PeerIdentityKeyEntity ? identityKeyRepository : correlationRepository,
+        ),
       transaction: jest.fn().mockImplementation(async (work: (m: unknown) => Promise<unknown>) => {
         transacting = true;
         try {
@@ -216,6 +230,67 @@ function makeService(
   };
 }
 
+describe('PeerAskService — two people here linked to the same asker', () => {
+  const BOB = 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK';
+  const CAROL = 'did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH';
+  const household = () => [
+    link({ id: 'link-bob', ownerUserId: 'bob' }),
+    link({ id: 'link-carol', ownerUserId: 'carol' }),
+  ];
+  const ask = (recipient?: string): PeerAskBody => ({
+    ...body({ archetype: 'relationship', subject: 'X' }),
+    ...(recipient ? { recipient } : {}),
+  });
+
+  it('answers as the person the ask names', async () => {
+    const { service, askService } = makeService({ links: household(), keys: { bob: BOB, carol: CAROL } });
+
+    // What follows the routing reads this suite's fixed ask row, owned by `owner-1`; only the routing matters here.
+    await service.handle(PEER, ask(CAROL)).catch(() => undefined);
+
+    expect(askService.create).toHaveBeenCalledWith(
+      { userId: 'carol' },
+      expect.objectContaining({ peerLinkId: 'link-carol', responderUserId: 'carol' }),
+    );
+  });
+
+  it('still refuses when no one is named, rather than pick a member', async () => {
+    const { service, askService } = makeService({ links: household(), keys: { bob: BOB, carol: CAROL } });
+
+    await expect(service.handle(PEER, ask())).rejects.toThrow('Ambiguous peer link');
+    expect(askService.create).not.toHaveBeenCalled();
+  });
+
+  it('never answers through another member’s link when the person named is not linked to the asker', async () => {
+    const { service, askService } = makeService({
+      links: [link({ id: 'link-bob', ownerUserId: 'bob' })],
+      keys: { bob: BOB, carol: CAROL },
+    });
+
+    await expect(service.handle(PEER, ask(CAROL))).rejects.toThrow('No peer link');
+    expect(askService.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a recipient who holds no live key here', async () => {
+    const { service } = makeService({ links: household(), keys: { bob: BOB } });
+
+    await expect(service.handle(PEER, ask(CAROL))).rejects.toThrow('No peer link');
+  });
+
+  it('collects from the link the ask came in on, with no recipient needed', async () => {
+    const { service, correlationRepository } = makeService({ links: household() });
+    correlationRepository.findOne.mockImplementation(({ where }: { where: { peerLinkId: string } }) =>
+      Promise.resolve(where.peerLinkId === 'link-carol' ? { askId: 'ask-1', requestDigest: 'x' } : null),
+    );
+
+    await service.result(PEER, 'ask-corr-1');
+
+    expect(correlationRepository.findOne).toHaveBeenCalledWith({
+      where: { peerLinkId: 'link-carol', correlationId: 'ask-corr-1' },
+    });
+  });
+});
+
 describe('PeerAskService.handle', () => {
   it('refuses an unlinked peer', async () => {
     const { service, askService } = makeService({ links: [] });
@@ -246,6 +321,21 @@ describe('PeerAskService.handle', () => {
         responderUserId: 'owner-1',
         peerLinkId: 'link-1',
         direction: 'inbound',
+      }),
+    );
+  });
+
+  // `handle` is where both peer doors arrive: `PeerAskController.ask` and the
+  // Trust Tasks engine's `ask/request`.
+  it('stores the normalized query, not the raw wire text', async () => {
+    const { service, askService } = makeService();
+
+    await service.handle(PEER, body({ archetype: 'relationship', subject: 'Car\u200Bol' }));
+
+    expect(askService.create).toHaveBeenCalledWith(
+      { userId: 'owner-1' },
+      expect.objectContaining({
+        query: expect.objectContaining({ prompt: 'Carol', promptHiddenCharactersRemoved: true }),
       }),
     );
   });
@@ -332,6 +422,48 @@ describe('PeerAskService.handle', () => {
     // revoked grant widen an answer on the local path; the same stamp keeps a
     // re-run of this ask capped at what the owner consented to.
     expect(askService.setConsentBasis).toHaveBeenCalledWith('ask-1', 'g1', 'count');
+  });
+
+  it('SECURITY: a stranger with an auto photos grant cannot find a photo by the place on its event', async () => {
+    // "Any photos from 14 Elm Street?" matched on a photo event's place would
+    // answer a location question at the photos ceiling, and a stranger's
+    // location ceiling is `none`. The real executor runs here; only the index
+    // is faked, so the assertion is on what the search was allowed to match.
+    const mocks = makeService({ links: [link({ trustTier: 'stranger' })], decision: 'auto' });
+    const searchService = {
+      searchPrompt: jest.fn().mockResolvedValue({ items: [], totalMatches: 0, truncated: false, limit: 50 }),
+    };
+    const logger = { setContext: jest.fn(), warn: jest.fn(), log: jest.fn() };
+    const service = new PeerAskService(
+      mocks.peerLinkService as never,
+      mocks.askService as never,
+      mocks.grantService as never,
+      new AskExecutorService(
+        searchService as never,
+        logger as never,
+        {
+          photosAtNamedPlace: jest.fn().mockResolvedValue({ places: [], fileIds: [], total: 0 }),
+        } as never,
+      ),
+      mocks.answerService as never,
+      mocks.auditService as never,
+      mocks.eventRepository as never,
+      logger as never,
+    );
+
+    const result = await service.handle(
+      PEER,
+      body({ archetype: 'content', subject: 'Any photos from 14 Elm Street?', dataClass: 'photos' }),
+    );
+
+    expect(result.status).toBe('answered');
+    expect(searchService.searchPrompt).toHaveBeenCalledTimes(1);
+    expect(searchService.searchPrompt.mock.calls[0][1]).toMatchObject({
+      prompt: 'Any photos from 14 Elm Street?',
+      includeTypes: ['file'],
+      mediaEvents: 'photos',
+      mediaEventPlaces: false,
+    });
   });
 
   it('answers a relationship ask as a boolean with NO item references', async () => {
@@ -532,6 +664,81 @@ describe('toAskQuery', () => {
         body({ archetype: 'availability', from: '2026-08-07T09:00:00.000Z', to: '2026-08-07T17:00:00.000Z' }),
       ),
     ).toMatchObject({ queryType: 'availability', dataClass: 'calendar' });
+  });
+});
+
+/**
+ * A peer's question is stored as a local one is: through the same parser, so
+ * zero-width, bidi and tag characters are removed and the owner is told they
+ * were. The web card strips them again at render, but the stored query is also
+ * what an AI client reads through the ask inbox.
+ */
+describe('toAskQuery — hidden characters are removed as on a local ask', () => {
+  const window = { from: '2026-09-01T00:00:00.000Z', to: '2026-09-02T00:00:00.000Z' };
+
+  it('removes a zero-width space from a relationship subject and says so', () => {
+    expect(toAskQuery(body({ archetype: 'relationship', subject: 'Car\u200Bol' }))).toMatchObject({
+      prompt: 'Carol',
+      promptHiddenCharactersRemoved: true,
+    });
+  });
+
+  it('removes a bidi override and a tag-character run from a content subject', () => {
+    const query = toAskQuery(
+      body({ archetype: 'content', subject: '\u202Ephotos\u{E0041}\u{E0042}', dataClass: 'photos' }),
+    );
+
+    expect(query).toMatchObject({ prompt: 'photos', promptHiddenCharactersRemoved: true });
+  });
+
+  it('removes hidden characters from the actor label', () => {
+    const query = toAskQuery({
+      ...body({ archetype: 'relationship', subject: 'Carol' }),
+      actor: { kind: 'first-party-agent', label: 'Ag\u200Bent' },
+    });
+
+    expect(query.actor).toEqual({ kind: 'first-party-agent', label: 'Agent' });
+  });
+
+  it('removes hidden characters from the stated purpose', () => {
+    const query = toAskQuery({
+      ...body({ archetype: 'relationship', subject: 'Carol' }),
+      purpose: 'wedding \u200Binvites',
+    });
+
+    expect(query.filters?.purpose).toBe('wedding invites');
+  });
+
+  it('removes them from availability’s purpose, which is both its prompt and its stated purpose', () => {
+    const query = toAskQuery(body({ archetype: 'availability', ...window, purpose: '\u200Blunch' }));
+
+    expect(query.prompt).toBe('lunch');
+    expect(query.filters?.purpose).toBe('lunch');
+  });
+
+  it.each([
+    ['empty', ''],
+    ['blank', '   '],
+    ['made only of hidden characters', '\u200B'],
+  ])('uses the ask’s own prompt for an availability purpose that is %s', (_label, purpose) => {
+    const query = toAskQuery(body({ archetype: 'availability', ...window, purpose }));
+
+    expect(query.prompt).toBe('q?');
+    expect(query.filters?.purpose).toBeUndefined();
+    expect(query).not.toHaveProperty('promptHiddenCharactersRemoved');
+  });
+
+  it('refuses a subject made only of hidden characters with the peer surface’s one refusal', () => {
+    const empty = () => toAskQuery(body({ archetype: 'relationship', subject: '\u200B\u200B' }));
+
+    expect(empty).toThrow(BadRequestException);
+    expect(empty).toThrow(/^Malformed ask$/);
+  });
+
+  it('adds no flag for a subject that had nothing hidden in it', () => {
+    expect(toAskQuery(body({ archetype: 'relationship', subject: 'Carol' }))).not.toHaveProperty(
+      'promptHiddenCharactersRemoved',
+    );
   });
 });
 

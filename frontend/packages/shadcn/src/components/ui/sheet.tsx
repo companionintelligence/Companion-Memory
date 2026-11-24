@@ -39,14 +39,17 @@ function SheetContent({
   side = 'right',
   showCloseButton = true,
   overlayClassName,
+  container,
   ...props
 }: React.ComponentProps<typeof SheetPrimitive.Content> & {
   side?: 'top' | 'right' | 'bottom' | 'left';
   showCloseButton?: boolean;
   overlayClassName?: string;
+  /** Portal target. The phone add-to-calendar sheet uses `#overlay-modal` so it stacks above the nav drawer. */
+  container?: HTMLElement | null;
 }) {
   return (
-    <SheetPortal>
+    <SheetPortal container={container}>
       <SheetOverlay className={overlayClassName} />
       <SheetPrimitive.Content
         data-slot="sheet-content"

@@ -1,5 +1,7 @@
 import type { BaseClient, Connection } from '@ci/domains/connections';
 
+import { isSyncTokenInvalidError } from './syncTokenErrors';
+
 interface CalendarEvent {
   id: string;
   status?: string;
@@ -7,29 +9,6 @@ interface CalendarEvent {
   start?: Record<string, unknown>;
   end?: Record<string, unknown>;
   [key: string]: unknown;
-}
-
-/**
- * Whether `err` is Google's 410 GONE response for an invalidated sync token
- * (`reason: 'fullSyncRequired'`). `BaseOAuth2Client.request` throws an `Error`
- * whose `.details` carries `{ code, message }` parsed from the response body
- * — Google's Calendar API puts the HTTP status in `error.code` there — and
- * falls back to `{ code: response.status, message: response.statusText }`
- * when the body can't be parsed as JSON; either way `details.code` ends up as
- * the HTTP status. The message check is a fallback for any shape that misses.
- */
-function isSyncTokenInvalidError(err: unknown): boolean {
-  if (!(err instanceof Error)) {
-    return false;
-  }
-
-  const details = (err as Error & { details?: { code?: number } }).details;
-
-  if (details?.code === 410) {
-    return true;
-  }
-
-  return /sync\s*token|fullsyncrequired|\b410\b/i.test(err.message);
 }
 
 export async function syncCalendar({

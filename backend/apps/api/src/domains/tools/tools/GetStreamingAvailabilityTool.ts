@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { LoggerService } from '@ci/common/logging';
 
@@ -213,6 +213,7 @@ export class GetStreamingAvailabilityTool extends BaseTool<
     } catch (error) {
       throw new Error(
         `Failed to get streaming availability: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
       );
     }
   }

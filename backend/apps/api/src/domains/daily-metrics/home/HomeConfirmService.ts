@@ -47,17 +47,35 @@ export class HomeConfirmService {
       .map((candidate) => ({ id: candidate.locationId as string, label: candidate.label }));
   }
 
+  /**
+   * The place a yes/no "Is <label> home?" names, and the one a bare "yes"
+   * confirms: the candidate {@link KnownPlacesService} tagged `home`, or null.
+   *
+   * There is deliberately no fallback to the busiest candidate. The tag needs
+   * evidence that recurs over weeks, so a user without it has no `home`
+   * candidate, and the busiest place is exactly the unsupported guess the tag
+   * refuses to make. On the reference corpus that is a calendar Location built
+   * from travel, or an unnamed cell labelled "Unknown place".
+   */
   topHomeCandidate(candidates: KnownPlaceCandidate[]): KnownPlaceCandidate | null {
-    return candidates.find((candidate) => candidate.kind === 'home') ?? candidates[0] ?? null;
+    return candidates.find((candidate) => candidate.kind === 'home') ?? null;
   }
 
   /**
-   * Enqueue at most one undismissed `confirm_home` action when home is unlabeled
-   * and overnight clustering produced at least one candidate.
+   * Enqueue at most one undismissed `confirm_home` action while home is
+   * unlabeled. It asks "Is <label> home?" about the `home` candidate when there
+   * is one, and otherwise "Which of these places is home?" over the named
+   * candidates. With neither, there is nothing to ask.
    */
   async ensureAction(context: UserServiceContext): Promise<void> {
     const { labeled, candidates } = await this.snapshot(context);
     if (labeled || candidates.length === 0) {
+      return;
+    }
+
+    const top = this.topHomeCandidate(candidates);
+    const options = this.candidateOptions(candidates);
+    if (!top && options.length === 0) {
       return;
     }
 
@@ -77,8 +95,6 @@ export class HomeConfirmService {
       return;
     }
 
-    const top = this.topHomeCandidate(candidates);
-    const options = this.candidateOptions(candidates);
     const prompt = top ? `Is ${top.label} home?` : 'Which of these places is home?';
 
     await this.actionService.create(context, {
@@ -151,6 +167,8 @@ export class HomeConfirmService {
           eventCount: 0,
           sampleEvents: [],
           confidence: 0.8,
+          presenceDays: 0,
+          presenceNights: 0,
         }
       );
     }

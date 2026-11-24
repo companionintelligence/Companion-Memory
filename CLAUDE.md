@@ -1,7 +1,5 @@
 # CLAUDE.md — CI-Server
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 ## Platform role
 
 **CI-Server** sits in the **Appliance** layer of the Companion Intelligence platform.
@@ -48,6 +46,17 @@ make test
 # Run one app's tests directly (only a slice of `make test`)
 cd backend/apps/api && yarn test
 
+# The ~85 database-backed be-api suites SKIP SILENTLY without a database, so
+# `make test` can pass having run none of them. This starts a throwaway Postgres
+# in Docker, runs them against it with CI_REQUIRE_DB=1 (a missing database
+# FAILS instead of skipping), and fails on any unexplained skip or DB crash.
+# Never uses .env. See docs/CI.md.
+make test-db                                  # or ARGS='src/domains/import', KEEP=1
+# KEEP=1 leaves the container up, and later runs leave it alone for 24h and while
+# anything is connected (KEEP_FOR=12h sets the window). Without that, every run
+# removes any ci-testdb-* container older than 2h that nothing is connected to.
+# docs/CI.md#stale-containers-and---keep
+
 # The native suites, which `make test` does NOT cover (each checks its own
 # toolchain first — JDK 21 + an Android SDK via ANDROID_HOME; cargo + GTK/WebKit)
 make test-android   # gradlew testDebugUnitTest — :app + the 3 :ci-capacitor-* modules
@@ -58,13 +67,13 @@ make test-desktop   # cargo test in frontend/apps/desktop/src-tauri
 make build
 make build IMAGE=api    # just one image, not the whole ENV-appropriate set. Valid:
                         # api gateway setup-database database object-store
-                        # setup-secrets summary hbpe
+                        # setup-secrets powersync summary hbpe
 make build DRY_RUN=1    # print the exact docker build commands — every --build-arg
                         # and, on a cuda/rocm host, the wheel-image tags — without running Docker
 ```
 
-**Three of those targets are one-line delegations to `scripts/xtask/`, a TypeScript program
-run under `tsx`: `build`, `dev` and `test`.** Their logic is no
+**Four of those targets are one-line delegations to `scripts/xtask/`, a TypeScript program
+run under `tsx`: `build`, `dev`, `test` and `test-db`.** Their logic is no
 longer in the Makefile — read the recipe before editing it. Dispatch, `--help` and signal
 handling are in `scripts/xtask/index.ts`; one file per subcommand under `commands/`; shared
 pieces under `lib/` — `exec.ts` (`run()` fail-fast / `tryRun()` tolerant), `gpu.ts` (GPU
@@ -123,15 +132,26 @@ gh api repos/companionintelligence/CI-Server/branches/main/protection --jq '.req
 **`publish.yml` must be dispatched on a release TAG, never on `main`.** Its
 `Resolve VERSION from tag` steps do `tag="${GITHUB_REF#refs/tags/}"`, so on a
 branch ref `VERSION` becomes the literal `refs/heads/main` — not a legal image
-tag. The `Refuse to publish a non-release ref` guard — first step of **all three**
-of its jobs (`verify-ci-passed`, `build`, `merge-and-register`; this said "both"
-when there were two), before any checkout, matching `GITHUB_REF`
+tag. The `Refuse to publish a non-release ref` guard — first step of **all four**
+of its jobs (`verify-ci-passed`, `build`, `push`, `merge-and-register`; this said
+"three" before `push` split out of `build`), before any checkout, matching `GITHUB_REF`
 against the workflow-level `RELEASE_TAG_RE` — now rejects that in seconds
 instead of after the two `timeout-minutes: 150` matrix legs (`ubuntu-latest`,
 `ubuntu-24.04-arm`) have built everything. The mistake is cheap now, not
 correct: the run still ends red and nothing is released. `docs/CI.md`'s
 generated "Cut a release" block still says `--ref main` — it is wrong; see the
 hand-maintained note in that file.
+
+**A release is one `release.yml` run on the tag.** It calls `publish.yml`, creates the
+GitHub Release, starts Memory Desktop (`desktop-release.yml`, as a run of its own so its
+Windows lane gets the `production` Environment's signing secrets) and the phone apps
+(`mobile-release.yml`, only when something they contain changed), then checks every
+platform with `scripts/release/release-check.mjs`. The desktop and phone apps take the
+server's version number (server 2026.11.17 ships Memory Desktop 2026.11.17). Before
+tagging, the gates `publish.yml`'s `GATED_WORKFLOWS` marks required, plus
+`desktop-build.yml`, must be green at that commit. Steps, version rules and what stays
+manual: `docs/CI.md`, section "Release in one run". To see where a release has landed at
+any time, run `node scripts/release/release-check.mjs`.
 
 **The release gate is a LIST now, not just `ci.yml`.** `verify-ci-passed` loops
 over a `GATED_WORKFLOWS` env block in `publish.yml` (`<workflow>:<required|advisory>`
@@ -188,6 +208,8 @@ SQL migration files in `backend/apps/api/db/postgres/migrations/` are hand-writt
 
 **Never hand-write the timestamp prefix.** Create migration files with `yarn workspace @ci/be-api migrate:make <name>`, which stamps the real UTC time to the second. Hand-picked round timestamps (…120000) have collided across parallel branches; dbmate keys `schema_migrations` on the prefix, so a duplicate breaks `migrate` for everyone. Uniqueness is enforced by `bin/check-migration-versions.js` (runs in lint-staged and before `yarn migrate`). It is plain CommonJS, not TypeScript, because `migrate` runs it inside the production image, which has no devDependencies — keep it dependency-free.
 
+**Never let a comment line start with `-- migrate:up` or `-- migrate:down`.** dbmate finds its directives with a line-anchored regex, so prose that wraps onto one is a directive. Since dbmate 2.29 each extra `-- migrate:up` opens a new section, and the file fails with `dbmate requires each migration to define a down block`. That is how 20260930025958 stopped `migrate` once #2865 took dbmate from 2.27 to 2.36. In prose, quote the word (`` -- `migrate:up` ``). `bin/check-migration-directives.js`, which runs in the same two places, requires exactly one of each per file.
+
 ## GraphQL codegen
 
 `backend/apps/api/src/domains/graphql/__generated__/schema.graphql` and everything under
@@ -228,7 +250,10 @@ API is the single scheduler — `@nestjs/schedule` crons in
 `domains/python-functions/cron/PythonFunctionCrons.ts` fan out one pg-boss job per user,
 `domains/python-functions` POSTs them to `POST /functions/run` in the sidecar, and the
 outcome returns over an authenticated callback webhook. Import paths are `ci.hbpe.*` / `ci.summary.*` (PEP 420
-namespace packages; no member may ship `src/ci/__init__.py`).
+namespace packages; no member may ship `src/ci/__init__.py`). What both share below their
+domains — the function runner and its routes, the bearer middleware, the LLM-host rewrite,
+the timezone validation — is `ci.sidecar.*` from `backend/packages/sidecar-core`, wired into
+all four sidecar Dockerfiles beside `ci-telemetry`.
 
 See `CI-Engineering/architecture/HBPE/` for design docs.
 
@@ -236,6 +261,6 @@ See `CI-Engineering/architecture/HBPE/` for design docs.
 
 Multiple AI agents work these repos in parallel. Never use `git reset --hard`, `git clean -f`, or any destructive git command without explicit confirmation from the user.
 
-## Confidentiality
+## License
 
-Private & Confidential — Property of Lifescope Inc. Do not distribute.
+Licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE.md). Keep the Required Notice in LICENSE.md, and the attributions in NOTICE.md, with any copy you redistribute.

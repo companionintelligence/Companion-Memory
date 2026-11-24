@@ -22,12 +22,14 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { ApplianceAdminGuard } from '@ci/common/guards';
 import { EventsModule } from '@ci/domains/events';
 
 import {
   ClientFactory,
   FacebookClient,
   GitHubClient,
+  DropboxClient,
   RedditClient,
   GoogleClient,
   MicrosoftClient,
@@ -55,6 +57,7 @@ import { ProviderService } from './services/ProviderService';
     ClientFactory,
     FacebookClient,
     GitHubClient,
+    DropboxClient,
     RedditClient,
     GoogleClient,
     CloudOAuthProxyService,
@@ -66,6 +69,9 @@ import { ProviderService } from './services/ProviderService';
     SignalClient,
     SlackClient,
     SteamClient,
+    // Registered so Nest resolves its DataSource here: connecting Signal asks it whether the
+    // caller is an administrator (the route serves every provider, so it cannot be a guard).
+    ApplianceAdminGuard,
   ],
   controllers: [ConnectionsController, ProvidersController],
   exports: [
@@ -76,6 +82,7 @@ import { ProviderService } from './services/ProviderService';
     ProviderKeyService,
     FacebookClient,
     GitHubClient,
+    DropboxClient,
     RedditClient,
     GoogleClient,
     MicrosoftClient,
@@ -99,6 +106,7 @@ export { ClientFactory } from './clients';
 export {
   FacebookClient,
   GitHubClient,
+  DropboxClient,
   RedditClient,
   GoogleClient,
   MicrosoftClient,
@@ -120,6 +128,7 @@ export type { ProviderKey } from './entities/ProviderKeyEntity';
 export type {
   Calendar,
   CalendarEvent,
+  CalendarViewWindow,
   OneDrivePageEntity,
   OneDriveFileEntity,
   OutlookMailMessageEntity,
@@ -136,3 +145,4 @@ export type {
 } from './clients/types';
 
 export { OUTLOOK_SKIP_REGEX, ONEDRIVE_ETAG_REGEX } from './clients/constants';
+export { callbackRequestOrigin } from './utils/callbackUrls';

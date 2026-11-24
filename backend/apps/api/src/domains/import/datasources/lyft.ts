@@ -14,14 +14,15 @@
  * sources describe the same kind of event, and a timeline that renders a Lyft
  * ride differently from an Uber one is only telling you which app was open. */
 import fs from 'node:fs';
-import { open, readdir, stat as fsStat } from 'node:fs/promises';
+import { readdir, stat as fsStat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { parseCSV } from './csv';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
+import { readHead, stripBom } from './sniff';
 import type { ImportParams } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 // True when the CSV header row carries a column hinting at a Lyft ride export.
 function headerHasRideCols(text: string): boolean {
@@ -225,23 +226,9 @@ export class LyftFileImporter implements FileImporter {
 
   // Read only the first ~8KB to inspect the CSV header row.
   private async headerMatches(fpath: string): Promise<boolean> {
-    try {
-      const fh = await open(fpath, 'r');
-      try {
-        const buf = Buffer.alloc(8192);
-        const { bytesRead } = await fh.read(buf, 0, 8192, 0);
-        let text = buf.toString('utf8', 0, bytesRead);
-        if (text.charCodeAt(0) === 0xfeff) {
-          text = text.slice(1);
-        }
+    const head = await readHead(fpath, 8192);
 
-        return headerHasRideCols(text);
-      } finally {
-        await fh.close().catch(() => {});
-      }
-    } catch {
-      return false;
-    }
+    return head != null && headerHasRideCols(stripBom(head));
   }
 
   async fileImport(_ctx: unknown, entry: DirEntry, params: ImportParams): Promise<void> {
@@ -425,7 +412,7 @@ export class LyftFileImporter implements FileImporter {
         // The event is anchored where the ride began, or — failing that — where
         // it was requested from, which is within a block of it.
         ...((pickup ?? request) ? { location: pickup ?? request } : {}),
-        content: { filename: 'trip.txt', mediaType: 'text/plain', data: async () => Buffer.from(summary) },
+        content: textContent('trip.txt', summary),
         metadata: {
           Title: title,
           'Ride ID': rideId || undefined,
@@ -498,21 +485,29 @@ export class LyftFileImporter implements FileImporter {
       return;
     }
 
-    // Named by its address where the export has one. The request leg never
-    // does — Lyft records coordinates for it but no address — so it falls back
-    // to the trip's title rather than borrowing the pickup's street.
-    const title = address || `${tripTitle} (${leg.toLowerCase()})`;
+    // The body is a human sentence either way — it is read by a person, not by
+    // the place-name mapping.
+    const body = address || `${tripTitle} (${leg.toLowerCase()})`;
     params.pipeline.push({
       item: {
         id,
         classification: 'location',
         timestamp: ts,
         location: coords,
-        content: { filename: 'position.txt', mediaType: 'text/plain', data: async () => Buffer.from(title) },
+        content: textContent('position.txt', body),
         metadata: {
-          Title: title,
-          // `Name` is what the location.fix mapping prefers for a place name, so
-          // the position arrives addressed rather than as bare coordinates.
+          // `Title` and `Name` are both read as the fix's PLACE NAME
+          // (push/inputs.ts toPositionInput, via titleFor's location.fix arm), so
+          // each is set only when the export actually recorded an address for
+          // THIS leg. The request leg never has one — Lyft records coordinates
+          // for it but no address — and until 2026-11-05 `Title` fell back to
+          // the ride narration here, the exact defect uber.ts documents: a trip
+          // narration names the TRIP, not any point along it, and
+          // `promote.place_position` turned such fixes into Location entities
+          // the Places list rendered as venues. An unnamed fix with coordinates
+          // is a reverse-geocode candidate instead, which names it properly.
+          // The narration stays on `Trip` (with `Leg`), which is provenance.
+          Title: address || undefined,
           Name: address || undefined,
           Leg: leg,
           Trip: tripTitle,

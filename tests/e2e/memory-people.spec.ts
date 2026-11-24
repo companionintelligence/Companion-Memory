@@ -14,13 +14,17 @@ import { expect, test } from './fixtures/authenticated';
 test('people list loads with sane, named results', async ({ page }) => {
   await page.goto('/memory/people');
 
-  // The page's own "N people" count is the "finished loading" signal. It used
+  // The page's own people count is the "finished loading" signal. It used
   // to be the search input, but PeoplePage has no input of its own any more —
   // the header's GlobalSearchBox drives this page through `?search=` (see
   // isLiveSearchPath), and PeoplePage.test.tsx asserts the old placeholder is
   // gone. The count is a better signal anyway: it only renders once the query
   // has resolved, whereas the input rendered before the data did.
-  await expect(page.getByText(/\d+ people/)).toBeVisible({ timeout: 15_000 });
+  //
+  // The header renders the label "People" and the count (e.g. "66", or
+  // "1,234") as two sibling elements, so there is no "N people" string to
+  // match; their shared row reads "People66". Assert that row.
+  await expect(page.getByText(/^People\s*[\d,]+$/).first()).toBeVisible({ timeout: 15_000 });
 
   const rows = page.locator('button', { hasText: /events/ });
   await expect(rows.first()).toBeVisible({ timeout: 15_000 });

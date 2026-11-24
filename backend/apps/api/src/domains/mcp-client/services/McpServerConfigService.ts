@@ -21,7 +21,7 @@ import type {
 
 import { McpClientManagerService } from './McpClientManagerService';
 import { McpSecretCodec } from './McpSecretCodec';
-import { computeSchemaDigest, grandfatherApprovals } from './mcpToolDigest';
+import { computeDescriptionDigest, computeSchemaDigest, grandfatherApprovals } from './mcpToolDigest';
 
 /**
  * CRUD over `ci.mcp_server_configs`, scoped to the calling user, plus the security-critical
@@ -79,7 +79,8 @@ export class McpServerConfigService {
       url: dto.url ?? null,
       auth: this.secretCodec.encryptAuth(dto.auth ?? null),
       enabled: dto.enabled ?? true,
-      source: dto.source ?? 'user_added',
+      // A catalogSlug means the row came from the catalog; callers (the web dialog) send only the slug.
+      source: dto.source ?? (dto.catalogSlug ? 'catalog' : 'user_added'),
       catalogSlug: dto.catalogSlug ?? null,
       discoveredTools: null,
       // `[]`, never null: a server added after the approval gate exists contributes zero tools to
@@ -163,8 +164,9 @@ export class McpServerConfigService {
    * approval alone, so the settings screen can approve one drifted tool without silently revoking
    * the twenty that were fine.
    *
-   * Each `tools[]` entry must carry the digest the client was shown. It is re-derived from the
-   * schema currently stored in `discovered_tools` and a mismatch is rejected — otherwise a schema
+   * Each `tools[]` entry must carry the schema digest the client was shown, and may carry the
+   * description digest. Each is re-derived from the tool currently stored in `discovered_tools` and
+   * a mismatch is rejected — otherwise a schema
    * that drifted between rendering the list and clicking Approve would be approved sight-unseen,
    * which is the exact failure this feature exists to prevent.
    */
@@ -190,6 +192,7 @@ export class McpServerConfigService {
         }
 
         const actual = computeSchemaDigest(tool);
+        const descriptionDigest = computeDescriptionDigest(tool);
 
         if (actual !== requested.schemaDigest) {
           throw new BadRequestException(
@@ -197,9 +200,19 @@ export class McpServerConfigService {
           );
         }
 
+        // Optional on the wire (an older client sends only the schema digest), checked when sent:
+        // the description is what the assistant reads, so one that moved between rendering the
+        // list and clicking Approve must be reviewed again too.
+        if (requested.descriptionDigest !== undefined && requested.descriptionDigest !== descriptionDigest) {
+          throw new BadRequestException(
+            `The description of "${requested.name}" changed since it was shown to you; re-review it before approving`,
+          );
+        }
+
         byName.set(requested.name, {
           name: requested.name,
           schemaDigest: actual,
+          descriptionDigest,
           approvedAt,
           approvedBy: userId,
         });
@@ -262,7 +275,7 @@ export class McpServerConfigService {
     let candidate = base;
     let suffix = 2;
 
-    while (await this.repo.exist({ where: { userId, slug: candidate } })) {
+    while (await this.repo.exists({ where: { userId, slug: candidate } })) {
       candidate = `${base}-${suffix}`;
       suffix += 1;
     }

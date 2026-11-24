@@ -31,15 +31,16 @@
    edge. */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { open, readdir, stat } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { amazonMusicAlbumUrl, amazonMusicTrackUrl } from './_amazon_urls';
 import { parseCSV } from './csv';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
+import { readHead } from './sniff';
 import type { Entity, ImportParams, Metadata, Relationship } from './timeline';
-import { mimeForFile } from './timeline';
+import { mimeForFile, textContent } from './timeline';
 
 type MusicFileKind = 'followed' | 'playlists' | 'saved';
 
@@ -82,18 +83,9 @@ function headerKind(text: string): MusicFileKind | null {
 }
 
 async function sniffKind(fpath: string): Promise<MusicFileKind | null> {
-  let handle: Awaited<ReturnType<typeof open>> | undefined;
-  try {
-    handle = await open(fpath, 'r');
-    const buf = Buffer.alloc(4096);
-    const { bytesRead: n } = await handle.read(buf, 0, 4096, 0);
+  const head = await readHead(fpath);
 
-    return headerKind(buf.toString('utf8', 0, n));
-  } catch {
-    return null;
-  } finally {
-    await handle?.close().catch(() => undefined);
-  }
+  return head == null ? null : headerKind(head);
 }
 
 /** A field's value, with Amazon's "Not Available" filler read as no value. */
@@ -492,7 +484,7 @@ export class AmazonMusicFileImporter implements FileImporter {
       item: {
         id: `amazonmusic:album:${album.asin}`,
         classification: 'saved_media',
-        content: { filename: 'album.txt', mediaType: 'text/plain', data: async () => Buffer.from(text) },
+        content: textContent('album.txt', text),
         metadata: {
           Title: album.title,
           Artist: album.artist,

@@ -18,6 +18,13 @@ export const PYTHON_FUNCTION_QUEUES: Record<PythonFunctionTarget, string> = {
 };
 
 /**
+ * The yield gate `py-fn-summary` names; see SummaryServiceYieldGate. It stays closed
+ * while the summary service has no chat model or already has enough to do, so those
+ * jobs wait in the queue.
+ */
+export const SUMMARY_SERVICE_YIELD_GATE = 'summary-service';
+
+/**
  * HBPE's labeling wall-clock budget — mirrors `HBPE_LABEL_BUDGET_SECONDS` in
  * `backend/apps/hbpe/src/ci/hbpe/config.py`. `label_unlabeled` runs a hard
  * `started_at + budget` deadline, so on any appliance whose backlog outlasts
@@ -47,11 +54,37 @@ const HBPE_LABEL_BUDGET_SECONDS = 4 * 60 * 60;
 const HBPE_POST_LABEL_SECONDS = 4 * 60 * 60;
 
 /**
+ * How often a sidecar reports that it still holds a run, queued or running,
+ * for a target whose jobs carry a heartbeat window
+ * (`PYTHON_FUNCTION_HEARTBEAT_TIMEOUT_SECONDS`). The dispatcher asks for it in
+ * the run request (`heartbeat_seconds`); see `ci.sidecar.runner`.
+ */
+export const PYTHON_RUN_HEARTBEAT_SECONDS = 60;
+
+/**
+ * How long an hbpe job may go without a heartbeat before pg-boss fails it,
+ * which retries it. A sidecar that dies with the run stops beating, so its job
+ * is let go within this plus pg-boss's one-minute supervision pass, about six
+ * minutes, instead of at the 8 h expiry. Until then Predict and the crons
+ * refuse a second run for that person while nothing is running.
+ *
+ * Five beats, not one: an API restart (about a minute) or a few dropped
+ * requests must not fail a run that is still going. If the API is gone for
+ * longer, the run's job is failed and retried while the sidecar still has it;
+ * the retry carries the same job id and the runner hands back the run already
+ * holding it instead of starting a second one.
+ */
+const HBPE_HEARTBEAT_TIMEOUT_SECONDS = 5 * PYTHON_RUN_HEARTBEAT_SECONDS;
+
+/**
  * Queue-level policy. `expireInSeconds` is the recovery contract for deferred
  * jobs: if the Python service dies without calling back, the job stays
  * `active` until this window elapses, then pg-boss retries it. It must exceed
  * the longest legitimate run on that target — an expiry that fires on a run
  * that is still working does not recover anything, it duplicates it.
+ * `PYTHON_FUNCTION_HEARTBEAT_TIMEOUT_SECONDS` lets a target recover sooner: the
+ * sidecar beats while it holds the run and pg-boss fails the job once the beats
+ * stop.
  *
  * `policy: 'short'` is what makes every caller's singletonKey-based dedup
  * (fan-out crons, SmartRotationListener, ForecastResolver.triggerHbpe) actually
@@ -62,10 +95,26 @@ const HBPE_POST_LABEL_SECONDS = 4 * 60 * 60;
  */
 export const PYTHON_FUNCTION_QUEUE_OPTIONS: Record<
   PythonFunctionTarget,
-  { policy: 'short'; expireInSeconds: number; retryLimit: number; retryDelay: number }
+  {
+    policy: 'short';
+    expireInSeconds: number;
+    retryLimit: number;
+    retryDelay: number;
+    yieldsTo?: string;
+    localConcurrency?: number;
+  }
 > = {
   // Summaries/insights/actions: LLM-bound, minutes per run on CPU.
-  summary: { policy: 'short', expireInSeconds: 30 * 60, retryLimit: 3, retryDelay: 60 },
+  summary: {
+    policy: 'short',
+    expireInSeconds: 30 * 60,
+    retryLimit: 3,
+    retryDelay: 60,
+    yieldsTo: SUMMARY_SERVICE_YIELD_GATE,
+    // A dispatch only hands the run over, so one slot is plenty. It makes each fetch
+    // one job, so the gate's in-flight count is asked before every handover.
+    localConcurrency: 1,
+  },
   // HBPE nightly/bootstrap: the labeling drain spends its WHOLE budget before
   // the rest of the pipeline starts, so the two costs add — the expiry has to
   // be the sum, not the budget. It used to be exactly HBPE_LABEL_BUDGET_SECONDS,
@@ -86,12 +135,38 @@ export const PYTHON_FUNCTION_QUEUE_OPTIONS: Record<
   // does not depend on it. Making that retry harmless is the expiry's job, not
   // retryLimit's: with the window sized above, an expiry only fires when the
   // run really is gone.
+  //
+  // A missed heartbeat (PYTHON_FUNCTION_HEARTBEAT_TIMEOUT_SECONDS) is the
+  // failure that can tell the two apart: the sidecar stopped saying it holds
+  // the run, so the run went with it. Its retry, 300 s later, runs the pipeline
+  // again on the restarted sidecar. The expiry is unchanged. It frees nothing
+  // from a run that hangs while its sidecar keeps beating: the retry reaches
+  // the runner still holding that job and joins it.
   hbpe: {
     policy: 'short',
     expireInSeconds: HBPE_LABEL_BUDGET_SECONDS + HBPE_POST_LABEL_SECONDS,
     retryLimit: 2,
     retryDelay: 300,
   },
+};
+
+/**
+ * Per target, how long an active job may go without a heartbeat before pg-boss
+ * fails it (and so retries it). Unset, the target's jobs are bounded by the
+ * queue's expiry alone and the dispatcher asks for no beats.
+ *
+ * `PythonFunctionService.dispatch` sets this on each job it sends, never on
+ * the queue. pg-boss's `updateQueue` keeps any setting a call leaves out, so a
+ * queue-level window would stay on the queue after a downgrade to a release
+ * whose sidecar never beats (or a dev stack switched back to an older branch):
+ * every run there would be failed five minutes in and dispatched again, up to
+ * three times, then dead-lettered. Per job, only the jobs already sent by this
+ * release carry it.
+ */
+export const PYTHON_FUNCTION_HEARTBEAT_TIMEOUT_SECONDS: Readonly<
+  Partial<Record<PythonFunctionTarget, number>>
+> = {
+  hbpe: HBPE_HEARTBEAT_TIMEOUT_SECONDS,
 };
 
 /**
@@ -137,6 +212,12 @@ export type PythonFunctionRunPayload = {
 
   /** Owner of the work; the Python callback JWT is signed with this subject. */
   userId: string;
+};
+
+/** Body of the heartbeat the Python runner POSTs while it holds a run that asked for one. */
+export type PythonFunctionHeartbeatBody = {
+  job_id: string;
+  queue: string;
 };
 
 /** Body of the completion webhook POSTed by the Python runner. */

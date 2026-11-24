@@ -1,7 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
 
-import type { ApolloError } from '@apollo/client';
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { createHookContext } from '@ci/common';
 import { ENTITY_TYPE_MAP } from '@ci/common/src/constants';
 import { type ResultOf, type VariablesOf } from '@graphql-typed-document-node/core';
@@ -11,8 +10,8 @@ import { gql } from '@/graphql';
 const PAGE_SIZE = 30;
 
 const SEARCH_QUERY = gql(`
-  query Search($query: String!, $includeTypes: [String!], $excludeTypes: [String!], $eventTypes: [String!], $tags: [String!], $startTime: String, $endTime: String, $sortBy: String, $sortOrder: String, $connectors: [String!], $people: [String!], $places: [String!], $hasLocation: Boolean, $bbox: [Float!], $semantic: Boolean, $direction: String, $shareToken: String, $first: Int, $after: String) {
-    search(input: { query: $query, includeTypes: $includeTypes, excludeTypes: $excludeTypes, eventTypes: $eventTypes, tags: $tags, startTime: $startTime, endTime: $endTime, sortBy: $sortBy, sortOrder: $sortOrder, connectors: $connectors, people: $people, places: $places, hasLocation: $hasLocation, bbox: $bbox, semantic: $semantic, direction: $direction, shareToken: $shareToken, first: $first, after: $after }) {
+  query Search($query: String!, $includeTypes: [String!], $excludeTypes: [String!], $eventTypes: [String!], $tags: [String!], $startTime: String, $endTime: String, $sortBy: String, $sortOrder: String, $connectors: [String!], $people: [String!], $places: [String!], $hasLocation: Boolean, $areas: [[Float!]!], $semantic: Boolean, $direction: String, $fileKinds: [String!], $shareToken: String, $first: Int, $after: String) {
+    search(input: { query: $query, includeTypes: $includeTypes, excludeTypes: $excludeTypes, eventTypes: $eventTypes, tags: $tags, startTime: $startTime, endTime: $endTime, sortBy: $sortBy, sortOrder: $sortOrder, connectors: $connectors, people: $people, places: $places, hasLocation: $hasLocation, areas: $areas, semantic: $semantic, direction: $direction, fileKinds: $fileKinds, shareToken: $shareToken, first: $first, after: $after }) {
       totalCount
       pageInfo {
         hasNextPage
@@ -189,6 +188,29 @@ const SEARCH_QUERY = gql(`
   }
 `);
 
+/**
+ * Whether a name sort left each big kind's older rows out (`SearchResultConnection.nameSortCutShort`),
+ * asked for on its own rather than as a field of {@link SEARCH_QUERY}.
+ *
+ * The phone apps ship this web build and talk to whichever Memory the person runs, which can be
+ * older than the field. Selected in SEARCH_QUERY, an older server fails validation for the whole
+ * search, and the list, the gallery, the timeline and the map's list all come back as an error.
+ * Here only the note goes missing (`errorPolicy: 'ignore'`), as with `GetUserTimeFormat`.
+ */
+const NAME_SORT_CUT_SHORT_QUERY = gql(`
+  query SearchNameSortCutShort($query: String!, $includeTypes: [String!], $excludeTypes: [String!], $eventTypes: [String!], $tags: [String!], $startTime: String, $endTime: String, $sortBy: String, $sortOrder: String, $connectors: [String!], $people: [String!], $places: [String!], $hasLocation: Boolean, $areas: [[Float!]!], $semantic: Boolean, $direction: String, $fileKinds: [String!], $shareToken: String) {
+    search(input: { query: $query, includeTypes: $includeTypes, excludeTypes: $excludeTypes, eventTypes: $eventTypes, tags: $tags, startTime: $startTime, endTime: $endTime, sortBy: $sortBy, sortOrder: $sortOrder, connectors: $connectors, people: $people, places: $places, hasLocation: $hasLocation, areas: $areas, semantic: $semantic, direction: $direction, fileKinds: $fileKinds, shareToken: $shareToken, first: 1 }) {
+      nameSortCutShort
+    }
+  }
+`);
+
+/**
+ * The rows of one kind a name sort reads (the server's `NAME_SORT_CANDIDATE_LIMIT`). A list whose
+ * total is no bigger cannot have been cut short, so {@link NAME_SORT_CUT_SHORT_QUERY} is not sent.
+ */
+const NAME_SORT_POOL_SIZE = 500;
+
 export type EntityItem = ResultOf<typeof SEARCH_QUERY>['search']['edges'][number]['node'];
 
 /**
@@ -307,7 +329,9 @@ type ReturnType = [
     loadingMore: boolean;
     hasNextPage: boolean;
     totalCount: number;
-    error: ApolloError | Error | undefined;
+    /** A name sort that left out each big kind's older rows (see NameSortCutShortNote). */
+    nameSortCutShort: boolean;
+    error: Error | undefined;
     activeEntity: MemoryEntity | null;
     /** The current filters, minus paging. See {@link SearchFilterVariables}. */
     searchVariables: SearchFilterVariables;
@@ -335,9 +359,10 @@ function useEntityService({
   people,
   places,
   hasLocation,
-  bbox,
+  areas,
   semantic,
   direction,
+  fileKinds,
   shareToken,
   skip = false,
 }: {
@@ -354,10 +379,13 @@ function useEntityService({
   people?: string[];
   places?: string[];
   hasLocation?: boolean;
-  bbox?: number[];
+  /** Map areas, each [minLon, minLat, maxLon, maxLat], ORed by the server. */
+  areas?: number[][];
   semantic?: boolean;
   /** Sent / received message direction (`inbound` / `outbound`); pins the browse to communications. */
   direction?: string;
+  /** Which kinds of file (`image`, `video`, `audio`, `document`); files only. */
+  fileKinds?: string[];
   // Shared-search capability token. When set, the server runs the referenced
   // public saved search as its owner and ignores every other filter above —
   // this drives the read-only /shared viewer with the same view components.
@@ -370,6 +398,8 @@ function useEntityService({
    */
   skip?: boolean;
 }): ReturnType {
+  // Only rectangles with all four edges travel; an empty list is no filter.
+  const validAreas = areas?.filter((area) => area.length === 4);
   const searchVariables: SearchFilterVariables = {
     query: searchQuery,
     // Map display names to the backend IndexableEntity values via the shared
@@ -393,9 +423,10 @@ function useEntityService({
     people: people && people.length > 0 ? people : undefined,
     places: places && places.length > 0 ? places : undefined,
     hasLocation: hasLocation || undefined,
-    bbox: bbox && bbox.length === 4 ? bbox : undefined,
+    areas: validAreas && validAreas.length > 0 ? validAreas : undefined,
     semantic: semantic || undefined,
     direction: direction || undefined,
+    fileKinds: fileKinds && fileKinds.length > 0 ? fileKinds : undefined,
     shareToken: shareToken || undefined,
   };
 
@@ -418,6 +449,27 @@ function useEntityService({
   const pageInfo = data?.search?.pageInfo;
   const hasNextPage = pageInfo?.hasNextPage ?? false;
   const totalCount = data?.search?.totalCount ?? 0;
+
+  // Only a name sort with no search text and no tags is read from a capped pool, and only a list
+  // bigger than one kind's pool can have lost rows to it. Shared links are left out: every search
+  // a share token makes is written to the owner's disclosure history, and the reader has no When
+  // filter or search box to act on the note with.
+  const mayBeCutShort =
+    !skip &&
+    searchVariables.shareToken == null &&
+    searchVariables.sortBy === 'name' &&
+    searchVariables.query.length === 0 &&
+    searchVariables.tags == null &&
+    totalCount > NAME_SORT_POOL_SIZE;
+  const { data: cutShortData } = useQuery(NAME_SORT_CUT_SHORT_QUERY, {
+    variables: searchVariables,
+    // As the search itself: a kind that passes 500 while the page is open shows the note on the next
+    // read instead of keeping the cached answer.
+    fetchPolicy: 'cache-and-network',
+    skip: !mayBeCutShort,
+    errorPolicy: 'ignore',
+  });
+  const nameSortCutShort = mayBeCutShort && (cutShortData?.search?.nameSortCutShort ?? false);
 
   // Append the next server page (cursor-based) onto the accumulated results.
   const loadMore = useCallback(() => {
@@ -483,6 +535,7 @@ function useEntityService({
       loadingMore,
       hasNextPage,
       totalCount,
+      nameSortCutShort,
       error: error ?? loadMoreError,
       activeEntity,
       searchVariables,

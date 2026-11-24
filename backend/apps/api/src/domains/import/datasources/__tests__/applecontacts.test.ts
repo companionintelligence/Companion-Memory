@@ -4,6 +4,9 @@ import path from 'path';
 
 import Database from 'better-sqlite3';
 
+import type { StagedEntity } from '../../entities/StagedEntityEntity';
+import { toGraphEntity } from '../../push/entities';
+import { entityIdentityKey, resolveEntityType } from '../../staging/identity';
 import { AppleContactsFileImporter } from '../applecontacts';
 import type { EntityAttribute, ImportParams } from '../timeline';
 
@@ -100,6 +103,107 @@ describe('Apple Contacts datasource', () => {
     expect(carolEmails).toEqual(expect.arrayContaining(['carol@example.com', 'carol.chen@example.org']));
     expect(carolEmails).toHaveLength(2);
     expect(carol!.attributes?.some((a: EntityAttribute) => a.name === 'phone')).toBe(false);
+  });
+
+  /**
+   * The identity attributes are read once, for `identity_key`, and never
+   * persisted — so a card's numbers used to survive only as its one derived key.
+   * When the key rule changed (an office line `(212) 555-0147;229` had keyed as
+   * the truncation `5550147229`), no Apple Contacts row could be re-keyed: the
+   * typed line was gone. `Phones` / `Emails` keep it, as vcard.ts always did.
+   */
+  describe('typed handles kept in metadata', () => {
+    const OFFICE_EXT = '(212) 555-0147;229';
+
+    async function importContacts(
+      contacts: Array<{ pk: number; name: string; phones?: string[]; emails?: string[]; urls?: string[] }>,
+    ) {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ac-typed-'));
+      const dbPath = path.join(dir, 'AddressBook-v22.abcddb');
+      const db = new Database(dbPath);
+      db.exec(`
+        CREATE TABLE ZABCDRECORD (Z_PK INTEGER PRIMARY KEY, ZFIRSTNAME TEXT, ZLASTNAME TEXT);
+        CREATE TABLE ZABCDPHONENUMBER (Z_PK INTEGER PRIMARY KEY, ZOWNER INTEGER, ZFULLNUMBER TEXT);
+        CREATE TABLE ZABCDEMAILADDRESS (Z_PK INTEGER PRIMARY KEY, ZOWNER INTEGER, ZADDRESS TEXT);
+        CREATE TABLE ZABCDURLADDRESS (Z_PK INTEGER PRIMARY KEY, ZOWNER INTEGER, ZURL TEXT);
+      `);
+      for (const c of contacts) {
+        const [first, ...rest] = c.name.split(' ');
+        db.prepare('INSERT INTO ZABCDRECORD (Z_PK, ZFIRSTNAME, ZLASTNAME) VALUES (?, ?, ?)').run(
+          c.pk,
+          first,
+          rest.join(' ') || null,
+        );
+        for (const [table, column, values] of [
+          ['ZABCDPHONENUMBER', 'ZFULLNUMBER', c.phones ?? []],
+          ['ZABCDEMAILADDRESS', 'ZADDRESS', c.emails ?? []],
+          ['ZABCDURLADDRESS', 'ZURL', c.urls ?? []],
+        ] as const) {
+          for (const value of values) {
+            db.prepare(`INSERT INTO ${table} (ZOWNER, ${column}) VALUES (?, ?)`).run(c.pk, value);
+          }
+        }
+      }
+
+      db.close();
+      const pipeline: EmittedGraph[] = [];
+      await new AppleContactsFileImporter().fileImport(
+        {},
+        { filename: 'AddressBook-v22.abcddb', fullPath: dbPath },
+        { pipeline, timeframe: {}, log: () => {} } as unknown as ImportParams,
+      );
+      fs.rmSync(dir, { recursive: true, force: true });
+
+      return pipeline.filter((p) => p.entity).map((p) => p.entity!);
+    }
+
+    it('keeps every number and address as typed, once each, the extension line included', async () => {
+      // Two phones × two emails × one URL: the LEFT JOINs return four rows,
+      // and every value used to be accumulated once per row.
+      const [dana] = await importContacts([
+        {
+          pk: 1,
+          name: 'Dana Quill',
+          phones: [OFFICE_EXT, '+1 (212) 555-0199'],
+          emails: ['dana.quill@example.com', 'dq@example.org'],
+          urls: ['https://example.invalid/dana'],
+        },
+      ]);
+
+      expect(dana.metadata?.Names).toEqual(['Dana Quill']);
+      expect(dana.metadata?.Phones).toEqual(expect.arrayContaining([OFFICE_EXT, '+1 (212) 555-0199']));
+      expect(dana.metadata?.Phones).toHaveLength(2);
+      expect(dana.metadata?.Emails).toEqual(
+        expect.arrayContaining(['dana.quill@example.com', 'dq@example.org']),
+      );
+      expect(dana.metadata?.Emails).toHaveLength(2);
+      expect(dana.metadata?.URLs).toEqual(['https://example.invalid/dana']);
+      expect(dana.accumulate).toEqual(expect.arrayContaining(['Names', 'Emails', 'Phones', 'URLs']));
+      expect(dana.attributes?.filter((a) => a.name === 'phone')).toHaveLength(2);
+      expect(dana.attributes?.filter((a) => a.name === 'email')).toHaveLength(2);
+    });
+
+    it('keys an office line on the next handle while the typed line survives into properties', async () => {
+      const [rae] = await importContacts([
+        { pk: 1, name: 'Rae Holt', phones: [OFFICE_EXT], emails: ['rae.holt@example.com'] },
+      ]);
+
+      // The fixed rule refuses the extension, so the email is the key — the
+      // old rule's `5550147229` sorted first and became it.
+      expect(entityIdentityKey(rae)).toBe('rae.holt@example.com');
+
+      const graph = toGraphEntity({
+        type: resolveEntityType(rae),
+        name: rae.name ?? null,
+        identityKey: entityIdentityKey(rae),
+        metadata: rae.metadata ?? {},
+        dataSource: 'apple_contacts',
+      } as unknown as StagedEntity);
+
+      expect(graph?.key).toBe('contact:rae.holt@example.com');
+      expect(graph?.properties).toMatchObject({ Phones: [OFFICE_EXT], email: 'rae.holt@example.com' });
+      expect(graph?.properties).not.toHaveProperty('phones');
+    });
   });
 
   /**
@@ -219,5 +323,71 @@ describe('Apple Contacts datasource', () => {
       expect(names).toEqual(['Alice Icloud', 'Bob Exchange', 'Unassigned Contact']);
       fs.rmSync(tmp, { recursive: true, force: true });
     });
+  });
+
+  /**
+   * Colleagues whose cards all list the office switchboard used to key on it —
+   * the smallest handle, since digits sort before letters — and stage as ONE
+   * entity. With no `accumulate` here, the others simply vanished. They are
+   * told apart across every database one import reads, since colleagues are
+   * as likely to sit in a work account's database as in iCloud's.
+   */
+  it('keys colleagues sharing an office line apart, across account databases', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ac-office-'));
+
+    const makeDb = (
+      dbPath: string,
+      contacts: Array<{ pk: number; first: string; last: string; phones: string[]; email?: string }>,
+    ) => {
+      fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+      const db = new Database(dbPath);
+      db.exec(`
+        CREATE TABLE ZABCDRECORD (Z_PK INTEGER PRIMARY KEY, ZFIRSTNAME TEXT, ZLASTNAME TEXT);
+        CREATE TABLE ZABCDPHONENUMBER (Z_PK INTEGER PRIMARY KEY, ZOWNER INTEGER, ZFULLNUMBER TEXT);
+        CREATE TABLE ZABCDEMAILADDRESS (Z_PK INTEGER PRIMARY KEY, ZOWNER INTEGER, ZADDRESS TEXT);
+        CREATE TABLE ZABCDURLADDRESS (Z_PK INTEGER PRIMARY KEY, ZOWNER INTEGER, ZURL TEXT);
+      `);
+      for (const c of contacts) {
+        db.prepare('INSERT INTO ZABCDRECORD (Z_PK, ZFIRSTNAME, ZLASTNAME) VALUES (?, ?, ?)').run(
+          c.pk,
+          c.first,
+          c.last,
+        );
+        for (const number of c.phones) {
+          db.prepare('INSERT INTO ZABCDPHONENUMBER (ZOWNER, ZFULLNUMBER) VALUES (?, ?)').run(c.pk, number);
+        }
+
+        if (c.email) {
+          db.prepare('INSERT INTO ZABCDEMAILADDRESS (ZOWNER, ZADDRESS) VALUES (?, ?)').run(c.pk, c.email);
+        }
+      }
+
+      db.close();
+    };
+
+    makeDb(path.join(tmp, 'AddressBook-v22.abcddb'), [
+      { pk: 1, first: 'Priya', last: 'Natarajan', phones: ['555-010-0100'], email: 'priya@example.com' },
+    ]);
+    makeDb(path.join(tmp, 'Sources', 'ACCOUNT-WORK', 'AddressBook-v22.abcddb'), [
+      { pk: 1, first: 'Tom', last: 'Becker', phones: ['555-010-0100'], email: 'tom@example.com' },
+      { pk: 2, first: 'Lena', last: 'Ortiz', phones: ['555-010-0100', '555-010-0142'] },
+    ]);
+
+    const pipeline: EmittedGraph[] = [];
+    await new AppleContactsFileImporter().fileImport({}, { filename: path.basename(tmp), fullPath: tmp }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    const keyByName = new Map(pipeline.map((g) => [g.entity!.name, entityIdentityKey(g.entity!)]));
+    expect(keyByName).toEqual(
+      new Map([
+        ['Priya Natarajan', 'priya@example.com'],
+        ['Tom Becker', 'tom@example.com'],
+        ['Lena Ortiz', '5550100142'],
+      ]),
+    );
+    fs.rmSync(tmp, { recursive: true, force: true });
   });
 });

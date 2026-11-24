@@ -1,9 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef } from 'react';
 
 import { cn } from '@ci/shadcn';
+import { Archive, Brain, Search as SearchIcon } from '@ci/shadcn/icons';
 import { useSearchParams } from 'react-router-dom';
 
 import { MemoryChatAbout } from '@/components/ChatWithAgent';
+import { LoadMoreFailed } from '@/components/InfiniteList';
+import { MAP_CARD_CLASS } from '@/components/Map/mapCard';
+import { useLoadMoreSentinel } from '@/hooks/useLoadMoreSentinel';
 import { formatEnumLabel } from '@/lib/utils';
 
 import { useEntityService, type EntityItem } from '../../MemoryPage/useEntityService';
@@ -31,6 +35,51 @@ const TIMELINE_TYPES: ReadonlySet<string> = new Set([
   'CommunicationType',
 ]);
 
+/**
+ * One row, memoised: the timeline re-renders whenever its own state moves (a
+ * page arriving, the hovered or selected entity changing) and without this
+ * every loaded card was rebuilt — and its chat context re-derived — each time.
+ * Only the row whose `active` flips re-renders on a selection.
+ */
+const TimelineRow = memo(function TimelineRow({
+  entity,
+  active,
+  registerRow,
+  onSelect,
+  onHover,
+}: {
+  entity: EntityItem;
+  active: boolean;
+  registerRow: (entityId: string) => (element: HTMLDivElement | null) => void;
+  onSelect?: (entity: EntityItem) => void;
+  onHover?: (entity: EntityItem | null) => void;
+}) {
+  const setRef = useMemo(() => registerRow(entity.id), [registerRow, entity.id]);
+
+  return (
+    <div
+      ref={setRef}
+      className={cn(
+        'relative rounded-md transition-shadow duration-150',
+        active && 'ring-2 ring-[#58ebbf]/80 ring-offset-0',
+      )}
+      onClickCapture={() => onSelect?.(entity)}
+      onMouseEnter={() => onHover?.(entity)}
+      onMouseLeave={() => onHover?.(null)}
+    >
+      <div
+        className={cn(
+          'absolute left-[-18px] top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full',
+          active ? 'bg-[#82ffe1] ring-2 ring-[#58ebbf]/60 shadow-glow-ci' : 'bg-[#58ebbf] shadow-glow-ci',
+        )}
+      />
+      <MemoryChatAbout entity={entity}>
+        <EntityCard entity={entity} />
+      </MemoryChatAbout>
+    </div>
+  );
+});
+
 interface TimelineViewProps {
   activeEntityId?: string | null;
   onEntityHover?: (entity: EntityItem | null) => void;
@@ -53,7 +102,6 @@ export function TimelineView({
   typeFilter,
   groupByEventType = false,
 }: TimelineViewProps = {}) {
-  const sentinelRef = useRef<HTMLDivElement>(null);
   const rowRefs = useRef(new globalThis.Map<string, HTMLDivElement>());
 
   const [{ data, loading, loadingMore, hasNextPage, loadMore, error, refetch }] = useEntityService();
@@ -92,26 +140,9 @@ export function TimelineView({
 
   // Load the next server page when the sentinel nears the viewport. Using the
   // viewport as root keeps this working regardless of which ancestor scrolls.
-  useEffect(() => {
-    const sentinel = sentinelRef.current;
-
-    if (!sentinel || !hasNextPage) {
-      return;
-    }
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting) {
-          loadMore();
-        }
-      },
-      { rootMargin: '400px' },
-    );
-
-    observer.observe(sentinel);
-
-    return () => observer.disconnect();
-  }, [hasNextPage, loadMore]);
+  // A failed page unwatches it and the retry below is the only way to ask again.
+  const pageFailed = error != null && timelineData.length > 0;
+  const sentinelRef = useLoadMoreSentinel({ enabled: hasNextPage && !pageFailed, loadMore });
 
   useEffect(() => {
     if (!activeEntityId) {
@@ -145,12 +176,27 @@ export function TimelineView({
     );
   }
 
+  // This list is the map's side panel, laid straight over the satellite
+  // imagery, where bare text is hard to read. Its errors sit on the same card
+  // as the map's own "Couldn't load the map" (MapStatusOverlay).
   if (error && timelineData.length === 0) {
-    return <ErrorState onRetry={refetch} />;
+    return (
+      <div className={cn('m-3', MAP_CARD_CLASS)}>
+        <ErrorState onRetry={refetch} className="px-4 py-6" />
+      </div>
+    );
   }
 
   if (timelineData.length === 0) {
     const isMapView = searchParams.get('view') === 'map';
+
+    // On the map this list is the side panel, and the map draws its own empty
+    // state in the centre (MapStatusOverlay: "No located memories match these
+    // filters" / "Nothing to map yet"). A second card here said the same thing
+    // in different words, with different advice. An empty list is just empty.
+    if (isMapView) {
+      return null;
+    }
 
     // Results exist but none are timeline-renderable types — distinguish this
     // from a truly empty result so the user knows to switch to the List view.
@@ -159,7 +205,7 @@ export function TimelineView({
         <Empty
           title="No timeline events match this search"
           description="These results aren't time-based. Switch to List to see them."
-          icon="🗂️"
+          icon={Archive}
         />
       );
     }
@@ -172,19 +218,8 @@ export function TimelineView({
       return (
         <Empty
           title="No memories match these filters"
-          description={
-            isMapView
-              ? 'Try removing a filter, or clear Located, to see more.'
-              : 'Try removing a filter (or the Located filter on the map) to see more.'
-          }
-          icon="🔍"
-          // Difference blend keeps the copy legible over any map tile tone
-          // (light satellite / dark streets) in the left panel.
-          className={
-            isMapView
-              ? 'mix-blend-difference [&_h3]:text-white [&_p]:text-white [&_div.bg-muted]:bg-white/25'
-              : undefined
-          }
+          description="Try removing a filter (or the Located filter on the map) to see more."
+          icon={SearchIcon}
         />
       );
     }
@@ -193,42 +228,23 @@ export function TimelineView({
       <Empty
         title="No memories yet"
         description="Your timeline will fill in as memories are created."
-        icon="🧠"
+        icon={Brain}
       />
     );
   }
 
   const renderTimelineRows = (entities: EntityItem[]) => (
     <div className="space-y-4">
-      {entities.map((entity) => {
-        const active = activeEntityId === entity.id;
-
-        return (
-          <div
-            key={entity.id}
-            ref={setRowRef(entity.id)}
-            className={cn(
-              'relative rounded-md transition-shadow duration-150',
-              active && 'ring-2 ring-[#58ebbf]/80 ring-offset-0',
-            )}
-            onClickCapture={() => onEntitySelect?.(entity)}
-            onMouseEnter={() => onEntityHover?.(entity)}
-            onMouseLeave={() => onEntityHover?.(null)}
-          >
-            <div
-              className={cn(
-                'absolute left-[-18px] top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full',
-                active
-                  ? 'bg-[#82ffe1] ring-2 ring-[#58ebbf]/60 shadow-glow-ci'
-                  : 'bg-[#58ebbf] shadow-glow-ci',
-              )}
-            />
-            <MemoryChatAbout entity={entity}>
-              <EntityCard entity={entity} />
-            </MemoryChatAbout>
-          </div>
-        );
-      })}
+      {entities.map((entity) => (
+        <TimelineRow
+          key={entity.id}
+          entity={entity}
+          active={activeEntityId === entity.id}
+          registerRow={setRowRef}
+          onSelect={onEntitySelect}
+          onHover={onEntityHover}
+        />
+      ))}
     </div>
   );
 
@@ -252,7 +268,17 @@ export function TimelineView({
 
         {loadingMore && <TimelineSkeleton count={2} className="pl-8 pt-2" />}
 
-        {hasNextPage && <div ref={sentinelRef} className="h-8" />}
+        {hasNextPage && !pageFailed && <div ref={sentinelRef} className="h-8" />}
+
+        {pageFailed && (
+          <div className={cn('ml-8 mt-4', MAP_CARD_CLASS)}>
+            <LoadMoreFailed
+              noun="events"
+              message={error.message}
+              onRetry={hasNextPage ? loadMore : refetch}
+            />
+          </div>
+        )}
       </div>
     </div>
   );

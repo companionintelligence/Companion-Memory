@@ -5,11 +5,19 @@ import { DataSource } from 'typeorm';
 import type { UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { BACKFILL_JOB_PRIORITY, EventListenerRegistry, EventService } from '@ci/domains/events';
+import {
+  PYTHON_FUNCTION_QUEUES,
+  PythonFunctionRunEvent,
+  type PythonFunctionTarget,
+} from '@ci/domains/python-functions';
 
 import { DEAD_LETTER_QUEUE, STAGE_ID_LIST } from '../constants';
 import type { PipelineRunDesiredState } from '../entities/PipelineRunEntity';
+import { PipelineSliceEvent, PipelineSweepEvent } from '../events';
 import type { StageCoverage } from '../types';
 import { stageVersion } from '../versions';
+
+import { StageRegistry } from './StageRegistry';
 
 // ---------------------------------------------------------------------------
 // Bounds
@@ -248,7 +256,7 @@ export interface DeadLetterBulkReplayResult {
 }
 
 /** Which letters {@link PipelineRunService.replayDeadLetters} should claim. */
-export interface BulkReplayDeadLettersInput {
+export interface BulkReplayDeadLettersInput extends DeadLetterScope {
   /** Explicit letters. Deduplicated before the claim. */
   ids?: string[];
 
@@ -270,8 +278,23 @@ export interface ListRunsOptions {
   activeOnly?: boolean;
 }
 
+/**
+ * Whose letters a dead-letter read or replay may reach, beyond the caller's own.
+ *
+ * A letter with a NULL `user_id` names no user in its payload: maintenance
+ * sweeps, telemetry, an id-only event such as `content.created`, a payload too
+ * malformed to read. Those are the appliance's failures, not any one member's,
+ * and the payload is still somebody's data. So they are the appliance admin's
+ * to see and replay, and the controller decides that with the same rule the
+ * Jobs controls use (`ApplianceAdminGuard.admits`). Absent means no: a caller
+ * that forgets to ask gets only its own letters.
+ */
+export interface DeadLetterScope {
+  includeUnattributed?: boolean;
+}
+
 /** Options for {@link PipelineRunService.listDeadLetters}. */
-export interface ListDeadLettersOptions {
+export interface ListDeadLettersOptions extends DeadLetterScope {
   queue?: string;
   stage?: string;
   /** `true` → only replayed, `false` → only un-replayed, absent → both. */
@@ -345,6 +368,72 @@ interface StageStateRow {
   status: string;
   count: number | string;
   stale: number | string;
+}
+
+/**
+ * The queue a dead letter is re-emitted onto, or `null` to route it by
+ * listener registration.
+ *
+ * A `python.function.run` goes to its target's queue, whatever the letter
+ * recorded. Its two listeners are not a fan-out. `PythonFunctionService` always
+ * sends to `PYTHON_FUNCTION_QUEUES[target]`, and each listener POSTs to its own
+ * sidecar, which rejects the other sidecar's functions. Routed by registration,
+ * a summary job also reached `py-fn-hbpe`, failed there with "Unknown function
+ * 'actions_generation'" and came back as a new letter on every replay. The
+ * target also beats a recorded queue, so a copy that died on the wrong sidecar
+ * before this fix is replayed where it was meant to go.
+ *
+ * A `pipeline.slice` or `pipeline.sweep` goes to the queue its stage declares
+ * today, for the same reason. All three pipeline queues listen for both events,
+ * and the handler refuses a payload whose stage rides another queue ("Refusing
+ * to process it on the wrong resource pool"). Routed by registration, two of
+ * the three copies failed and wrote new letters. Sent to the queue it failed
+ * on after a release moved its stage, the one copy failed the same way, and
+ * the registration check below cannot see that move because the old queue
+ * still listens for the event. `stageQueue` answers `null` for a stage this
+ * build cannot resolve, and that letter is routed like any other.
+ *
+ * Every other letter goes back to the queue it failed on: the stage queue
+ * `PipelineSliceListener` wrote, or the queue the reaper read from the failure's
+ * `queue` field or from pg-boss's `source_name`. Only a reaped letter that names
+ * no queue still says `dead-letter`: a copy pg-boss 10 made of a job that failed
+ * before failures recorded their queue (or that pg-boss expired itself). That
+ * queue has no worker, so those are routed by listener registration, which
+ * reaches every queue listening for the event.
+ *
+ * So is a letter whose queue no longer listens for its event, because a
+ * release moved the listener after the job died. Letters have no TTL, so that
+ * can be weeks later. `send()` would still enqueue onto the old queue, whose
+ * worker finds no handler and completes the job without running anything: a
+ * replay that reports success, does nothing, and lets the purge delete the
+ * only copy of the payload 30 days on.
+ */
+function replayQueueFor(
+  letter: Pick<DeadLetterRow, 'queue' | 'event_name' | 'payload'>,
+  stageQueue: (stageId: string) => string | null,
+): string | null {
+  if (letter.event_name === PythonFunctionRunEvent) {
+    const target = letter.payload?.target;
+
+    if (typeof target === 'string' && Object.hasOwn(PYTHON_FUNCTION_QUEUES, target)) {
+      return PYTHON_FUNCTION_QUEUES[target as PythonFunctionTarget];
+    }
+  }
+
+  if (letter.event_name === PipelineSliceEvent || letter.event_name === PipelineSweepEvent) {
+    const stage = letter.payload?.stage;
+    const queue = typeof stage === 'string' ? stageQueue(stage) : null;
+
+    if (queue != null) {
+      return queue;
+    }
+  }
+
+  if (letter.queue === DEAD_LETTER_QUEUE) {
+    return null;
+  }
+
+  return EventListenerRegistry.getQueuesFor(letter.event_name).has(letter.queue) ? letter.queue : null;
 }
 
 /**
@@ -447,6 +536,7 @@ export class PipelineRunService {
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly eventService: EventService,
     private readonly logger: LoggerService,
+    private readonly stageRegistry: StageRegistry,
   ) {
     this.logger.setContext(PipelineRunService.name);
   }
@@ -882,11 +972,16 @@ export class PipelineRunService {
    * time and make the page stable when a batch of letters shares a timestamp.
    *
    * Scoping: a letter attributable to ANOTHER user is excluded, because the
-   * payload is that user's record verbatim. Letters with a NULL `user_id` ARE
-   * included: NULL means "not attributable to a user" (maintenance sweeps,
-   * telemetry, a payload too malformed to read a user out of), and those are
-   * frequently the most important rows in the table. Hiding them would make the
-   * appliance's own failures invisible on the one screen built to show failures.
+   * payload is that user's record verbatim. Letters with a NULL `user_id` are
+   * included only when `includeUnattributed` says so, which the controller sets
+   * for the appliance admin alone. NULL means "not attributable to a user"
+   * (maintenance sweeps, telemetry, an id-only event, a payload too malformed to
+   * read a user out of), and those are frequently the most important rows in
+   * the table, so the admin's Jobs page keeps them. They used to be shown to
+   * every account, which was safe only while NULL really meant "nobody's": the
+   * writers left slice letters and `ownerId`-keyed events NULL as well, so a
+   * household member could read, and replay, another member's payloads. See
+   * {@link DeadLetterScope}.
    */
   async listDeadLetters(
     ctx: UserServiceContext,
@@ -908,7 +1003,7 @@ export class PipelineRunService {
               d.failed_at,
               d.replayed_at
          FROM ci.pipeline_dead_letters d
-        WHERE (d.user_id = $1::uuid OR d.user_id IS NULL)
+        WHERE (d.user_id = $1::uuid OR ($7::boolean AND d.user_id IS NULL))
           AND ($2::text IS NULL OR d.queue = $2::text)
           AND ($3::text IS NULL OR d.stage = $3::text)
           AND ($4::boolean IS NULL
@@ -916,7 +1011,15 @@ export class PipelineRunService {
                OR (NOT $4::boolean AND d.replayed_at IS NULL))
         ORDER BY d.failed_at DESC, d.id DESC
         LIMIT $5 OFFSET $6`,
-      [ctx.userId, options.queue ?? null, options.stage ?? null, options.replayed ?? null, limit, offset],
+      [
+        ctx.userId,
+        options.queue ?? null,
+        options.stage ?? null,
+        options.replayed ?? null,
+        limit,
+        offset,
+        options.includeUnattributed === true,
+      ],
     );
 
     return rows.map((row) => ({
@@ -971,19 +1074,33 @@ export class PipelineRunService {
    *
    * ── Routing ────────────────────────────────────────────────────────────────
    *
-   * A letter written by `PipelineSliceListener` carries the stage queue it died
-   * on, and is re-emitted onto exactly that queue. A letter harvested by
-   * `DeadLetterReaperListener` carries `dead-letter` — pg-boss's parking queue,
-   * which has no worker — so naming it would enqueue the job where nothing will
-   * ever pick it up. Those are routed by listener registration instead, which is
-   * where the job would have gone had it been sent fresh.
+   * A letter is re-emitted onto the queue it failed on, and only that one. A
+   * letter written by `PipelineSliceListener` carries its stage queue. A letter
+   * harvested by `DeadLetterReaperListener` carries the `output.queue` that
+   * `PGBossEventService` writes on every failure. A `python.function.run` goes
+   * to its target's queue, and a `pipeline.slice` or `pipeline.sweep` to the
+   * queue its stage declares today.
+   *
+   * A reaped letter that names no queue still carries `dead-letter`, pg-boss's
+   * parking queue, which has no worker, so naming it would enqueue the job where
+   * nothing will ever pick it up. Those are routed by listener registration,
+   * which reaches EVERY queue listening for the event. Until failures recorded
+   * their queue that was the route for every reaped letter, and it re-ran
+   * listeners that had already succeeded: a `file.uploaded` that failed only
+   * its preview went back to all six of its queues. A letter whose queue no
+   * longer listens for its event is routed the same way. See `replayQueueFor`.
    *
    * Replays ride {@link BACKFILL_JOB_PRIORITY} regardless of what the original
    * job carried: a replay is recovery of something already late, and a
    * replay-all at interactive priority would push every live request behind a
    * backlog of failures.
    */
-  async replayDeadLetter(ctx: UserServiceContext, letterId: string): Promise<DeadLetterReplayResult> {
+  async replayDeadLetter(
+    ctx: UserServiceContext,
+    letterId: string,
+    scope: DeadLetterScope = {},
+  ): Promise<DeadLetterReplayResult> {
+    const includeUnattributed = scope.includeUnattributed === true;
     const claimed = await this.dataSource.query<DeadLetterRow[]>(
       // CTE-wrapped so the OUTER command is a SELECT. TypeORM's Postgres driver
       // special-cases UPDATE/DELETE and resolves \`[rows, rowCount]\`, so a bare
@@ -997,15 +1114,15 @@ export class PipelineRunService {
          UPDATE ci.pipeline_dead_letters
             SET replayed_at = now()
           WHERE id = $2::uuid
-            AND (user_id = $1::uuid OR user_id IS NULL)
+            AND (user_id = $1::uuid OR ($3::boolean AND user_id IS NULL))
             AND replayed_at IS NULL
       RETURNING id, queue, event_name, payload, replayed_at)
        SELECT id, queue, event_name, payload, replayed_at FROM claimed`,
-      [ctx.userId, letterId],
+      [ctx.userId, letterId, includeUnattributed],
     );
 
     if (claimed.length === 0) {
-      await this.explainUnclaimableLetter(ctx, letterId);
+      await this.explainUnclaimableLetter(ctx, letterId, includeUnattributed);
     }
 
     return this.emitClaimedLetter(ctx, claimed[0]);
@@ -1082,7 +1199,7 @@ export class PipelineRunService {
       `WITH candidates AS (
          SELECT id
            FROM ci.pipeline_dead_letters
-          WHERE (user_id = $1::uuid OR user_id IS NULL)
+          WHERE (user_id = $1::uuid OR ($6::boolean AND user_id IS NULL))
             AND replayed_at IS NULL
             AND ($2::uuid[] IS NULL OR id = ANY($2::uuid[]))
             AND ($3::text IS NULL OR event_name = $3::text)
@@ -1098,7 +1215,14 @@ export class PipelineRunService {
             AND d.replayed_at IS NULL
       RETURNING d.id, d.queue, d.event_name, d.payload, d.replayed_at)
        SELECT id, queue, event_name, payload, replayed_at FROM claimed`,
-      [ctx.userId, ids, input.eventName ?? null, input.failedAfter ?? null, limit],
+      [
+        ctx.userId,
+        ids,
+        input.eventName ?? null,
+        input.failedAfter ?? null,
+        limit,
+        input.includeUnattributed === true,
+      ],
     );
 
     const replayed: DeadLetterReplayResult[] = [];
@@ -1180,9 +1304,8 @@ export class PipelineRunService {
       );
     }
 
-    // `dead-letter` is pg-boss's parking queue and has no worker; see the method
-    // comment. `undefined` here means "route by listener registration".
-    const queue = letter.queue === DEAD_LETTER_QUEUE ? null : letter.queue;
+    // `null` means "route by listener registration"; see replayQueueFor.
+    const queue = replayQueueFor(letter, (stageId) => this.stageQueueFor(stageId));
 
     let jobIds: string[];
 
@@ -1220,14 +1343,14 @@ export class PipelineRunService {
       throw new ConflictException(
         routable
           ? `Dead letter ${letterId} was not re-emitted: queue ` +
-            `${queue == null ? `for event "${eventName}"` : `"${queue}"`} has a listener but accepted no ` +
-            `job. pg-boss refuses a send whose singletonKey duplicates a job still in "created" on a queue ` +
-            `with a de-duplicating policy, so this letter is most likely already queued from an earlier ` +
-            `replay; CI_QUEUE_SUPPRESS covering the queue produces the same empty result. Nothing was ` +
-            `enqueued and the claim has been released.`
+              `${queue == null ? `for event "${eventName}"` : `"${queue}"`} has a listener but accepted no ` +
+              `job. pg-boss refuses a send whose singletonKey duplicates a job still in "created" on a queue ` +
+              `with a de-duplicating policy, so this letter is most likely already queued from an earlier ` +
+              `replay; CI_QUEUE_SUPPRESS covering the queue produces the same empty result. Nothing was ` +
+              `enqueued and the claim has been released.`
           : `Dead letter ${letterId} was not re-emitted: nothing in this process listens for event ` +
-            `"${eventName}"${queue == null ? ' on any queue' : ` on queue "${queue}"`}, so the send ` +
-            `enqueued nothing. The listener's module is probably not loaded in this process.`,
+              `"${eventName}"${queue == null ? ' on any queue' : ` on queue "${queue}"`}, so the send ` +
+              `enqueued nothing. The listener's module is probably not loaded in this process.`,
       );
     }
 
@@ -1235,6 +1358,10 @@ export class PipelineRunService {
       letterId,
       eventName,
       queue,
+      // Where the letter says it died. Differs from `queue` when replay picked
+      // another route (a stage's current queue, a Python target, or every
+      // listener), which is the case an operator needs to see in the log.
+      recordedQueue: letter.queue,
       jobIds,
       userId: ctx.userId,
     });
@@ -1302,13 +1429,19 @@ export class PipelineRunService {
    * Split from the caller so the happy path issues exactly one statement: this
    * extra read only happens when the claim already failed.
    */
-  private async explainUnclaimableLetter(ctx: UserServiceContext, letterId: string): Promise<never> {
+  private async explainUnclaimableLetter(
+    ctx: UserServiceContext,
+    letterId: string,
+    includeUnattributed: boolean,
+  ): Promise<never> {
+    // The same scope as the claim, so a letter the caller may not see is a 404
+    // here, never a 409 that confirms it exists.
     const rows = await this.dataSource.query<Array<{ replayed_at: Date | null }>>(
       `SELECT d.replayed_at
          FROM ci.pipeline_dead_letters d
         WHERE d.id = $2::uuid
-          AND (d.user_id = $1::uuid OR d.user_id IS NULL)`,
-      [ctx.userId, letterId],
+          AND (d.user_id = $1::uuid OR ($3::boolean AND d.user_id IS NULL))`,
+      [ctx.userId, letterId, includeUnattributed],
     );
 
     if (rows.length === 0) {
@@ -1320,6 +1453,24 @@ export class PipelineRunService {
         `${rows[0].replayed_at?.toISOString() ?? 'an unknown time'}. ` +
         `replayed_at is what keeps a replay-all from looping; clear it in the database to force another.`,
     );
+  }
+
+  /**
+   * The queue a stage declares in this build, or `null` when the id names no
+   * stage this build can resolve (removed by a release, or declared but not
+   * bound). Replay then falls back to the letter's own routing, where the
+   * worker's "Unknown pipeline stage" error is what the operator should see.
+   */
+  private stageQueueFor(stageId: string): string | null {
+    if (!this.stageRegistry.has(stageId)) {
+      return null;
+    }
+
+    try {
+      return this.stageRegistry.get(stageId).queue;
+    } catch {
+      return null;
+    }
   }
 
   /**

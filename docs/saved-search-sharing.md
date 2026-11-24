@@ -57,7 +57,9 @@ immediately opens the share modal on it — no trip to the Saved Searches page.
 
 > No screenshot here, on purpose: a capture of this story prints the Storybook dev origin into the
 > link and embed fields (`http://localhost:6006/shared/…`, because `shareUrl` in `shareLink.ts`
-> defaults to `window.location.origin`). Open the story live instead.
+> defaults to the page origin — `getWebOrigin()`, which inside the iOS/Android apps is the
+> Memory server they are paired with, never their own `capacitor://localhost`). Open the
+> story live instead.
 
 - **Visibility** toggle: _Not shared_ / _Link shared_.
 - Turning on **Link shared** mints an unguessable token and shows the **capability link**

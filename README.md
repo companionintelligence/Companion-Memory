@@ -1,11 +1,23 @@
 
 <p align="center">
-    <img width="320" height="320" alt="Companion Memory" src="docs/images/companion-memory-mark.gif" />
+    <img src="https://raw.githubusercontent.com/companionintelligence/.github/main/profile/assets/icons/companion-memory.png" width="96" height="96" alt="Companion Memory icon">
 </p>
 
 
-# Companion Memory
-### Personal Database for Companion Intelligence
+<h1 align="center">Companion Memory</h1>
+
+<p align="center"><strong>Personal Database for Companion Intelligence</strong></p>
+
+[![release](https://img.shields.io/github/v/release/companionintelligence/Companion-Memory?style=flat-square&color=0a6358&label=release)](https://github.com/companionintelligence/Companion-Memory/releases/latest)
+[![platform](https://img.shields.io/badge/platform-Docker%20%C2%B7%20Web%20%C2%B7%20iOS%20%C2%B7%20Android-0a6358?style=flat-square)](https://github.com/companionintelligence/Companion-Memory)
+[![License](https://img.shields.io/badge/license-PolyForm%20NC%201.0-0a6358?style=flat-square)](LICENSE.md)
+[![Discord](https://img.shields.io/badge/chat-Discord-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.com/invite/yQp9hwpzAa)
+
+<p align="center"><a href="https://ci.computer/memory">Website</a> · <a href="#docs">Documentation</a> · <a href="#install-from-store">Get started</a> · <a href="https://docs.ci.computer/docs/reference/open-source-systems">Systems map</a></p>
+
+<p align="center">
+  <a href="https://hub.ci.computer/store/ci-memory"><img src="https://img.shields.io/badge/Install%20in%20Hub-Install%20in%20Hub-0a6358?style=for-the-badge&logo=docker&logoColor=white" alt="Install in Hub" height="30"></a>
+</p>
 
 ### [INSTALL FROM STORE](https://hub.ci.computer/store?category=companion-intelligence)
 
@@ -60,6 +72,41 @@ This is a Yarn workspace monorepo, with a uv-managed Python workspace alongside 
     ├── editor/                 # Rich-text editor package
     ├── shadcn/                 # ShadCN components (these typically shouldn't be modified directly, they're just local copies of our component library)
     └── template/               # A starter package to copy and paste when you need to create a new package in frontend/packages/
+```
+
+
+## Features
+
+| Feature | What it provides |
+|---|---|
+| **Capture and import** | Accept authenticated events, files and personal archive imports. |
+| **Search and retrieval** | Expose the same memory domain through REST, GraphQL and Memory MCP. |
+| **Background intelligence** | Run parsing, summaries and predictions in workers and Python sidecars. |
+| **Clients** | Serve web, CLI and mobile clients from shared API contracts. |
+
+## Screenshots
+
+<table>
+  <tr>
+    <td valign="top"><img src="video/assets/shots/feed-overview.png" alt="Companion Memory feed showing captured and summarized activity" width="420"><p align="center">Companion Memory feed showing captured and summarized activity</p></td>
+    <td valign="top"><img src="video/assets/shots/memory-search-results.png" alt="Companion Memory search results across personal records" width="420"><p align="center">Companion Memory search results across personal records</p></td>
+    <td valign="top"><img src="video/assets/shots/insights-list.png" alt="Companion Memory insight list" width="420"><p align="center">Companion Memory insight list</p></td>
+  </tr>
+</table>
+
+
+## How it fits together
+
+Clients send captures and queries to the authenticated API. Workers handle slower imports and parsing, while PostgreSQL remains the source of truth for structured records and vectors.
+
+```mermaid
+flowchart LR
+  Clients[Capture, web, CLI and agents] --> API[Authenticated API]
+  API --> Queue[Background jobs]
+  API --> DB[(PostgreSQL and extensions)]
+  Queue --> Workers[Import, parsing and summary workers]
+  Workers --> DB
+  API --> MCP[REST, GraphQL and Memory MCP]
 ```
 
 ## Architecture at a glance
@@ -129,10 +176,27 @@ summary and hbpe sidecars. Only the import-stage queues and their crons in
 `backend/apps/api/src/domains/import/` currently declare `role: 'worker'`, which
 is what moves them off the request-serving event loop.
 
-PowerSync is **not** part of the local stack: the `powersync` Compose service
-declares `profiles: ["staging","production"]`, so `make dev` never starts it, and
-`GET /api/powersync/token` returns 503 until both `POWERSYNC_URL` and
-`POWERSYNC_JWT_SECRET` are configured.
+Three of those arrows cross from Docker to the host, and a host firewall sees
+each of them as an inbound connection from the bridge network: the sidecars'
+calls to Ollama or Lemonade (`:11434` / `:13305`), and their completion
+webhooks back to the `api` process (`:3030`). CI-Hub prompts for the engine
+ports on its own installs, but the webhook port is a `make dev`-only crossing
+(a compose install reaches the api as `http://api:3030` inside one network),
+so nothing prompts for it. The symptom is silent: sidecar runs complete, the
+`py-fn-*` jobs sit `active` until they time out, and the sidecar log says
+`function_run_callback_undeliverable` with a firewall hint. On a ufw host:
+
+```bash
+sudo ufw allow from 172.16.0.0/12 to any port 3030 proto tcp comment 'ci-server sidecar callbacks'
+```
+
+PowerSync is **opt-in** in the local stack. Set `POWERSYNC_URL=http://localhost:18080`
+in `.env` and `make dev` starts the `powersync` Compose service too (its own compose
+profile, published on loopback), hands the api that URL on the port this stack actually
+got, and the phone reaches it over the `adb reverse` that `yarn android` applies. Leave
+`POWERSYNC_URL` unset and nothing changes: the service does not run and
+`GET /api/powersync/token` answers 503. See
+[`infrastructure/powersync/README.md`](infrastructure/powersync/README.md#running-it-under-make-dev).
 
 ### Caddy request routing
 
@@ -455,8 +519,11 @@ Then open `https://<project>.localhost` (e.g. **https://ci-server.localhost**) a
 
 ```
 Username: jsmith@example.com
-Password: replace-me-pw-000000
+Password: the AUTH_DEFAULT_USER_PASSWORD value in your .env
 ```
+
+`make init` generates that password, along with the other secrets, when it creates
+`.env`. A `.env` from before that change still holds `replace-me-pw-000000`.
 
 With the stack up and seeded, this is also the state from which to capture UI
 screenshots for the docs — see the [screenshot capture guide](docs/screenshots.md)
@@ -472,7 +539,7 @@ make reset
 
 Run `make` from the project root to see all available commands with descriptions.
 
-Three of those targets — `build`, `dev` and `test` — are
+Four of those targets — `build`, `dev`, `test` and `test-db` — are
 one-line delegations to a TypeScript program at [`scripts/xtask/`](scripts/xtask),
 run through `tsx` (`yarn tsx scripts/xtask/index.ts <command> ...`). The `make`
 targets stay the documented entry point and still take the variables they always
@@ -546,7 +613,8 @@ current shell without installing, `source scripts/gh-packages-auth.sh`.
 | `make smoke-api` | Verify the built API image can run `migrate` with production-only dependencies (a devDependency in either half fails the container at startup). Runs as part of `make publish` |
 | `make staging` | Run the staging deployment |
 | `make production` | Run the production deployment |
-| `make publish` | Publish CI-Server images and metadata to the CI-Portal store (builds `ENV=production`, then `smoke-api`) |
+| `make publish` | Publish CI-Server images and metadata to the CI-Portal store (runs `publish-build`, then pushes) |
+| `make publish-build` | Everything `publish` does before the push: `init`, `build ENV=production`, `smoke-api` and `smoke-stack`. `publish.yml`'s build job runs this with a read-only token and pushes from a separate job |
 | `make publish-quiet` | Publish to the CI-Portal store in quiet mode (skips the build/smoke steps) |
 | `make seed-production` | Seed the production database via an ephemeral proxy |
 
@@ -557,12 +625,12 @@ With no `IMAGE`, `make build` builds the `ENV`-appropriate set, in this order:
 ```
 local        setup-database database object-store summary hbpe
 staging      api gateway setup-database database object-store summary hbpe
-production   api gateway setup-database database object-store setup-secrets summary hbpe
+production   api gateway setup-database database object-store setup-secrets powersync summary hbpe
 ```
 
 ```bash
 make build IMAGE=hbpe    # just this one — api, gateway, setup-database, database,
-                         #   object-store, setup-secrets, summary or hbpe
+                         #   object-store, setup-secrets, powersync, summary or hbpe
 make build DRY_RUN=1     # print the exact docker build commands — every --build-arg
                          #   and, on a cuda/rocm host, the wheel-image tags — and build nothing
 ```
@@ -697,18 +765,22 @@ The `make` targets cover **both stacks** — the TypeScript one and the Python o
 |---------|-------------|
 | `make lint` | `yarn lint` + `yarn format:check`, then `ruff check`, `ruff format --check`, `mypy`, `uv lock --check` (catches a stale lockfile) and the `ci.*` namespace guard |
 | `make format` | `prettier --write` across the JS/TS sources, then `ruff format` and `ruff check --fix` |
-| `make test` | `yarn workspaces foreach --all run test`, then `uv run pytest` |
+| `make test` | `yarn workspace <name> run test` for every workspace that declares one, then the desktop `node --test` pass, `uv run pytest` and the two `sh` suites. Every step runs even if an earlier one fails, and a summary table says which did not pass |
+| `make test-db` | The database-backed `be-api` jest suites, against a throwaway Postgres container (Docker only; never your `.env` database). Fails on any unexplained skip or any database crash. `ARGS=` selects jest paths/flags, `KEEP=1` leaves the container up (`KEEP_FOR=12h` sets how long later runs leave it alone; default 24h), `NO_RETRY=1` skips the serial re-run of failed files — see [`docs/CI.md`](docs/CI.md#running-the-database-backed-suites-locally-make-test-db) |
 
-The repo root now declares `test` and `typecheck` scripts of its own: `yarn test`
-runs the xtask unit suite (`tsx --test "scripts/xtask/**/*.test.ts"`), and
-`yarn typecheck` runs `tsc --noEmit` over what the root `tsconfig.json` includes —
-`scripts/**`, `tests/**` and the Playwright config, which nothing ran before.
-Neither needs naming anywhere else: `foreach --all` stopped excluding the root
+The repo root now declares `test` and `typecheck` scripts of its own. `yarn test`
+runs the `node:test` suites under `scripts/`: the top-level `scripts/*.test.ts`
+files plus everything under `scripts/xtask`, `scripts/dev-stack` and
+`scripts/publish`. `yarn typecheck` runs `tsc --noEmit` over what the root
+`tsconfig.json` includes: `scripts/**`, `tests/**` and the three root
+`playwright*.config.ts` files.
+Neither needs naming in the Makefile: `foreach --all` stopped excluding the root
 workspace the moment those scripts existed, so `make test` runs the suite and
 `make typecheck` (`yarn workspaces foreach --all run typecheck`) runs the
-type-check — locally only now; the CI lane that used to run this on every PR
-(`pr-gate.yml`'s `Type check packages`) was deleted along with the rest of
-that file, and it had no twin in `ci.yml`.
+type-check. In CI, `ci.yml` runs the root pair as lanes of their own,
+`Type check root` and `Run root tests`, when someone dispatches it.
+`Run root tests` fails if any test skips. The nine `frontend/packages/*`
+type-checks that `make typecheck` also runs have no lane there.
 
 The underlying Yarn scripts are still there if you only want the JS half:
 
@@ -755,3 +827,17 @@ yarn typecheck              # Type-check without emitting
 yarn lint                   # Lint frontend code
 yarn lint:fix               # Auto-fix frontend linting issues
 ```
+
+<!-- companion-hub-readme-deep-review -->
+
+## Documentation and local service map
+
+| Need | Start here |
+|---|---|
+| Local development stack | `make dev` and the local development section below |
+| Architecture and request routing | [Architecture at a glance](#architecture-at-a-glance) and Caddy routing |
+| Configuration and deployment | [Documentation index](docs/README.md) |
+| Security review | [Security guidance](SECURITY.md) |
+
+For issue reports, include the deployment mode (Hub, standalone, or local development), the service involved, and redacted request/health output. Never include API keys or captured memory content in public issue text.
+

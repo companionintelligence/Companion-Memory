@@ -3,9 +3,10 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type
 import { apiKeyHeaders, buildApiUrl } from '@ci/common';
 import { ENTITY_TYPE_MAP } from '@ci/common/src/constants';
 import { Button, cn } from '@ci/shadcn';
-import { AlertCircle, ArrowLeft, Loader2, Sparkles } from '@ci/shadcn/icons';
+import { ArrowLeft, Loader2, Sparkles } from '@ci/shadcn/icons';
 import { useSearchParams } from 'react-router-dom';
 
+import { useAnswersFromDevice } from '@/api/powersync/deviceFallback';
 import { useGraphDots } from '@/api/useGraphDots';
 import { useGraphOverview, type GraphNode, type GraphLink } from '@/api/useGraphOverview';
 import { useNodeGraphService } from '@/api/useNodeGraphService';
@@ -16,7 +17,8 @@ import { AVAILABLE_ENTITY_TYPES } from '@/components/SearchBox/useDropdown';
 import { useAuth } from '@/hooks';
 import { graphNodeChatContext } from '@/lib/agentChat';
 import { formatEnumLabel } from '@/lib/utils';
-import { Empty } from '@/pages/MemoryPage/Components';
+import { Empty, ErrorState } from '@/pages/MemoryPage/Components';
+import { readListParam } from '@/pages/MemoryPage/Components/ExplorerToolbar/filterParams';
 import { useEntityService } from '@/pages/MemoryPage/useEntityService';
 
 import { ConnectionThreadDialog } from './ConnectionThreadDialog';
@@ -142,23 +144,28 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
       .filter((type): type is string => Boolean(type));
   }, [includedEntityTypesParam, excludedEntityTypesParam]);
 
-  // Explorer's `tags` URL param (comma-separated labels). Present (even empty)
-  // means the tag filter is active; absent leaves the graph unfiltered.
-  const rawTags = searchParams?.get('tags');
-  const tagsParam = rawTags ?? undefined;
+  // Explorer's `tags` URL param (one label per occurrence). Present (even
+  // empty) means the tag filter is active; absent leaves the graph unfiltered.
+  const tagsKey = searchParams?.has('tags') ? JSON.stringify(readListParam(searchParams, 'tags')) : undefined;
+  const tagsParam = useMemo(
+    () => (tagsKey === undefined ? undefined : (JSON.parse(tagsKey) as string[])),
+    [tagsKey],
+  );
 
   // Event-scoped LifeScope dimensions, shared via URL with List/Gallery/Map.
+  // Who / Where carry one value per param occurrence (a place can be a full
+  // street address); the keys are JSON so a comma in a name cannot alias two lists.
   const connectorsParam = searchParams?.get('connectors') ?? '';
-  const peopleParamRaw = searchParams?.get('people') ?? '';
-  const placesParamRaw = searchParams?.get('places') ?? '';
+  const peopleKey = JSON.stringify(searchParams ? readListParam(searchParams, 'people') : []);
+  const placesKey = JSON.stringify(searchParams ? readListParam(searchParams, 'places') : []);
   const eventTypesParamRaw = searchParams?.get('eventTypes') ?? '';
   const hasLocationParam = searchParams?.get('hasLocation') === '1';
   const dateFromParam = searchParams?.get('from') || undefined;
   const dateToParam = searchParams?.get('to') || undefined;
 
   const explorerConnectors = useMemo(() => connectorsParam.split(',').filter(Boolean), [connectorsParam]);
-  const explorerPeople = useMemo(() => peopleParamRaw.split(',').filter(Boolean), [peopleParamRaw]);
-  const explorerPlaces = useMemo(() => placesParamRaw.split(',').filter(Boolean), [placesParamRaw]);
+  const explorerPeople = useMemo(() => JSON.parse(peopleKey) as string[], [peopleKey]);
+  const explorerPlaces = useMemo(() => JSON.parse(placesKey) as string[], [placesKey]);
   const explorerEventTypes = useMemo(
     () => eventTypesParamRaw.split(',').filter(Boolean),
     [eventTypesParamRaw],
@@ -171,7 +178,9 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
   /** The query matched more nodes than the canvas cap draws (server-reported). */
   const [searchTruncated, setSearchTruncated] = useState(false);
 
-  const [{ authToken }] = useAuth();
+  // `authenticated` gates the search, not `authToken`: the token is the web JWT, which the native
+  // shell never has — its credential is a keystore API key (`apiKeyHeaders`).
+  const [{ authToken, authenticated }] = useAuth();
 
   /**
    * DOTS overview: the default zoomed-out picture — every data type as thousands of tiny dots from
@@ -188,6 +197,9 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
     !dateFromParam &&
     !dateToParam;
 
+  // Bumped by the error state's Try again: every graph fetch below re-runs on a new key.
+  const [retryKey, setRetryKey] = useState(0);
+
   const { loading, error, subgraph, userEntityId, filterMatchedEntityIds, filterScope } = useGraphOverview(
     authToken,
     {
@@ -201,6 +213,7 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
       hasLocation: hasLocationParam,
       dateFrom: dateFromParam,
       dateTo: dateToParam,
+      refreshKey: retryKey,
       skip: dotsEligible,
     },
   );
@@ -217,6 +230,7 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
   } = useGraphDots(authToken, {
     includeTypes: explorerIncludeTypes,
     eventTypes: explorerEventTypes,
+    refreshKey: retryKey,
     skip: !dotsEligible,
   });
 
@@ -253,6 +267,7 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
     data: focusGraph,
     loading: focusLoading,
     error: focusError,
+    refresh: refreshFocus,
   } = useNodeGraphService({
     entityId: focusEntityId ?? undefined,
     nodeLimit: FOCUS_NODE_LIMIT,
@@ -371,7 +386,7 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
       return;
     }
 
-    if (!authToken) {
+    if (!authenticated) {
       setSearchError('Authentication required for graph search.');
       setSearchNodes([]);
       setSearchLinks([]);
@@ -397,19 +412,25 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
         }
 
         if (tagsParam !== undefined) {
-          params.set('tags', tagsParam);
+          if (tagsParam.length === 0) {
+            params.set('tags', '');
+          }
+
+          for (const tag of tagsParam) {
+            params.append('tags', tag);
+          }
         }
 
         if (explorerConnectors.length > 0) {
           params.set('connectors', explorerConnectors.join(','));
         }
 
-        if (explorerPeople.length > 0) {
-          params.set('people', explorerPeople.join(','));
+        for (const person of explorerPeople) {
+          params.append('people', person);
         }
 
-        if (explorerPlaces.length > 0) {
-          params.set('places', explorerPlaces.join(','));
+        for (const place of explorerPlaces) {
+          params.append('places', place);
         }
 
         if (explorerEventTypes.length > 0) {
@@ -431,7 +452,7 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
         const response = await fetch(buildApiUrl(`/api/graph/search?${params.toString()}`), {
           headers: {
             ...apiKeyHeaders(),
-            Authorization: `Bearer ${authToken}`,
+            ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
           },
           signal: controller.signal,
         });
@@ -530,6 +551,7 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
     };
   }, [
     authToken,
+    authenticated,
     isSearchMode,
     trimmedSearchQuery,
     explorerIncludeTypes,
@@ -541,6 +563,7 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
     hasLocationParam,
     dateFromParam,
     dateToParam,
+    retryKey,
   ]);
 
   /**
@@ -636,12 +659,22 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
   }, [displayGraph.nodes]);
 
   // A selection only means something while its subject is on screen; mode/data changes that drop
-  // the subject drop the selection (and its dialog) with it.
+  // the subject drop the selection (and its dialog) with it. Focus mode waits until the focused
+  // entity's own subgraph is on screen first. Before that, useNodeGraphService hands back nothing
+  // on the first focus and the previously focused entity's subgraph after that. A dot clicked in
+  // the overview is selected and focused in one go, and checking it against either placeholder
+  // cleared the selection, so its card never opened.
+  const focusPending = focusEntityId !== null && !nodeById.has(focusEntityId);
+
   useEffect(() => {
+    if (focusPending) {
+      return;
+    }
+
     if (selectedNodeId && !nodeById.has(selectedNodeId)) {
       setSelectedNodeId(null);
     }
-  }, [nodeById, selectedNodeId]);
+  }, [focusPending, nodeById, selectedNodeId]);
 
   useEffect(() => {
     if (selectedLinkId && !displayGraph.links.some((link) => link.id === selectedLinkId)) {
@@ -776,6 +809,9 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
   const dataLoading = mode === 'search' ? searchLoading : mode === 'focus' ? focusLoading : overviewLoading;
   const dataError =
     mode === 'search' ? searchError : mode === 'focus' ? (focusError?.message ?? null) : overviewError;
+  // The graph has no copy on the phone. While the appliance is not answering,
+  // say so in the words the other views use, not the transport's "Fetch failed: 500".
+  const offline = useAnswersFromDevice();
 
   const centerNodeId = mode === 'focus' ? focusEntityId : (overviewUserEntityId ?? undefined);
 
@@ -788,12 +824,27 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
       </div>
     );
   } else if (dataError) {
+    // The same plain "could not load" + Try again the other Memory views show, not the
+    // transport's "Fetch failed: 500". With the appliance not answering, the shared
+    // component's offline copy wins (no description passed).
     stateOverlay = (
-      <div className="absolute inset-0 z-10 flex items-center justify-center">
-        <div className="flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-          <AlertCircle className="h-5 w-5" />
-          <span>{dataError}</span>
-        </div>
+      <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/80">
+        <ErrorState
+          description={
+            offline
+              ? undefined
+              : !authenticated
+                ? 'Authentication required for graph search.'
+                : "We couldn't load your graph. Check your connection and try again."
+          }
+          onRetry={() => {
+            if (mode === 'focus') {
+              void refreshFocus();
+            } else {
+              setRetryKey((key) => key + 1);
+            }
+          }}
+        />
       </div>
     );
   } else if (displayGraph.nodes.length === 0) {
@@ -872,6 +923,12 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
             onViewportChange={handleViewportChange}
             forceLod={dotsEligible && mode === 'overview'}
             ambientBreath={dotsEligible && mode === 'overview'}
+            // The canvas is the whole view here, with no page around it to scroll, so every swipe
+            // belongs to the graph.
+            verticalSwipe="graph"
+            // Zoom buttons clear of the floating chrome: stacked above the 2D/3D toggle on a desktop,
+            // and top-right on a phone, where the legend spans most of the bottom edge.
+            controlsClassName={variant === 'mobile' ? 'bottom-auto top-3' : 'bottom-9'}
           />
         ))}
 
@@ -941,9 +998,7 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
           {dotsEligible && mode === 'overview' && dotsConnectivity && dotsConnectivity.total > 0 && (
             <div className="flex flex-col gap-1" data-testid="graph-relatedness">
               <div className="flex items-baseline justify-between gap-3">
-                <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  Relatedness
-                </span>
+                <span className="text-[10px] font-semibold text-muted-foreground">Relatedness</span>
                 <span className="font-semibold tabular-nums text-foreground">
                   {Math.round(dotsConnectivity.relatedRatio * 100)}% linked
                 </span>
@@ -992,9 +1047,7 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
               {dotsTruncated && dotsEligible ? ' · top by links' : ''}
             </span>
             {dotsEligible && mode === 'overview' && dotsHydrating && (
-              <span className="constellation-hydrating-chip text-[10px] uppercase tracking-wide text-primary/80">
-                materializing
-              </span>
+              <span className="constellation-hydrating-chip text-[10px] text-primary/80">materializing</span>
             )}
             {legendTypes.map(([type]) => (
               <span key={type} className="flex items-center gap-1">

@@ -3,9 +3,11 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
 import { FeatureService } from '@ci/common/feature';
+import { utcDay } from '@ci/common/hbpe';
 import { LoggerService } from '@ci/common/logging';
 import { serves } from '@ci/common/roles';
-import { Cron } from '@ci/common/schedule';
+import { Cron, fanOutPerUser } from '@ci/common/schedule';
+import { listOnboardedUserIds } from '@ci/domains/user';
 
 import { PythonFunctionService } from '../services/PythonFunctionService';
 import type { PythonFunctionTarget } from '../types';
@@ -14,9 +16,18 @@ import type { PythonFunctionTarget } from '../types';
 const DOSSIER_LOOKBACK_DAYS = 30;
 
 /**
+ * Singleton window for work that reads the user's current state instead of naming
+ * a window. The queue keeps one waiting copy per user. With an hourly key, every
+ * tick while the summary service has no model adds a job. Each one later runs the
+ * same LLM pass over the same input.
+ */
+const CURRENT_STATE_KEY = 'current';
+
+/**
  * Nightly (02:30) and ensure_bootstrap (boot+30s / 03:00) share one worker and
- * one pipeline. Distinct keys let both sit `active` after a missed callback.
- * Manual Predict keeps `fn:nightly:<user>:manual` and is not this path.
+ * one pipeline. Manual Predict keeps `fn:nightly:<user>:manual` and is not this
+ * path. The key alone does not stop a second run beside a live one (see
+ * `fanOut`).
  */
 function hbpePipelineSingleton(
   target: PythonFunctionTarget,
@@ -52,15 +63,16 @@ function hbpePipelineSingleton(
  * - HBPE bootstrap    app start + 03:00 daily sweep (no-op for warm users)
  *
  * Per-user window resolution (timezones) and personalization stay inside the
- * Python functions — the cron only sends the user id and a reference instant.
+ * Python functions. The cron only sends the user id and a reference instant, or
+ * the UTC hour for hourly summaries.
  *
  * Three of these crons stand down when `smart.rotation` is on, because
  * SmartRotationListener dispatches the same Python functions on its own cadence:
  * `insights` (rotation's `insights` work type) and `hourlySummaries` /
  * `dossierRefresh` (rotation's `summaries` work type dispatches both as
- * independent products). Their singleton keys do NOT collide — this class
- * scopes by time window (`fn:<name>:<user>:<hourKey>`) and rotation scopes by
- * `fn:<name>:<user>:rotation` — so without the guard pg-boss treats them as
+ * independent products). Their singleton keys do NOT collide. This class uses
+ * `fn:<name>:<user>:<hourKey>` or `fn:<name>:<user>:current` and rotation uses
+ * `fn:<name>:<user>:rotation`, so without the guard pg-boss treats them as
  * distinct jobs and both run. These are LLM-bound and take minutes per run.
  *
  * The rest stay unconditional: daily/weekly/monthly summaries, actions, and the
@@ -114,22 +126,33 @@ export class PythonFunctionCrons implements OnApplicationBootstrap {
       return;
     }
 
-    await this.fanOut('summary', 'hourly_summary', hourKey());
+    const window = previousHourWindow();
+
+    // Keyed by the hour the job names, not the hour this tick ran in. That is the key
+    // SummaryBackfillService gives the same hour. Off by one, a job waiting in the queue
+    // would make the backfill's insert for the NEXT hour a silent no-op.
+    await this.fanOut('summary', 'hourly_summary', hourKey(new Date(window.start_time)), window);
   }
 
   @Cron('0 10 0 * * *', { name: 'PythonFunctionCrons.dailySummaries' })
   async dailySummaries(): Promise<void> {
-    await this.fanOut('summary', 'daily_summary', dayKey(), { reference_time: new Date().toISOString() });
+    await this.fanOut('summary', 'daily_summary', utcDay(new Date()), {
+      reference_time: new Date().toISOString(),
+    });
   }
 
   @Cron('0 15 0 * * 1', { name: 'PythonFunctionCrons.weeklySummaries' })
   async weeklySummaries(): Promise<void> {
-    await this.fanOut('summary', 'weekly_summary', dayKey(), { reference_time: new Date().toISOString() });
+    await this.fanOut('summary', 'weekly_summary', utcDay(new Date()), {
+      reference_time: new Date().toISOString(),
+    });
   }
 
   @Cron('0 20 0 1 * *', { name: 'PythonFunctionCrons.monthlySummaries' })
   async monthlySummaries(): Promise<void> {
-    await this.fanOut('summary', 'monthly_summary', dayKey(), { reference_time: new Date().toISOString() });
+    await this.fanOut('summary', 'monthly_summary', utcDay(new Date()), {
+      reference_time: new Date().toISOString(),
+    });
   }
 
   @Cron('0 12 * * * *', { name: 'PythonFunctionCrons.dossierRefresh' })
@@ -145,8 +168,12 @@ export class PythonFunctionCrons implements OnApplicationBootstrap {
     // moved, which is the shipped-config behaviour because `smart.rotation`
     // (the only other dossier scheduler, and the only one that had a freshness
     // gate) is false in config/default.json.
-    await this.fanOut('summary', 'dossier_refresh', hourKey(), { lookback_days: DOSSIER_LOOKBACK_DAYS }, () =>
-      this.listUsersWithStaleDossier(DOSSIER_LOOKBACK_DAYS),
+    await this.fanOut(
+      'summary',
+      'dossier_refresh',
+      CURRENT_STATE_KEY,
+      { lookback_days: DOSSIER_LOOKBACK_DAYS },
+      () => this.listUsersWithStaleDossier(DOSSIER_LOOKBACK_DAYS),
     );
   }
 
@@ -156,17 +183,17 @@ export class PythonFunctionCrons implements OnApplicationBootstrap {
       return;
     }
 
-    await this.fanOut('summary', 'insights_generation', hourKey(), { lookback_hours: 72 });
+    await this.fanOut('summary', 'insights_generation', CURRENT_STATE_KEY, { lookback_hours: 72 });
   }
 
   @Cron('0 45 * * * *', { name: 'PythonFunctionCrons.actions' })
   async actions(): Promise<void> {
-    await this.fanOut('summary', 'actions_generation', hourKey(), { lookback_days: 7 });
+    await this.fanOut('summary', 'actions_generation', CURRENT_STATE_KEY, { lookback_days: 7 });
   }
 
   @Cron('0 30 2 * * *', { name: 'PythonFunctionCrons.hbpeNightly' })
   async hbpeNightly(): Promise<void> {
-    await this.fanOut('hbpe', 'nightly', dayKey());
+    await this.fanOut('hbpe', 'nightly', utcDay(new Date()));
   }
 
   @Cron('0 0 3 * * *', { name: 'PythonFunctionCrons.hbpeBootstrapSweep' })
@@ -175,7 +202,7 @@ export class PythonFunctionCrons implements OnApplicationBootstrap {
   }
 
   private async ensureHbpeBootstrap(): Promise<void> {
-    await this.fanOut('hbpe', 'ensure_bootstrap', dayKey());
+    await this.fanOut('hbpe', 'ensure_bootstrap', utcDay(new Date()));
   }
 
   private async fanOut(
@@ -194,24 +221,22 @@ export class PythonFunctionCrons implements OnApplicationBootstrap {
       return;
     }
 
-    let enqueued = 0;
+    // One prediction run per person: a user whose run is still waiting or
+    // going (a Predict, yesterday's nightly, the start-up sweep before a
+    // restart) is skipped. The `short` key refused only an identical key that
+    // had not started yet, so an API restart or a Predict at 02:00 queued a
+    // second whole pipeline behind the first.
+    const { enqueued } = await fanOutPerUser(
+      userIds,
+      (userId) => {
+        const options = { singletonKey: hbpePipelineSingleton(target, functionName, userId, windowKey) };
 
-    for (const userId of userIds) {
-      try {
-        const didEnqueue = await this.pythonFunctionService.dispatch(target, functionName, userId, args, {
-          singletonKey: hbpePipelineSingleton(target, functionName, userId, windowKey),
-        });
-
-        if (didEnqueue) {
-          enqueued += 1;
-        }
-      } catch (err) {
-        this.logger.error(
-          `Failed to enqueue ${functionName} for user ${userId}`,
-          err instanceof Error ? err : new Error(String(err)),
-        );
-      }
-    }
+        return target === 'hbpe'
+          ? this.pythonFunctionService.dispatchUnlessRunning(target, functionName, userId, args, options)
+          : this.pythonFunctionService.dispatch(target, functionName, userId, args, options);
+      },
+      { logger: this.logger, label: functionName },
+    );
 
     this.logger.log('Python function fan-out enqueued', {
       target,
@@ -221,13 +246,9 @@ export class PythonFunctionCrons implements OnApplicationBootstrap {
     });
   }
 
-  /** Same population the Temporal system workflows fanned out over. */
-  private async listOnboardedUserIds(): Promise<string[]> {
-    type Row = { id: string };
-
-    const rows = (await this.dataSource.query('SELECT id FROM ci.users WHERE onboarded = true')) as Row[];
-
-    return rows.map((row) => String(row.id));
+  /** The same population every other fan-out on this appliance covers. */
+  private listOnboardedUserIds(): Promise<string[]> {
+    return listOnboardedUserIds(this.dataSource);
   }
 
   /**
@@ -336,12 +357,22 @@ export class PythonFunctionCrons implements OnApplicationBootstrap {
   }
 }
 
-/** Window key for hourly-cadence work: dedupes within the current UTC hour. */
-function hourKey(now = new Date()): string {
-  return now.toISOString().slice(0, 13);
+/** Window key for one UTC hour, named by the hour's start. */
+function hourKey(hourStart: Date): string {
+  return hourStart.toISOString().slice(0, 13);
 }
 
-/** Window key for daily-cadence work: dedupes within the current UTC day. */
-function dayKey(now = new Date()): string {
-  return now.toISOString().slice(0, 10);
+/**
+ * The hour this tick summarizes, named in the job. Left to the function it means
+ * the hour before the job RUNS. A job can wait, because the queue holds them while
+ * the summary service has no model. A day of held jobs would all summarize the same
+ * last hour and lose the other 23.
+ */
+function previousHourWindow(now = new Date()): { start_time: string; end_time: string } {
+  const end = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), now.getUTCHours()),
+  );
+  const start = new Date(end.getTime() - 60 * 60 * 1000);
+
+  return { start_time: start.toISOString(), end_time: end.toISOString() };
 }

@@ -52,25 +52,46 @@ async function withInbox<T>(dir: string, run: () => Promise<T>): Promise<T> {
   }
 }
 
+const OWNER = '00000000-0000-7000-8000-000000000001';
+const MEMBER = '00000000-0000-7000-8000-000000000002';
+
+/** A signed-in caller who is the appliance administrator. */
+const admin = (userId: string | null = null): { userId: string | null; isAdmin: boolean } => ({
+  userId,
+  isAdmin: true,
+});
+
+/** A signed-in caller who is not — a household member, or a plain api key. */
+const member = (userId: string | null = null): { userId: string | null; isAdmin: boolean } => ({
+  userId,
+  isAdmin: false,
+});
+
 describe('resolveWithinImportRoots', () => {
-  it('refuses everything when no roots are configured', async () => {
+  it('refuses everything when no roots are configured, even for an admin', async () => {
     // The default. Path imports stay off until an operator opts in, rather than
     // being on and hoping the check is right.
     await withRoots([], async () => {
-      await expect(resolveWithinImportRoots('/etc/passwd', null)).rejects.toBeInstanceOf(
+      await expect(resolveWithinImportRoots('/etc/passwd', admin())).rejects.toBeInstanceOf(
         PathOutsideImportRootsError,
       );
     });
   });
 
-  it('allows a file inside a configured root', async () => {
+  it('lets the administrator reach a configured root but refuses a non-admin there', async () => {
+    // The configured roots are the appliance operator's surface — on a desktop
+    // install `/repo` is a mount of the owner's ~/Downloads. A household member
+    // used to reach them too; now only the administrator does.
     const root = await mkdtemp(path.join(os.tmpdir(), 'ci-roots-'));
     const file = path.join(root, 'export.zip');
 
     await writeFile(file, 'bytes');
 
     await withRoots([root], async () => {
-      expect(await resolveWithinImportRoots(file, null)).toContain('export.zip');
+      expect(await resolveWithinImportRoots(file, admin())).toContain('export.zip');
+      await expect(resolveWithinImportRoots(file, member())).rejects.toBeInstanceOf(
+        PathOutsideImportRootsError,
+      );
     });
   });
 
@@ -79,7 +100,7 @@ describe('resolveWithinImportRoots', () => {
 
     await withRoots([root], async () => {
       await expect(
-        resolveWithinImportRoots(path.join(root, '..', '..', 'etc', 'passwd'), null),
+        resolveWithinImportRoots(path.join(root, '..', '..', 'etc', 'passwd'), admin()),
       ).rejects.toBeInstanceOf(PathOutsideImportRootsError);
     });
   });
@@ -96,9 +117,9 @@ describe('resolveWithinImportRoots', () => {
     await writeFile(path.join(sibling, 'secret.zip'), 'bytes');
 
     await withRoots([root], async () => {
-      await expect(resolveWithinImportRoots(path.join(sibling, 'secret.zip'), null)).rejects.toBeInstanceOf(
-        PathOutsideImportRootsError,
-      );
+      await expect(
+        resolveWithinImportRoots(path.join(sibling, 'secret.zip'), admin()),
+      ).rejects.toBeInstanceOf(PathOutsideImportRootsError);
     });
   });
 
@@ -116,7 +137,7 @@ describe('resolveWithinImportRoots', () => {
     await symlink(path.join(outside, 'secret.zip'), path.join(root, 'link.zip'));
 
     await withRoots([root], async () => {
-      await expect(resolveWithinImportRoots(path.join(root, 'link.zip'), null)).rejects.toBeInstanceOf(
+      await expect(resolveWithinImportRoots(path.join(root, 'link.zip'), admin())).rejects.toBeInstanceOf(
         PathOutsideImportRootsError,
       );
     });
@@ -128,24 +149,23 @@ describe('resolveWithinImportRoots', () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'ci-roots-'));
 
     await withRoots([root], async () => {
-      await expect(resolveWithinImportRoots(path.join(root, 'nope.zip'), null)).rejects.toBeInstanceOf(
+      await expect(resolveWithinImportRoots(path.join(root, 'nope.zip'), admin())).rejects.toBeInstanceOf(
         PathOutsideImportRootsError,
       );
     });
   });
 
-  it("allows the caller's own inbox subtree, even with no roots configured — and only theirs", async () => {
-    // The same composition upstream made when it appended its data dir to
-    // CI_IMPORT_ROOTS, narrowed per account: reading one's OWN inbox slice is
-    // on by default regardless of the operator's roots; another account's
-    // slice, the shared root, and an anonymous caller get nothing.
+  it("allows the caller's own inbox subtree — admin or not — and only theirs", async () => {
+    // The per-user inbox is each caller's own slice of the shared mount and is
+    // on for everyone, independent of the operator's roots and of role. Another
+    // account's slice, the shared root, and an anonymous caller get nothing.
     const inbox = await mkdtemp(path.join(os.tmpdir(), 'ci-inbox-'));
 
-    await mkdir(path.join(inbox, 'kyle_lifescope.io'));
-    await mkdir(path.join(inbox, 'other_lifescope.io'));
+    await mkdir(path.join(inbox, OWNER));
+    await mkdir(path.join(inbox, MEMBER));
 
-    const mine = path.join(inbox, 'kyle_lifescope.io', 'export.zip');
-    const theirs = path.join(inbox, 'other_lifescope.io', 'export.zip');
+    const mine = path.join(inbox, OWNER, 'export.zip');
+    const theirs = path.join(inbox, MEMBER, 'export.zip');
     const shared = path.join(inbox, 'export.zip');
 
     await writeFile(mine, 'bytes');
@@ -154,15 +174,15 @@ describe('resolveWithinImportRoots', () => {
 
     await withRoots([], () =>
       withInbox(inbox, async () => {
-        expect(await resolveWithinImportRoots(mine, 'kyle@lifescope.io')).toContain('export.zip');
+        expect(await resolveWithinImportRoots(mine, member(OWNER))).toContain('export.zip');
 
         for (const refused of [theirs, shared]) {
-          await expect(resolveWithinImportRoots(refused, 'kyle@lifescope.io')).rejects.toBeInstanceOf(
+          await expect(resolveWithinImportRoots(refused, member(OWNER))).rejects.toBeInstanceOf(
             PathOutsideImportRootsError,
           );
         }
 
-        await expect(resolveWithinImportRoots(mine, null)).rejects.toBeInstanceOf(
+        await expect(resolveWithinImportRoots(mine, member(null))).rejects.toBeInstanceOf(
           PathOutsideImportRootsError,
         );
       }),
@@ -178,8 +198,8 @@ describe('resolveWithinImportRoots', () => {
     await writeFile(file, 'bytes');
 
     await withRoots(['/does/not/exist', root], async () => {
-      expect(await resolveWithinImportRoots(file, null)).toContain('export.zip');
-      await expect(resolveWithinImportRoots('/etc/passwd', null)).rejects.toBeInstanceOf(
+      expect(await resolveWithinImportRoots(file, admin())).toContain('export.zip');
+      await expect(resolveWithinImportRoots('/etc/passwd', admin())).rejects.toBeInstanceOf(
         PathOutsideImportRootsError,
       );
     });
@@ -199,11 +219,13 @@ async function withInboxHostDir<T>(dir: string, run: () => Promise<T>): Promise<
 }
 
 describe('resolveWithinUserInbox', () => {
-  it('derives the user folder from the email, lowercased and sanitized', async () => {
+  it('keys the user folder on the account id, not the email', async () => {
+    // Two addresses that sanitize to one folder name used to share an inbox;
+    // the immutable account id cannot collide, so each account is its own.
     const inbox = await mkdtemp(path.join(os.tmpdir(), 'ci-inbox-'));
 
     await withInbox(inbox, async () => {
-      expect(userInboxDir('Kyle@Lifescope.IO')).toBe(path.join(inbox, 'kyle_lifescope.io'));
+      expect(userInboxDir(OWNER)).toBe(path.join(inbox, OWNER));
     });
   });
 });
@@ -220,11 +242,11 @@ describe('userInboxDisplayDir', () => {
 
     await withInbox(inbox, async () => {
       await withInboxHostDir('', async () => {
-        expect(userInboxDisplayDir('kyle@lifescope.io')).toBe(userInboxDir('kyle@lifescope.io'));
+        expect(userInboxDisplayDir(OWNER)).toBe(userInboxDir(OWNER));
       });
       // Whitespace is "not configured", not a folder named ' '.
       await withInboxHostDir('   ', async () => {
-        expect(userInboxDisplayDir('kyle@lifescope.io')).toBe(userInboxDir('kyle@lifescope.io'));
+        expect(userInboxDisplayDir(OWNER)).toBe(userInboxDir(OWNER));
       });
     });
   });
@@ -234,14 +256,14 @@ describe('userInboxDisplayDir', () => {
 
     await withInbox(inbox, async () => {
       await withInboxHostDir(
-        '/home/kyle/.local/share/companion-hub/app-data/ci-memory/data/import-work/inbox',
+        '/home/owner/.local/share/companion-hub/app-data/ci-memory/data/import-work/inbox',
         async () => {
-          expect(userInboxDisplayDir('Kyle@Lifescope.IO')).toBe(
-            '/home/kyle/.local/share/companion-hub/app-data/ci-memory/data/import-work/inbox/kyle_lifescope.io',
+          expect(userInboxDisplayDir(OWNER)).toBe(
+            `/home/owner/.local/share/companion-hub/app-data/ci-memory/data/import-work/inbox/${OWNER}`,
           );
           // The server path is untouched: the resolvers keep working where the
           // API actually runs.
-          expect(userInboxDir('Kyle@Lifescope.IO')).toBe(path.join(inbox, 'kyle_lifescope.io'));
+          expect(userInboxDir(OWNER)).toBe(path.join(inbox, OWNER));
         },
       );
     });
@@ -255,7 +277,7 @@ describe('userInboxDisplayDir', () => {
       // it here would glue the API's cwd onto it and name a folder that
       // exists nowhere.
       await withInboxHostDir('import-work/inbox/', async () => {
-        expect(userInboxDisplayDir('kyle@lifescope.io')).toBe('import-work/inbox/kyle_lifescope.io');
+        expect(userInboxDisplayDir(OWNER)).toBe(`import-work/inbox/${OWNER}`);
       });
     });
   });
@@ -269,11 +291,11 @@ describe('userInboxDisplayDir', () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'ci-roots-'));
     const rootFile = path.join(root, 'export.zip');
 
-    await mkdir(path.join(inbox, 'kyle_lifescope.io'), { recursive: true });
-    await mkdir(path.join(inbox, 'other_lifescope.io'), { recursive: true });
+    await mkdir(path.join(inbox, OWNER), { recursive: true });
+    await mkdir(path.join(inbox, MEMBER), { recursive: true });
 
-    const mine = path.join(inbox, 'kyle_lifescope.io', 'export.zip');
-    const theirs = path.join(inbox, 'other_lifescope.io', 'export.zip');
+    const mine = path.join(inbox, OWNER, 'export.zip');
+    const theirs = path.join(inbox, MEMBER, 'export.zip');
     const shared = path.join(inbox, 'export.zip');
 
     await writeFile(mine, 'bytes');
@@ -283,12 +305,10 @@ describe('userInboxDisplayDir', () => {
 
     await withRoots([root], () =>
       withInbox(inbox, async () => {
-        const email = 'kyle@lifescope.io';
-
-        expect(await resolveWithinUserInbox(mine, email)).toContain('export.zip');
+        expect(await resolveWithinUserInbox(mine, OWNER)).toContain('export.zip');
 
         for (const refused of [theirs, shared, rootFile]) {
-          await expect(resolveWithinUserInbox(refused, email)).rejects.toBeInstanceOf(
+          await expect(resolveWithinUserInbox(refused, OWNER)).rejects.toBeInstanceOf(
             PathOutsideImportRootsError,
           );
         }
@@ -308,19 +328,18 @@ describe('realUserInboxDir', () => {
   it('agrees with what the resolver returns, symlinked mount and all', async () => {
     const real = await mkdtemp(path.join(os.tmpdir(), 'ci-inbox-real-'));
     const link = `${real}-link`;
-    const email = 'kyle@lifescope.io';
 
-    await mkdir(path.join(real, 'kyle_lifescope.io', 'reddit'), { recursive: true });
-    await writeFile(path.join(real, 'kyle_lifescope.io', 'reddit', 'export.zip'), 'bytes');
+    await mkdir(path.join(real, OWNER, 'reddit'), { recursive: true });
+    await writeFile(path.join(real, OWNER, 'reddit', 'export.zip'), 'bytes');
     await symlink(real, link);
 
     await withInbox(link, async () => {
-      const unit = path.join(userInboxDir(email), 'reddit', 'export.zip');
-      const resolved = await resolveWithinUserInbox(unit, email);
+      const unit = path.join(userInboxDir(OWNER), 'reddit', 'export.zip');
+      const resolved = await resolveWithinUserInbox(unit, OWNER);
 
-      expect(path.relative(await realUserInboxDir(email), resolved)).toBe(path.join('reddit', 'export.zip'));
+      expect(path.relative(await realUserInboxDir(OWNER), resolved)).toBe(path.join('reddit', 'export.zip'));
       // And the configured spelling is exactly what does NOT hold.
-      expect(path.relative(userInboxDir(email), resolved)).toContain('..');
+      expect(path.relative(userInboxDir(OWNER), resolved)).toContain('..');
     });
   });
 
@@ -330,7 +349,7 @@ describe('realUserInboxDir', () => {
     await withInbox(inbox, async () => {
       // Only ever a comparison step, so an account whose folder the boot sweep
       // has not created yet gets a usable root instead of an exception.
-      expect(await realUserInboxDir('kyle@lifescope.io')).toBe(userInboxDir('kyle@lifescope.io'));
+      expect(await realUserInboxDir(OWNER)).toBe(userInboxDir(OWNER));
     });
   });
 });

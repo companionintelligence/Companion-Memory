@@ -2,6 +2,7 @@ import { WebPlugin } from '@capacitor/core';
 
 import type {
   GenerateResult,
+  LoadedModelResult,
   LoadModelResult,
   LocalLlmAvailability,
   LocalLlmPlugin,
@@ -20,7 +21,10 @@ import type {
  */
 export class LocalLlmWeb extends WebPlugin implements LocalLlmPlugin {
   async isAvailable(): Promise<LocalLlmAvailability> {
-    return { available: false, reason: 'On-device LLM is only available in the native Android app.' };
+    return {
+      available: false,
+      reason: 'On-device LLM is only available in the native iOS and Android apps.',
+    };
   }
 
   async getModelStatus(): Promise<ModelStatusResult> {
@@ -29,6 +33,10 @@ export class LocalLlmWeb extends WebPlugin implements LocalLlmPlugin {
 
   async downloadModel(): Promise<void> {
     throw this.unavailable('downloadModel is not available on web.');
+  }
+
+  async cancelDownload(): Promise<void> {
+    // Nothing downloads on web — no-op.
   }
 
   async deleteModel(): Promise<void> {
@@ -42,6 +50,14 @@ export class LocalLlmWeb extends WebPlugin implements LocalLlmPlugin {
   async configureIntentTools(): Promise<void> {
     // There is no local model to give tools to — accept and ignore, so callers can configure
     // unconditionally at startup without branching on platform.
+  }
+
+  async getLoadedModel(): Promise<LoadedModelResult> {
+    return { loaded: false };
+  }
+
+  async resetConversation(): Promise<void> {
+    // No conversation to reset — no-op, so a "New chat" handler can call it unconditionally.
   }
 
   async unloadModel(): Promise<void> {

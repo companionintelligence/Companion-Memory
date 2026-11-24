@@ -18,6 +18,8 @@ def test_rejects_tokenizer_junk():
     assert not is_displayable_label("Air_2")
     assert not is_displayable_label("Ransom")
     assert not is_displayable_label("general")
+    assert not is_displayable_label("Label")
+    assert not is_displayable_label("LABEL")
     assert is_thinking_echo("no_think")
 
 

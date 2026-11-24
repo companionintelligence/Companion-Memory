@@ -5,6 +5,7 @@ import {
   Controller,
   Get,
   Headers,
+  Logger,
   NotFoundException,
   Param,
   Post,
@@ -16,11 +17,12 @@ import {
 import { InjectDataSource } from '@nestjs/typeorm';
 import type { Request, Response } from 'express';
 import { DataSource } from 'typeorm';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { FULL_CAPABILITY, READ_CAPABILITY, RequireCapability, WRITE_CAPABILITY } from '@ci/common/decorators';
 import { ApplianceAdminGuard, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { summarizeDatabaseError } from '@ci/common/persistence';
 import { ValidationPipe } from '@ci/common/pipes';
 import config from '@ci/configuration';
 import { UNFURL_SWEEP_QUEUE, UnfurlSweepRequestEvent } from '@ci/domains/embed/events';
@@ -30,8 +32,6 @@ import {
   FilePreviewSweepRequestEvent,
   VIDEO_PLAYBACK_SWEEP_QUEUE,
   VideoPlaybackSweepRequestEvent,
-  MediaDimensionsBackfillRequestEvent,
-  MEDIA_DIMENSIONS_QUEUE,
 } from '@ci/domains/files';
 import { EventEntity } from '@ci/domains/memory';
 import { EstimateLocationBatchRequestEvent, GeocodeBatchRequestEvent } from '@ci/domains/memory/events';
@@ -43,6 +43,7 @@ import {
 } from '@ci/domains/search-ingress';
 import { INDEXABLE_ENTITIES, type IndexableEntity } from '@ci/domains/search-next';
 
+import { SEARCH_INDEX_BACKFILL_QUEUE, SearchIndexBackfillRequestEvent } from '../events';
 import { ESTIMATE_LOCATION_QUEUE } from '../listeners/EstimateLocationBatchListener';
 import {
   type CommunicationLinkBackfillProgress,
@@ -101,6 +102,7 @@ import {
   BACKFILLABLE_ENTITIES,
   type SearchIndexBackfillResult,
   SearchIndexBackfillService,
+  PIPELINE_COVERED_STAGES,
 } from '../services/SearchIndexBackfillService';
 import {
   type SummaryBackfillProgressEvent,
@@ -166,6 +168,19 @@ const truncateSearchIndexSchema = z.object({
 });
 
 // Body for POST /api/maintenance/search-index/backfill. All optional: defaults
+/**
+ * The entity types the pipeline's index stages own (the keys of
+ * PIPELINE_COVERED_STAGES): what a sweep request may name. The listener
+ * refuses unknown names asynchronously, where a caller never sees it, so the
+ * check happens here as a 400.
+ */
+const PIPELINE_INDEXED_ENTITIES = Object.keys(PIPELINE_COVERED_STAGES) as [string, ...string[]];
+
+const searchIndexSweepSchema = z.object({
+  /** Restrict the sweep to these types (default: every type the pipeline indexes). */
+  entityTypes: z.array(z.enum(PIPELINE_INDEXED_ENTITIES)).min(1).optional(),
+});
+
 // sweep every backfillable ingest type with no per-type cap. Re-emits each
 // un-indexed row's create event onto the search-index queue only.
 const searchIndexBackfillSchema = z.object({
@@ -446,8 +461,29 @@ const GEOCODE_QUEUE = 'geocode';
 /** Default batch size for the location estimator when the body omits a limit. */
 const ESTIMATE_DEFAULT_LIMIT = 500;
 
-/** Default batch size for the media-dimensions backfill when the body omits a limit. */
-const MEDIA_DIMENSIONS_DEFAULT_LIMIT = 500;
+/**
+ * The `error` line a streamed run ends with when it throws.
+ *
+ * A database error's own message names internal relations and constraints, or
+ * on a connection failure the server's address, and the stream is answered to
+ * any account holding a write key. So a database failure is told by its kind
+ * and code, and its message goes to the log. Anything else (a service's own
+ * message) is passed on as before.
+ */
+function streamErrorMessage(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  const summary = summarizeDatabaseError(err);
+
+  if (summary == null) {
+    return message;
+  }
+
+  Logger.error(`A streamed maintenance run failed in the database: ${message}`, 'MaintenanceController');
+
+  return summary.kind === 'unavailable'
+    ? `The database was unavailable during this run (${summary.code}).`
+    : `The database refused a write in this run (SQLSTATE ${summary.code}).`;
+}
 
 /**
  * Operator-facing maintenance endpoints. POST /api/maintenance/geocode-locations
@@ -582,10 +618,11 @@ export class MaintenanceController {
 
   /**
    * Reverse-geocode backfill (geodata-plan Phase 2): the inverse of
-   * geocode-locations. Counts events that HAVE coordinates (photo EXIF / GPS /
-   * estimation) but no readable location_name, and emits a
+   * geocode-locations. Counts events that HAVE measured coordinates (photo EXIF
+   * / GPS) but no readable location_name, and emits a
    * {@link GeocodeBatchRequestEvent} with direction 'reverse' so the batch
    * listener resolves a place name for each — turning bare map pins into labels.
+   * Estimated coordinates are not counted: the listener refuses to name them.
    */
   @Post('reverse-geocode-locations')
   async reverseGeocodeLocations(
@@ -603,13 +640,15 @@ export class MaintenanceController {
     const retryNull = body.retryNull ?? false;
 
     // Candidate set: coordinates present, name missing — the inverse of the
-    // forward backfill's filter.
+    // forward backfill's filter — minus estimated coordinates, which the
+    // listener refuses (GeocodeBatchListener.selectReverseCandidates).
     const candidateCount = await this.dataSource
       .getRepository(EventEntity)
       .createQueryBuilder('event')
       .where('event.user_id = :userId', { userId })
       .andWhere('event.location_coordinates IS NOT NULL')
       .andWhere("(event.location_name IS NULL OR btrim(event.location_name) = '')")
+      .andWhere("COALESCE(event.metadata->>'location_source', '') <> 'estimated'")
       .getCount();
 
     const estimatedEventCount = Math.min(candidateCount, limit);
@@ -772,12 +811,16 @@ export class MaintenanceController {
   /**
    * Media-dimensions backfill. Records `ci.files.width`/`height` for ORIGINAL
    * image/video files that still lack them — the existing corpus, ingested
-   * before the preview pass started capturing dimensions. Counts the candidates
-   * (locally-stored ORIGINAL image/video files with NULL width) and emits a
-   * {@link MediaDimensionsBackfillRequestEvent} for the files-domain listener to
-   * process out-of-band. Once recorded, EventType.mediaWidth/mediaHeight and the
-   * drawer "Dimensions" row light up with no frontend change. Idempotent +
-   * resumable: re-run until estimatedFileCount is 0.
+   * before the preview pass started capturing dimensions. Counts the files with
+   * no width that the `enrich.media_dimensions` stage still has work for (no
+   * ledger answer at its current version, or a failed probe whose retry is due)
+   * and emits a `MediaDimensionsBackfillRequestEvent` for the files-domain
+   * listener to process out-of-band. Once recorded, EventType.mediaWidth/
+   * mediaHeight and the drawer "Dimensions" row light up with no frontend
+   * change. Idempotent + resumable: re-run until estimatedFileCount is 0.
+   *
+   * The work is the orchestrator's `media_dimensions` leg, called as is, so the
+   * endpoint and the nightly leg cannot drift apart again.
    */
   @Post('backfill-media-dimensions')
   async backfillMediaDimensions(
@@ -791,38 +834,7 @@ export class MaintenanceController {
       return { jobId: null, estimatedFileCount: 0, status: 'noop' };
     }
 
-    const limit = body.limit ?? MEDIA_DIMENSIONS_DEFAULT_LIMIT;
-
-    // Mirror the listener's candidate filter so the estimate matches the work.
-    const rows = await this.dataSource.query<Array<{ count: string }>>(
-      `SELECT COUNT(*)::bigint AS count
-         FROM ci.files
-        WHERE user_id = $1
-          AND variant = $2
-          AND key IS NOT NULL
-          AND width IS NULL
-          AND (content_type LIKE 'image/%' OR content_type LIKE 'video/%')`,
-      [userId, 'ORIGINAL'],
-    );
-
-    const candidateCount = Number(rows[0]?.count ?? 0);
-    const estimatedFileCount = Math.min(candidateCount, limit);
-
-    if (estimatedFileCount === 0) {
-      return { jobId: null, estimatedFileCount: 0, status: 'noop' };
-    }
-
-    const jobIds = await this.signallingEventService.send(
-      MediaDimensionsBackfillRequestEvent,
-      { userId, limit },
-      { queue: MEDIA_DIMENSIONS_QUEUE },
-    );
-
-    return {
-      jobId: jobIds[0] ?? null,
-      estimatedFileCount,
-      status: jobIds.length > 0 ? 'enqueued' : 'noop',
-    };
+    return this.maintenanceOrchestratorService.runMediaDimensionsLeg(userId, { limit: body.limit });
   }
 
   /**
@@ -858,6 +870,7 @@ export class MaintenanceController {
       examined: 0,
       fromLinked: 0,
       toLinked: 0,
+      edgeDecisionsReopened: 0,
       windows: 0,
       range: null,
     };
@@ -923,6 +936,7 @@ export class MaintenanceController {
         examined: 0,
         identifiersSeen: 0,
         identifiersExisting: 0,
+        identifiersForgotten: 0,
         peopleCreated: 0,
         identifiersIndexed: 0,
         errors: [],
@@ -965,6 +979,7 @@ export class MaintenanceController {
       examined: 0,
       organizersLinked: 0,
       participantsLinked: 0,
+      edgeDecisionsReopened: 0,
       pages: 0,
     };
 
@@ -1314,7 +1329,10 @@ export class MaintenanceController {
    */
   // Appliance-wide (it walks every user's index rows), so it is the administrator's call,
   // not any signed-in household member's. See ApplianceAdminGuard for the unclaimed-box rule.
+  // `full`, not the class-level `write`: it deletes index rows, and `write` is "nothing that
+  // deletes".
   @UseGuards(ApplianceAdminGuard)
+  @RequireCapability(FULL_CAPABILITY)
   @Post('search-index/cleanup-orphans')
   async cleanupSearchOrphans(
     @Body(new ValidationPipe(cleanupOrphansSchema)) body: CleanupOrphansRequest,
@@ -1331,8 +1349,10 @@ export class MaintenanceController {
    * tables wholesale. A data reset that clears `ci.*` must also do this (or it
    * re-orphans the entire index). Destructive — requires `{ "confirm": true }`.
    */
-  // Wipes BOTH search tables for EVERY user. Administrator only.
+  // Wipes BOTH search tables for EVERY user. Administrator only, and `full` from an api key:
+  // the class-level `write` let an admin's default key wipe the whole index.
   @UseGuards(ApplianceAdminGuard)
+  @RequireCapability(FULL_CAPABILITY)
   @Post('search-index/truncate')
   async truncateSearchIndex(
     @Body(new ValidationPipe(truncateSearchIndexSchema)) body: { confirm: true },
@@ -1364,6 +1384,37 @@ export class MaintenanceController {
       batchSize: body.batchSize,
       limitPerType: body.limitPerType,
     });
+  }
+
+  /**
+   * Request the pipeline's search-index sweep for the caller's own rows: the
+   * SAME event an import's push stage emits when it finishes
+   * (`SearchIndexBackfillRequestEvent`, consumed by the pipeline domain's
+   * `SearchIndexSweepRequestListener`), for every type the pipeline indexes
+   * unless `entityTypes` narrows it. The sweep re-runs each index stage whose
+   * recorded version is behind the current one, which is how a corpus picks up
+   * a bumped stage without waiting for the next import — the way
+   * `ci_search.mobile_search_documents` (20261019212935) reaches an existing install.
+   *
+   * Per-user by design, like every pipeline sweep, so no admin guard: a user
+   * re-indexing their own rows is local Postgres work. `search-index/backfill`
+   * above is the other lane — rows the pipeline has never seen.
+   */
+  @Post('search-index/sweep')
+  async requestSearchIndexSweep(
+    @Context() context: RequestContext,
+    @Body(new ValidationPipe(searchIndexSweepSchema)) body: { entityTypes?: string[] },
+  ): Promise<{ jobId: string | null; userId: string; entityTypes: string[] }> {
+    const { userId } = toServiceContext(context);
+    const entityTypes = body.entityTypes ?? PIPELINE_INDEXED_ENTITIES;
+
+    const jobIds = await this.signallingEventService.send(
+      SearchIndexBackfillRequestEvent,
+      { userId, entityTypes, requestedBy: 'maintenance:search-index/sweep' },
+      { queue: SEARCH_INDEX_BACKFILL_QUEUE },
+    );
+
+    return { jobId: jobIds[0] ?? null, userId, entityTypes };
   }
 
   /**
@@ -1517,7 +1568,12 @@ export class MaintenanceController {
    * 'file' — run migration 20260818235804) from a dangling-but-plausible id (a
    * file row that was deleted). Pure observability: no writes, counts are
    * GLOBAL, matching /search/coverage.
+   *
+   * Appliance-wide, so the administrator's (ApplianceAdminGuard): its `sample`
+   * lists other accounts' content ids and external ids (Audible / Kindle URIs
+   * among them), which any signed-in account or read key used to receive.
    */
+  @UseGuards(ApplianceAdminGuard)
   @Get('content/external-id-kind')
   @RequireCapability(READ_CAPABILITY)
   async contentExternalIdKindIntegrity(): Promise<ExternalIdKindIntegrityReport> {
@@ -1603,17 +1659,23 @@ export class MaintenanceController {
    * table. The importer's own watermark (`ci_server.last_push`) must be reset
    * separately; see db/postgres/INGEST_RESET_RUNBOOK.md.
    *
-   * It truncates, so it cannot take one user's rows and leave another's — and
-   * this route is behind ordinary user auth, not an admin role, because the
-   * appliance has none. The service therefore REFUSES when any of those tables
-   * still holds another account's data; the confirm literal proves the caller
-   * meant it, not that they were entitled to everyone else's memory.
+   * It truncates, so it cannot take one user's rows and leave another's. The
+   * service therefore REFUSES when any table it would clear still holds another
+   * account's data, checked inside the reset's own transaction; the confirm
+   * literal proves the caller meant it, not that they were entitled to
+   * everyone else's memory. The caller's uploaded files, document chunks, chat
+   * attachments, reminders, capture log and planning candidates go with it,
+   * because they hang off the cleared rows (see IngestResetService).
    */
   // `full`, not the class-level `write`: this one TRUNCATES. `capabilityAllows`
   // refuses anything that removes data below `full`, which is the same line
   // `memory.forget` sits behind — a read-only key being able to truncate its
   // own ingested data was the sharpest instance of the gap #1780 describes.
   // The confirm literal proves intent; it was never an authorization check.
+  //
+  // Administrator only. The appliance has an admin role now, and a wipe of
+  // whole tables is the operator's call, not any household member's.
+  @UseGuards(ApplianceAdminGuard)
   @Post('ingest/reset')
   @RequireCapability(FULL_CAPABILITY)
   async resetIngest(
@@ -1668,7 +1730,7 @@ export class MaintenanceController {
       const result = await run(emit);
       emit({ type: 'result', ...result });
     } catch (err) {
-      emit({ type: 'error', error: (err as Error).message });
+      emit({ type: 'error', error: streamErrorMessage(err) });
     } finally {
       if (!res.writableEnded) {
         res.end();

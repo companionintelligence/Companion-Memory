@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 
-import { useMutation } from '@apollo/client';
+import { useMutation } from '@apollo/client/react';
 import { Button, Dialog, Input, Label } from '@ci/shadcn';
 
 import { gql } from '@/graphql';

@@ -44,6 +44,7 @@ from ci.hbpe.pipeline.serve import (  # noqa: E402
     MODEL_B1,
     MODEL_B2,
     MODEL_HMT,
+    MODEL_LOGIT,
     pick_served_model,
 )
 
@@ -151,25 +152,47 @@ def test_per_class_recall_sleep_not_hidden():
 
 
 def test_d3_picks_hmt_on_brier_and_ece():
-    # Misses the +5pp top-1 margin, but better Brier vs B1 and better ECE vs B2.
+    # Beats the best baseline Brier (0.28) by more than the margin, and is the
+    # best calibrated of the three.
     hmt = {"l0_top1_acc": 0.72, "brier": 0.20, "ece": 0.05}
     b1 = {"l0_top1_acc": 0.70, "brier": 0.30, "ece": 0.10}
     b2 = {"l0_top1_acc": 0.71, "brier": 0.28, "ece": 0.08}
     assert pick_served_model(hmt, b1, b2, has_checkpoint=True) == MODEL_HMT
 
 
-def test_d3_picks_hmt_on_margin():
-    hmt = {"l0_top1_acc": 0.80, "brier": 0.3, "ece": 0.1}
-    b1 = {"l0_top1_acc": 0.70, "brier": 0.4, "ece": 0.1}
+def test_d3_benches_hmt_that_only_wins_on_top1():
+    # Ten points of top-1 over B1 used to be an automatic serve. It forecasts
+    # worse than both baselines, which is what the gate now reads.
+    hmt = {"l0_top1_acc": 0.80, "brier": 0.40, "ece": 0.10}
+    b1 = {"l0_top1_acc": 0.70, "brier": 0.30, "ece": 0.10}
     b2 = {"l0_top1_acc": 0.72, "brier": 0.35, "ece": 0.12}
-    assert pick_served_model(hmt, b1, b2, has_checkpoint=True) == MODEL_HMT
+    assert pick_served_model(hmt, b1, b2, has_checkpoint=True) == MODEL_B1
 
 
-def test_d3_picks_b2_when_hmt_misses():
+def test_d3_benches_hmt_that_beats_brier_but_is_miscalibrated():
+    # Better Brier than either baseline, but ECE far outside the tolerance.
+    hmt = {"l0_top1_acc": 0.75, "brier": 0.20, "ece": 0.40}
+    b1 = {"l0_top1_acc": 0.70, "brier": 0.30, "ece": 0.08}
+    b2 = {"l0_top1_acc": 0.72, "brier": 0.32, "ece": 0.07}
+    assert pick_served_model(hmt, b1, b2, has_checkpoint=True) == MODEL_B1
+
+
+def test_d3_brier_margin_is_not_a_tie_break():
+    # Better than the best baseline, but by less than BRIER_MARGIN.
+    hmt = {"l0_top1_acc": 0.75, "brier": 0.289, "ece": 0.05}
+    b1 = {"l0_top1_acc": 0.70, "brier": 0.30, "ece": 0.08}
+    b2 = {"l0_top1_acc": 0.72, "brier": 0.32, "ece": 0.07}
+    assert pick_served_model(hmt, b1, b2, has_checkpoint=True) == MODEL_B1
+
+
+def test_d3_falls_back_to_the_better_baseline():
+    # B2 was the unconditional fallback; B1 forecasts better here, so it wins.
     hmt = {"l0_top1_acc": 0.71, "brier": 0.45, "ece": 0.2}
     b1 = {"l0_top1_acc": 0.70, "brier": 0.30, "ece": 0.08}
     b2 = {"l0_top1_acc": 0.72, "brier": 0.32, "ece": 0.07}
-    assert pick_served_model(hmt, b1, b2, has_checkpoint=True) == MODEL_B2
+    assert pick_served_model(hmt, b1, b2, has_checkpoint=True) == MODEL_B1
+    worse_b1 = {"l0_top1_acc": 0.70, "brier": 0.36, "ece": 0.08}
+    assert pick_served_model(hmt, worse_b1, b2, has_checkpoint=True) == MODEL_B2
 
 
 def test_d3_cold_start_without_checkpoint():
@@ -265,6 +288,30 @@ def test_histogram_keeps_b1_ready_while_still_learning():
     assert overridden["system_status"] == "READY"
 
 
+def test_histogram_keeps_logit_ready_without_a_checkpoint():
+    from ci.hbpe.pipeline.histogram_api import build_histogram
+
+    class _Engine:
+        last_model_version = "logit"
+        last_still_learning = False
+
+        def predict(self, horizon_start=None):
+            return [
+                {
+                    "bucket_index": 0,
+                    "start_time": "2026-08-18T00:00:00Z",
+                    "l0_probs": {WORK: 0.6, SLEEP: 0.4},
+                    "l1_probs": {},
+                    "l2_probs": {},
+                }
+            ]
+
+    out = build_histogram(_Engine(), user_id=None, system_status="COLD_START")
+    assert out["still_learning"] is False
+    assert out["model_version"] == "logit"
+    assert out["system_status"] == "READY"
+
+
 def test_histogram_keeps_pipeline_step_while_still_learning(monkeypatch):
     from ci.hbpe.pipeline.histogram_api import build_histogram
 
@@ -300,3 +347,68 @@ def test_histogram_keeps_pipeline_step_while_still_learning(monkeypatch):
     assert out["pipeline_detail"] == "3 of 50"
     assert out["still_learning"] is True
     assert out["model_version"] == "b1"
+
+
+def _engine_over(monkeypatch, occupancy):
+    """An InferenceEngine with no checkpoint over *occupancy*, without a database."""
+    from ci.hbpe.model.vocab import build_l0_vocab
+    from ci.hbpe.pipeline import inference_engine as ie
+
+    monkeypatch.setattr(ie, "fetch_metric_rows", lambda *_a, **_k: [])
+    monkeypatch.setattr(ie, "fetch_rhythm", lambda _uid: None)
+    monkeypatch.setattr(ie, "fetch_timezone", lambda _uid: None)
+    engine = object.__new__(ie.InferenceEngine)
+    engine.user_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    engine._session = None
+    engine._try_reload_session = lambda: None
+    engine._l0_vocab = build_l0_vocab()
+    engine._l1_dim = 1
+    engine._l1_display_names = {}
+    engine._l1_l0 = {}
+    engine._output_cache = {}
+    engine._logit_cache = {}
+    engine._occupancy = occupancy
+    engine.last_model_version = MODEL_HMT
+    engine.last_still_learning = False
+    return engine
+
+
+@pytest.mark.parametrize(("n_days", "served"), [(1, MODEL_B1), (4, MODEL_LOGIT)])
+def test_starter_prior_is_b2_still_learning_only_without_history(
+    monkeypatch, n_days, served
+):
+    """The web app reads model b2 marked still learning as "no forecast built
+    from this account's data yet" (forecastBuilt in
+    frontend/packages/common/src/utils/widgetSnapshots.ts), so the pair has to
+    mean exactly that: no history days at all."""
+    horizon = datetime.datetime(2026, 8, 18)
+    as_of = datetime.date(2026, 8, 18)
+
+    engine = _engine_over(monkeypatch, [])
+    buckets = engine.predict(horizon_start=horizon, as_of=as_of)
+    assert engine.last_model_version == MODEL_B2
+    assert engine.last_still_learning is True
+    # One class for every slot: there is nothing to tell the slots apart by.
+    assert len({bucket["predicted_l0"] for bucket in buckets}) == 1
+
+    # The web app reads the payload, not the engine: the pair has to reach it,
+    # and the starter prior is not promoted to READY the way b1 is.
+    from ci.hbpe.pipeline.histogram_api import build_histogram
+
+    payload = build_histogram(engine, user_id=None, system_status="COLD_START")
+    assert payload["model_version"] == MODEL_B2
+    assert payload["still_learning"] is True
+    assert payload["system_status"] == "COLD_START"
+
+    rows = []
+    for i in range(n_days):
+        day = as_of - datetime.timedelta(days=i + 1)
+        for b in range(68):
+            if b < 28 or b >= 40:
+                token = SLEEP if b < 28 else WORK
+                rows.append({"date": day, "bucket_idx": b, "token_id": token})
+    engine = _engine_over(monkeypatch, rows)
+    engine.predict(horizon_start=horizon, as_of=as_of)
+    # The occupancy baseline below the head's row floor, the head above it.
+    assert engine.last_model_version == served
+    assert engine.last_still_learning is (served == MODEL_B1)

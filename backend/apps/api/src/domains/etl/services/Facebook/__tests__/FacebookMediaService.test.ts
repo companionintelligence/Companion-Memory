@@ -1,7 +1,7 @@
 import { FacebookMediaService, facebookUrl, MAX_FACEBOOK_MEDIA_BYTES } from '../FacebookMediaService';
 
 /**
- * Every dependency mocked, and `fetch` replaced per test — the service's own
+ * Every dependency mocked, and the CDN hop (`cdnFetch`) replaced per test — the service's own
  * contract is what is under test: bytes go to FileService and the content row
  * points at the stored file; a failed download still leaves a row, pointing
  * at the CDN; an object already catalogued is updated, not duplicated.
@@ -29,22 +29,8 @@ function build() {
 }
 
 function okResponse(bytes: number, headers: Record<string, string> = {}) {
-  const body = new Uint8Array(bytes);
-
-  return {
-    ok: true,
-    status: 200,
-    statusText: 'OK',
-    headers: { get: (name: string) => headers[name.toLowerCase()] ?? null },
-    arrayBuffer: async () => body.buffer,
-  };
+  return new Response(new Uint8Array(bytes), { status: 200, headers });
 }
-
-const originalFetch = globalThis.fetch;
-
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-});
 
 const photo = {
   kind: 'photo' as const,
@@ -59,12 +45,12 @@ const photo = {
 describe('FacebookMediaService.upsertMedia', () => {
   it('downloads the CDN file, stores it, and writes a content row pointing at the stored file', async () => {
     const { service, contentService, fileService } = build();
-    globalThis.fetch = jest.fn(async () => okResponse(1234, { 'content-length': '1234' })) as never;
+    service.cdnFetch = jest.fn(async () => okResponse(1234, { 'content-length': '1234' }));
 
     const result = await service.upsertMedia({ userId: 'user-1', connectionId: 'conn-1', media: photo });
 
     expect(result).toEqual({ contentId: 'content-new', fileId: 'file-1' });
-    expect(globalThis.fetch).toHaveBeenCalledWith(photo.cdnUrl);
+    expect(service.cdnFetch).toHaveBeenCalledWith(new URL(photo.cdnUrl), expect.anything());
     expect(fileService.uploadWithDedupInfo).toHaveBeenCalledWith(
       { userId: 'user-1' },
       expect.objectContaining({
@@ -101,7 +87,7 @@ describe('FacebookMediaService.upsertMedia', () => {
 
   it('still writes the row — as a source-native reference to the CDN link — when the download fails', async () => {
     const { service, contentService, fileService, logger } = build();
-    globalThis.fetch = jest.fn(async () => ({ ok: false, status: 403, statusText: 'Forbidden' })) as never;
+    service.cdnFetch = jest.fn(async () => new Response(null, { status: 403 }));
 
     const result = await service.upsertMedia({ userId: 'user-1', connectionId: 'conn-1', media: photo });
 
@@ -123,9 +109,9 @@ describe('FacebookMediaService.upsertMedia', () => {
 
   it('refuses to buffer a file over the size cap and keeps the link instead', async () => {
     const { service, fileService } = build();
-    globalThis.fetch = jest.fn(async () =>
+    service.cdnFetch = jest.fn(async () =>
       okResponse(10, { 'content-length': String(MAX_FACEBOOK_MEDIA_BYTES + 1) }),
-    ) as never;
+    );
 
     const result = await service.upsertMedia({
       userId: 'user-1',
@@ -145,12 +131,12 @@ describe('FacebookMediaService.upsertMedia', () => {
       externalIdKind: 'file',
       sourceData: { contentType: 'facebook_photo' },
     } as never);
-    globalThis.fetch = jest.fn() as never;
+    service.cdnFetch = jest.fn();
 
     const result = await service.upsertMedia({ userId: 'user-1', connectionId: 'conn-1', media: photo });
 
     expect(result).toEqual({ contentId: 'content-existing', fileId: 'file-old' });
-    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(service.cdnFetch).not.toHaveBeenCalled();
     expect(fileService.uploadWithDedupInfo).not.toHaveBeenCalled();
     expect(contentService.create).not.toHaveBeenCalled();
     expect(contentService.update).toHaveBeenCalledWith(
@@ -179,7 +165,7 @@ describe('FacebookMediaService.upsertMedia', () => {
         sourceData: { contentType: 'facebook_photo' },
       },
     ] as never);
-    globalThis.fetch = jest.fn(async () => okResponse(50)) as never;
+    service.cdnFetch = jest.fn(async () => okResponse(50));
 
     const result = await service.upsertMedia({ userId: 'user-1', connectionId: 'conn-1', media: photo });
 
@@ -199,9 +185,36 @@ describe('FacebookMediaService.upsertMedia', () => {
     );
   });
 
+  it.each([
+    ['a link-local metadata address', 'http://169.254.169.254/latest/meta-data/'],
+    ['plain http, even on the CDN', 'http://scontent-lax3-1.xx.fbcdn.net/v/x.jpg'],
+    ['a host off the CDN', 'https://example.com/x.jpg'],
+    ['a look-alike host', 'https://scontent.fbcdn.net.example.com/x.jpg'],
+    ['a LAN address', 'https://192.168.1.10/x.jpg'],
+  ])('never requests %s, and keeps only the link', async (_label, cdnUrl) => {
+    // The URL comes out of a sync payload. Downloading it is what turned a forged payload into
+    // a fetch of anything the appliance can reach, read back as the caller's own file.
+    const { service, fileService, contentService } = build();
+    service.cdnFetch = jest.fn(async () => okResponse(10));
+
+    const result = await service.upsertMedia({
+      userId: 'user-1',
+      connectionId: 'conn-1',
+      media: { ...photo, cdnUrl },
+    });
+
+    expect(service.cdnFetch).not.toHaveBeenCalled();
+    expect(fileService.uploadWithDedupInfo).not.toHaveBeenCalled();
+    expect(result.fileId).toBeNull();
+    expect(contentService.create).toHaveBeenCalledWith(
+      { userId: 'user-1' },
+      expect.objectContaining({ external_id_kind: 'external_uri' }),
+    );
+  });
+
   it('writes a link-only row when the object has no CDN URL at all', async () => {
     const { service, contentService } = build();
-    globalThis.fetch = jest.fn() as never;
+    service.cdnFetch = jest.fn();
 
     await service.upsertMedia({
       userId: 'user-1',
@@ -209,7 +222,7 @@ describe('FacebookMediaService.upsertMedia', () => {
       media: { ...photo, cdnUrl: undefined },
     });
 
-    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(service.cdnFetch).not.toHaveBeenCalled();
     expect(contentService.create).toHaveBeenCalledWith(
       { userId: 'user-1' },
       expect.objectContaining({

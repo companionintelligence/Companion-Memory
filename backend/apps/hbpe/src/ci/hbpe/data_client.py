@@ -33,6 +33,7 @@ import psycopg2.extras
 
 from ci.hbpe.buckets import BUCKET_SECONDS, MAX_BUCKET_INDEX
 from ci.hbpe.database import get_conn
+from ci.hbpe.event_status import LIVE_EVENT_SQL
 from ci.hbpe.graphql_client import GraphQLUnavailable, decode_gid, gql, paginate
 
 log = logging.getLogger(__name__)
@@ -135,6 +136,13 @@ def _unlabeled_events_where(
     the *session* TimeZone; the container happens to run Etc/UTC today, but an
     appliance deployed with any other TimeZone would silently shift the window
     off the one hbpe.pipeline.recurrence computes in UTC.
+
+    An event that did not happen (``LIVE_EVENT_SQL``: cancelled, no_show,
+    skipped) is not queued. get_token_events_for_day never publishes one, so its
+    label could reach nothing, and the drain would spend Qwen time on it and
+    mint L1 vocabulary from a meeting that never took place. If its status comes
+    back, the predicate is true again and the drain takes it like any other
+    unlabeled event.
     """
     from ci.hbpe.tokenizer.static_labeler import mapped_kind_sql
 
@@ -150,6 +158,7 @@ def _unlabeled_events_where(
     where = f"""WHERE e.user_id    = %s::uuid
           AND e.is_deleted = FALSE
           AND e.event_type IS DISTINCT FROM 'planned_block'
+          AND {LIVE_EVENT_SQL}
           AND ec.event_id  IS NULL
           AND e.start_time >= '2010-01-01'::timestamptz
           AND NOT ({mapped_kind_sql()}){window}"""
@@ -241,6 +250,15 @@ def get_token_events_for_day(user_id: str, date_str: str) -> list[dict]:
     plain LEFT JOIN would instead emit the event once per matching pattern, so
     adding e.g. a ``social.post`` row beside the existing ``social.%`` would
     silently double every Instagram post's tokens for that bucket.
+
+    Events that did not happen are left out by status (``LIVE_EVENT_SQL``), on
+    top of ``is_deleted``. A cancelled meeting is still a row, and a label it was
+    given while it was live stays in hbpe.l1_event_cluster, so this predicate is
+    the only thing keeping it off the token stream that HMT training, recurrence
+    and seasonal all read. A status change takes effect when the day is next
+    serialized. bootstrap._TOKEN_SOURCE_DAYS_SQL carries the same predicate, so
+    a day left with no live event and no hourly summary becomes a purge day and
+    is still visited, however old it is.
     """
     # Imported here, not at module scope, for the same reason
     # _unlabeled_events_where does: static_labeler imports vocab_registry,
@@ -278,6 +296,7 @@ def get_token_events_for_day(user_id: str, date_str: str) -> list[dict]:
             WHERE e.user_id    = %s
               AND e.is_deleted = FALSE
               AND e.event_type IS DISTINCT FROM 'planned_block'
+              AND {LIVE_EVENT_SQL}
               AND e.start_time >= %s::date
               AND e.start_time <  (%s::date + INTERVAL '1 day')
               AND e.start_time >= '2010-01-01'::timestamptz
@@ -311,13 +330,10 @@ def get_token_events_for_day(user_id: str, date_str: str) -> list[dict]:
             return [dict(r) for r in cur.fetchall()]
 
 
-# Structural-emptiness guard: as of migration 20260828120000, ci.tasks carries
-# l0_class / l1_cluster_id columns but nothing in the repo ever writes them
-# (see the comment on TaskEntity.l0Class / l1ClusterId). Without this guard,
-# every scheduled pass runs the WHERE-gated query below once per user per day
-# in the serialize window and it is *always* empty — a real DB round trip
-# spent proving a structural fact that does not change until a writer ships.
-# Cached for the life of the process so it costs one query, not one per call.
+# Structural-emptiness guard: TaskService populates ci.tasks.l0_class on task
+# creation, update, and completion via classifyTaskL0 (taskL0Classifier.ts).
+# On fresh databases before any classified task exists, this probe avoids
+# running the per-day query across empty tables.
 _completed_tasks_precondition_checked: bool = False
 _completed_tasks_precondition_populated: bool = True
 

@@ -13,6 +13,7 @@ the data model, the migration and backfill plan — is
 | `constants.ts` | Queues, stage ids, slice sizes, leases, retry policy. Everything DECLARED, nothing discovered. |
 | `versions.ts` | `STAGE_VERSIONS` — the re-run watermark. The point of the whole rebuild. |
 | `schedule.ts` | `STAGE_SCHEDULES` — per-stage `trigger` / `cost` / `window` / `minInterval` / `maxStaleness` / `perRunCap`, plus `stageDueness()` and the boot guard `assertStageSchedules()`. |
+| `reopens.ts` | `STAGE_REOPENS` — which consumers' decisions a producer's `done` re-opens, row for row (`promote.place` → `promote.edge_event`, `enrich.person_link` → `promote.edge_communication`, `enrich.event_person_link` → `promote.edge_event`), applied by `PipelineSliceListener`. |
 | `types.ts` | The `Stage` contract, `StageResult`, `StageSource`, `StageSchedule`, and the event payload schemas. |
 | `events.ts` | The pipeline's event surface: `pipeline.slice`, `pipeline.sweep`, `pipeline.dead_letter.reap`. |
 | `services/PipelineStateService.ts` | The ledger. The only writer of `ci.pipeline_state` and the home of THE ONE RULE. |
@@ -22,6 +23,10 @@ the data model, the migration and backfill plan — is
 | `services/PipelineRunService.ts` | `ci.pipeline_runs` / `ci.pipeline_shards` persistence behind the runner. |
 | `services/EnrichmentWindowService.ts` | Whether the nightly enrichment window is open, from a zoned wall clock + `ci.pipeline_turns`. |
 | `services/BackpressureService.ts` | `QUEUE_READY_CAPS` — the admission gate that stops the pipeline committing more work to a queue than it can re-decide. |
+| `services/EdgeProjectionReopenService.ts` | Bound to maintenance's `EDGE_PROJECTION_REOPENER`: a linkage writer that is NOT a stage (the `link_*` maintenance legs) re-opens the `promote.edge_*` leg's decision for the rows it wrote, in its own transaction. `STAGE_REOPENS`' counterpart for writers that report no `done`. |
+| `services/EventTimeReopenService.ts` | Bound to memory's `EVENT_TIME_REOPENER`: `CalendarEventService` re-opens `clean.temporal_repair` and `enrich.estimate_location` for an event whose time a source or a person just moved, in the transaction that moved it. |
+| `services/EventStatusReopenService.ts` | Bound to memory's `EVENT_STATUS_REOPENER`: `CalendarEventService` asks it when a status calls an event off or reinstates it. It takes back the estimate `enrich.estimate_location` lent an event that did not happen (`withdrawEstimates`, which that stage cannot do: its sweep never offers such an event) and re-opens the stage's ledger row so a reinstated event is offered again. |
+| `services/EventLocationReopenService.ts` | Bound to memory's `EVENT_LOCATION_REOPENER` (twin of `EventTimeReopenService`): when a calendar source moves an event's place, `CalendarEventService` re-opens, in the refresh's own transaction, the decisions `enrich.geocode`, `enrich.event_reverse`, `enrich.estimate_location` and `promote.place` made on the old one (`EVENT_LOCATION_STAGES`). Not `promote.edge_event`: `promote.place`'s `done` re-opens that through `STAGE_REOPENS`. |
 | `controllers/PipelineController.ts` | The operator HTTP surface (state, runs, pause/resume/cancel, dead letters + replay, quarantine release). |
 | `listeners/PipelineSliceListener.ts` | THE generic worker. One class serves every stage that will ever exist. |
 | `listeners/PipelineTickCron.ts` | The five-minute control tick (`20 */5 * * * *`), advisory-locked, calling whatever is bound to `PIPELINE_TICK`. |
@@ -270,12 +275,15 @@ stage whose `trigger` is not `manual` (`automaticStageIds()`); metered stages ar
 `window: 'enrichment'` + `perRunCap`, enforced by the guard rather than by
 unreachability.
 
-Two optional declarations sit alongside it, each with its own module-load guard:
+Three optional declarations sit alongside it, each with its own module-load guard:
 `STAGE_DEPENDENCIES` (`services/PipelineControlService.ts`), which orders
-producers before consumers inside a run, and `ARRIVAL_SIGNALS`
+producers before consumers inside a run; `ARRIVAL_SIGNALS`
 (`listeners/StageArrivalListener.ts`), which is what actually makes
 `trigger: 'onArrival'` true — declaring `onArrival` with no signal promises a
-fast path that does not exist.
+fast path that does not exist; and `STAGE_REOPENS` (`reopens.ts`), for a
+consumer whose predicate ORs columns from different producers, so a row can be
+decided before a slower producer writes it — the producer's `done` re-opens the
+consumer's decision on that same row.
 
 ### 4. Declare the token — `services/StageRegistry.ts`
 
@@ -473,6 +481,7 @@ commits more work than it can re-decide on the next tick.
 | Queue not one of `PIPELINE_QUEUES` | Throws: slices sent to an unworked queue sit until retention deletes them. |
 | Empty `entityTypes`, or a missing `source.{schema,table,idColumn,userColumn}` | Throws: those four are interpolated into the sweep, and a missing one produces a query that is syntactically valid over the wrong rows. |
 | Predicate starting with `AND`, containing `;`, or mentioning `pipeline_state` / `p.` | Throws, with the ratchet explained. |
+| `source.changedAtColumn` that is not a plain column name | Throws at first resolve. A declared column the table LACKS is only caught at query time, where the tick logs it per leg and carries on. |
 | Multi-type stage swept without an `entityType` | Both the dispatcher and `selectStale` refuse — guessing would record one type's progress under another's key. |
 
 ---
@@ -550,6 +559,50 @@ uniformly distributed, so switching models has a ~50 % chance of moving the
 version **down**, which by the rule above would pin the whole corpus to the old
 model permanently. Generations are declared and append-only, and an undeclared
 model is a hard failure at boot with the exact line to add.
+
+### When the source row changes: `source.changedAtColumn`
+
+A version records which **rule** produced an answer, not which **input**. For a
+stage over rows that never change after they land that is all it needs; for a
+stage whose output is a copy of a row that does change, the first answer
+outlives the row it describes until someone bumps the version for an unrelated
+reason. `enrich.person_self_claim` was that stage: every number a re-import,
+merge or edit dropped from a Person kept its self claim, and
+`clean.duplicate_detect` re-proposed pairs on it at every scoring bump.
+
+A stage in that position declares the timestamp its inputs' writers bump:
+
+```ts
+export const PERSON_SELF_CLAIM_SOURCE: StageSource = {
+  schema: 'ci',
+  table: 'entities',
+  idColumn: 'entity_id',
+  userColumn: 'owner_user_id',
+  predicate: `entity_type = 'Person'`,
+  changedAtColumn: 'updated_at',
+};
+```
+
+On each tick where the leg is due, the control tick calls
+`PipelineStateService.reopenChangedSources`, which re-opens (`stage_version = 0`,
+through the same `reopen()` `IdentifierArrivalService` uses) every `done` /
+`skipped` row at the current version whose source row was stamped after the row
+was decided — `ci.pipeline_state.updated_at`, less
+`SOURCE_CHANGE_GRACE_SECONDS` for a change that committed while its slice was
+running. The re-opened rows then go through THE ONE RULE like any other.
+
+This is not the ratchet. The stamp is an INPUT column the stage never writes,
+it lives outside the applicability predicate, and nothing the stage does moves
+it. Declare it only when every writer of the stage's inputs bumps it, when
+nothing bumps it at a high rate for reasons the stage ignores, and when a
+re-run is cheap — a bulk re-import changes thousands of rows at once. Its cost
+on a converged leg is one more pass of the scan `hasCandidates` already makes
+for that leg, per tick.
+
+A stage that RETRACTS output on re-run needs one more thing: an applicability
+predicate that still reaches a row which has lost everything. The self-claim
+stage applies to every Person row, merged or not, because the moment a Person
+is merged away or edited down to nothing is exactly when its claims must go.
 
 ---
 

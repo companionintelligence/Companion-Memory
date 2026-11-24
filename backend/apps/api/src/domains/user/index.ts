@@ -58,6 +58,8 @@ import { UserService } from './services/UserService';
       }),
     },
   ],
+  // AccountPurgeService also serves the immediate account delete (privacy domain),
+  // which hands an ended account's rows and file objects to the same purge.
   exports: [UserService, AccountPurgeService],
 })
 export class UserModule {}
@@ -67,6 +69,7 @@ export { UserEntity };
 
 // Services
 export { UserService, AccountPurgeService };
+export { listOnboardedUserIds } from './services/onboardedUserIds';
 
 // The header clients send their IANA zone in; exported so a client-facing
 // surface (CORS `allowedHeaders`, an HTTP client's default headers) names the
@@ -74,11 +77,37 @@ export { UserService, AccountPurgeService };
 export { CLIENT_TIMEZONE_HEADER, ClientTimezoneInterceptor };
 
 // Account purge
-export { PURGE_OBJECT_STORE, type PurgeObjectStore } from './purge/objectStore';
+export { removeFromAskAudit, type AskAuditRemoval } from './purge/askAudit';
+export {
+  deleteSoleOwnedObjects,
+  OBJECT_DELETE_DEADLINE_MS,
+  PURGE_OBJECT_STORE,
+  type PurgeObjectStore,
+  type StoredObject,
+} from './purge/objectStore';
+export { type AccountPurgeOutcome } from './services/AccountPurgeService';
+export {
+  ACCOUNT_GRANT_REVOKER,
+  AccountGrantRevokerUnavailable,
+  accountTokenRevoked,
+  summarizeRevocations,
+  type AccountGrantRevoker,
+  type GrantRevocation,
+  type RevocationOutcome,
+  type RevocationSummary,
+} from './services/accountGrantRevoker';
 export { buildPurgePlan } from './purge/purgePlan';
 export type { PurgePlan, PurgeStep } from './purge/types';
 
 // Types
-export type { User, OnboardingProgress, UserRole } from './entities/UserEntity';
+export type { User, OnboardingProgress, TimeFormat, UserRole } from './entities/UserEntity';
+export { TIME_FORMATS } from './entities/UserEntity';
 export type { CreateUserDto, UpdateUserDto } from './types';
+export { normalizeEmail } from './email';
+export {
+  LastAdminDeletionRefused,
+  SUCCESSOR_NOT_FOUND,
+  SUCCESSOR_REQUIRED,
+  type DeletionOptions,
+} from './services/UserService';
 export { UserCreatedEvent, type UserCreatedPayload } from './events';

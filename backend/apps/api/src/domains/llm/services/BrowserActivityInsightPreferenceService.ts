@@ -1,7 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 
 import { type UserServiceContext } from '@ci/common/context';
-import { PersonService, UserContextService } from '@ci/domains/memory';
+import { PersonService, UserContextService, ensureSelfEntityId } from '@ci/domains/memory';
 
 /**
  * Settings → Model "Categorize browsing activity". Stored on the self
@@ -21,6 +22,12 @@ export class BrowserActivityInsightPreferenceService {
   constructor(
     private readonly personService: PersonService,
     private readonly userContextService: UserContextService,
+    /**
+     * For `SELF_ENTITY_PROVISIONER`, resolved lazily by `ensureSelfEntityId`.
+     * Optional so a hand-built service (the unit tests) still constructs; without
+     * it a user who has no self entity gets the old error rather than a new one.
+     */
+    @Optional() private readonly moduleRef?: ModuleRef,
   ) {}
 
   invalidate(userId: string): void {
@@ -41,13 +48,10 @@ export class BrowserActivityInsightPreferenceService {
 
   async setEnabled(context: UserServiceContext, enabled: boolean): Promise<boolean> {
     const userId = context.userId!;
-    const selfIdentity = await this.userContextService.getSelfIdentity(userId);
-
-    if (!selfIdentity) {
-      throw new Error('Self entity not found');
-    }
-
-    const self = await this.personService.findById(context, selfIdentity.entityId);
+    // Provisioned when the user has none: an imported account has no self entity
+    // to store the flag on, and this write answered 500 for it.
+    const selfEntityId = await ensureSelfEntityId(context, this.userContextService, this.moduleRef);
+    const self = await this.personService.findById(context, selfEntityId);
 
     if (!self) {
       throw new Error('Self entity not found');

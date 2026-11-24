@@ -24,6 +24,10 @@ export class EmbeddingEntity {
   @Column({ type: 'uuid', name: 'user_id' })
   userId!: string;
 
+  /** What the vector was made from — `searchDocumentHash` of the document; NULL for rows written before it was kept. */
+  @Column({ type: 'text', name: 'source_hash', nullable: true })
+  sourceHash!: string | null;
+
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   createdAt!: Date;
 
@@ -42,4 +46,4 @@ export class EmbeddingEntity {
   }
 }
 
-export type Embedding = Readonly<Omit<EmbeddingEntity, 'embedding'>>;
+export type Embedding = Readonly<Omit<EmbeddingEntity, 'embedding' | 'sourceHash'>>;

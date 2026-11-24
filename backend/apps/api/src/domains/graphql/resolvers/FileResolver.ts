@@ -1,4 +1,4 @@
-import { UseGuards } from '@nestjs/common';
+import { BadRequestException, UseGuards } from '@nestjs/common';
 import { Args, ID, Mutation, Parent, Query, ResolveField, Resolver } from '@nestjs/graphql';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
@@ -86,6 +86,26 @@ export class FileResolver {
       },
       totalCount,
     };
+  }
+
+  /** Most links one `refreshMediaUrls` call re-signs; a screenful of tiles is far fewer. */
+  private static readonly MAX_REFRESH_LINKS = 100;
+
+  /**
+   * Fresh signed links for expired ones, in order; null where the link names no file of the
+   * caller's. The web app calls it when an image or video fails on a cached link, instead of
+   * re-running whatever query first handed the link out. See FileService.resignLinks.
+   */
+  @Query(() => [String], { nullable: 'items' })
+  async refreshMediaUrls(
+    @Context() context: RequestContext,
+    @Args('urls', { type: () => [String] }) urls: string[],
+  ): Promise<(string | null)[]> {
+    if (urls.length > FileResolver.MAX_REFRESH_LINKS) {
+      throw new BadRequestException(`refreshMediaUrls takes at most ${FileResolver.MAX_REFRESH_LINKS} links`);
+    }
+
+    return this.fileService.resignLinks(toServiceContext(context), urls);
   }
 
   @Query(() => FileType, { nullable: true })

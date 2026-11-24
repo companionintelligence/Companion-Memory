@@ -97,14 +97,18 @@ def build_histogram(
     )
 
     served = (model_version or "").lower()
-    # Occupancy baselines are a real forecast. The HTTP layer used to pass
-    # COLD_START whenever no HMT checkpoint existed, which greyed a working B1
-    # strip. Promote COLD_START → READY while serving b0/b1, but never clobber a
-    # live pipeline step (NIGHTLY:train / BOOTSTRAP:label) — those must stay
-    # visible for the Forecast ETA line.
+    # Occupancy baselines and the logistic head are a real forecast. The HTTP
+    # layer passes COLD_START whenever no HMT checkpoint exists, which greyed a
+    # working strip. Promote COLD_START → READY while serving b0/b1/logit, but
+    # never clobber a live pipeline step (NIGHTLY:train / BOOTSTRAP:label) —
+    # those must stay visible for the Forecast ETA line. Logit clears
+    # still_learning once it is the served model, so the promotion cannot
+    # require that flag.
     if _is_pipeline_step(system_status):
         pass
-    elif still_learning and served in {"b0", "b1"}:
+    elif served in {"b0", "b1", "logit"} and (
+        still_learning or system_status in (None, "COLD_START")
+    ):
         system_status = "READY"
     elif system_status is None:
         if still_learning:

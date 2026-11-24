@@ -57,7 +57,12 @@ describe('PortalTokenService — a wedged JWKS fetch must not hang bearer auth',
   let localSessionToken: string;
 
   let fetchMock: jest.SpyInstance;
-  let userService: { findById: jest.Mock; hasNoUsers: jest.Mock; findByEmail: jest.Mock; create: jest.Mock };
+  let userService: {
+    findById: jest.Mock;
+    createFirstAccount: jest.Mock;
+    findByEmail: jest.Mock;
+    create: jest.Mock;
+  };
   let federatedIdentityService: { findUserId: jest.Mock; bind: jest.Mock; listForUser: jest.Mock };
   let logger: { setContext: jest.Mock; debug: jest.Mock; warn: jest.Mock };
   let service: PortalTokenService;
@@ -114,7 +119,7 @@ describe('PortalTokenService — a wedged JWKS fetch must not hang bearer auth',
 
     userService = {
       findById: jest.fn().mockResolvedValue({ id: 'u-bound' }),
-      hasNoUsers: jest.fn().mockResolvedValue(false),
+      createFirstAccount: jest.fn().mockResolvedValue(null),
       findByEmail: jest.fn(),
       create: jest.fn(),
     };
@@ -174,7 +179,7 @@ describe('PortalTokenService — a wedged JWKS fetch must not hang bearer auth',
 
     // Real timers would be needed to let real crypto finish; the verify itself
     // needs no timer, so a plain await drives it to completion.
-    await expect(second).resolves.toEqual({ id: 'u-bound' });
+    await expect(second).resolves.toMatchObject({ user: { id: 'u-bound' } });
     expect(state.settled).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
@@ -225,7 +230,7 @@ describe('PortalTokenService — a wedged JWKS fetch must not hang bearer auth',
   it('still verifies a real EdDSA Portal token against the JWKS (behaviour unchanged)', async () => {
     respondWithJwks();
 
-    await expect(service.verifyAndProvision(portalToken)).resolves.toEqual({ id: 'u-bound' });
+    await expect(service.verifyAndProvision(portalToken)).resolves.toMatchObject({ user: { id: 'u-bound' } });
     expect(federatedIdentityService.findUserId).toHaveBeenCalledWith('https://hub.test', 'portal-sub-1');
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0]?.[0]).toBe('https://hub.test/api/auth/jwks');

@@ -37,4 +37,6 @@ export type Identical<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false)
 export type CapabilityVocabularyIsShared = Assert<Identical<ApiKeyCapability, ToolCapability>>;
 
 /** The request facts the ledger row is built from. A widened or renamed field silently loses one. */
-export type RequestContextIsShared = Assert<Identical<Required<RequestContext>, Required<ToolRequestContext>>>;
+export type RequestContextIsShared = Assert<
+  Identical<Required<RequestContext>, Required<ToolRequestContext>>
+>;

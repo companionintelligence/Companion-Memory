@@ -14,6 +14,7 @@
  */
 
 import { isNativePlatform } from './apiBase';
+import type { CompanionWidgetSnapshot, WidgetAction } from './widgetSnapshots';
 
 /** A live sidecar's address plus the bearer token every one of its routes requires. */
 export interface LocalHubSession {
@@ -23,10 +24,35 @@ export interface LocalHubSession {
   token: string;
 }
 
+export interface DiscoverLanAppliancesOptions {
+  /** mDNS / Bonjour service type to browse; defaults to `_companion-memory._tcp.`. */
+  serviceType?: string;
+  /** Discovery window in milliseconds (clamped 500..10000; default 2500). */
+  timeoutMs?: number;
+}
+
+export interface DiscoveredLanAppliance {
+  name: string;
+  host: string;
+  port: number;
+  baseUrl: string;
+  txt?: Record<string, string>;
+}
+
+export interface DiscoverLanAppliancesResult {
+  appliances: DiscoveredLanAppliance[];
+  supported: boolean;
+}
+
 interface LocalHubPlugin {
   start(): Promise<LocalHubSession>;
   stop(): Promise<void>;
   getStatus(): Promise<{ running: boolean; baseUrl?: string }>;
+  discoverLanAppliances?(options?: DiscoverLanAppliancesOptions): Promise<DiscoverLanAppliancesResult>;
+  publishWidgetSnapshot?(options: { snapshot: CompanionWidgetSnapshot }): Promise<void>;
+  readWidgetActions?(): Promise<{ actions: WidgetAction[] }>;
+  acknowledgeWidgetActions?(options: { ids: string[] }): Promise<void>;
+  clearWidgetSnapshot?(): Promise<void>;
 }
 
 /** The `LocalHub` plugin off the runtime Capacitor bridge, or undefined when absent. */
@@ -78,4 +104,59 @@ export async function localHubSession(): Promise<LocalHubSession | null> {
  */
 export function localHubHeaders(session: LocalHubSession): Record<string, string> {
   return { Authorization: `Bearer ${session.token}` };
+}
+
+/**
+ * Discovers Companion Memory appliances advertising over mDNS / Bonjour on the LAN.
+ * Returns `{ appliances: [], supported: false }` on web or when the native bridge is absent.
+ */
+export async function discoverLanAppliances(
+  options?: DiscoverLanAppliancesOptions,
+): Promise<DiscoverLanAppliancesResult> {
+  if (!isNativePlatform()) {
+    return { appliances: [], supported: false };
+  }
+
+  const hub = localHubPlugin();
+  if (!hub?.discoverLanAppliances) {
+    return { appliances: [], supported: false };
+  }
+
+  try {
+    return await hub.discoverLanAppliances(options);
+  } catch {
+    return { appliances: [], supported: false };
+  }
+}
+
+export async function publishWidgetSnapshot(snapshot: CompanionWidgetSnapshot): Promise<void> {
+  if (!isNativePlatform()) {
+    return;
+  }
+
+  await localHubPlugin()?.publishWidgetSnapshot?.({ snapshot });
+}
+
+export async function readWidgetActions(): Promise<WidgetAction[]> {
+  if (!isNativePlatform()) {
+    return [];
+  }
+
+  return (await localHubPlugin()?.readWidgetActions?.())?.actions ?? [];
+}
+
+export async function acknowledgeWidgetActions(ids: string[]): Promise<void> {
+  if (!isNativePlatform() || ids.length === 0) {
+    return;
+  }
+
+  await localHubPlugin()?.acknowledgeWidgetActions?.({ ids });
+}
+
+export async function clearWidgetSnapshot(): Promise<void> {
+  if (!isNativePlatform()) {
+    return;
+  }
+
+  await localHubPlugin()?.clearWidgetSnapshot?.();
 }

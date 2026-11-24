@@ -15,7 +15,10 @@ import {
 } from '@ci/domains/maintenance/events';
 import { GraphDeltaWriter } from '@ci/domains/memory';
 
+import { buildContact, parseContentLine, unfoldContentLines, type ContentLine } from '../datasources/vcard';
 import { PushStage } from '../stages/PushStage';
+import { CONTACT_IDENTIFIER_KEYS, CONTACT_NAMES_KEY, markSharedContactHandles } from '../staging/identity';
+import { StagedWriter } from '../staging/StagedWriter';
 import type { StageRunContext } from '../types';
 
 import { createStagingHarness, importDatabase, type StagingHarness } from './support/stagingHarness';
@@ -505,6 +508,75 @@ describeWithDatabase(`the push stage (${importDatabase.target})`, () => {
     );
 
     expect(Number(count)).toBe(3);
+  });
+
+  it('grows a person on a later export instead of replacing it, and keeps what a merge added', async () => {
+    // Two exports of one address book. The parser declares URLs and Phones as
+    // accumulating; the staged row carries that declaration to the push, and
+    // the push unions those keys into the person rather than replacing them.
+    // Between the exports a merge folded a duplicate's number into him — which
+    // the second export's refresh used to erase.
+    const card = (url: string) => ({
+      entity: {
+        type: 'contact',
+        name: 'Gus Oduya',
+        attributes: [{ name: 'phone', value: '(202) 555-0173', identity: true }],
+        metadata: { Source: 'vCard', Phones: ['(202) 555-0173'], URLs: [url] },
+        accumulate: ['Phones', 'URLs'],
+      },
+    });
+    const personFor = async (runId: string) => {
+      const [mapped] = await harness.dataSource.query<Array<{ server_entity_id: string }>>(
+        `SELECT m.server_entity_id
+           FROM ci_import.entity_mappings m
+           JOIN ci_import.staged_entities s ON s.id = m.staged_entity_id
+          WHERE s.run_id = $1::uuid`,
+        [runId],
+      );
+
+      return mapped.server_entity_id;
+    };
+
+    const { stage } = makeStage();
+
+    const first = await harness.writerFor('vcard');
+    first.writer.push(card('https://gus.example/a'));
+    await first.writer.settled();
+
+    const [staged] = await harness.dataSource.query<Array<{ accumulate: string[] }>>(
+      `SELECT accumulate FROM ci_import.staged_entities WHERE run_id = $1::uuid`,
+      [first.runId],
+    );
+    // The parser's own keys, then the ones staging accumulates for every contact.
+    expect(staged.accumulate).toEqual(['Phones', 'URLs', ...CONTACT_IDENTIFIER_KEYS, CONTACT_NAMES_KEY]);
+
+    await stage.run(contextFor(first.runId));
+    const gus = await personFor(first.runId);
+
+    // PersonMergeService's fold, in effect: a duplicate's number unioned in.
+    await harness.dataSource.query(
+      `UPDATE ci.entities SET properties = properties || '{"phones": ["2025550173", "2025550188"]}'::jsonb
+        WHERE entity_id = $1`,
+      [gus],
+    );
+
+    const second = await harness.writerFor('vcard');
+    second.writer.push(card('https://gus.example/b'));
+    await second.writer.settled();
+    await stage.run(contextFor(second.runId));
+
+    expect(await personFor(second.runId)).toBe(gus);
+
+    const [after] = await harness.dataSource.query<Array<{ properties: Record<string, unknown> }>>(
+      `SELECT properties FROM ci.entities WHERE entity_id = $1`,
+      [gus],
+    );
+
+    expect(after.properties).toMatchObject({
+      URLs: ['https://gus.example/a', 'https://gus.example/b'],
+      Phones: ['(202) 555-0173'],
+      phones: ['2025550173', '2025550188'],
+    });
   });
 
   it('attaches the sender and recipients to the communication it pushes', async () => {
@@ -997,5 +1069,166 @@ describeWithDatabase(`the push stage (${importDatabase.target})`, () => {
     const options = (positions.create.mock.calls[0] as unknown[])[2];
 
     expect(options).toEqual({ emitCreated: false });
+  });
+
+  /**
+   * The whole chain a contact card takes — the real vCard parser, the real
+   * writer and the real push into Postgres — because the handles this is about
+   * exist only as parser ATTRIBUTES, and are gone from the staged row unless
+   * staging records them.
+   *
+   * The card is keyed on its office FAX, exactly as a real one was: the
+   * extension line truncates to 5550110229, the cell number sorts after the
+   * fax, and digits sort before every email. Before, that fax was the one
+   * identifier the card had: its own email and cell number never reached
+   * `ci.entity_identifiers`, and the fax was indexed as its phone. Invented
+   * throughout: 555-01XX numbers, `.example` mail.
+   */
+  it('indexes every email and phone a contact card states, and never its office fax', async () => {
+    const card = [
+      'BEGIN:VCARD',
+      'VERSION:3.0',
+      'N:Quill;Ada;;;',
+      'FN:Ada Quill',
+      'EMAIL;type=INTERNET;type=pref:ada@quill-legal.example',
+      'EMAIL;type=INTERNET:info@quill-legal.example',
+      'TEL;type=pref:(212) 555-0110\\;229',
+      'TEL;type=OTHER;type=FAX:(212) 555-0118',
+      'TEL;type=CELL:(646) 555-0142',
+      'END:VCARD',
+    ].join('\r\n');
+    const lines = unfoldContentLines(card)
+      .filter((line) => !/^(BEGIN|END):VCARD$/i.test(line.trim()))
+      .map((line) => parseContentLine(line))
+      .filter((line): line is ContentLine => line != null);
+    const contact = buildContact(lines, 'contacts.vcf');
+
+    const runId = await harness.startRun();
+    const writer = new StagedWriter(harness.dataSource.manager, {
+      userId: harness.userId,
+      runId,
+      dataSource: 'vcard',
+    });
+    writer.push({ item: contact!.item, edges: [{ relation: 'contact', to: { entity: contact!.entity } }] });
+    await writer.settled();
+
+    const { stage } = makeStage();
+    await stage.run(contextFor(runId));
+
+    const [person] = await harness.dataSource.query<
+      Array<{ entity_id: string; linked_id: string; properties: Record<string, unknown> }>
+    >(
+      `SELECT entity_id, linked_id, properties FROM ci.entities
+        WHERE owner_user_id = $1::uuid AND entity_type = 'Person' AND name = 'Ada Quill'`,
+      [harness.userId],
+    );
+
+    expect(person.properties).toMatchObject({
+      email: 'ada@quill-legal.example',
+      emails: ['ada@quill-legal.example'],
+      phone: '6465550142',
+      phones: ['6465550142'],
+      Faxes: ['(212) 555-0118'],
+    });
+
+    const indexed = await harness.dataSource.query<Array<{ kind: string; value_normalized: string }>>(
+      `SELECT kind, value_normalized FROM ci.entity_identifiers
+        WHERE owner_user_id = $1::uuid AND entity_id = $2::uuid
+        ORDER BY kind, value_normalized`,
+      [harness.userId, person.entity_id],
+    );
+
+    expect(indexed).toEqual([
+      { kind: 'email', value_normalized: 'ada@quill-legal.example' },
+      { kind: 'name', value_normalized: 'ada quill' },
+      { kind: 'phone', value_normalized: '6465550142' },
+    ]);
+
+    // `buildContact` alone marks nothing shared — the importer's file-level
+    // pass does (`markSharedContactHandles`) — so here the key is still the
+    // smallest handle, the fax. What is indexed does not depend on the key.
+    const [staged] = await harness.dataSource.query<Array<{ identity_key: string }>>(
+      `SELECT identity_key FROM ci_import.staged_entities WHERE run_id = $1::uuid`,
+      [runId],
+    );
+    expect(staged.identity_key).toBe('2125550118');
+  });
+
+  /**
+   * A household on one home line, through the importer's own file-level pass:
+   * "Ana Ruiz" and "Luis Ruiz" share a surname, which #2795 deliberately
+   * cannot tell from a nickname, so the line is not marked shared, both cards
+   * key on it, and staging collapses them onto ONE row that accumulates both
+   * people's addresses. Indexed whole, Luis's mail would resolve to "Ana Ruiz",
+   * and the email tier would fold Ana into any Luis it met. The row is
+   * indexed on its handle alone. Invented throughout.
+   */
+  it("never indexes one household member's address as another's", async () => {
+    const parse = (raw: string[]) => {
+      const lines = unfoldContentLines(raw.join('\r\n'))
+        .filter((line) => !/^(BEGIN|END):VCARD$/i.test(line.trim()))
+        .map((line) => parseContentLine(line))
+        .filter((line): line is ContentLine => line != null);
+
+      return buildContact(lines, 'contacts.vcf')!;
+    };
+
+    const ana = parse([
+      'BEGIN:VCARD',
+      'FN:Ana Ruiz',
+      'EMAIL;type=INTERNET:ana.ruiz@example.com',
+      'TEL;type=HOME:(415) 555-0100',
+      'TEL;type=CELL:(415) 555-0111',
+      'END:VCARD',
+    ]);
+    const luis = parse([
+      'BEGIN:VCARD',
+      'FN:Luis Ruiz',
+      'EMAIL;type=INTERNET:luis.ruiz@example.org',
+      'TEL;type=HOME:(415) 555-0100',
+      'TEL;type=CELL:(415) 555-0122',
+      'END:VCARD',
+    ]);
+    const entities = markSharedContactHandles([ana.entity, luis.entity]);
+
+    const runId = await harness.startRun();
+    const writer = new StagedWriter(harness.dataSource.manager, {
+      userId: harness.userId,
+      runId,
+      dataSource: 'vcard',
+    });
+    writer.push({ item: ana.item, edges: [{ relation: 'contact', to: { entity: entities[0] } }] });
+    writer.push({ item: luis.item, edges: [{ relation: 'contact', to: { entity: entities[1] } }] });
+    await writer.settled();
+
+    const staged = await harness.dataSource.query<
+      Array<{ identity_key: string; metadata: Record<string, unknown> }>
+    >(`SELECT identity_key, metadata FROM ci_import.staged_entities WHERE run_id = $1::uuid`, [runId]);
+    expect(staged).toHaveLength(1);
+    expect(staged[0].metadata).toMatchObject({
+      contactNames: ['Ana Ruiz', 'Luis Ruiz'],
+      emails: ['ana.ruiz@example.com', 'luis.ruiz@example.org'],
+    });
+
+    const { stage } = makeStage();
+    await stage.run(contextFor(runId));
+
+    const [person] = await harness.dataSource.query<
+      Array<{ entity_id: string; properties: Record<string, unknown> }>
+    >(
+      `SELECT entity_id, properties FROM ci.entities
+        WHERE owner_user_id = $1::uuid AND entity_type = 'Person' AND name = 'Ana Ruiz'`,
+      [harness.userId],
+    );
+    expect(person.properties).toMatchObject({ phones: ['4155550100'], phone: '4155550100' });
+    expect(person.properties).not.toHaveProperty('emails');
+    expect(person.properties).not.toHaveProperty('contactNames');
+
+    const emailsIndexed = await harness.dataSource.query<Array<{ value_normalized: string }>>(
+      `SELECT value_normalized FROM ci.entity_identifiers
+        WHERE owner_user_id = $1::uuid AND kind = 'email'`,
+      [harness.userId],
+    );
+    expect(emailsIndexed.map((row) => row.value_normalized)).not.toContain('luis.ruiz@example.org');
   });
 });

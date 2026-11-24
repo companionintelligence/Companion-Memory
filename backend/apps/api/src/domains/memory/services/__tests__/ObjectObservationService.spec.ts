@@ -1,4 +1,4 @@
-import type { DataSource, Repository } from 'typeorm';
+import { IsNull, Not, type DataSource, type Repository } from 'typeorm';
 
 import type { ObjectObservationEntity } from '../../entities/ObjectObservationEntity';
 import { platformIdentity } from '../../identity';
@@ -46,6 +46,10 @@ import { ObjectObservationService, detectionKeyFor } from '../ObjectObservationS
 const USER = '00000000-0000-4000-8000-0000000000aa';
 const CONTENT = '00000000-0000-4000-8000-00000000c001';
 const FILE = '00000000-0000-4000-8000-0000000000f1';
+// Ids a resolution links to: refuseForeignLinks refuses one that is not a uuid before it asks anything.
+const THING = '00000000-0000-4000-8000-0000000000b1';
+const PICKED_THING = '00000000-0000-4000-8000-0000000000b7';
+const NAMED_PRODUCT = '00000000-0000-4000-8000-0000000000d2';
 
 function ctx() {
   return { userId: USER };
@@ -81,7 +85,7 @@ function makeService(): Harness {
   const query = jest.fn(async (sql: string, params: unknown[]) => {
     calls.push({ sql, params });
 
-    const ids = (params[1] ?? []) as unknown[];
+    const ids = Array.isArray(params[1]) ? (params[1] as unknown[]) : [];
 
     return ids.map((_value, index) => ({ observation_id: `obs-${calls.length}-${index}` }));
   });
@@ -97,7 +101,12 @@ function makeService(): Harness {
     update,
   } as unknown as Repository<ObjectObservationEntity>;
 
-  const dataSource = { query } as unknown as DataSource;
+  // refuseForeignLinks asks which linked rows belong to someone else: none here, and that read
+  // stays out of the statements the tests count and script.
+  const dataSource = {
+    query: (sql: string, params: unknown[]) =>
+      sql.includes('IS DISTINCT FROM') ? Promise.resolve([]) : query(sql, params),
+  } as unknown as DataSource;
 
   const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
 
@@ -479,7 +488,7 @@ describe('ObjectObservationService.resolve — a machine decision is not a human
     findOne.mockResolvedValue({ id: 'obs-1', confirmedByUser: false });
 
     await service.resolve(ctx(), 'obs-1', {
-      resolvedObjectId: 'item-1',
+      resolvedObjectId: THING,
       resolutionMethod: 'label',
     });
 
@@ -500,6 +509,28 @@ describe('ObjectObservationService.resolve — a machine decision is not a human
     // skip these, not abort.
     expect(update).not.toHaveBeenCalled();
     expect(result).toEqual({ id: 'obs-1', confirmedByUser: true });
+  });
+
+  it('leaves a sighting a person answered "not a thing" untouched', async () => {
+    const { service, findOne, update } = makeService();
+
+    // What rejectObservation leaves: unconfirmed, unlinked, method `user`.
+    const rejected = {
+      id: 'obs-1',
+      confirmedByUser: false,
+      resolvedObjectId: null,
+      resolutionMethod: 'user',
+    };
+
+    findOne.mockResolvedValue(rejected);
+
+    const result = await service.resolve(ctx(), 'obs-1', {
+      resolvedObjectId: 'item-2',
+      resolutionMethod: 'label',
+    });
+
+    expect(update).not.toHaveBeenCalled();
+    expect(result).toEqual(rejected);
   });
 
   it('clamps a resolution confidence and never invents one', async () => {
@@ -574,11 +605,170 @@ describe('ObjectObservationService.confirm — the only writer of confirmed_by_u
 
     findOne.mockResolvedValue({ id: 'obs-1', confirmedByUser: false });
 
-    await service.confirm(ctx(), 'obs-1', true, { resolvedObjectId: 'item-7' });
+    await service.confirm(ctx(), 'obs-1', true, { resolvedObjectId: PICKED_THING });
 
     expect(update.mock.calls[0][1]).toEqual(
-      expect.objectContaining({ confirmedByUser: true, resolvedObjectId: 'item-7' }),
+      expect.objectContaining({ confirmedByUser: true, resolvedObjectId: PICKED_THING }),
     );
+  });
+
+  it("takes the picked unit's product when no product is named", async () => {
+    const { service, findOne, query, update } = makeService();
+
+    findOne.mockResolvedValue({
+      id: 'obs-1',
+      userId: USER,
+      confirmedByUser: false,
+      resolvedProductId: 'product-1',
+    });
+    query.mockImplementationOnce(async (sql: string) =>
+      sql.includes('FROM ci.objects') ? [{ product_id: 'product-9' }] : [],
+    );
+
+    await service.confirm(ctx(), 'obs-1', true, { resolvedObjectId: PICKED_THING });
+
+    expect(query.mock.calls[0][1]).toEqual([PICKED_THING, USER]);
+    expect(update.mock.calls[0][1]).toEqual(
+      expect.objectContaining({ resolvedObjectId: PICKED_THING, resolvedProductId: 'product-9' }),
+    );
+  });
+
+  it("keeps a product named in the same call over the unit's own", async () => {
+    const { service, findOne, query, update } = makeService();
+
+    findOne.mockResolvedValue({ id: 'obs-1', userId: USER, confirmedByUser: false });
+
+    await service.confirm(ctx(), 'obs-1', true, {
+      resolvedObjectId: PICKED_THING,
+      resolvedProductId: NAMED_PRODUCT,
+    });
+
+    expect(query).not.toHaveBeenCalled();
+    expect(update.mock.calls[0][1]).toEqual(expect.objectContaining({ resolvedProductId: NAMED_PRODUCT }));
+  });
+
+  it('moves the thing\'s "last seen" when the row comes back confirmed and linked', async () => {
+    const { service, findOne, query } = makeService();
+    const observedAt = new Date('2026-05-02T10:00:00.000Z');
+
+    findOne
+      .mockResolvedValueOnce({
+        id: 'obs-1',
+        userId: USER,
+        confirmedByUser: false,
+        resolvedObjectId: 'item-7',
+      })
+      .mockResolvedValueOnce({
+        id: 'obs-1',
+        userId: USER,
+        confirmedByUser: true,
+        resolvedObjectId: 'item-7',
+        observedAt,
+        placeEntityId: null,
+      });
+
+    await service.confirm(ctx(), 'obs-1');
+
+    const touch = query.mock.calls.find(([sql]) => String(sql).includes('SET last_seen_at'));
+    expect(touch?.[1]).toEqual([USER, 'item-7', observedAt, null]);
+  });
+
+  it('leaves "last seen" alone for a retraction that keeps the link', async () => {
+    const { service, findOne, query } = makeService();
+
+    findOne
+      .mockResolvedValueOnce({ id: 'obs-1', userId: USER, confirmedByUser: true, resolvedObjectId: 'item-1' })
+      .mockResolvedValueOnce({
+        id: 'obs-1',
+        userId: USER,
+        confirmedByUser: false,
+        resolvedObjectId: 'item-1',
+      });
+
+    await service.confirm(ctx(), 'obs-1', false);
+
+    expect(query.mock.calls.some(([sql]) => String(sql).includes('SET last_seen_at'))).toBe(false);
+  });
+});
+
+describe('ObjectObservationService.sendBackToReview — "not this thing"', () => {
+  it("clears the thing link as a person's answer and marks the sighting for the review queue", async () => {
+    const { service, findOne, update } = makeService();
+
+    findOne.mockResolvedValue({
+      id: 'obs-1',
+      confirmedByUser: true,
+      resolvedObjectId: 'item-1',
+      resolvedProductId: 'product-1',
+    });
+
+    await service.sendBackToReview(ctx(), 'obs-1');
+
+    const [criteria, patch] = update.mock.calls[0];
+
+    expect(criteria).toEqual({ id: 'obs-1', userId: USER });
+    expect(patch).toEqual(
+      expect.objectContaining({
+        confirmedByUser: false,
+        // `user`, so the resolution ladder and the vision listener leave it alone.
+        resolutionMethod: 'user',
+        resolutionConfidence: null,
+        resolvedObjectId: null,
+      }),
+    );
+    // "Not this one" is not "not this product".
+    expect(patch).not.toHaveProperty('resolvedProductId');
+    expect(patch.metadata()).toBe(`metadata || '{"sentBackToReview": true}'::jsonb`);
+  });
+
+  it('returns null for an id that is not this user’s', async () => {
+    const { service, findOne, update } = makeService();
+
+    findOne.mockResolvedValue(null);
+
+    expect(await service.sendBackToReview(ctx(), 'obs-x')).toBeNull();
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('leaves a sighting linked to nothing as it is, so "not a thing" stays out of the queue', async () => {
+    const { service, findOne, update } = makeService();
+    const rejected = { id: 'obs-1', confirmedByUser: false, resolvedObjectId: null, resolvedProductId: null };
+
+    findOne.mockResolvedValue(rejected as never);
+
+    expect(await service.sendBackToReview(ctx(), 'obs-1')).toBe(rejected);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('leaves a sighting alone when it is no longer linked to the thing the person was looking at', async () => {
+    const { service, findOne, update } = makeService();
+    const moved = { id: 'obs-1', confirmedByUser: true, resolvedObjectId: 'item-2', resolvedProductId: null };
+
+    findOne.mockResolvedValue(moved as never);
+
+    expect(await service.sendBackToReview(ctx(), 'obs-1', 'item-1')).toBe(moved);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('writes only while the sighting is still linked to the thing the person was looking at', async () => {
+    const { service, findOne, update } = makeService();
+
+    findOne.mockResolvedValue({ id: 'obs-1', confirmedByUser: true, resolvedObjectId: 'item-1' });
+
+    await service.sendBackToReview(ctx(), 'obs-1', 'item-1');
+
+    // A merge between the read and the write moves the link, and then this matches no row.
+    expect(update.mock.calls[0][0]).toEqual({ id: 'obs-1', userId: USER, resolvedObjectId: 'item-1' });
+  });
+
+  it('is undone by any later answer', async () => {
+    const { service, findOne, update } = makeService();
+
+    findOne.mockResolvedValue({ id: 'obs-1', confirmedByUser: false });
+
+    await service.confirm(ctx(), 'obs-1', false, { resolvedObjectId: null, resolvedProductId: null });
+
+    expect(update.mock.calls[0][1].metadata()).toBe("metadata - 'sentBackToReview'");
   });
 });
 
@@ -601,11 +791,44 @@ describe('ObjectObservationService — reads are user-scoped', () => {
     await service.findForReview(ctx());
 
     // object_observations_review_idx is WHERE NOT confirmed_by_user AND
-    // resolved_object_id IS NULL — this query must match it to use it.
+    // resolved_object_id IS NULL — every branch of this query must match it to use it.
     const { where, order } = find.mock.calls[0][0];
 
-    expect(where.confirmedByUser).toBe(false);
-    expect(where.resolvedObjectId).toBeDefined();
+    expect(where).toHaveLength(2);
+
+    for (const branch of where) {
+      expect(branch.userId).toBe(USER);
+      expect(branch.confirmedByUser).toBe(false);
+      expect(branch.resolvedObjectId).toEqual(IsNull());
+    }
+
     expect(order).toEqual({ observedAt: 'DESC' });
+  });
+
+  it('leaves the sent-back sightings out for a machine sweep', async () => {
+    const { service, find } = makeService();
+
+    await service.findForReview(ctx(), 100, 0, { sentBack: false });
+
+    const { where } = find.mock.calls[0][0];
+
+    expect(where).toHaveLength(1);
+    expect(where[0].resolutionMethod).toEqual(Not('user'));
+  });
+
+  it('leaves a sighting a person answered "not a thing" out of the review queue', async () => {
+    const { service, find } = makeService();
+
+    await service.findForReview(ctx());
+
+    // rejectObservation leaves the row unconfirmed and unlinked, so only the
+    // method says a person has already looked at it.
+    const [unanswered, sentBack] = find.mock.calls[0][0].where;
+
+    expect(unanswered.resolutionMethod).toEqual(Not('user'));
+    expect(unanswered).not.toHaveProperty('metadata');
+    // The one answered row the queue shows: "not this thing" on a thing's page.
+    expect(sentBack.resolutionMethod).toBe('user');
+    expect(sentBack.metadata).toBeDefined();
   });
 });

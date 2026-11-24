@@ -402,6 +402,109 @@ describe('EditTaskModal', () => {
     expect(screen.getByRole('button', { name: /^done$/i })).toBeInTheDocument();
   }, 10000);
 
+  // ═══ THE DUE DATE USED TO BE UN-CLEARABLE ON iOS ═══
+  //
+  // A native date input has one way to empty it: the picker's own Reset. On iOS
+  // that puts back the value the picker opened with instead of clearing it
+  // (Edit task > Due > Reset left "Oct 5" in place and `due_at` stayed set), and
+  // Backspace does nothing to a picker-backed field. So the dialog carries its
+  // own Clear, which empties the draft the same way typing a title away does.
+  describe('clearing the due date', () => {
+    // Local noon, which is what `dueAtFromInput` stores, whatever zone this runs in.
+    const DUE = new Date(2026, 9, 5, 12).toISOString();
+    const WITH_DUE = { ...TASK, dueAt: DUE };
+
+    function clearDueMock() {
+      return {
+        request: {
+          query: UPDATE_TASK,
+          variables: {
+            input: {
+              id: TASK.id,
+              title: TASK.title,
+              description: 'First draft',
+              dueAt: null,
+              estimatedMinutes: 30,
+            },
+          },
+        },
+        result: {
+          data: {
+            updateTask: {
+              __typename: 'UpdateTaskPayload',
+              success: true,
+              task: { ...updatedTask(TASK.title), estimatedMinutes: 30 },
+            },
+          },
+        },
+      };
+    }
+
+    it('offers Clear only while there is a due date to clear', () => {
+      const { unmount } = renderWithProviders(<EditTaskModal task={TASK} onClose={vi.fn()} />, { mocks: [] });
+
+      expect(screen.getByLabelText(/^due$/i)).toHaveValue('');
+      expect(screen.queryByRole('button', { name: /clear due date/i })).not.toBeInTheDocument();
+
+      unmount();
+      renderWithProviders(<EditTaskModal task={WITH_DUE} onClose={vi.fn()} />, { mocks: [] });
+
+      expect(screen.getByLabelText(/^due$/i)).toHaveValue('2026-10-05');
+      expect(screen.getByRole('button', { name: /clear due date/i })).toBeInTheDocument();
+    });
+
+    it('empties the field and saves a null due date', async () => {
+      const onSaved = vi.fn();
+
+      renderWithProviders(<EditTaskModal task={WITH_DUE} onClose={vi.fn()} onSaved={onSaved} />, {
+        mocks: [clearDueMock()],
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /clear due date/i }));
+
+      expect(screen.getByLabelText(/^due$/i)).toHaveValue('');
+      expect(screen.queryByRole('button', { name: /clear due date/i })).not.toBeInTheDocument();
+
+      // The autosave only matches the mock if it sent `dueAt: null` — a stale
+      // date, or no write at all, would leave the alert up and `onSaved` unfired.
+      await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1), { timeout: 2000 });
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+  });
+
+  // ═══ THE DUE FIELD USED TO RUN UNDER MINUTES ON iOS ═══
+  //
+  // WebKit resolves `width: 100%` on a native date control as the CONTENT box
+  // and adds its padding and border on top: 26pt wider than the grid cell it
+  // sits in, so on a phone the field overlapped Minutes. `min-w-0` and the
+  // grid's `minmax(0, 1fr)` tracks cannot help, because the width is not what
+  // overflows — the box model is. Dropping the native appearance on touch
+  // devices makes it an ordinary border-box input again. jsdom lays nothing out,
+  // so this pins the class that decides it.
+  it('gives the Due field a plain box on touch devices so it stays inside its column', () => {
+    renderWithProviders(<EditTaskModal task={TASK} onClose={vi.fn()} />, { mocks: [] });
+
+    expect(screen.getByLabelText(/^due$/i)).toHaveClass('pointer-coarse:appearance-none');
+  });
+
+  // ═══ THE CARET USED TO OPEN AT THE START OF THE TITLE ═══
+  //
+  // `autoFocus` focuses the field and leaves the caret wherever the engine
+  // does, which on iOS is position 0 — so ' v2' typed straight after opening
+  // landed in front of the title. Opening to edit a title means appending to it.
+  it('opens with the caret at the end of the title, so typing appends', () => {
+    const setSelectionRange = vi.spyOn(HTMLTextAreaElement.prototype, 'setSelectionRange');
+
+    try {
+      renderWithProviders(<EditTaskModal task={TASK} onClose={vi.fn()} />, { mocks: [] });
+
+      expect(screen.getByLabelText(/^title$/i)).toHaveFocus();
+      expect(setSelectionRange).toHaveBeenCalledWith(TASK.title.length, TASK.title.length);
+    } finally {
+      setSelectionRange.mockRestore();
+    }
+  });
+
   // Escape must not be swallowed while the save is failing — a dialog that
   // ignores the key reads as broken, and the user never learns why it will not
   // close or that discarding is right there.

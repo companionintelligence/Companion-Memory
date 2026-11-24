@@ -3,6 +3,8 @@
  * `?excludedEntityTypes=` URL state (via useDropdown), with a trigger label
  * that summarizes the selection (all / none / one / "N Entity Types").
  */
+import { useState } from 'react';
+
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { useLocation } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
@@ -137,5 +139,44 @@ describe('EntityTypeFilter — toggling from the menu', () => {
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Clear all' })).toBeDisabled());
     expect(screen.getByRole('button', { name: 'Select all' })).not.toBeDisabled();
+  });
+});
+
+describe('EntityTypeFilter — caller-owned trigger and open state', () => {
+  it('opens from the caller’s trigger, handed the selected types, and follows a controlled open state', async () => {
+    function Host() {
+      const [open, setOpen] = useState(false);
+
+      return (
+        <>
+          <div data-testid="open">{String(open)}</div>
+          <button type="button" onClick={() => setOpen(false)}>
+            Close from outside
+          </button>
+          <EntityTypeFilter
+            modal={false}
+            open={open}
+            onOpenChange={setOpen}
+            renderTrigger={(selected) => <button type="button">{`What row: ${selected.length}`}</button>}
+          />
+        </>
+      );
+    }
+
+    renderWithProviders(
+      <DropdownProvider args={[{ changeSearchParams: true }]}>
+        <Host />
+      </DropdownProvider>,
+      { route: '/memory?includedEntityTypes=Person,Event' },
+    );
+
+    const trigger = await screen.findByRole('button', { name: 'What row: 2' });
+
+    openMenu(trigger);
+    expect(await screen.findByRole('menu')).toBeInTheDocument();
+    expect(screen.getByTestId('open')).toHaveTextContent('true');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close from outside', hidden: true }));
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
   });
 });

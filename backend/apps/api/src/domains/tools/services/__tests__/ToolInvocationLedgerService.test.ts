@@ -14,7 +14,13 @@ import {
 } from '../ToolInvocationLedgerService';
 
 function makeLogger() {
-  return { setContext: jest.fn(), debug: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() } as any;
+  return {
+    setContext: jest.fn(),
+    debug: jest.fn(),
+    log: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+  } as any;
 }
 
 /**
@@ -222,7 +228,10 @@ describe('ToolInvocationLedgerService', () => {
 
   it('pages on the whole key, not just the timestamp — a tie is ordinary, not exceptional', async () => {
     const { builder, service } = makeService();
-    const cursor = { occurredAt: new Date('2026-08-20T10:00:00.000Z'), id: 'aaaaaaaa-0000-7000-8000-000000000001' };
+    const cursor = {
+      occurredAt: new Date('2026-08-20T10:00:00.000Z'),
+      id: 'aaaaaaaa-0000-7000-8000-000000000001',
+    };
 
     await service.listForUser('user-1', { cursor });
 
@@ -294,7 +303,10 @@ describe('truncateError', () => {
 
 describe('cursor codec', () => {
   it('round-trips both halves of the key', () => {
-    const cursor = { occurredAt: new Date('2026-08-20T10:00:00.000Z'), id: 'aaaaaaaa-0000-7000-8000-000000000001' };
+    const cursor = {
+      occurredAt: new Date('2026-08-20T10:00:00.000Z'),
+      id: 'aaaaaaaa-0000-7000-8000-000000000001',
+    };
 
     expect(decodeCursor(encodeCursor(cursor))).toStrictEqual(cursor);
   });
@@ -324,6 +336,8 @@ describe('cursor codec', () => {
     expect(() => decodeCursor('not-a-cursor')).toThrow();
     expect(() => decodeCursor(Buffer.from('no-separator', 'utf8').toString('base64url'))).toThrow();
     expect(() => decodeCursor(Buffer.from('not-a-date|id', 'utf8').toString('base64url'))).toThrow();
-    expect(() => decodeCursor(Buffer.from('2026-08-20T10:00:00.000Z|', 'utf8').toString('base64url'))).toThrow();
+    expect(() =>
+      decodeCursor(Buffer.from('2026-08-20T10:00:00.000Z|', 'utf8').toString('base64url')),
+    ).toThrow();
   });
 });

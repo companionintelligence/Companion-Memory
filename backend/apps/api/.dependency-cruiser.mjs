@@ -29,9 +29,10 @@ export default {
       name: 'no-production-dev-deps',
       severity: 'error',
       // bin/ is covered too: it is the only other code the production image
-      // runs (`yarn migrate` -> check-migration-versions.js, dbmate.js), and
-      // the image installs dependencies only, so a devDependency there is not
-      // a lint nit — it exits non-zero at startup and fails every app install.
+      // runs (`yarn migrate` -> check-migration-versions.js,
+      // check-migration-directives.js, dbmate.js), and the image installs
+      // dependencies only, so a devDependency there is not a lint nit — it
+      // exits non-zero at startup and fails every app install.
       comment: 'Application code must not import non-production dependencies',
       from: {
         path: '^(src|bin)',
@@ -71,7 +72,9 @@ export default {
       comment: "Within a domain, import modules directly; do not go through that domain's public barrel.",
       from: {
         path: '^src/domains/([^/]+)/',
-        pathNot: '\\.test\\.ts$',
+        // Tests may go through the barrel: a test of what it exports, or a worked example of the public
+        // API, has to. Both suffixes, because the domains name their tests either way.
+        pathNot: '\\.(test|spec)\\.ts$',
       },
       to: {
         path: '^src/domains/$1/index\\.ts$',

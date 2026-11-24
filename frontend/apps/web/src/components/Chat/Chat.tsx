@@ -11,11 +11,13 @@ import {
   useState,
 } from 'react';
 
-import { useDeviceLayout } from '@ci/common';
+import { LocalLlmGenerationError } from '@ci/common';
 import { cn } from '@ci/shadcn';
 import * as smd from 'streaming-markdown';
 import { type Parser as StreamingParser } from 'streaming-markdown';
 import { v7 as uuid7 } from 'uuid';
+
+import { isPrimaryPointerTouch } from '@/hooks/useDeviceBreakpoint';
 
 import { AssistantMessage } from './blocks/AssistantMessage';
 import { ThinkBlock } from './blocks/ThinkBlock';
@@ -35,9 +37,12 @@ interface Message {
   content: string;
   createdAt?: string;
   source?: 'openclaw' | 'memory' | 'user';
+  /** Persisted tool calls. The live stream draws these as they arrive; a reload has only this column. */
+  toolCalls?: object[] | null;
 }
 
-interface Props extends ChatInputProps {
+interface Props extends Omit<ChatInputProps, 'refocusWhenEnabled'> {
+  /** Focus the box on open and give focus back after each reply (see ChatInput's `refocusWhenEnabled`). */
   autoFocus?: boolean;
   hasStartedReceiving?: boolean | null;
   messages?: Message[];
@@ -149,18 +154,26 @@ export function Chat({
     </Fragment>,
   ]);
 
-  const { isMobile } = useDeviceLayout();
-  const loaderMargin = useMemo(() => (isMobile ? 'mt-2' : 'mt-4'), [isMobile]);
-  const contentPadding = useMemo(() => (isMobile ? 'p-2' : 'p-4'), [isMobile]);
-  const threadPadding = useMemo(() => (isMobile ? 'pb-0 gap-2' : 'pb-0 gap-4'), [isMobile]);
-
-  const flushStream = useCallback((node?: ReactNode) => {
+  const flushStream = useCallback((node?: ReactNode): ReactNode => {
     // We need to cut off the flow of streaming text to the current stream blocks.
     // We will be creating new stream blocks below to accept subsequently streamed
     // characters, but if this function has been invoked we are logically at the end
     // of a block. These refs will not be set until the next React render cycle and
     // we want to pause the text stream until they fixate on the newly created stream
     // receiver elements.
+    //
+    // End both parsers first. `streaming-markdown` keeps back the last character it was given, whatever it is, until
+    // the next one shows whether it starts markdown (at the start of a line it keeps more, as `1.` or `#` could still
+    // become a list or a heading). A bare URL gets its `href` only once something follows it. `parser_end` writes all
+    // of that out, so a block dropped without it stayed a character short until a reload.
+    if (textParserRef.current) {
+      smd.parser_end(textParserRef.current);
+    }
+
+    if (thinkParserRef.current) {
+      smd.parser_end(thinkParserRef.current);
+    }
+
     textStreamingRef.current = null;
     textParserRef.current = null;
     thinkStreamingRef.current = null;
@@ -180,10 +193,17 @@ export function Chat({
     );
 
     setAccumulatedMessages((prev) => (node ? [...prev, node, newStreamNodes] : [...prev, newStreamNodes]));
+
+    return newStreamNodes;
   }, []);
 
   const handleFrameChunk = useCallback(
     (chunk: Decoded) => {
+      // The server's "still going" frame: nothing to show, and not a channel change.
+      if (chunk.channel === Channel.KEEPALIVE) {
+        return true;
+      }
+
       if (!supportedChannels.has(chunk.channel)) {
         console.warn('Ignored unsupported chunk channel:', chunk.channel);
 
@@ -233,8 +253,6 @@ export function Chat({
         if (chunk.channel === Channel.TEXT) {
           targetRef = textStreamingRef;
           parserRef = textParserRef;
-          // Accumulate text for TTS
-          accumulatedTextRef.current += payload;
         } else if (chunk.channel === Channel.THINK) {
           targetRef = thinkStreamingRef;
           parserRef = thinkParserRef;
@@ -250,6 +268,12 @@ export function Chat({
 
         if (parser == null) {
           return false; // not ready → buffer it
+        }
+
+        // Accumulate text for TTS, only once the chunk is written. A buffered chunk comes back for another try, so adding
+        // it before the checks above handed `onResponseFinished` the first chunk after a block change twice.
+        if (chunk.channel === Channel.TEXT) {
+          accumulatedTextRef.current += payload;
         }
 
         smd.parser_write(parser, payload);
@@ -268,16 +292,28 @@ export function Chat({
         return false;
       }
 
+      // What this send added to the transcript: the bubble, and the empty reply blocks that were started after it.
+      let echoed: ReactNode[] = [];
+
       try {
         const block = <UserMessage key={uuid7()} content={data.message} createdAt={new Date().toJSON()} />;
 
-        flushStream(block);
+        echoed = [block, flushStream(block)];
         maybeAutoScroll(true);
       } catch (err) {
         console.error('Error inserting user block', err);
       }
 
-      return (await onSubmit?.(data, e)) ?? false;
+      const result = await onSubmit?.(data, e);
+
+      // The bubble goes up the moment the send starts, so a slow model load or request still reads as sent. But an
+      // explicit refusal leaves the text in the composer, and the transcript must not also say it went out — each
+      // try added a bubble with no reply. Taking the reply blocks back too restores the empty state.
+      if (result === false && echoed.length > 0) {
+        setAccumulatedMessages((prev) => prev.filter((node) => !echoed.includes(node)));
+      }
+
+      return result ?? false;
     },
     [onSubmit, flushStream, maybeAutoScroll],
   );
@@ -313,14 +349,9 @@ export function Chat({
       }
     }
 
-    const input = autoFocusRef.current;
-
-    if (input && autoFocus) {
-      requestAnimationFrame(() => {
-        input.focus();
-      });
-    }
-  }, [flushStream, autoFocus, onResponseFinished]);
+    // No focus call here. The box is still disabled when the stream ends (`streaming` clears after it, then a thread
+    // refetch can disable it again), so ChatInput gives focus back once it is enabled (`refocusWhenEnabled`).
+  }, [flushStream, onResponseFinished]);
 
   // Without this handler a decode failure or exhausted chunk retry was
   // swallowed by createStreamProcessor's catch: the request stayed open, the
@@ -332,6 +363,10 @@ export function Chat({
     (err: unknown) => {
       console.error('Chat stream processing failed', err);
 
+      // A turn the phone's own model failed knows why — the runtime's error text rides on the error. It goes under
+      // the generic wording, which stays the whole message for every other kind of failure.
+      const reason = err instanceof LocalLlmGenerationError ? err.reason : '';
+
       flushStream(
         <div
           key={uuid7()}
@@ -339,6 +374,9 @@ export function Chat({
         >
           The response stream was interrupted, so this reply may be incomplete. Try sending your message
           again.
+          {reason ? (
+            <span className="mt-1 block break-words text-xs opacity-80">Reason: {reason}</span>
+          ) : null}
         </div>,
       );
 
@@ -403,10 +441,12 @@ export function Chat({
     maybeAutoScroll();
   }, [accumulatedMessages]);
 
+  // Not on a touch screen, where focus opens the keyboard over the conversation. Opening a thread sets `messages`, and
+  // a dispatch thread sets them again on every update, so this would bring the keyboard back while the person reads.
   useEffect(() => {
     const input = autoFocusRef.current;
 
-    if (input && autoFocus) {
+    if (input && autoFocus && !isPrimaryPointerTouch()) {
       requestAnimationFrame(() => {
         input.focus();
       });
@@ -419,9 +459,16 @@ export function Chat({
   );
 
   return (
-    <div className="flex flex-col h-full min-h-0 w-full relative">
+    <div className="relative flex h-full min-h-0 min-w-0 w-full flex-col">
       {children == null && (messages?.length ?? 0) === 0 && accumulatedMessages.length === 1 && (
-        <div className="flex flex-col flex-1 min-h-0 p-4 items-center justify-center">{emptyState}</div>
+        // Scrolls on its own, like the starters column inside it: with the keyboard up a phone
+        // has less height than an error state with its button, and an overflowing flex item
+        // used to spill its bottom edge over the composer below. `m-auto` on the inner box
+        // centres it while there is room and gives that up, rather than clipping the top,
+        // when there is not -- `justify-center` on a scroll container would hide the start.
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain p-2 device:p-4">
+          <div className="m-auto flex w-full flex-col items-center">{emptyState}</div>
+        </div>
       )}
 
       {(children != null || (messages?.length ?? 0) > 0 || accumulatedMessages.length > 1) && (
@@ -430,9 +477,9 @@ export function Chat({
           onScroll={onScroll}
           data-list-scroll=""
           className={cn(
-            'flex flex-col gap-4 flex-1 min-h-0 overflow-y-scroll',
-            contentPadding,
-            threadPadding,
+            'mx-2 mt-2 flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-y-auto overscroll-contain rounded-2xl border border-border/50 bg-muted/20 p-3 shadow-inner',
+            '[&>*]:min-w-0',
+            'device:mx-0 device:mt-0 device:gap-4 device:rounded-none device:border-0 device:bg-transparent device:p-4 device:pb-0 device:shadow-none',
           )}
         >
           {children}
@@ -441,9 +488,9 @@ export function Chat({
         </div>
       )}
 
-      {hasStartedReceiving === false && <ChatLoader className={loaderMargin} />}
+      {hasStartedReceiving === false && <ChatLoader className="mt-2 device:mt-4" />}
 
-      <div className={cn('w-full', contentPadding)}>
+      <div className="w-full px-2 pb-2 pt-1 device:p-4">
         <ChatInput
           ref={autoFocusRef}
           loading={loading}
@@ -451,6 +498,7 @@ export function Chat({
           onSubmit={handleSubmit}
           initialDraft={initialDraft}
           {...chatInputProps}
+          refocusWhenEnabled={autoFocus}
         />
       </div>
     </div>

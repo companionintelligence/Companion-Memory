@@ -24,11 +24,13 @@ export class SessionEntity {
   @Column({ type: 'timestamptz', nullable: true })
   rotated_at!: Date | null;
 
-  @Column({ type: 'text' })
-  ip!: string;
+  /** NULL when the sign-in request had no address. */
+  @Column({ type: 'text', nullable: true })
+  ip!: string | null;
 
-  @Column({ type: 'text' })
-  user_agent!: string;
+  /** NULL when the sign-in request sent no User-Agent header. */
+  @Column({ type: 'text', nullable: true })
+  user_agent!: string | null;
 
   @Column({ type: 'timestamptz' })
   expires_at!: Date;

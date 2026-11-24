@@ -50,6 +50,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { ApplianceAdminGuard } from '@ci/common/guards';
 import { BrowserActivityModule } from '@ci/domains/browser-activity';
 import { EventsModule } from '@ci/domains/events';
 import { FilesModule } from '@ci/domains/files';
@@ -113,6 +114,9 @@ import { UnpackStage } from './stages/UnpackStage';
     UserModule,
   ],
   providers: [
+    // Registered so Nest can resolve its DataSource for the admin gate on
+    // GET /import/doctor (see ImportDoctorController).
+    ApplianceAdminGuard,
     DataSourceCatalogService,
     ImportDoctorService,
     ImportInboxService,
@@ -183,14 +187,25 @@ export { ImportStageEvent } from './events';
 export { ImportStageListener } from './listeners/ImportStageListener';
 export {
   configuredImportRoots,
+  importRootsCallerFor,
   resolveWithinImportRoots,
   uploadsRoot,
   userInboxDisplayDir,
   PathOutsideImportRootsError,
 } from './sources/importRoots';
+export type { ImportRootsCaller } from './sources/importRoots';
 // Re-exported for the import tools, which live in the tools domain (that is
 // where the native provider is assembled) and must reach this domain through
 // its barrel rather than into its internals.
+// Re-exported for the etl domain's cloud-drive sync, which asks whether a
+// remote zip is an export before downloading it.
+export {
+  listingHasRecords,
+  recognizeArchiveListing,
+  recognizeListingRoots,
+} from './archive/archiveListingRecognition';
+export { listRemoteZipEntries } from './archive/remoteZipListing';
+export type { ReadRange } from './archive/remoteZipListing';
 export { dataSourcesRecognize } from './datasources/registry';
 export type { DirEntry, DataSourceRecognition } from './datasources/registry';
 export { recognizePathWithinRoots } from './datasources/recognizePath';
@@ -277,7 +292,11 @@ export type {
   UnpushedRunSummary,
 } from './controllers/ImportRunsController';
 export { DataSourceCatalogService } from './services/DataSourceCatalogService';
-export type { DataSourceSummary, SourceCatalogEntry } from './services/DataSourceCatalogService';
+export type {
+  BundleCatalogEntry,
+  DataSourceSummary,
+  SourceCatalogEntry,
+} from './services/DataSourceCatalogService';
 export { ObjectCountService, assembleObjectCounts } from './services/ObjectCountService';
 export type { ObjectCountEntry, RawObjectCountData } from './services/ObjectCountService';
 export { ImportUploadsController } from './controllers/ImportUploadsController';
@@ -328,6 +347,7 @@ export type { StagedPushStatus } from './entities/pushState';
 export {
   makeIsSelf,
   matchOwner,
+  matchParticipantOwner,
   isExactOwnerIdentifier,
   shouldMapContactToSelf,
   decideSelfCollation,

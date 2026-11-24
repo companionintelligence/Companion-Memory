@@ -32,10 +32,10 @@ describe('unsupportedReason', () => {
   });
 
   it('names the graph dimensions the /api/graph endpoints have no notion of', () => {
-    expect(unsupportedDimensions('graph').sort()).toEqual(['bbox', 'direction', 'semantic', 'sort']);
+    expect(unsupportedDimensions('graph').sort()).toEqual(['areas', 'direction', 'semantic', 'sort']);
     expect(unsupportedReason('graph', 'semantic')).toMatch(/semantic/i);
     expect(unsupportedReason('graph', 'direction')).toMatch(/sent or received/i);
-    expect(unsupportedReason('graph', 'bbox')).toMatch(/map/i);
+    expect(unsupportedReason('graph', 'areas')).toMatch(/map/i);
     expect(unsupportedReason('graph', 'sort')).toMatch(/order/i);
   });
 
@@ -55,7 +55,7 @@ describe('unsupportedReason', () => {
       'places',
       'hasLocation',
       'semantic',
-      'bbox',
+      'areas',
     ] as const) {
       expect(unsupportedReason('timeline', dimension)).toBeNull();
     }
@@ -87,15 +87,15 @@ describe('isDimensionActive', () => {
 
   it('is false for a param that is absent or empty', () => {
     expect(isDimensionActive(new URLSearchParams('?semantic='), 'semantic')).toBe(false);
-    expect(isDimensionActive(new URLSearchParams(''), 'bbox')).toBe(false);
+    expect(isDimensionActive(new URLSearchParams(''), 'areas')).toBe(false);
   });
 });
 
 describe('droppedFilters', () => {
-  const params = new URLSearchParams('?semantic=1&bbox=1,2,3,4&tags=space&sortBy=name');
+  const params = new URLSearchParams('?semantic=1&areas=1,2,3,4&tags=space&sortBy=name');
 
   it('lists only the set filters the view cannot apply', () => {
-    expect(droppedFilters('graph', params).sort()).toEqual(['bbox', 'semantic', 'sort']);
+    expect(droppedFilters('graph', params).sort()).toEqual(['areas', 'semantic', 'sort']);
   });
 
   it('is empty for the views that honour everything', () => {

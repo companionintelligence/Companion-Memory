@@ -19,6 +19,7 @@ export interface CreateTaskDto {
   estimatedMinutes?: number | null;
   sourceKind?: string;
   sourceRef?: string | null;
+  l0Class?: string | null;
   metadata?: Record<string, unknown>;
 }
 
@@ -35,6 +36,7 @@ export interface UpdateTaskDto {
   deferUntil?: string | null;
   estimatedMinutes?: number | null;
   actualMinutes?: number;
+  l0Class?: string | null;
   metadata?: Record<string, unknown>;
 }
 
@@ -43,6 +45,8 @@ export interface FindTasksOptions {
   /** Owner-local `YYYY-MM-DD`; matches `scheduled_for` exactly. */
   scheduledFor?: string;
   parentId?: string | null;
+  /** Children of any of these parents; the batched form of `parentId` (see `findChildrenOf`). */
+  parentIds?: string[];
   limit?: number;
 }
 

@@ -118,10 +118,7 @@ export function SourceGuide({ guide, logo, badges, children }: SourceGuideProps)
         <div className="space-y-3">
           <Steps title={guide.altPath.title} steps={guide.altPath.steps} />
           {guide.altPath.url ? (
-            <ExportCta
-              url={guide.altPath.url}
-              label={`Open the ${shortTitle(guide.title)} data request page`}
-            />
+            <ExportCta url={guide.altPath.url} label={`Open the ${shortTitle(guide.title)} export page`} />
           ) : null}
         </div>
       ) : null}
@@ -202,13 +199,18 @@ function Steps({ title, steps }: { title: string; steps: readonly string[] }) {
     <section className="space-y-1">
       <h4 className="text-sm font-medium">{title}</h4>
 
-      <ol className="list-decimal space-y-1 pl-5 text-sm text-muted-foreground">
+      {/* Chat markdown gets its link colour from a `prose` wrapper; this list
+          has none, so a link in a step would read as ordinary grey text.
+          Blue, underlined, darker on hover: the one look everyone reads as
+          "click me". The links open in a new tab, so the step list they are
+          reading stays where it is. */}
+      <ol className="list-decimal space-y-1 pl-5 text-sm text-muted-foreground [&_a]:text-blue-600 [&_a]:underline [&_a]:underline-offset-2 [&_a:hover]:text-blue-800 dark:[&_a]:text-blue-400 dark:[&_a:hover]:text-blue-300">
         {steps.map((step) => (
           // The steps are AUTHORED as inline markdown — nested per-OS bullets
           // joined with newlines, backticked paths — and rendering them as
           // plain text is how `**Windows:**` reaches someone's screen verbatim.
           <li key={step}>
-            <Markdown>{step}</Markdown>
+            <Markdown linkTarget="_blank">{step}</Markdown>
           </li>
         ))}
       </ol>

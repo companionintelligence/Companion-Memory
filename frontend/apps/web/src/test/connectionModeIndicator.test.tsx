@@ -1,6 +1,6 @@
 /**
  * What the connection chip actually tells the user, driven through the real
- * provider and a real (faked) health endpoint.
+ * provider and real (faked) Memory endpoints.
  *
  * `connectionMode.test.ts` covers the resolver in isolation — given a set of
  * probes, the right mode comes out. What is asserted here is the part a user
@@ -24,7 +24,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ConnectionModeIndicator } from '@/components/ConnectionModeIndicator';
 
-import { okResponse, slowServer } from './fetchFakes';
+import { memoryApiResponse, slowMemoryServer } from './fetchFakes';
 
 /** Slower than an on-device sidecar should ever be — the tunnel's real latency. */
 const TUNNEL_LATENCY_MS = 650;
@@ -53,7 +53,7 @@ afterEach(() => {
 
 describe('ConnectionModeIndicator', () => {
   it('reports "Connected" for a remote that answers slower than an on-device server would', async () => {
-    vi.stubGlobal('fetch', slowServer(TUNNEL_LATENCY_MS));
+    vi.stubGlobal('fetch', slowMemoryServer(TUNNEL_LATENCY_MS));
 
     renderIndicator();
 
@@ -66,17 +66,16 @@ describe('ConnectionModeIndicator', () => {
   });
 
   it('renders nothing until the first probe settles, rather than asserting "Not synced yet" on load', async () => {
-    let release: (() => void) | undefined;
+    const releases: (() => void)[] = [];
 
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => {
-        await new Promise<void>((resolve) => {
-          release = resolve;
-        });
-
-        return okResponse();
-      }),
+      vi.fn(
+        (input: RequestInfo) =>
+          new Promise<Response>((resolve) => {
+            releases.push(() => resolve(memoryApiResponse(input)));
+          }),
+      ),
     );
 
     const { container } = renderIndicator();
@@ -86,12 +85,12 @@ describe('ConnectionModeIndicator', () => {
     expect(container).toBeEmptyDOMElement();
     expect(screen.queryByText('Not synced yet')).not.toBeInTheDocument();
 
-    release?.();
+    releases.forEach((release) => release());
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Connected' })).toBeInTheDocument());
   });
 
-  it('explains what the dot means, which is the only on-screen account of it in the connected state', async () => {
+  it('explains what the icon means on a tap, which is the only on-screen account of it', async () => {
     // This file's `unstubAllGlobals` also clears the ResizeObserver stub that
     // setup.ts installs once at import, and Radix's positioning needs it — so
     // the tooltip's own case puts it back.
@@ -106,20 +105,21 @@ describe('ConnectionModeIndicator', () => {
     vi.stubGlobal('ResizeObserver', ResizeObserverStub);
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => okResponse()),
+      vi.fn(async (input: RequestInfo) => memoryApiResponse(input)),
     );
 
     renderIndicator();
 
     const chip = await screen.findByRole('button', { name: 'Connected' });
 
-    // Focus rather than hover: Radix opens on focus without waiting out the
-    // hover delay, and it is the path a keyboard user takes anyway.
-    fireEvent.focus(chip);
+    // A tap, not a hover: on a phone the hover tooltip this used to be opened
+    // on the tap's focus and closed on its click, a flash.
+    fireEvent.click(chip);
 
-    const tooltip = await screen.findByRole('tooltip');
+    const popover = await screen.findByTestId('connection-mode-popover');
 
-    expect(tooltip).toHaveTextContent('Your Companion server is answering');
+    expect(popover).toHaveTextContent('Your Companion server is answering');
+    expect(screen.getByRole('button', { name: 'Check again' })).toBeInTheDocument();
   });
 
   it('reports "Not synced yet" once a genuinely unreachable server has been probed', async () => {
@@ -138,7 +138,7 @@ describe('ConnectionModeIndicator', () => {
   it('re-probes on the interval, so a mode resolved once at mount cannot pin the chip', async () => {
     vi.useFakeTimers();
 
-    const fetchMock = vi.fn(async () => okResponse());
+    const fetchMock = vi.fn(async (input: RequestInfo) => memoryApiResponse(input));
     vi.stubGlobal('fetch', fetchMock);
 
     renderIndicator();
@@ -146,21 +146,21 @@ describe('ConnectionModeIndicator', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
 
     // The appliance going away (or coming back) while the network stays up
     // raises neither `online` nor `offline`; only the timer catches it.
     await act(async () => {
       await vi.advanceTimersByTimeAsync(CONNECTION_REPROBE_INTERVAL_MS);
     });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
   it('recovers from a probe that never settles instead of hiding the chip for the life of the page', async () => {
     vi.useFakeTimers();
 
-    // Answers its headers and then stalls forever — fetchJson clears its abort
-    // timer once headers arrive, so nothing inside the probe can end this.
+    // Answers its headers and then stalls forever, and the body ignores the
+    // probe's abort signal, so nothing inside the probe can end this.
     const fetchMock = vi.fn(
       () =>
         new Promise<Response>((resolve) => {

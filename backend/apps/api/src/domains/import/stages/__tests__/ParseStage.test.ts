@@ -1,4 +1,7 @@
+import path from 'node:path';
+
 import type { DataSourceRecognition } from '../../datasources/registry';
+import { MEDIA_STORE_DIRNAME } from '../../datasources/timeline';
 import { SUMMARY_KEY, type StageSummary } from '../../telemetry/stageSummary';
 import type { StageRunContext } from '../../types';
 import { ParseStage } from '../ParseStage';
@@ -347,5 +350,101 @@ describe('progress during one long source', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+});
+
+describe('the media store handed to importers', () => {
+  it('is a dot directory under the scratch tree, never the scratch root', async () => {
+    // The catch-all `generic` importer walks the scratch tree after the
+    // specialised importers have run. Given the root as its store, an MMS
+    // importer's extracted parts were re-staged as standalone photos — each
+    // with the SENDER's EXIF GPS as a position fix on the user. The walker
+    // skips dot entries, so a dot directory keeps the store out of its reach.
+    const seen: Array<{ mediaStoreDir?: string }> = [];
+
+    dataSourcesRecognize.mockResolvedValue([
+      {
+        data_source: {
+          name: 'sms_backup_restore',
+          title: 'sms_backup_restore',
+          icon: '',
+          description: '',
+          newFileImporter: () => ({
+            recognize: async () => ({ confidence: 1 }),
+            fileImport: async (_ctx: unknown, _entry: unknown, params: { mediaStoreDir?: string }) => {
+              seen.push(params);
+            },
+          }),
+        },
+        recognition: { confidence: 1 },
+      } as unknown as DataSourceRecognition,
+    ]);
+
+    const { stage } = buildStage();
+    const context = contextFor();
+
+    await stage.run(context);
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0].mediaStoreDir).toBe(path.join(context.scratchDir, MEDIA_STORE_DIRNAME));
+    expect(path.basename(seen[0].mediaStoreDir as string).startsWith('.')).toBe(true);
+    expect(seen[0].mediaStoreDir).not.toBe(context.scratchDir);
+  });
+});
+
+describe('the time zone handed to importers', () => {
+  function importerSeeing(seen: Array<{ timeZone?: string }>): DataSourceRecognition {
+    return {
+      data_source: {
+        name: 'whatsapp',
+        title: 'whatsapp',
+        icon: '',
+        description: '',
+        newFileImporter: () => ({
+          recognize: async () => ({ confidence: 1 }),
+          fileImport: async (_ctx: unknown, _entry: unknown, params: { timeZone?: string }) => {
+            seen.push(params);
+          },
+        }),
+      },
+      recognition: { confidence: 1 },
+    } as unknown as DataSourceRecognition;
+  }
+
+  it("is the account's profile zone, so zone-less export times are read where the person lives", async () => {
+    const seen: Array<{ timeZone?: string }> = [];
+
+    dataSourcesRecognize.mockResolvedValue([importerSeeing(seen)]);
+
+    const { stage, dataSource } = buildStage();
+
+    dataSource.query.mockImplementation(async (sql: string) =>
+      sql.includes('FROM ci.users') ? ([{ timezone: 'America/Los_Angeles' }] as never[]) : [],
+    );
+
+    await stage.run(contextFor());
+
+    expect(seen[0].timeZone).toBe('America/Los_Angeles');
+    expect(dataSource.query).toHaveBeenCalledWith(expect.stringContaining('FROM ci.users'), [USER_ID]);
+  });
+
+  it('is left unset when the profile holds no zone this platform knows', async () => {
+    const seen: Array<{ timeZone?: string }> = [];
+
+    dataSourcesRecognize.mockResolvedValue([importerSeeing(seen)]);
+
+    const { stage, dataSource, logger } = buildStage();
+
+    dataSource.query.mockImplementation(async (sql: string) =>
+      sql.includes('FROM ci.users') ? ([{ timezone: 'Not/AZone' }] as never[]) : [],
+    );
+
+    await stage.run(contextFor());
+
+    expect(seen[0].timeZone).toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('time zone'),
+      expect.objectContaining({ timezone: 'Not/AZone' }),
+    );
   });
 });

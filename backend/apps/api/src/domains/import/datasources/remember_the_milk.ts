@@ -54,7 +54,7 @@ import path from 'node:path';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 /**
  * One element of the confirmed top-level `tasks` array. Only `name` and
@@ -276,7 +276,7 @@ export class RememberTheMilkFileImporter implements FileImporter {
         id,
         classification: 'note',
         timestamp: ts,
-        content: { filename: 'task.txt', mediaType: 'text/plain', data: async () => Buffer.from(name) },
+        content: textContent('task.txt', name),
         metadata: {
           Title: name,
           Completed: hasCompletedKey,

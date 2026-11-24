@@ -1,5 +1,6 @@
-import { act, fireEvent, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { useSearchParams } from 'react-router-dom';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { gql } from '@/graphql';
 import { renderWithProviders } from '@/test/renderWithProviders';
@@ -76,6 +77,14 @@ const GET_MERGED_PERSON = gql(`
         communicationCount
         lastInteractionAt
       }
+    }
+  }
+`);
+
+const GET_PEOPLE_COUNT = gql(`
+  query GetPeopleCount($query: String) {
+    people(query: $query, first: 1) {
+      totalCount
     }
   }
 `);
@@ -193,7 +202,7 @@ function candidateEdge(people: unknown[], overrides: Record<string, unknown> = {
           score: 0.85,
         },
       ],
-      people,
+      people: people.map((person) => mergePerson(person as Record<string, unknown>)),
       ...overrides,
     },
   };
@@ -234,6 +243,19 @@ function personNode(overrides: Record<string, unknown> = {}) {
 
 function pageInfo({ hasNextPage = false, endCursor = null as string | null } = {}) {
   return { __typename: 'PageInfo' as const, hasNextPage, endCursor };
+}
+
+function setViewport(mobile: boolean) {
+  window.matchMedia = ((query: string) => ({
+    matches: query.includes('max-width') ? mobile : false,
+    media: query,
+    onchange: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })) as unknown as typeof window.matchMedia;
 }
 
 /**
@@ -323,6 +345,23 @@ function mocks({ candidates = [] as unknown[] } = {}) {
 }
 
 describe('PeoplePage', () => {
+  afterEach(() => setViewport(false));
+
+  // The first page used to load behind a full-screen spinner that covered
+  // the Memory section strip too.
+  it('shows person-shaped placeholder rows while the first page loads', async () => {
+    renderWithProviders(<PeoplePage />, { mocks: mocks() });
+
+    const status = screen.getByRole('status');
+
+    expect(status).toHaveTextContent('Loading people');
+    expect(status.querySelectorAll('[data-slot="skeleton"].rounded-full')).toHaveLength(8);
+    expect(document.querySelector('.animate-spin')).toBeNull();
+
+    expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
   it('routes to the decoded uuid, not the global id, when a person row is opened', async () => {
     navigate.mockClear();
     renderWithProviders(<PeoplePage />, { mocks: mocks() });
@@ -359,7 +398,7 @@ describe('PeoplePage', () => {
       }),
     });
 
-    expect(await screen.findByRole('link', { name: 'A. Lovelace' })).toHaveAttribute(
+    expect(await screen.findByRole('link', { name: /^A\.\s*Lovelace$/ })).toHaveAttribute(
       'href',
       `/people/${DUPLICATE_UUID}`,
     );
@@ -607,7 +646,7 @@ describe('PeoplePage', () => {
     }
   });
 
-  it('offers Merge into one person and Use as the kept person on a merge candidate', async () => {
+  it('offers one clear merge action and names the record that will be kept', async () => {
     renderWithProviders(<PeoplePage />, {
       mocks: mocks({
         candidates: [
@@ -634,10 +673,53 @@ describe('PeoplePage', () => {
     });
 
     expect(await screen.findByRole('button', { name: 'Merge into one person' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Use as the kept person' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Use Ada Lovelace as the kept person' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Keep this one' })).not.toBeInTheDocument();
     expect(screen.queryByText('Merge into one person?')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
+  });
+
+  it('keeps the people list near the top on phones and reveals more merge cards on request', async () => {
+    setViewport(true);
+
+    const liamId = btoa('person:019fd7c0-641c-76dd-8ed7-a5053faff711');
+    const stevenId = btoa('person:019fd7c0-641c-76dd-8ed7-a5053faff712');
+    const graceId = btoa('person:019fd7c0-641c-76dd-8ed7-a5053faff713');
+    const hopperId = btoa('person:019fd7c0-641c-76dd-8ed7-a5053faff714');
+
+    renderWithProviders(<PeoplePage />, {
+      mocks: mocks({
+        candidates: [
+          candidateEdge([
+            mergePerson({ id: liamId, name: 'Liam Broza' }),
+            mergePerson({ id: stevenId, name: 'Steven Berry' }),
+          ]),
+          {
+            ...candidateEdge(
+              [
+                mergePerson({ id: graceId, name: 'Grace Hopper' }),
+                mergePerson({ id: hopperId, name: 'G. Hopper' }),
+              ],
+              { id: 'candidate-2' },
+            ),
+            cursor: 'candidate-2',
+          },
+        ],
+      }),
+    });
+
+    expect(await screen.findByText('Liam Broza')).toBeInTheDocument();
+    expect(screen.getByText('Ada Lovelace')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /^Grace\s*Hopper$/ })).not.toBeInTheDocument();
+
+    const keep = screen.getByRole('button', { name: 'Use Liam Broza as the kept person' });
+    expect(keep).toHaveTextContent('Keep');
+    expect(keep.className).toContain('border');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show 1 more' }));
+
+    expect(await screen.findByRole('link', { name: /^Grace\s*Hopper$/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show only one' })).toHaveAttribute('aria-expanded', 'true');
   });
 
   /**
@@ -785,6 +867,276 @@ describe('PeoplePage', () => {
     }
   });
 
+  describe('the People count after a merge', () => {
+    const ZOE_UUID = '019fd7c0-641c-76dd-8ed7-a5053faff720';
+    const ZOE_GLOBAL_ID = btoa(`person:${ZOE_UUID}`);
+    const ZOE_TWIN_UUID = '019fd7c0-641c-76dd-8ed7-a5053faff721';
+    const ZOE_TWIN_GLOBAL_ID = btoa(`person:${ZOE_TWIN_UUID}`);
+
+    const zoePair = candidateEdge([
+      { id: ZOE_GLOBAL_ID, name: 'Zoe Young' },
+      { id: ZOE_TWIN_GLOBAL_ID, name: 'Zoe Young' },
+    ]);
+
+    const mergeMocks = [
+      {
+        request: {
+          query: MERGE_PEOPLE,
+          variables: { input: { targetId: ZOE_GLOBAL_ID, sourceIds: [ZOE_TWIN_GLOBAL_ID] } },
+        },
+        result: {
+          data: {
+            mergePeople: {
+              __typename: 'MergePeoplePayload' as const,
+              success: true,
+              person: { __typename: 'PersonType' as const, id: ZOE_GLOBAL_ID, name: 'Zoe Young' },
+            },
+          },
+        },
+      },
+      {
+        request: { query: GET_MERGED_PERSON, variables: { id: ZOE_GLOBAL_ID } },
+        result: { data: { person: personNode({ id: ZOE_GLOBAL_ID, name: 'Zoe Young' }) } },
+      },
+      {
+        request: { query: GET_MERGE_CANDIDATES, variables: { first: CANDIDATE_PAGE_SIZE } },
+        result: candidatesResult([]),
+      },
+    ];
+
+    function peoplePage(query: string | null, totalCount: number, nodes: Array<Record<string, unknown>>) {
+      return {
+        request: { query: GET_PEOPLE, variables: { query, first: PAGE_SIZE } },
+        result: {
+          data: {
+            people: {
+              __typename: 'PersonConnection' as const,
+              totalCount,
+              pageInfo: pageInfo({ hasNextPage: true, endCursor: 'page-1-end' }),
+              edges: nodes.map((node) => ({
+                __typename: 'PersonEdge' as const,
+                cursor: String(node.id),
+                node: personNode(node),
+              })),
+            },
+          },
+        },
+      };
+    }
+
+    const headerCount = () =>
+      screen.getByText('People', { selector: '.font-medium' }).nextElementSibling?.textContent;
+
+    /**
+     * People loads 30 rows at a time. Merging a pair near the end of the list
+     * removed no loaded row. The count only went down by the loaded rows it
+     * took out, so the header kept "40" until a reload showed 39.
+     */
+    it('drops by the person the merge removed even when that row is not loaded yet', async () => {
+      renderWithProviders(<PeoplePage />, {
+        mocks: [
+          peoplePage(null, 40, [{ id: PERSON_GLOBAL_ID, name: 'Ada Lovelace' }]),
+          {
+            request: { query: GET_MERGE_CANDIDATES, variables: { first: CANDIDATE_PAGE_SIZE } },
+            result: candidatesResult([zoePair]),
+          },
+          ...mergeMocks,
+          // The recount fails, so the header shows the drop made on the client.
+          {
+            request: { query: GET_PEOPLE_COUNT, variables: { query: null } },
+            error: new Error('Memory server unreachable'),
+          },
+        ],
+      });
+
+      expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument();
+      expect(headerCount()).toBe('40');
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Merge into one person' }));
+
+      await waitFor(() => expect(headerCount()).toBe('39'));
+      await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+      expect(headerCount()).toBe('39');
+      expect(screen.getByText('Ada Lovelace')).toBeInTheDocument();
+    });
+
+    it('takes the server count after the merge queue folded more people than the merge removed', async () => {
+      renderWithProviders(<PeoplePage />, {
+        mocks: [
+          peoplePage(null, 40, [{ id: PERSON_GLOBAL_ID, name: 'Ada Lovelace' }]),
+          {
+            request: { query: GET_MERGE_CANDIDATES, variables: { first: CANDIDATE_PAGE_SIZE } },
+            result: candidatesResult([zoePair]),
+          },
+          ...mergeMocks,
+          {
+            request: { query: GET_PEOPLE_COUNT, variables: { query: null } },
+            result: {
+              data: { people: { __typename: 'PersonConnection' as const, totalCount: 37 } },
+            },
+          },
+        ],
+      });
+
+      expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument();
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Merge into one person' }));
+
+      await waitFor(() => expect(headerCount()).toBe('37'));
+    });
+
+    it("reads a search's count again from the server, since the removed person may not have matched", async () => {
+      renderWithProviders(<PeoplePage />, {
+        route: '/?search=Young',
+        mocks: [
+          peoplePage('Young', 31, [{ id: ZOE_GLOBAL_ID, name: 'Zoe Young' }]),
+          {
+            request: { query: GET_MERGE_CANDIDATES, variables: { first: CANDIDATE_PAGE_SIZE } },
+            result: candidatesResult([zoePair]),
+          },
+          ...mergeMocks,
+          {
+            request: { query: GET_PEOPLE_COUNT, variables: { query: 'Young' } },
+            result: {
+              data: { people: { __typename: 'PersonConnection' as const, totalCount: 30 } },
+            },
+          },
+        ],
+      });
+
+      await waitFor(() => expect(headerCount()).toBe('31'));
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Merge into one person' }));
+
+      await waitFor(() => expect(headerCount()).toBe('30'));
+    });
+
+    /**
+     * Clearing the search reads the full list back from the cache. A merge made
+     * in the search left that list at its old count, so "40" came back.
+     */
+    it('lowers the full list too when the merge was made in a search', async () => {
+      function SearchFor({ term }: { term: string }) {
+        const [, setSearchParams] = useSearchParams();
+
+        return (
+          <button type="button" onClick={() => setSearchParams(term === '' ? {} : { search: term })}>
+            {term === '' ? 'Everyone' : `Search ${term}`}
+          </button>
+        );
+      }
+
+      renderWithProviders(
+        <>
+          <PeoplePage />
+          <SearchFor term="Young" />
+          <SearchFor term="" />
+        </>,
+        {
+          mocks: [
+            peoplePage(null, 40, [{ id: PERSON_GLOBAL_ID, name: 'Ada Lovelace' }]),
+            {
+              request: { query: GET_MERGE_CANDIDATES, variables: { first: CANDIDATE_PAGE_SIZE } },
+              result: candidatesResult([zoePair]),
+            },
+            peoplePage('Young', 31, [{ id: ZOE_GLOBAL_ID, name: 'Zoe Young' }]),
+            ...mergeMocks,
+            {
+              request: { query: GET_PEOPLE_COUNT, variables: { query: 'Young' } },
+              result: {
+                data: { people: { __typename: 'PersonConnection' as const, totalCount: 30 } },
+              },
+            },
+          ],
+        },
+      );
+
+      expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument();
+      expect(headerCount()).toBe('40');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Search Young' }));
+      await waitFor(() => expect(headerCount()).toBe('31'));
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Merge into one person' }));
+      await waitFor(() => expect(headerCount()).toBe('30'));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Everyone' }));
+      await waitFor(() => expect(headerCount()).toBe('39'));
+      expect(screen.getByText('Ada Lovelace')).toBeInTheDocument();
+    });
+
+    it("keeps the latest merge's count when an earlier recount answers last", async () => {
+      const THEO_GLOBAL_ID = btoa('person:019fd7c0-641c-76dd-8ed7-a5053faff722');
+      const THEO_TWIN_GLOBAL_ID = btoa('person:019fd7c0-641c-76dd-8ed7-a5053faff723');
+      const theoPair = candidateEdge(
+        [
+          { id: THEO_GLOBAL_ID, name: 'Theo Park' },
+          { id: THEO_TWIN_GLOBAL_ID, name: 'Theo Park' },
+        ],
+        { id: 'candidate-2' },
+      );
+      const candidates = (edges: unknown[]) => ({
+        request: { query: GET_MERGE_CANDIDATES, variables: { first: CANDIDATE_PAGE_SIZE } },
+        result: candidatesResult(edges),
+      });
+      const recount = (totalCount: number, delay = 0) => ({
+        request: { query: GET_PEOPLE_COUNT, variables: { query: null } },
+        delay,
+        result: { data: { people: { __typename: 'PersonConnection' as const, totalCount } } },
+      });
+
+      renderWithProviders(<PeoplePage />, {
+        mocks: [
+          peoplePage(null, 40, [{ id: PERSON_GLOBAL_ID, name: 'Ada Lovelace' }]),
+          candidates([zoePair, theoPair]),
+          mergeMocks[0],
+          mergeMocks[1],
+          candidates([theoPair]),
+          // The first merge's recount is slow and answers after the second's.
+          recount(39, 300),
+          {
+            request: {
+              query: MERGE_PEOPLE,
+              variables: { input: { targetId: THEO_GLOBAL_ID, sourceIds: [THEO_TWIN_GLOBAL_ID] } },
+            },
+            result: {
+              data: {
+                mergePeople: {
+                  __typename: 'MergePeoplePayload' as const,
+                  success: true,
+                  person: { __typename: 'PersonType' as const, id: THEO_GLOBAL_ID, name: 'Theo Park' },
+                },
+              },
+            },
+          },
+          {
+            request: { query: GET_MERGED_PERSON, variables: { id: THEO_GLOBAL_ID } },
+            result: { data: { person: personNode({ id: THEO_GLOBAL_ID, name: 'Theo Park' }) } },
+          },
+          candidates([]),
+          recount(37),
+        ],
+      });
+
+      expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument();
+      const mergeButtons = await screen.findAllByRole('button', { name: 'Merge into one person' });
+      expect(mergeButtons).toHaveLength(2);
+
+      fireEvent.click(mergeButtons[0]);
+      await waitFor(() => {
+        expect(screen.queryByRole('button', { name: 'Merging' })).not.toBeInTheDocument();
+        expect(screen.getAllByRole('button', { name: 'Merge into one person' })).toHaveLength(1);
+      });
+      expect(headerCount()).toBe('39');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Merge into one person' }));
+      await waitFor(() => expect(headerCount()).toBe('37'));
+
+      await act(() => new Promise((resolve) => setTimeout(resolve, 400)));
+      expect(headerCount()).toBe('37');
+    });
+  });
+
   /**
    * `ci.merge_candidates` was write-only: the pipeline scored pairs nobody could
    * read. The queue has to render the score and the evidence, because that is
@@ -838,8 +1190,88 @@ describe('PeoplePage', () => {
 
     expect(await screen.findByText('Suggested merges')).toBeInTheDocument();
     expect(screen.getByText('85% match')).toBeInTheDocument();
-    expect(screen.getByText(/Same phone digits: 9145826767/)).toBeInTheDocument();
+    expect(screen.getByText(/Same phone digits: 914-582-6767/)).toBeInTheDocument();
     expect(screen.queryByText(/Detected by/)).not.toBeInTheDocument();
+  });
+
+  /**
+   * The report: "Same phone number, but names differ" above two people whose
+   * listed numbers were each marked "only here". The shared number sat in one
+   * record's contact-card list, which `identifiers` cannot show — it reads an
+   * index that holds a number for only one person. The card now names the
+   * number and lists it under both people.
+   */
+  it('names the shared number and shows it under both people, not as two unrelated numbers', async () => {
+    const phone = (value: string, rawValue: string) => ({
+      __typename: 'PersonIdentifierType' as const,
+      kind: 'phone',
+      value,
+      rawValue,
+      label: null,
+      source: 'import',
+    });
+
+    // Not PERSON_GLOBAL_ID: the People list's Ada Lovelace has that id, Apollo keeps one cache entry per
+    // id, and whichever query lands last would decide the card's name and numbers.
+    const adaQuillId = btoa('person:019fd7c0-641c-76dd-8ed7-a5053faff7a1');
+
+    renderWithProviders(<PeoplePage />, {
+      mocks: mocks({
+        candidates: [
+          candidateEdge(
+            [
+              mergePerson({
+                id: adaQuillId,
+                name: 'Ada Quill',
+                identifiers: [phone('2125550118', '(212) 555-0118')],
+              }),
+              mergePerson({
+                id: DUPLICATE_GLOBAL_ID,
+                name: 'Bo Brightwater',
+                identifiers: [phone('2125550110', '212-555-0110')],
+              }),
+            ],
+            {
+              evidence: [
+                {
+                  __typename: 'MergeCandidateEvidenceType' as const,
+                  kind: 'phone',
+                  value: '+12125550118',
+                  score: 0.85,
+                },
+                {
+                  __typename: 'MergeCandidateEvidenceType' as const,
+                  kind: 'phone_check',
+                  value: 'given_name_conflict',
+                  score: 0,
+                },
+              ],
+            },
+          ),
+        ],
+      }),
+    });
+
+    await screen.findByText('Same phone number +1 (212) 555-0118, but names differ');
+
+    // The card, not the People list below it. Queried again on each try: the list re-renders while it
+    // loads, so a card held from before the last render is detached.
+    await waitFor(() => {
+      const heading = screen.getByText('Same phone number +1 (212) 555-0118, but names differ');
+      const card = within(heading.closest('[data-merge-candidate]') as HTMLElement);
+
+      // Ada's own row, and the evidence number under Bo — both "shared".
+      const adaRow = card.getByText('(212) 555-0118').closest('div');
+      expect(adaRow).toHaveTextContent('shared');
+      expect(adaRow).not.toHaveTextContent('only here');
+      expect(card.getByText('+1 (212) 555-0118').closest('div')).toHaveTextContent('shared');
+
+      // Bo's main line is genuinely his alone.
+      expect(card.getByText('212-555-0110').closest('div')).toHaveTextContent('only here');
+      // And the differences line no longer lists the shared number as Ada's alone.
+      expect(card.queryByText(/Ada Quill has \(212\) 555-0118/)).not.toBeInTheDocument();
+      expect(card.getByText(/Bo Brightwater has 212-555-0110/)).toBeInTheDocument();
+    });
   });
 
   it('shows a merging spinner on the merge button until the request finishes', async () => {
@@ -878,6 +1310,9 @@ describe('PeoplePage', () => {
 
   it('groups a bare given name against several fuller people as a picker', async () => {
     const smithId = btoa('person:019fd7c0-641c-76dd-8ed7-a5053faff6fe');
+    // Not PERSON_GLOBAL_ID, which the People list's Ada Lovelace has: sharing her cache entry, the bare
+    // name was renamed to "Ada Lovelace" whenever the list's query landed last, and no picker showed.
+    const bareWilliamId = btoa('person:019fd7c0-641c-76dd-8ed7-a5053faff7a2');
     const clusterEvidence = [
       {
         __typename: 'MergeCandidateEvidenceType' as const,
@@ -892,22 +1327,25 @@ describe('PeoplePage', () => {
         candidates: [
           candidateEdge(
             [
-              mergePerson({ name: 'william' }),
+              mergePerson({ id: bareWilliamId, name: 'william' }),
               mergePerson({ id: DUPLICATE_GLOBAL_ID, name: 'William Broza' }),
             ],
             { evidence: clusterEvidence },
           ),
           candidateEdge(
-            [mergePerson({ name: 'william' }), mergePerson({ id: smithId, name: 'William Smith' })],
+            [
+              mergePerson({ id: bareWilliamId, name: 'william' }),
+              mergePerson({ id: smithId, name: 'William Smith' }),
+            ],
             { id: 'candidate-2', evidence: clusterEvidence },
           ),
         ],
       }),
     });
 
-    expect(await screen.findByText(/might be one of these people/)).toBeInTheDocument();
-    expect(screen.getAllByRole('button', { name: 'This is them' })).toHaveLength(2);
-    expect(screen.getByRole('button', { name: 'None of these' })).toBeInTheDocument();
+    await screen.findByText(/might be one of these people/, undefined, { timeout: 5000 });
+    expect(await screen.findAllByRole('button', { name: 'This is them' })).toHaveLength(2);
+    expect(await screen.findByRole('button', { name: 'None of these' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Merge into one person' })).not.toBeInTheDocument();
   });
 

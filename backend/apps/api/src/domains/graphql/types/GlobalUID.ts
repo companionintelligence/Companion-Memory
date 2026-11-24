@@ -1,3 +1,5 @@
+import { BadRequestException } from '@nestjs/common';
+
 type ResourceType =
   | 'action'
   | 'answer'
@@ -20,6 +22,7 @@ type ResourceType =
   | 'message'
   | 'note'
   | 'observation'
+  | 'peer-invite'
   | 'peer-link'
   | 'person'
   | 'place'
@@ -40,6 +43,14 @@ type ResourceType =
   | 'thread'
   | 'user';
 
+/**
+ * A malformed or mistyped id is the CALLER's mistake, so it is raised as a 400
+ * (`BAD_USER_INPUT` over GraphQL), not a plain `Error`. `formatError` masks every
+ * non-HTTP throwable as "Internal server error" with a correlation id — which is
+ * how `file(id: "<a bare uuid>")` read as a server fault in the iOS QA run
+ * (MEM-06), when the id was simply not a global id. The messages are unchanged:
+ * `mutationGlobalIds.test.ts` pins them, and a bare uuid is still refused.
+ */
 export class GlobalUID {
   static encode(type: ResourceType, id: string): string {
     return Buffer.from(`${type}:${id}`).toString('base64');
@@ -51,13 +62,13 @@ export class GlobalUID {
     try {
       decoded = Buffer.from(globalId, 'base64').toString('utf-8');
     } catch {
-      throw new Error('Invalid global id');
+      throw new BadRequestException('Invalid global id');
     }
 
     const [type, id] = decoded.split(':');
 
     if (!type || !id) {
-      throw new Error('Invalid global id format');
+      throw new BadRequestException('Invalid global id format');
     }
 
     return {
@@ -70,7 +81,7 @@ export class GlobalUID {
     const { type: decodedType, id } = this.decode(globalId);
 
     if (decodedType !== type) {
-      throw new Error('Unexpected global id type');
+      throw new BadRequestException('Unexpected global id type');
     }
 
     return id;

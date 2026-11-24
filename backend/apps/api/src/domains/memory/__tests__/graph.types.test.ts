@@ -1,4 +1,10 @@
-import { EXPLORER_TO_GRAPH_ENTITY_TYPES, graphTypesToExclude } from '../graph.types';
+import {
+  ENTITY_TYPES,
+  EXPLORER_TO_GRAPH_ENTITY_TYPES,
+  GRAPH_ENTITY_TYPES,
+  graphEntityKindOf,
+  graphTypesToExclude,
+} from '../graph.types';
 
 const ALL_EXPLORER_TYPES = Object.keys(EXPLORER_TO_GRAPH_ENTITY_TYPES);
 
@@ -87,5 +93,65 @@ describe('graphTypesToExclude', () => {
 
     // Still never touches connective types.
     expect(excluded.has('Concept')).toBe(false);
+  });
+});
+
+describe('graphEntityKindOf', () => {
+  // The spellings `ci.entities` holds each kind under: a person is a Person or a Contact, a place is what
+  // the geocoder mints (Location) or what memory.remember writes (Place), a concept is a Concept.
+  it.each([
+    ['Person', 'person'],
+    ['Contact', 'person'],
+    ['Location', 'place'],
+    ['Place', 'place'],
+    ['Concept', 'concept'],
+  ])('names a %s node a %s', (entityType, kind) => {
+    expect(graphEntityKindOf(entityType)).toBe(kind);
+  });
+
+  // Every other node has a purge of its own, or none: a detail table behind it, or no service at all.
+  it.each([
+    'Event',
+    'Content',
+    'Communication',
+    'Item',
+    'Object',
+    'Thing',
+    'File',
+    'Product',
+    'Organization',
+  ])('names a %s node nothing', (entityType) => {
+    expect(graphEntityKindOf(entityType)).toBeNull();
+  });
+
+  it('names a type it has never heard of nothing, and nothing nothing', () => {
+    expect(graphEntityKindOf('Restaurant')).toBeNull();
+    expect(graphEntityKindOf('')).toBeNull();
+    expect(graphEntityKindOf(null)).toBeNull();
+    expect(graphEntityKindOf(undefined)).toBeNull();
+  });
+
+  it('matches the spelling exactly, as PersonService and the importers’ upsert key do', () => {
+    // `valid_entity_type` refuses a lower-case first letter, and a PERSON is stored but invisible to PersonService.
+    expect(graphEntityKindOf('person')).toBeNull();
+    expect(graphEntityKindOf('PERSON')).toBeNull();
+  });
+});
+
+describe('GRAPH_ENTITY_TYPES', () => {
+  it('agrees with the explorer vocabulary about which graph types are a person and a place', () => {
+    expect([...GRAPH_ENTITY_TYPES.person].sort()).toEqual([...EXPLORER_TO_GRAPH_ENTITY_TYPES.person].sort());
+    expect([...GRAPH_ENTITY_TYPES.place].sort()).toEqual([...EXPLORER_TO_GRAPH_ENTITY_TYPES.place].sort());
+    expect(GRAPH_ENTITY_TYPES.concept).toEqual(['Concept']);
+  });
+
+  it('holds only types the graph vocabulary lists, and no type under two kinds', () => {
+    const all = [...GRAPH_ENTITY_TYPES.person, ...GRAPH_ENTITY_TYPES.place, ...GRAPH_ENTITY_TYPES.concept];
+
+    expect(new Set(all).size).toBe(all.length);
+
+    for (const type of all) {
+      expect(ENTITY_TYPES as readonly string[]).toContain(type);
+    }
   });
 });

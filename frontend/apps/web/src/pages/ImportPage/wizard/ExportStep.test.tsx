@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CatalogSource } from '../useImportApi';
+import { zipFilesStore } from '../zipStore';
 
 import { ExportStep } from './ExportStep';
 import type { ExportEntry } from './sources';
@@ -82,6 +83,19 @@ vi.mock('../DropZone', () => ({
         onClick={() => onFiles(Array.from({ length: 60 }, (_, i) => new File(['x'], `part-${i}.mp4`)))}
       >
         drop many
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          onFiles([
+            new File(['a'], 'PXL_001.jpg'),
+            new File(['b'], 'spotify.zip'),
+            new File(['c'], 'PXL_002.jpg'),
+            new File(['d'], 'VID_003.mp4'),
+          ])
+        }
+      >
+        drop photos
       </button>
       <button
         type="button"
@@ -271,6 +285,53 @@ describe('ExportStep', () => {
     expect(screen.getByText('chatgpt-export.zip')).toBeInTheDocument();
   });
 
+  it('packs loose files that are not archives into ONE zip and starts one run, archives still one each', async () => {
+    const { onRunsStarted } = renderStep();
+
+    fireEvent.click(screen.getByRole('button', { name: /drop photos/i }));
+
+    await waitFor(() => expect(startRun).toHaveBeenCalledTimes(2));
+
+    // Three photos and a video were picked together: one archive, named for
+    // the card and the count rather than after whichever file came first.
+    const sent = uploadFile.mock.calls.map((call) => (call as unknown as [File])[0].name);
+
+    expect(sent).toEqual(['Spotify (3 files).zip', 'spotify.zip']);
+    // The zip holds the photos and the video, not the archive beside them.
+    expect(vi.mocked(zipFilesStore).mock.calls[0][0].map((file) => file.name)).toEqual([
+      'PXL_001.jpg',
+      'PXL_002.jpg',
+      'VID_003.mp4',
+    ]);
+    expect(startRun).toHaveBeenCalledWith('drop-Spotify (3 files).zip', {
+      label: 'Spotify (3 files).zip',
+      stages: ['unpack', 'parse', 'media'],
+      declaredSources: ['spotify'],
+    });
+    await waitFor(() => expect(onRunsStarted).toHaveBeenLastCalledWith('spotify', ['run-drop-spotify.zip']));
+    expect(screen.getByText('Spotify (3 files).zip')).toBeInTheDocument();
+  });
+
+  it('keeps a slash in the card title out of the packed zip name', async () => {
+    renderStep({
+      entries: [
+        {
+          kind: 'service',
+          key: 'twitter',
+          source: catalogSource({ id: 'twitter', title: 'Twitter / X' }),
+          importers: ['twitter'],
+        },
+      ],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /drop photos/i }));
+
+    await waitFor(() => expect(startRun).toHaveBeenCalledTimes(2));
+
+    // The server's upload parser keeps only what follows the last slash.
+    expect((uploadFile.mock.calls[0] as unknown as [File])[0].name).toBe('Twitter - X (3 files).zip');
+  });
+
   it('lists every dropped file with its upload state, ending fully uploaded', async () => {
     renderStep();
 
@@ -344,8 +405,10 @@ describe('ExportStep', () => {
     fireEvent.click(screen.getByRole('button', { name: 'drop many' }));
     fireEvent.click(await screen.findByRole('button', { name: /upload 60 files anyway/i }));
 
-    await waitFor(() => expect(uploadFile).toHaveBeenCalledTimes(60));
-    await screen.findByText('All 60 files uploaded');
+    // Sixty small videos fit in one packed archive, so they make one run.
+    await screen.findByText('File uploaded');
+    expect(uploadFile).toHaveBeenCalledTimes(1);
+    expect(startRun).toHaveBeenCalledTimes(1);
   });
 
   it('a failed file is named and does not stop the files behind it', async () => {

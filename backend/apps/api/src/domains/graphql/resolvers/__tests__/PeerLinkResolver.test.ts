@@ -1,7 +1,7 @@
-import { NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 
 import type { Person } from '@ci/domains/memory';
-import type { PeerLink } from '@ci/domains/peers';
+import { safetyCodeFor, type PeerLink } from '@ci/domains/peers';
 
 import { GlobalUID } from '../../types/GlobalUID';
 import { PeerLinkType, PeerTrustTierEnum } from '../../types/PeerLinkType';
@@ -51,7 +51,11 @@ function makePerson(overrides: Partial<Person> = {}): Person {
   } as unknown as Person;
 }
 
-function build(overrides: Record<string, unknown> = {}, personOverrides: Record<string, unknown> = {}) {
+function build(
+  overrides: Record<string, unknown> = {},
+  personOverrides: Record<string, unknown> = {},
+  featureEnabled?: boolean,
+) {
   const service = {
     findAll: jest.fn().mockResolvedValue([makeLink()]),
     findById: jest.fn().mockResolvedValue(makeLink()),
@@ -60,19 +64,65 @@ function build(overrides: Record<string, unknown> = {}, personOverrides: Record<
     ...overrides,
   };
 
-  // Unrelated to `PeerLinkService` above — `avatarUrl` reads through
-  // `PersonService.findById` instead. Defaults to "nothing found", same as a
+  // Unrelated to `PeerLinkService` above — `avatarUrl` reads through the
+  // batched `PersonLoader` instead. Defaults to "nothing found", same as a
   // real owner-scoped miss.
-  const personService = {
-    findById: jest.fn().mockResolvedValue(null),
+  const personLoader = {
+    load: jest.fn().mockResolvedValue(null),
     ...personOverrides,
   };
 
-  const resolver = new PeerLinkResolver(service as never, personService as never);
+  const featureService =
+    featureEnabled === undefined
+      ? undefined
+      : { isFeatureEnabled: jest.fn().mockResolvedValue(featureEnabled) };
+
+  const resolver = new PeerLinkResolver(service as never, personLoader as never, featureService as never);
   const context = { userId: OWNER } as never;
 
-  return { resolver, service, personService, context };
+  return { resolver, service, personLoader, featureService, context };
 }
+
+describe('PeerLinkResolver — safety codes', () => {
+  const MINE = 'did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK';
+  const THEIRS = 'did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH';
+
+  function withKeys(link: PeerLink, ownerDidKey: string | null) {
+    const service = { findAll: jest.fn().mockResolvedValue([link]) };
+    const identityService = { existingDidKeyFor: jest.fn().mockResolvedValue(ownerDidKey) };
+    const resolver = new PeerLinkResolver(
+      service as never,
+      { load: jest.fn() } as never,
+      undefined,
+      identityService as never,
+    );
+
+    return { resolver, identityService };
+  }
+
+  it('gives a did:key link the code both sides compute, without exposing either key', async () => {
+    const { resolver } = withKeys(makeLink({ peerIssuer: 'did:key', peerSubject: THEIRS }), MINE);
+
+    const [projected] = await resolver.myPeerLinks({ userId: OWNER } as never);
+
+    expect(projected.safetyCode).toBe(safetyCodeFor(THEIRS, MINE));
+    expect(projected.linkedByKey).toBe(true);
+    expect(JSON.stringify(projected)).not.toContain('did:key');
+  });
+
+  it('gives none to a Portal link, or before the owner has a key', async () => {
+    expect(
+      (await withKeys(makeLink(), MINE).resolver.myPeerLinks({ userId: OWNER } as never))[0].safetyCode,
+    ).toBeNull();
+    expect(
+      (
+        await withKeys(makeLink({ peerIssuer: 'did:key', peerSubject: THEIRS }), null).resolver.myPeerLinks({
+          userId: OWNER,
+        } as never)
+      )[0].safetyCode,
+    ).toBeNull();
+  });
+});
 
 describe('PeerLinkResolver', () => {
   describe('scoping', () => {
@@ -117,6 +167,23 @@ describe('PeerLinkResolver', () => {
 
       expect(service.revoke).not.toHaveBeenCalled();
     });
+
+    it('leaves the live link alone when asked to revoke an ended one under the same handle', async () => {
+      // `revoke` ends the handle's CURRENT link, which for a peer added back
+      // since is the new one. The ended link is already what was asked for.
+      const ended = makeLink({
+        id: 'link-old',
+        status: 'revoked',
+        revokedAt: new Date('2026-10-01T00:00:00Z'),
+      });
+      const { resolver, service, context } = build({ findById: jest.fn().mockResolvedValue(ended) });
+
+      const payload = await resolver.revokePeerLink(context, GlobalUID.encode('peer-link', 'link-old'));
+
+      expect(service.revoke).not.toHaveBeenCalled();
+      expect(payload.success).toBe(true);
+      expect(payload.peerLink?.status).toBe('revoked');
+    });
   });
 
   describe('trust tier', () => {
@@ -143,6 +210,56 @@ describe('PeerLinkResolver', () => {
       });
 
       expect(service.upsert.mock.calls[0][1]).toMatchObject({ trustTier: 'family' });
+    });
+
+    it('asks for a live link, so re-adding a revoked handle makes a link that works', async () => {
+      // `upsert` keeps a stored `revoked` status unless told otherwise, so
+      // re-adding a revoked peer used to answer success with the link still dead.
+      // `active` on an ended link is a new link beside it (PeerLinkService.spec).
+      const { resolver, service, context } = build();
+
+      await resolver.createPeerLink(context, {
+        peerHandle: 'ada',
+        memoryEndpoint: 'https://ada.example/agent',
+      });
+
+      expect(service.upsert.mock.calls[0][1]).toMatchObject({ status: 'active', trustTier: 'stranger' });
+    });
+
+    it('never re-activates on update: editing a revoked link leaves it revoked', async () => {
+      const { resolver, service, context } = build({
+        findById: jest.fn().mockResolvedValue(makeLink({ status: 'revoked', revokedAt: new Date() })),
+      });
+
+      await resolver.updatePeerLink(context, {
+        id: GlobalUID.encode('peer-link', '01a0-link'),
+        displayName: 'Ada L.',
+      });
+
+      expect(service.upsert.mock.calls[0][1].status).toBeUndefined();
+    });
+
+    it('SECURITY: hands upsert the link it read, so the write refuses a link replaced since', async () => {
+      // `upsert` writes the handle's current row. If the peer was added again
+      // after this read, that row is the NEW link, and this edit would copy the
+      // ended link's tier and identity onto it. The id travels with the write,
+      // which refuses then (PeerLinkService.spec covers the refusal).
+      const { resolver, service, context } = build({
+        findById: jest
+          .fn()
+          .mockResolvedValue(
+            makeLink({ id: 'link-old', status: 'revoked', revokedAt: new Date(), trustTier: 'family' }),
+          ),
+        upsert: jest.fn().mockRejectedValue(new ConflictException('added again since')),
+      });
+
+      await expect(
+        resolver.updatePeerLink(context, {
+          id: GlobalUID.encode('peer-link', 'link-old'),
+          displayName: 'Ada',
+        }),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(service.upsert.mock.calls[0][1]).toMatchObject({ expectedLinkId: 'link-old' });
     });
 
     it('preserves the existing tier when an update does not mention it', async () => {
@@ -355,12 +472,10 @@ describe('PeerLinkResolver', () => {
   describe('avatarUrl', () => {
     it("returns the linked Person's avatarUrl when personEntityId is set", async () => {
       const link = PeerLinkType.toType(makeLink({ personEntityId: 'person-ada' }));
-      const { resolver, personService, context } = build(
+      const { resolver, personLoader, context } = build(
         {},
         {
-          findById: jest
-            .fn()
-            .mockResolvedValue(makePerson({ properties: { avatar_url: 'https://x/ada.png' } })),
+          load: jest.fn().mockResolvedValue(makePerson({ properties: { avatar_url: 'https://x/ada.png' } })),
         },
       );
 
@@ -369,24 +484,24 @@ describe('PeerLinkResolver', () => {
       expect(result).toBe('https://x/ada.png');
       // The decoded raw id, not the global id on the wire — and the caller's
       // own scope, not the link's `ownerUserId` — is what goes into the lookup.
-      expect(personService.findById).toHaveBeenCalledWith({ userId: OWNER }, 'person-ada');
+      expect(personLoader.load).toHaveBeenCalledWith({ userId: OWNER }, 'person-ada');
     });
 
-    it('returns null when personEntityId is not set, without querying PersonService', async () => {
+    it('returns null when personEntityId is not set, without asking the loader', async () => {
       const link = PeerLinkType.toType(makeLink({ personEntityId: null }));
-      const { resolver, personService, context } = build();
+      const { resolver, personLoader, context } = build();
 
       const result = await resolver.avatarUrl(context, link);
 
       expect(result).toBeNull();
-      expect(personService.findById).not.toHaveBeenCalled();
+      expect(personLoader.load).not.toHaveBeenCalled();
     });
 
     it('returns null cleanly when the linked Person has no avatar', async () => {
       const link = PeerLinkType.toType(makeLink({ personEntityId: 'person-ada' }));
       const { resolver, context } = build(
         {},
-        { findById: jest.fn().mockResolvedValue(makePerson({ properties: {} })) },
+        { load: jest.fn().mockResolvedValue(makePerson({ properties: {} })) },
       );
 
       const result = await resolver.avatarUrl(context, link);
@@ -395,7 +510,7 @@ describe('PeerLinkResolver', () => {
     });
 
     it('SECURITY: a peer link naming a Person owned by someone else never leaks that avatar', async () => {
-      // Faithful to `PersonService.findById` (`EntityService.findById`), which
+      // Faithful to `PersonService.findById` behind the loader, which
       // is OWNER-SCOPED — the where clause is `{ id, userId }`, not `{ id }`.
       // A mock that ignored the owner would hide the one case this field has
       // to fail closed on: `personEntityId` decoding to a real Person id that
@@ -405,7 +520,7 @@ describe('PeerLinkResolver', () => {
       const { resolver, context } = build(
         {},
         {
-          findById: jest.fn(async (ctx: { userId: string }, id: string) =>
+          load: jest.fn(async (ctx: { userId: string }, id: string) =>
             id === MALLORYS_PERSON_ID && ctx.userId === 'someone-else'
               ? makePerson({ id, properties: { avatar_url: 'https://x/mallory.png' } })
               : null,
@@ -425,7 +540,7 @@ describe('PeerLinkResolver', () => {
       const { resolver, context } = build(
         {},
         {
-          findById: jest.fn().mockResolvedValue(
+          load: jest.fn().mockResolvedValue(
             makePerson({
               properties: {
                 avatar_url: 'https://x/ada.png',
@@ -448,5 +563,79 @@ describe('PeerLinkResolver', () => {
       expect(JSON.stringify(link)).not.toContain('do-not-leak');
       expect(JSON.stringify(result)).not.toContain('do-not-leak');
     });
+  });
+
+  describe('feature-flag gating (G5c)', () => {
+    it('stays dark across all five operations when the `ask` feature flag is disabled', async () => {
+      const { resolver, service, context } = build({}, {}, false);
+      const gid = GlobalUID.encode('peer-link', '01a0-link');
+
+      await expect(resolver.myPeerLinks(context)).resolves.toEqual([]);
+      await expect(resolver.peerLink(context, gid)).resolves.toBeNull();
+      await expect(
+        resolver.createPeerLink(context, {
+          peerHandle: 'ada',
+          memoryEndpoint: 'https://ada.example/agent',
+        }),
+      ).resolves.toEqual({ success: false });
+      await expect(resolver.updatePeerLink(context, { id: gid, displayName: 'Ada' })).resolves.toEqual({
+        success: false,
+      });
+      await expect(resolver.revokePeerLink(context, gid)).resolves.toEqual({ success: false });
+
+      expect(service.findAll).not.toHaveBeenCalled();
+      expect(service.findById).not.toHaveBeenCalled();
+      expect(service.upsert).not.toHaveBeenCalled();
+      expect(service.revoke).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe('PeerLinkResolver — ending a link tells the other side', () => {
+  it('ends the link first, then reports whether their box was told', async () => {
+    const ended = makeLink({ status: 'revoked', revokedAt: new Date() });
+    const service = {
+      findById: jest.fn().mockResolvedValue(makeLink()),
+      revoke: jest.fn().mockResolvedValue(ended),
+    };
+    const noticeService = { announceUnlink: jest.fn().mockResolvedValue(true) };
+    const resolver = new PeerLinkResolver(
+      service as never,
+      { load: jest.fn() } as never,
+      undefined,
+      undefined,
+      noticeService as never,
+    );
+
+    const payload = await resolver.revokePeerLink(
+      { userId: OWNER } as never,
+      GlobalUID.encode('peer-link', 'link-1'),
+    );
+
+    expect(payload).toMatchObject({ success: true, peerNotified: true });
+    expect(noticeService.announceUnlink).toHaveBeenCalledWith({ userId: OWNER }, ended);
+    expect(service.revoke.mock.invocationCallOrder[0]).toBeLessThan(
+      noticeService.announceUnlink.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('still ends the link when telling them fails', async () => {
+    const service = {
+      findById: jest.fn().mockResolvedValue(makeLink()),
+      revoke: jest.fn().mockResolvedValue(makeLink({ status: 'revoked', revokedAt: new Date() })),
+    };
+    const noticeService = { announceUnlink: jest.fn().mockRejectedValue(new Error('down')) };
+    const resolver = new PeerLinkResolver(
+      service as never,
+      { load: jest.fn() } as never,
+      undefined,
+      undefined,
+      noticeService as never,
+    );
+
+    await expect(
+      resolver.revokePeerLink({ userId: OWNER } as never, GlobalUID.encode('peer-link', 'link-1')),
+    ).resolves.toMatchObject({ success: true, peerNotified: false });
+    expect(service.revoke).toHaveBeenCalledTimes(1);
   });
 });

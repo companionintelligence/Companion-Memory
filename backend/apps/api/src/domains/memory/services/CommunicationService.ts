@@ -1,4 +1,4 @@
-import { Injectable, Optional } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
   DataSource,
@@ -15,27 +15,42 @@ import { type ServiceContext, type UserServiceContext, SYSTEM_USER } from '@ci/c
 import { HbpeNotifyService } from '@ci/common/hbpe';
 import { LoggerService } from '@ci/common/logging';
 import {
+  type HourlyActivityOptions,
   INGEST_MERGE_KINDS,
   INGEST_PRODUCER_PREFERENCE,
   INGEST_REFRESH_COLUMNS,
   type BulkInsertResult,
   appendRecordSources,
   bulkInsertIdempotent,
+  keysetOrderOf,
   keysetPaginate,
+  keysetSeek,
   type KeysetPageArgs,
+  type KeysetCountOptions,
   type KeysetPage,
+  type OwnedLink,
+  refuseForeignLinks,
 } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
+import { FileRemovedEvent } from '@ci/domains/files/events';
 import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
 
 import { CommunicationBaseEntity } from '../entities/CommunicationBaseEntity';
 import { CommunicationEntity, Communication, previewFromContent } from '../entities/CommunicationEntity';
-import { CommunicationCreatedEvent, CommunicationUpdatedEvent, CommunicationRemovedEvent } from '../events';
+import {
+  CommunicationCreatedEvent,
+  CommunicationUpdatedEvent,
+  CommunicationRemovedEvent,
+  ContentRemovedEvent,
+} from '../events';
 import { ledgerPlatform } from '../identity';
-import { CreateCommunicationDto, UpdateCommunicationDto } from '../types';
+import { AGENT_TURN_MESSAGE_CATEGORY, CreateCommunicationDto, UpdateCommunicationDto } from '../types';
 
-import { CtiAggregate, type RepositoryProvider } from './CtiAggregate';
+import { type PurgedCommunications, purgeCommunicationAggregates } from './communicationPurge';
+import { CtiAggregate, detailChanged, type RepositoryProvider } from './CtiAggregate';
+import { STORED_OBJECTS, StoredObjectsDeletedError, type StoredObjects } from './filePurge';
 import { GraphDeltaWriter } from './GraphDeltaWriter';
+import { nothingWrapped, type WrappedFilesPurged } from './wrappedFilePurge';
 
 interface Options {
   limit?: number;
@@ -74,6 +89,44 @@ export interface HourlyCommunicationCount {
   count: number;
 }
 
+/** A message's links that name another row, as a create or an update carries them. */
+interface CommunicationLinkFields {
+  device_id?: string | null;
+  from_entity_id?: string | null;
+  to_entity_ids?: readonly string[] | null;
+}
+
+/**
+ * What a message links to, for {@link refuseForeignLinks}: the links an import of the account's
+ * export checks. `device_id`'s key only asks that the device exists, and the sender and
+ * recipient columns have none.
+ */
+function communicationLinks(rows: readonly CommunicationLinkFields[]): OwnedLink[] {
+  return [
+    {
+      field: 'device_id',
+      table: 'ci.devices',
+      key: 'device_id',
+      ownerColumn: 'user_id',
+      ids: rows.map((row) => row.device_id),
+    },
+    {
+      field: 'from_entity_id',
+      table: 'ci.entities',
+      key: 'entity_id',
+      ownerColumn: 'owner_user_id',
+      ids: rows.map((row) => row.from_entity_id),
+    },
+    {
+      field: 'to_entity_ids',
+      table: 'ci.entities',
+      key: 'entity_id',
+      ownerColumn: 'owner_user_id',
+      ids: rows.flatMap((row) => row.to_entity_ids ?? []),
+    },
+  ];
+}
+
 /**
  * Spanning-aggregate service for the communications CTI split: every
  * `ci.communications` row has a `Communication`-discriminated base row in
@@ -93,6 +146,12 @@ export class CommunicationService {
     private readonly dataSource: DataSource,
     private readonly graphDeltaWriter: GraphDeltaWriter,
     @Optional() private readonly hbpeNotify?: HbpeNotifyService,
+    /**
+     * The object store, which {@link purge} deletes the stored files of a message's attachments from.
+     * Optional so that a service built without one still does everything else; a purge that would have to
+     * delete stored bytes and has no store is refused before it changes anything.
+     */
+    @Optional() @Inject(STORED_OBJECTS) private readonly storedObjects?: StoredObjects,
   ) {
     this.logger.setContext(CommunicationService.name);
     this.aggregate = new CtiAggregate({
@@ -210,6 +269,8 @@ export class CommunicationService {
   }
 
   async create(context: UserServiceContext, data: CreateCommunicationDto): Promise<Communication> {
+    await refuseForeignLinks(this.dataSource, context.userId, communicationLinks([data]), 'message');
+
     // Idempotency: re-sending an existing (source_type, source_system,
     // source_id) triple — a flaky-client retry, a webhook re-delivery like
     // MemoryController.turn() — must return the existing row instead of
@@ -330,14 +391,24 @@ export class CommunicationService {
    * (INGEST_REFRESH_COLUMNS.communication) via ON CONFLICT DO UPDATE instead
    * of being a find-or-return no-op.
    *
-   * Bulk ingest does NOT emit per-row CommunicationCreatedEvent: at import
-   * volume the per-row pgboss fan-out (one job per registered queue per row)
-   * was the dominant cost. Search indexing for bulk-loaded rows is deferred to
-   * the post-load batch embed (POST /api/maintenance/search-index/backfill).
-   * Single-row create() still emits, so interactive creates index live.
+   * Bulk ingest does NOT emit per-row CommunicationCreatedEvent by default: at
+   * import volume the per-row pgboss fan-out (one job per registered queue per
+   * row) was the dominant cost. Search indexing for bulk-loaded rows is
+   * deferred to the post-load batch embed (POST /api/maintenance/search-index/
+   * backfill). Single-row create() still emits, so interactive creates index
+   * live — and a caller that is not the importer can ask for the same with
+   * `emitCreated: true`: the ETL connection syncs do, because nothing schedules
+   * that backfill for them (the arrival sweep covers content only), and a page
+   * of synced mail that skipped the event would be absent from search and
+   * never people-linked. Emitted for rows THIS call inserted, never for a
+   * re-sent triple, exactly as create()'s existing-row path emits nothing.
    */
-  async createMany(context: UserServiceContext, data: CreateCommunicationDto[]): Promise<Communication[]> {
-    return (await this.createManyDetailed(context, data)).map(({ entity }) => entity);
+  async createMany(
+    context: UserServiceContext,
+    data: CreateCommunicationDto[],
+    options: { emitCreated?: boolean } = {},
+  ): Promise<Communication[]> {
+    return (await this.createManyDetailed(context, data, options)).map(({ entity }) => entity);
   }
 
   /**
@@ -354,10 +425,15 @@ export class CommunicationService {
   async createManyDetailed(
     context: UserServiceContext,
     data: CreateCommunicationDto[],
+    options: { emitCreated?: boolean } = {},
   ): Promise<Array<BulkInsertResult<Communication>>> {
     if (data.length === 0) {
       return [];
     }
+
+    const emitCreated = options.emitCreated ?? false;
+
+    await refuseForeignLinks(this.dataSource, context.userId, communicationLinks(data), 'message');
 
     const entities = data.map((item) =>
       this.communicationRepository.create({
@@ -482,6 +558,16 @@ export class CommunicationService {
       results.map(({ entity }) => entity.time),
     );
 
+    // See createMany: only for rows this call inserted, so a re-sync is a no-op
+    // to the search index and the people-linker, as it is on the create() path.
+    if (emitCreated) {
+      for (const { entity, inserted } of results) {
+        if (inserted) {
+          await this.eventService.send(CommunicationCreatedEvent, { communicationId: entity.id });
+        }
+      }
+    }
+
     return egress;
   }
 
@@ -500,8 +586,13 @@ export class CommunicationService {
    * DESC, only one page (+1 sentinel) is read from Postgres via the
    * (user_id, time) index instead of loading every row into memory.
    */
-  async findPage(context: UserServiceContext, args: KeysetPageArgs): Promise<KeysetPage<Communication>> {
+  async findPage(
+    context: UserServiceContext,
+    args: KeysetPageArgs,
+    options: KeysetCountOptions = {},
+  ): Promise<KeysetPage<Communication>> {
     const page = await keysetPaginate(this.communicationRepository, args, {
+      ...options,
       alias: 'communication',
       timeProp: 'time',
       userId: context.userId,
@@ -527,6 +618,10 @@ export class CommunicationService {
   }
 
   async findByIds(context: ServiceContext, ids: string[]): Promise<(Communication | null)[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+
     const result = await this.communicationRepository.find({
       where: {
         id: In(ids),
@@ -579,8 +674,12 @@ export class CommunicationService {
       updateData.metadata = data.metadata;
     }
 
-    if (data.subject) {
-      updateData.subject = data.subject;
+    // An empty string is how the message page clears the subject, and one that
+    // is only whitespace counts as empty, as it does in labelFor; the label
+    // then falls back to the preview or content. A missing or null subject
+    // still leaves it alone.
+    if (data.subject != null) {
+      updateData.subject = data.subject.trim() ? data.subject : null;
     }
 
     if (data.content) {
@@ -640,6 +739,31 @@ export class CommunicationService {
       updateData.preview = data.preview;
     }
 
+    // New text and no preview to go with it: the stored one is the clip (or a
+    // connection's snippet) of the OLD text. The message list and the
+    // message's name would keep showing it. Readers derive it from the new
+    // text instead, as they do for an imported message that came without one.
+    // A save or a re-sync that hands back the stored text keeps the preview it
+    // has. A message edited in the app takes this path, as does a Facebook
+    // post whose re-sync changed the text. Decided against the row the
+    // update's own transaction loaded, so it follows what is being replaced.
+    const newContent = data.preview === undefined ? data.content : undefined;
+    const detail = newContent
+      ? (before: CommunicationEntity) => {
+          if (before.preview != null && before.content !== newContent) {
+            updateData.preview = null;
+          }
+
+          return updateData;
+        }
+      : updateData;
+
+    await this.refuseForeignUpdateLinks(context, id, {
+      device_id: updateData.deviceId,
+      from_entity_id: updateData.fromEntityId,
+      to_entity_ids: updateData.toEntityIds,
+    });
+
     // One transaction across both halves of the aggregate; when any source of
     // the derived label (subject/preview/content) or of the description
     // (summary) changed, the base row is re-derived from the updated detail.
@@ -654,7 +778,7 @@ export class CommunicationService {
       id,
       {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        detail: updateData as any, // TypeORM will handle JSON serialization
+        detail: detail as any, // TypeORM will handle JSON serialization
         // The base patch derives from the PATCHED detail values, so the label
         // reflects what is actually being persisted.
         base: labelSourcesTouched
@@ -665,8 +789,22 @@ export class CommunicationService {
           : undefined,
       },
       {
-        withinTx: async ({ manager, after }) => {
+        withinTx: async ({ manager, before, after }) => {
           if (!after) {
+            return;
+          }
+
+          // Only what moved. A connector re-sync and the message page's save
+          // hand back what is stored; recorded as given, each read as a rename.
+          const label = { old: this.labelFor(before), new: this.labelFor(after) };
+          const changedFields = {
+            ...(label.old !== label.new ? { name: label } : {}),
+            ...(detailChanged(before, after, Object.keys(updateData))
+              ? { detail_updated: { new: true } }
+              : {}),
+          };
+
+          if (Object.keys(changedFields).length === 0) {
             return;
           }
 
@@ -674,10 +812,7 @@ export class CommunicationService {
             entityId: id,
             entityType: 'Communication',
             name: this.labelFor(after),
-            changedFields: {
-              name: { new: this.labelFor(after) },
-              ...(Object.keys(updateData).length > 0 ? { detail_updated: { new: true } } : {}),
-            },
+            changedFields,
             ownerUserId: typeof context.userId === 'string' ? context.userId : null,
             changeSource: 'CommunicationService.update',
             changedByUserId: typeof context.userId === 'string' ? context.userId : null,
@@ -699,6 +834,33 @@ export class CommunicationService {
     // The transaction already reloaded the detail row; the Communication
     // egress composes from it alone.
     return CommunicationEntity.toEgressType(updated);
+  }
+
+  /**
+   * {@link refuseForeignLinks} for an update: the links have to belong to the message's owner,
+   * which is also how a system context, with no user of its own, is checked. A message the
+   * caller cannot see is left to the update, which answers null for it, so the refusal never
+   * tells a caller whose rows the ids it sent are.
+   */
+  private async refuseForeignUpdateLinks(
+    context: ServiceContext,
+    id: string,
+    patch: CommunicationLinkFields,
+  ): Promise<void> {
+    const links = communicationLinks([patch]);
+
+    if (links.every(({ ids }) => ids.every((value) => value == null))) {
+      return;
+    }
+
+    const row = await this.communicationRepository.findOne({
+      select: { id: true, userId: true },
+      where: { id, ...(context.userId !== SYSTEM_USER && { userId: context.userId }) },
+    });
+
+    if (row) {
+      await refuseForeignLinks(this.dataSource, row.userId, links, 'message');
+    }
   }
 
   async remove(context: ServiceContext, id: string): Promise<boolean> {
@@ -732,6 +894,85 @@ export class CommunicationService {
     }
 
     return true;
+  }
+
+  /**
+   * Permanently deletes communications, with everything that only exists because
+   * of them. This is `memory.forget`'s `archive_and_delete` for a `Communication`
+   * node, and the other end from {@link remove}: see
+   * {@link purgeCommunicationAggregates} for what goes, and for how it differs
+   * from `remove`.
+   *
+   * What a message's attachments name goes with it: the content rows over its files, and the stored
+   * files themselves when nothing else uses them. A file that something else still uses stays,
+   * reported in `files.kept` ({@link planWrappedFiles}). The objects are deleted from the object store
+   * inside the transaction, while the rows are locked, and before any row is.
+   *
+   * Everything is one transaction. Search is told afterwards, and so is HBPE, which
+   * re-serialises the days the messages fell on. The ids that were not the caller's,
+   * or no longer exist, are simply left out of the result.
+   *
+   * @throws {StoredObjectsDeletedError} if the stored files were deleted and the rows
+   *   then could not be. The messages named in it are still there, still naming files that
+   *   no longer open, and purging them again finishes the job. Anything that failed before
+   *   that left everything as it was.
+   * @returns the ids that were purged, the content rows that went with them, and what was
+   *   done about the files.
+   */
+  async purge(
+    context: UserServiceContext,
+    ids: string[],
+  ): Promise<{ communicationIds: string[]; contentIds: string[]; files: WrappedFilesPurged }> {
+    const requested = Array.from(new Set(ids));
+
+    if (requested.length === 0) {
+      return { communicationIds: [], contentIds: [], files: nothingWrapped() };
+    }
+
+    // Named by the purge itself once the objects are gone, and read here rather than there
+    // because the commit that follows can fail too.
+    let objectsGoneFor: string[] = [];
+    let purged: PurgedCommunications;
+
+    try {
+      purged = await this.communicationRepository.manager.transaction((manager) =>
+        purgeCommunicationAggregates(manager, context.userId, requested, {
+          objects: this.storedObjects,
+          onObjectsDeleted: (named) => {
+            objectsGoneFor = named;
+          },
+        }),
+      );
+    } catch (error) {
+      throw objectsGoneFor.length > 0 ? new StoredObjectsDeletedError(objectsGoneFor, error) : error;
+    }
+
+    // The index rows were deleted in the transaction. This tells anything else
+    // that listens, and is what announces a removal everywhere else in the app.
+    for (const { id } of purged.communications) {
+      await this.eventService.send(CommunicationRemovedEvent, { communicationId: id });
+    }
+
+    for (const contentId of purged.contentIds) {
+      await this.eventService.send(ContentRemovedEvent, { contentId });
+    }
+
+    for (const fileId of purged.files.fileIds) {
+      await this.eventService.send(FileRemovedEvent, { fileId });
+    }
+
+    if (purged.communications.length > 0) {
+      await this.hbpeNotify?.notifyCommunications(
+        context.userId,
+        purged.communications.map((communication) => communication.time),
+      );
+    }
+
+    return {
+      communicationIds: purged.communications.map((communication) => communication.id),
+      contentIds: purged.contentIds,
+      files: purged.files,
+    };
   }
 
   /**
@@ -801,26 +1042,41 @@ export class CommunicationService {
       query = query.limit(options.limit);
     }
 
+    // The direction `order` asks for (its first key, as for the primary sort); the tiebreak and the
+    // keyset below run the same way, so a page is always the rows PAST the cursor in that direction.
+    const direction = keysetOrderOf(options.order);
+
     if (options.order) {
-      for (const [field, direction] of Object.entries(options.order)) {
-        query = query.orderBy(`communications.${field}`, direction as 'ASC' | 'DESC');
+      for (const [field, fieldDirection] of Object.entries(options.order)) {
+        query = query.orderBy(`communications.${field}`, fieldDirection as 'ASC' | 'DESC');
       }
 
       // Deterministic tiebreak so same-timestamp rows page consistently.
-      query = query.addOrderBy('communications.id', 'DESC');
+      query = query.addOrderBy('communications.id', direction);
     }
 
-    // Composite keyset: page strictly past (afterTime, afterId) in (time DESC, id DESC).
+    // Composite keyset: page strictly past (afterTime, afterId) in (time, id), in `order` — see keysetSeek.
     if (options.afterTime && options.afterId) {
       query = query.andWhere(
-        '(communications.time < :afterTime OR (communications.time = :afterTime AND communications.id < :afterId))',
-        { afterTime: options.afterTime, afterId: options.afterId },
+        ...keysetSeek(
+          'communications.time',
+          'communications.id',
+          direction,
+          options.afterTime,
+          options.afterId,
+        ),
       );
     }
 
     if (options.connectors && options.connectors.length > 0) {
       query = query.andWhere('communications.source_system IN (:...connectors)', {
         connectors: options.connectors,
+      });
+    } else {
+      // An agent's conversation turns stay out of the explorer until its How filter names that
+      // agent; the IN above already admits exactly the named agents' turns.
+      query = query.andWhere('communications.category IS DISTINCT FROM :agentTurn', {
+        agentTurn: AGENT_TURN_MESSAGE_CATEGORY,
       });
     }
 
@@ -865,6 +1121,12 @@ export class CommunicationService {
     if (options.connectors && options.connectors.length > 0) {
       query = query.andWhere('communications.source_system IN (:...connectors)', {
         connectors: options.connectors,
+      });
+    } else {
+      // An agent's conversation turns stay out of the explorer until its How filter names that
+      // agent; the IN above already admits exactly the named agents' turns.
+      query = query.andWhere('communications.category IS DISTINCT FROM :agentTurn', {
+        agentTurn: AGENT_TURN_MESSAGE_CATEGORY,
       });
     }
 
@@ -929,13 +1191,24 @@ export class CommunicationService {
    * Hourly UTC activity buckets for the activity rollup: communications
    * counted by their event `time`, per user.
    */
-  async aggregateHourlyActivity(): Promise<HourlyCommunicationCount[]> {
+  async aggregateHourlyActivity(options: HourlyActivityOptions = {}): Promise<HourlyCommunicationCount[]> {
+    // Always in full: `ci.communications` carries no row timestamp, only the
+    // message's own `time`, and a filter on that would miss an import of old
+    // mail until the next full pass. The option is accepted for the contract's
+    // sake and changes nothing here.
+    void options;
+
     const rows: Array<{ user_id: string; bucket_start: Date; count: number }> =
       await this.communicationRepository
         .createQueryBuilder('communication')
         .select('communication.userId', 'user_id')
         .addSelect(`date_trunc('hour', communication.time, 'UTC')`, 'bucket_start')
         .addSelect('COUNT(*)::int', 'count')
+        // The heatmap's default (no How) leaves agents' conversation turns out, as the explorer
+        // does; a How that names an agent counts its turns from the table, not this rollup.
+        .where('communication.category IS DISTINCT FROM :agentTurn', {
+          agentTurn: AGENT_TURN_MESSAGE_CATEGORY,
+        })
         .groupBy('user_id')
         .addGroupBy('bucket_start')
         .getRawMany();

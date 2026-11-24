@@ -188,6 +188,56 @@ describeIfZip('systemExtract', () => {
     fs.rmSync(work, { recursive: true, force: true });
   });
 
+  it('never writes a repaired name through a link the archive carried', async () => {
+    // The real extractor, not a staged tree. Debian `unzip` restores the UNIX
+    // symlink entry `Takeout` as a real link, after skipping the MS-DOS entry
+    // `Takeout/José.vcf` that would have gone under it (the placeholder for
+    // the deferred link is in the way). The plain entry keeps that partial
+    // extraction alive, and the repair then writes the skipped entry at its
+    // true name. Without the link gone first that write lands in `outside`,
+    // replacing the file there because its size differs.
+    const work = scratch();
+    const outside = path.join(work, 'outside');
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, 'José.vcf'), 'original');
+    const dest = path.join(work, 'dest');
+    fs.mkdirSync(dest, { recursive: true });
+
+    const archive = path.join(work, 'linked.zip');
+    fs.writeFileSync(
+      archive,
+      buildZip([
+        { name: 'readme.txt', contents: 'plain' },
+        { name: 'Takeout', symlinkTo: outside },
+        { name: 'Takeout/José.vcf', contents: 'from the archive' },
+      ]),
+    );
+
+    const result = await systemExtract(archive, dest, { exclusiveDest: true });
+
+    expect(result.ok).toBe(true);
+    expect(fs.readFileSync(path.join(outside, 'José.vcf'), 'utf8')).toBe('original');
+    // Whatever the extractor did, no link is left in the extraction dir.
+    expect(fs.lstatSync(path.join(dest, 'Takeout')).isSymbolicLink()).toBe(false);
+
+    if (process.platform === 'darwin') {
+      // macOS never reaches the Debian state above. Info-ZIP 6.00 exits 2 on
+      // `Takeout exists but is not directory` and writes the link as a plain
+      // file, and the `ditto` fallback does the same with the link's target
+      // text, so there is no link for the repair to remove and no directory
+      // for the entry to land under. Nothing escapes; the entry is reported
+      // as unrepaired instead.
+      expect(fs.lstatSync(path.join(dest, 'Takeout')).isFile()).toBe(true);
+      expect(result.nameRepair?.unrepaired).toBe(1);
+    } else {
+      // The entry still lands, inside the extraction dir, under a real directory.
+      expect(fs.lstatSync(path.join(dest, 'Takeout')).isDirectory()).toBe(true);
+      expect(fs.readFileSync(path.join(dest, 'Takeout', 'José.vcf'), 'utf8')).toBe('from the archive');
+    }
+
+    fs.rmSync(work, { recursive: true, force: true });
+  });
+
   it('keeps a partly-extracted tree rather than discarding the whole archive', async () => {
     // Measured on a real 3.3GB Google Takeout: `unzip` exited 50 and `ditto`
     // exited 1 on two entries no extractor will take — a name used as both a

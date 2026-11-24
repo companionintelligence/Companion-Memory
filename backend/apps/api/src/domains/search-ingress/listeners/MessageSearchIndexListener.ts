@@ -71,17 +71,10 @@ export class MessageSearchIndexListener {
       return;
     }
 
-    const embedding = await this.embeddingGenerationService.generateEmbedding(content);
-
-    await this.embeddingService.upsert(
-      {
-        userId: payload.userId,
-      },
-      {
-        entityType: 'message',
-        entityId: payload.memoryId,
-        embedding,
-      },
+    await this.embeddingService.upsertDocument(
+      { userId: payload.userId },
+      { entityType: 'message', entityId: payload.memoryId, text: content },
+      (text) => this.embeddingGenerationService.generateEmbedding(text),
     );
 
     this.logger.log('Indexed agent-memory fragment for recall message channel', {

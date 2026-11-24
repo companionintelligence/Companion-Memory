@@ -1,5 +1,6 @@
 import { UseGuards } from '@nestjs/common';
-import { ID, Args, Mutation, Parent, Query, Resolver, ResolveField } from '@nestjs/graphql';
+import { ID, Args, Info, Mutation, Parent, Query, Resolver, ResolveField } from '@nestjs/graphql';
+import type { GraphQLResolveInfo } from 'graphql';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
@@ -8,6 +9,7 @@ import { NoteService } from '@ci/domains/notes';
 
 import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { TagLoader } from '../loaders/TagLoader';
+import { selectsField } from '../selectsField';
 import { CreateNoteInput } from '../types/CreateNoteInput';
 import { CreateNotePayload } from '../types/CreateNotePayload';
 import { DeleteByIdInput } from '../types/DeleteByIdInput';
@@ -17,10 +19,11 @@ import { GlobalUID } from '../types/GlobalUID';
 import { NoteConnection } from '../types/NoteConnection';
 import { NoteEdge } from '../types/NoteEdge';
 import { NoteType } from '../types/NoteType';
+import type { OptionalTotal } from '../types/OptionalTotal';
 import { PaginationArgs } from '../types/PaginationArgs';
 import { UpdateNoteInput } from '../types/UpdateNoteInput';
 import { UpdateNotePayload } from '../types/UpdateNotePayload';
-import { Paginator } from '../utils/Paginator';
+import { keysetArgs, keysetPageInfo } from '../utils/keysetConnection';
 
 @UseGuards(JwtOrApiKeyAuthGuard)
 @Resolver(() => NoteType)
@@ -40,6 +43,8 @@ export class NoteResolver {
     const serviceContext = toServiceContext(context);
 
     const entity = await this.noteService.create(serviceContext, {
+      // A client-minted id (an offline replica's), or none: the service mints one.
+      id: input.id ? GlobalUID.parse('note', input.id) : undefined,
       title: input.title,
       content: input.content,
     });
@@ -88,6 +93,23 @@ export class NoteResolver {
 
     const id = GlobalUID.parse('note', input.id);
 
+    if (input.expectedUpdatedAt) {
+      const outcome = await this.noteService.updateIfUnchanged(
+        serviceContext,
+        id,
+        { title: input.title, content: input.content },
+        input.expectedUpdatedAt,
+      );
+
+      if (outcome == null) {
+        return { success: false };
+      }
+
+      // Not written: the note changed since the client saw it. The note as stored goes
+      // back with `success: false`, so the client can tell whether the change was its own.
+      return { success: outcome.written, note: NoteType.toType(outcome.note) };
+    }
+
     const entity = await this.noteService.update(serviceContext, id, {
       title: input.title,
       content: input.content,
@@ -134,17 +156,16 @@ export class NoteResolver {
   async notes(
     @Context() context: RequestContext,
     @Args() pagination: PaginationArgs,
-  ): Promise<NoteConnection> {
+    @Info() info?: GraphQLResolveInfo,
+  ): Promise<OptionalTotal<NoteConnection>> {
     const serviceContext = toServiceContext(context);
 
-    const entities = await this.noteService.findAll(serviceContext);
-
-    const { slice, pageInfo, totalCount } = Paginator.paginate(entities, {
-      ...pagination,
-      getId: (entity) => GlobalUID.encode('note', entity.id),
+    // One page from SQL, last edited first; the count only when it is asked for.
+    const page = await this.noteService.findPage(serviceContext, keysetArgs(pagination), {
+      countTotal: selectsField(info, 'totalCount'),
     });
 
-    const edges: NoteEdge[] = slice.map((entity) => {
+    const edges: NoteEdge[] = page.entities.map((entity) => {
       const node = NoteType.toType(entity);
 
       return {
@@ -155,8 +176,8 @@ export class NoteResolver {
 
     return {
       edges,
-      pageInfo,
-      totalCount,
+      pageInfo: keysetPageInfo(edges, page),
+      ...(page.totalCount != null ? { totalCount: page.totalCount } : {}),
     };
   }
 

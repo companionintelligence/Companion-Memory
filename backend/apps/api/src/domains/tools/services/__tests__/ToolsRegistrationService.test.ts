@@ -18,7 +18,10 @@ describe('ToolsRegistrationService', () => {
     const registerProvider = jest.fn().mockResolvedValue(undefined);
     const registry = {
       registerProvider,
-      getAvailableTools: () => [schema('memory.recall', 'memory'), schema('people.find', 'people')],
+      getOutboundCatalogToolsForEveryOwner: () => [
+        schema('memory.recall', 'memory'),
+        schema('people.find', 'people'),
+      ],
     } as any;
 
     const service = new ToolsRegistrationService(registry, provider, makeLogger());
@@ -27,11 +30,11 @@ describe('ToolsRegistrationService', () => {
     expect(registerProvider).toHaveBeenCalledWith(provider);
   });
 
-  it('passes domain validation for the full planning domain (find/create/complete/update/schedule/plannedBlocks)', async () => {
+  it('passes domain validation for the full planning domain (find/create/complete/update/schedule/plannedBlocks/acceptProposed/declineProposed)', async () => {
     const registerProvider = jest.fn().mockResolvedValue(undefined);
     const registry = {
       registerProvider,
-      getAvailableTools: () => [
+      getOutboundCatalogToolsForEveryOwner: () => [
         schema('planning.findTasks', 'planning'),
         schema('planning.createTask', 'planning', {
           privacy: { access: 'write', sensitivity: 'personal', destructive: false, external: false },
@@ -47,6 +50,13 @@ describe('ToolsRegistrationService', () => {
           privacy: { access: 'write', sensitivity: 'personal', destructive: false, external: false },
         }),
         schema('planning.plannedBlocks', 'planning'),
+        schema('planning.acceptProposedTask', 'planning', {
+          privacy: { access: 'write', sensitivity: 'personal', destructive: false, external: false },
+        }),
+        schema('planning.declineProposedTask', 'planning', {
+          privacy: { access: 'write', sensitivity: 'personal', destructive: true, external: false },
+          localCapable: false,
+        }),
       ],
     } as any;
 
@@ -58,7 +68,7 @@ describe('ToolsRegistrationService', () => {
   it('fails fast when a registered tool declares an unknown domain', async () => {
     const registry = {
       registerProvider: jest.fn().mockResolvedValue(undefined),
-      getAvailableTools: () => [schema('weird.thing', 'weird')],
+      getOutboundCatalogToolsForEveryOwner: () => [schema('weird.thing', 'weird')],
     } as any;
 
     const service = new ToolsRegistrationService(registry, provider, makeLogger());
@@ -75,7 +85,7 @@ describe('ToolsRegistrationService', () => {
   it('fails fast when a tool claims to be localCapable and external at once', async () => {
     const registry = {
       registerProvider: jest.fn().mockResolvedValue(undefined),
-      getAvailableTools: () => [
+      getOutboundCatalogToolsForEveryOwner: () => [
         schema('media.streamingAvailability', 'media', {
           privacy: { ...READ, external: true },
           localCapable: true,
@@ -91,7 +101,7 @@ describe('ToolsRegistrationService', () => {
   it('accepts an external tool that correctly declares itself not local-capable', async () => {
     const registry = {
       registerProvider: jest.fn().mockResolvedValue(undefined),
-      getAvailableTools: () => [
+      getOutboundCatalogToolsForEveryOwner: () => [
         schema('media.streamingAvailability', 'media', {
           privacy: { ...READ, external: true },
           localCapable: false,
@@ -107,7 +117,7 @@ describe('ToolsRegistrationService', () => {
   it('propagates a provider-registration failure', async () => {
     const registry = {
       registerProvider: jest.fn().mockRejectedValue(new Error('boom')),
-      getAvailableTools: () => [],
+      getOutboundCatalogToolsForEveryOwner: () => [],
     } as any;
 
     const service = new ToolsRegistrationService(registry, provider, makeLogger());

@@ -41,6 +41,10 @@
 
 import type { Connect, Plugin } from 'vite';
 
+// The protected-schedule list the controls endpoint reads, imported for the same
+// reason as the taxonomy below: so a locked row previews the way an appliance
+// serves it.
+import { protectedCronReason } from '../../../../../../backend/apps/api/src/domains/events/jobControlPolicy';
 // The backend's taxonomy, imported rather than copied. It has no imports of its
 // own — see the head of that file — so this crosses the workspace boundary
 // without dragging Nest in. This is dev-server code; nothing here is bundled
@@ -421,8 +425,11 @@ function controls(now: number): Record<string, unknown> {
       // The preview is a single-process appliance, so nothing runs elsewhere and
       // the card's "N run in the worker process" note stays silent.
       servedHere: true,
-      locked: false,
-      lockedReason: null,
+      // The server's own protected list: the schedules that keep the appliance
+      // able to say it is broken, or that owe the person something, refuse to be
+      // switched off — and their rows have to say why.
+      locked: protectedCronReason(cron.name) != null,
+      lockedReason: protectedCronReason(cron.name),
       skippedCount: 0,
       lastSkippedAt: null,
     })),

@@ -10,7 +10,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { extractMediaMetadata } from './_exif';
+import { extractMediaMetadata } from '@ci/common/media/exif';
+
+import { JUNK_NAMES } from './fsWalk';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { isPathWithinOrEqual, registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
@@ -52,9 +54,9 @@ class GenericFileImporter implements FileImporter {
     }
   }
 
-  private async processFile(fpath: string, params: ImportParams) {
+  async processFile(fpath: string, params: ImportParams) {
     const base = path.basename(fpath);
-    if (base.startsWith('.')) {
+    if (base.startsWith('.') || JUNK_NAMES.has(base)) {
       return;
     }
 
@@ -100,11 +102,21 @@ class GenericFileImporter implements FileImporter {
       item.metadata['Timestamp Source'] = 'None';
       item.metadata['File Modified'] = fs.statSync(fpath).mtime.toISOString();
     } else {
-      item.metadata['Timestamp Source'] = item.content.mediaType?.startsWith('video/') ? 'Container' : 'EXIF';
+      item.metadata['Timestamp Source'] = item.content.mediaType?.startsWith('image/') ? 'EXIF' : 'Container';
     }
 
     params.pipeline.push({ item });
   }
+}
+
+/**
+ * Stage one file the way the folder walk does: EXIF or container dates when
+ * the file has them, undated otherwise. For an importer that claims a whole
+ * folder and still wants the files it does not read itself to come in, as
+ * they did when the folder walk reached them (Telegram's profile pictures).
+ */
+export async function stageLooseFile(fpath: string, params: ImportParams): Promise<void> {
+  await new GenericFileImporter().processFile(fpath, params);
 }
 
 /**
@@ -125,7 +137,7 @@ async function* walkDir(root: string, excludePaths: readonly string[] = []): Asy
   const entries = await fs.promises.readdir(root, { withFileTypes: true });
   for (const e of entries) {
     const full = path.join(root, e.name);
-    if (isClaimed(full, excludePaths)) {
+    if (isClaimed(full, excludePaths) || JUNK_NAMES.has(e.name)) {
       continue;
     }
 

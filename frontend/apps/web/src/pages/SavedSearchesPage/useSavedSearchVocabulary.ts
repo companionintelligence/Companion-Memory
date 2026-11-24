@@ -1,4 +1,4 @@
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 
 import { EVENT_TYPES_QUERY } from '@/components/SearchBox/ActivityFilter';
 import { SOURCE_SYSTEMS_QUERY } from '@/components/SearchBox/ConnectorFilter';

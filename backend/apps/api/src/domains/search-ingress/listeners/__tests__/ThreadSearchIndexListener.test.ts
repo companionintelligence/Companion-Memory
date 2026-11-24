@@ -11,6 +11,13 @@ function makeListener(
 ) {
   const embeddingGenerationService = { generateEmbedding: jest.fn().mockResolvedValue([0.1, 0.2]) };
   const embeddingService = {
+    upsertDocument: jest.fn(
+      async (_ctx: unknown, data: { text: string }, generate: (text: string) => Promise<number[]>) => {
+        await generate(data.text);
+
+        return 'embedded';
+      },
+    ),
     upsert: jest.fn().mockResolvedValue(null),
     remove: jest.fn().mockResolvedValue(true),
   };
@@ -75,7 +82,7 @@ describe('ThreadSearchIndexListener.indexThread / updateThread', () => {
 
     await listener.indexThread({ threadId: 'ghost' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalled();
   });
 
@@ -84,7 +91,7 @@ describe('ThreadSearchIndexListener.indexThread / updateThread', () => {
 
     await listener.indexThread({ threadId: 'thread-1' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
   });
 
   it('embeds and vectorizes the thread name/description PLUS every message in it', async () => {
@@ -100,9 +107,10 @@ describe('ThreadSearchIndexListener.indexThread / updateThread', () => {
     expect(embeddingGenerationService.generateEmbedding).toHaveBeenCalledWith(
       'Trip planning When are we leaving? Friday morning works for me.',
     );
-    expect(embeddingService.upsert).toHaveBeenCalledWith(
+    expect(embeddingService.upsertDocument).toHaveBeenCalledWith(
       { userId: 'user-1' },
-      { entityType: 'thread', entityId: 'thread-1', embedding: [0.1, 0.2] },
+      { entityType: 'thread', entityId: 'thread-1', text: expect.any(String) },
+      expect.any(Function),
     );
     expect(vectorService.upsert).toHaveBeenCalledWith(
       { userId: 'user-1' },
@@ -126,7 +134,7 @@ describe('ThreadSearchIndexListener.indexThread / updateThread', () => {
 
     await listener.indexThread({ threadId: 'thread-2' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(vectorService.upsert).not.toHaveBeenCalled();
   });
 });

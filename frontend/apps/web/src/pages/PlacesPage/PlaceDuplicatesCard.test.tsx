@@ -1,5 +1,5 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '@/test/renderWithProviders';
 
@@ -13,6 +13,8 @@ import {
 
 const PLACE_A = btoa('place:01a01c70-a291-720e-bd3e-516757a8c58d');
 const PLACE_B = btoa('place:01a01c70-a363-726d-862f-57f87330ac60');
+const PLACE_C = btoa('place:01a01c70-a4f2-7b3a-9c1e-2d6f0b8e4a11');
+const PLACE_D = btoa('place:01a01c70-a5c8-7e44-8a07-6b1d3f9c2e52');
 
 function place(id: string, lng: number) {
   return {
@@ -22,6 +24,23 @@ function place(id: string, lng: number) {
     description: null,
     placeKind: 'address',
     properties: { address: null, lat: 33.695, lng, source: 'reverse_geocode' },
+    // The server folds numeric properties.lat/lng into the typed pair.
+    latitude: 33.695,
+    longitude: lng,
+  };
+}
+
+/** A place made by hand with New place: its point is only in the typed coordinates. */
+function handMadePlace(id: string, latitude: number) {
+  return {
+    __typename: 'PlaceType' as const,
+    id,
+    name: 'Corner Cafe',
+    description: null,
+    placeKind: null,
+    properties: {},
+    latitude,
+    longitude: -122.4194,
   };
 }
 
@@ -50,7 +69,22 @@ const GROUP = {
   places: [place(PLACE_A, -117.748), place(PLACE_B, -117.749)],
 };
 
+function setViewport(mobile: boolean) {
+  window.matchMedia = ((query: string) => ({
+    matches: query.includes('max-width') ? mobile : false,
+    media: query,
+    onchange: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })) as unknown as typeof window.matchMedia;
+}
+
 describe('PlaceDuplicatesCard', () => {
+  afterEach(() => setViewport(false));
+
   it('renders nothing when there is nothing to review', async () => {
     renderWithProviders(<PlaceDuplicatesCard onMerged={vi.fn(async () => undefined)} />, {
       mocks: [duplicatesMock([])],
@@ -69,6 +103,88 @@ describe('PlaceDuplicatesCard', () => {
     // Each member shows its coordinates so an identically named pair can be told apart.
     expect(screen.getByText(/33\.69500, -117\.74800/)).toBeInTheDocument();
     expect(screen.getByText(/33\.69500, -117\.74900/)).toBeInTheDocument();
+  });
+
+  it('shows the coordinates of places made by hand, which keep nothing in properties', async () => {
+    const handMade = {
+      ...GROUP,
+      value: 'Corner Cafe',
+      places: [handMadePlace(PLACE_A, 37.7749), handMadePlace(PLACE_B, 37.776)],
+    };
+
+    renderWithProviders(<PlaceDuplicatesCard onMerged={vi.fn(async () => undefined)} />, {
+      mocks: [duplicatesMock([handMade])],
+    });
+
+    expect(await screen.findByText('37.77490, -122.41940')).toBeInTheDocument();
+    expect(screen.getByText('37.77600, -122.41940')).toBeInTheDocument();
+    expect(screen.queryAllByText('—')).toHaveLength(0);
+  });
+
+  it('keeps two same-name groups apart when the second arrives with Load more', async () => {
+    const firstPage = duplicatesMock([GROUP]);
+    firstPage.result.data.placeDuplicates.hasMore = true;
+    const otherTown = {
+      ...GROUP,
+      places: [
+        { ...place(PLACE_C, -118.2437), name: 'Other town A' },
+        { ...place(PLACE_D, -118.2438), name: 'Other town B' },
+      ],
+    };
+
+    renderWithProviders(<PlaceDuplicatesCard onMerged={vi.fn(async () => undefined)} />, {
+      mocks: [
+        firstPage,
+        {
+          request: {
+            query: GET_PLACE_DUPLICATES,
+            variables: { limit: PLACE_DUPLICATE_PAGE_SIZE, offset: PLACE_DUPLICATE_PAGE_SIZE },
+          },
+          result: {
+            data: {
+              placeDuplicates: {
+                __typename: 'PlaceDuplicatesPayload' as const,
+                totalCount: 2,
+                hasMore: false,
+                groups: [otherTown],
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Load more duplicate groups' }));
+
+    expect(await screen.findByText('Other town A')).toBeInTheDocument();
+    // Both share the value the old key was built from; both must stay listed.
+    expect(screen.getAllByText(/Same name, within 150 m/)).toHaveLength(2);
+  });
+
+  it('shows one clearly actionable group at a time on mobile', async () => {
+    setViewport(true);
+    const secondGroup = {
+      ...GROUP,
+      value: 'Second duplicate group',
+      places: [
+        { ...place(PLACE_C, -117.75), name: 'Second A' },
+        { ...place(PLACE_D, -117.751), name: 'Second B' },
+      ],
+    };
+
+    renderWithProviders(<PlaceDuplicatesCard onMerged={vi.fn(async () => undefined)} />, {
+      mocks: [duplicatesMock([GROUP, secondGroup])],
+    });
+
+    expect((await screen.findAllByText(GROUP.value)).length).toBeGreaterThan(0);
+    expect(screen.queryByText('Second duplicate group')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Keep this place' })[0]).toHaveClass('border');
+    expect(screen.getByRole('button', { name: 'Different places' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Merge places' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show 1 more suggestions' }));
+
+    expect(await screen.findByText('Second duplicate group')).toBeInTheDocument();
   });
 
   it('merges only after the confirm dialog is accepted, then tells the page', async () => {

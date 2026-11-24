@@ -4,12 +4,12 @@
    header with an empty ID are running-balance/summary rows and are skipped.
 */
 import fs from 'node:fs';
-import { open, readdir, stat as fsStat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { parseCSVRows } from './csv';
-import type { FileImporter, Recognition, DirEntry } from './registry';
+import { CsvExportImporter, type CsvExportSpec } from './csvImporter';
 import { registerDataSource } from './registry';
+import { readHead, stripBom } from './sniff';
 import type { ImportParams, LineItemRecord, Relationship } from './timeline';
 import { timeframeContains } from './timeline';
 
@@ -31,10 +31,6 @@ function textHasVenmoHeader(text: string): boolean {
   return false;
 }
 
-function stripBOM(s: string): string {
-  return s.charCodeAt(0) === 0xfeff ? s.slice(1) : s;
-}
-
 interface VenmoTxn {
   id: string;
   datetime?: Date;
@@ -44,6 +40,7 @@ interface VenmoTxn {
   from: string;
   to: string;
   amountTotal: string;
+  amountFee: string;
 }
 
 // Locate the header row, then map each subsequent data row by header name.
@@ -72,6 +69,7 @@ function parseVenmo(text: string): VenmoTxn[] {
   const fromIdx = col('From');
   const toIdx = col('To');
   const amtIdx = col('Amount (total)');
+  const feeIdx = col('Amount (fee)');
 
   const txns: VenmoTxn[] = [];
   for (let i = headerIdx + 1; i < rows.length; i++) {
@@ -97,111 +95,29 @@ function parseVenmo(text: string): VenmoTxn[] {
       from: cell(fromIdx),
       to: cell(toIdx),
       amountTotal: cell(amtIdx),
+      amountFee: cell(feeIdx),
     });
   }
 
   return txns;
 }
 
-export class VenmoFileImporter implements FileImporter {
-  async recognize(_ctx: unknown, entry: DirEntry): Promise<Recognition> {
-    const root = entry.fullPath || entry.fsRoot || entry.filename;
-    if (!root) {
-      return { confidence: 0 };
-    }
-
-    let stat: fs.Stats;
-    try {
-      stat = await fsStat(root);
-    } catch {
-      return { confidence: 0 };
-    }
-
-    if (stat.isFile()) {
-      if (path.extname(root).toLowerCase() !== '.csv') {
-        return { confidence: 0 };
-      }
-
-      return (await this.headerMatches(root)) ? { confidence: 0.9 } : { confidence: 0 };
-    }
-
-    if (stat.isDirectory()) {
-      try {
-        const names = await readdir(root);
-        for (const name of names) {
-          if (path.extname(name).toLowerCase() !== '.csv') {
-            continue;
-          }
-
-          if (await this.headerMatches(path.join(root, name))) {
-            return { confidence: 0.9 };
-          }
-        }
-      } catch {
-        /* ignore */
-      }
-
-      return { confidence: 0, dir_threshold: 0.7 };
-    }
-
-    return { confidence: 0 };
-  }
+export class VenmoFileImporter extends CsvExportImporter {
+  protected readonly spec: CsvExportSpec = {
+    headerMatches: (fpath) => this.headerMatches(fpath),
+    confidence: { named: 0, sniffed: 0.9 },
+    importInDir: 'all-matches',
+  };
 
   // Read only the first ~8KB to inspect for the Venmo header line (it lives
   // after a few preamble lines, so a single header line check is not enough).
   private async headerMatches(fpath: string): Promise<boolean> {
-    try {
-      const fh = await open(fpath, 'r');
-      try {
-        const buf = Buffer.alloc(8192);
-        const { bytesRead } = await fh.read(buf, 0, 8192, 0);
+    const head = await readHead(fpath, 8192);
 
-        return textHasVenmoHeader(stripBOM(buf.toString('utf8', 0, bytesRead)));
-      } finally {
-        await fh.close().catch(() => {});
-      }
-    } catch {
-      return false;
-    }
+    return head != null && textHasVenmoHeader(stripBom(head));
   }
 
-  async fileImport(_ctx: unknown, entry: DirEntry, params: ImportParams): Promise<void> {
-    const root = entry.fullPath || entry.fsRoot || entry.filename;
-    if (!root) {
-      return;
-    }
-
-    let stat: fs.Stats;
-    try {
-      stat = fs.statSync(root);
-    } catch {
-      return;
-    }
-
-    if (stat.isFile()) {
-      await this.processFile(root, params);
-    } else if (stat.isDirectory()) {
-      let names: string[];
-      try {
-        names = fs.readdirSync(root);
-      } catch {
-        return;
-      }
-
-      for (const name of names) {
-        if (path.extname(name).toLowerCase() !== '.csv') {
-          continue;
-        }
-
-        const fpath = path.join(root, name);
-        if (await this.headerMatches(fpath)) {
-          await this.processFile(fpath, params);
-        }
-      }
-    }
-  }
-
-  private async processFile(fpath: string, params: ImportParams): Promise<void> {
+  protected async processFile(fpath: string, params: ImportParams): Promise<void> {
     const base = path.basename(fpath);
     let raw: string;
     try {
@@ -248,7 +164,21 @@ export class VenmoFileImporter implements FileImporter {
       return undefined;
     }
 
-    if (t.type === 'Standard Transfer') {
+    // A Charge is a request one person sent another; the amount's sign still
+    // says which way the money moved for the account holder.
+    if (t.type === 'Charge') {
+      if (sign === '-') {
+        return 'payment';
+      }
+
+      if (sign === '+') {
+        return 'credit';
+      }
+
+      return undefined;
+    }
+
+    if (t.type === 'Standard Transfer' || t.type === 'Instant Transfer') {
       return 'transfer';
     }
 
@@ -273,22 +203,13 @@ export class VenmoFileImporter implements FileImporter {
       );
     }
 
-    // The counterparty person: the To name on an outgoing Payment, the From
-    // name on an incoming one. Only Payments name a real person — Standard
-    // Transfers carry no names and Card Payments put the card scheme in From.
+    const counterparty = this.counterpartyFor(t);
     const edges: Relationship[] = [];
-    if (t.type === 'Payment') {
-      const counterparty = t.amountTotal.startsWith('-')
-        ? { relation: 'to', name: t.to }
-        : t.amountTotal.startsWith('+')
-          ? { relation: 'from', name: t.from }
-          : undefined;
-      if (counterparty?.name) {
-        edges.push({
-          relation: counterparty.relation,
-          to: { entity: { type: 'person', name: counterparty.name } },
-        });
-      }
+    if (counterparty?.name) {
+      edges.push({
+        relation: counterparty.relation,
+        to: { entity: { type: 'person', name: counterparty.name } },
+      });
     }
 
     const amount = t.amountTotal.replace(/^([+-])\s+/, '$1');
@@ -304,7 +225,7 @@ export class VenmoFileImporter implements FileImporter {
         ? [
             {
               LineNumber: 1,
-              Product: t.note || `Venmo payment${t.to ? ` to ${t.to}` : ''}`,
+              Product: t.note || `Venmo payment${counterparty?.name ? ` to ${counterparty.name}` : ''}`,
               Quantity: 1,
               Total: lineTotal,
               IsDigital: undefined,
@@ -329,12 +250,13 @@ export class VenmoFileImporter implements FileImporter {
           From: t.from || undefined,
           To: t.to || undefined,
           Amount: amount || undefined,
+          Fee: t.amountFee ? t.amountFee.replace(/^([+-])\s+/, '$1') : undefined,
           'Transaction ID': t.id,
           // CANONICAL commerce keys (push/commerceKeys.ts). Venmo has no order
           // id — its transaction id is the reference — and on an outgoing
           // payment the counterparty is who was paid.
           'Order ID': t.id,
-          Merchant: classification === 'payment' ? t.to || undefined : undefined,
+          Merchant: classification === 'payment' ? counterparty?.name || undefined : undefined,
           Total: lineTotal,
           LineItems: lineItems,
           Source: 'Venmo',
@@ -342,6 +264,25 @@ export class VenmoFileImporter implements FileImporter {
       },
       edges: edges.length ? edges : undefined,
     });
+  }
+
+  // The other person on a Payment or a Charge. A Payment's From pays its To.
+  // A Charge's From is the person who sent the request and its To the person
+  // asked to pay, so the roles swap: money out on a Charge went to From, money
+  // in came from To. Transfers carry no names and Card Payments put the card
+  // scheme in From, so neither names a person.
+  private counterpartyFor(t: VenmoTxn): { relation: 'to' | 'from'; name: string } | undefined {
+    const out = t.amountTotal.startsWith('-');
+    const into = t.amountTotal.startsWith('+');
+    if (t.type === 'Payment') {
+      return out ? { relation: 'to', name: t.to } : into ? { relation: 'from', name: t.from } : undefined;
+    }
+
+    if (t.type === 'Charge') {
+      return out ? { relation: 'to', name: t.from } : into ? { relation: 'from', name: t.to } : undefined;
+    }
+
+    return undefined;
   }
 }
 

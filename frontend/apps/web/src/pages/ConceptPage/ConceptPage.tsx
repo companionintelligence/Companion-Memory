@@ -1,6 +1,6 @@
 import { type ReactNode, useState } from 'react';
 
-import { useMutation, useQuery } from '@apollo/client';
+import { useMutation, useQuery } from '@apollo/client/react';
 import { GlobalUID, LoadingPage, usePageTitle, EmptyState } from '@ci/common';
 import { useParams } from 'react-router-dom';
 
@@ -57,7 +57,7 @@ export function ConceptPage() {
 
   usePageTitle(concept?.name ? `Concept - ${concept.name} - Companion Memory` : 'Concept - Companion Memory');
 
-  let content: ReactNode | null = null;
+  let content: ReactNode | null;
 
   if (loading) {
     content = <LoadingPage />;

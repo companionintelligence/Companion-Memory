@@ -13,7 +13,8 @@ const state: {
   loadingMore: boolean;
   error: string | null;
   hasMore: boolean;
-} = { rows: [], loading: false, loadingMore: false, error: null, hasMore: false };
+  needsWebSignIn: boolean;
+} = { rows: [], loading: false, loadingMore: false, error: null, hasMore: false, needsWebSignIn: false };
 
 /** Captured so a tab click can be asserted to change the QUESTION, not just the styling. */
 let lastFilters: ActivityFilters | undefined;
@@ -56,6 +57,7 @@ describe('ActivityPage', () => {
     state.loadingMore = false;
     state.error = null;
     state.hasMore = false;
+    state.needsWebSignIn = false;
     lastFilters = undefined;
   });
 
@@ -182,5 +184,19 @@ describe('ActivityPage', () => {
     renderWithProviders(<ActivityPage />);
 
     expect(screen.getByRole('alert')).toHaveTextContent(/boom/);
+  });
+
+  // The ledger is closed to API keys on purpose — it records which key called what — so the native
+  // shell, which holds only a device key, can never read it. Say so rather than show a raw 401.
+  it('says a web sign-in is needed, instead of a ledger it can never load', () => {
+    state.rows = null;
+    state.needsWebSignIn = true;
+    renderWithProviders(<ActivityPage />);
+
+    expect(screen.getByText('Needs a web sign-in')).toBeInTheDocument();
+    expect(screen.getByText(/never allowed to read it/i)).toBeInTheDocument();
+    expect(screen.queryByRole('tab')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByText('Loading…')).not.toBeInTheDocument();
   });
 });

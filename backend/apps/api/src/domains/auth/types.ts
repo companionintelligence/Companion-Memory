@@ -16,10 +16,12 @@ export interface JwtPayload {
   sub: string;
   /**
    * Session id (the SessionEntity row) the token belongs to. Present on
-   * session tokens minted since CSRF principal-binding; access tokens and
-   * legacy session tokens carry only `sub`. Optional so pre-upgrade cookies
-   * keep verifying — a sid-less session token resolves to the anonymous CSRF
-   * scope until its first rotation embeds the claim.
+   * session tokens minted since CSRF principal-binding. Access tokens minted
+   * for a session (sign-in, sign-up, refresh) carry it too. Legacy session tokens and
+   * access tokens with no session behind them (the native code exchange) carry
+   * only `sub`. Optional so pre-upgrade cookies keep verifying. A sid-less
+   * session token resolves to the anonymous CSRF scope until its first rotation
+   * embeds the claim.
    */
   sid?: string;
 }
@@ -33,17 +35,18 @@ export interface SessionMetadata {
   userAgent?: string;
 }
 
-export interface UpdateSignupCodeDto {
-  used?: boolean;
-}
-
 export interface RotationResult {
-  /** New session token, or `null` on a grace-period match (keep the cookie). */
+  /**
+   * The session token to set as the cookie: a new one after a rotation, the current one again on a
+   * grace-period match. `null` only for a grace match whose current token cannot be signed again
+   * (keep the cookie).
+   */
   sessionToken: string | null;
   /**
    * Id of the session row the refresh matched — returned on BOTH branches, so
-   * the refresh response can bind (or upgrade) the CSRF cookie to its session
-   * even when a grace match sets no new session cookie.
+   * the refresh response can bind (or upgrade) the CSRF cookie to its session,
+   * even on a grace match that sets no session cookie because its current token
+   * cannot be signed again.
    */
   sessionId: string;
 }
@@ -61,10 +64,12 @@ export interface IssuedSession {
 /**
  * Who owns an api key's lifecycle. `null` = user-created (theirs to rename and
  * re-scope); `'connect'` = minted by the Companion Memory consent flow, so CI-Hub
- * rotates and revokes it. Recorded explicitly — the `app:` name prefix is
- * user-settable and so is not proof of provenance.
+ * rotates and revokes it; `'sign_in'` = minted by the phone or desktop app when
+ * someone signs in, so it is a signed-in device and goes when they sign out,
+ * change their password or sign out everywhere. Recorded explicitly — the `app:`
+ * name prefix is user-settable and so is not proof of provenance.
  */
-export type ApiKeyProvenance = 'connect';
+export type ApiKeyProvenance = 'connect' | 'sign_in';
 
 /**
  * The one `ApiKeyProvenance` value, in one place. Mint (ConnectService), lifecycle
@@ -76,17 +81,35 @@ export type ApiKeyProvenance = 'connect';
 export const CONNECT_PROVENANCE: ApiKeyProvenance = 'connect';
 
 /**
+ * A key the phone or desktop app minted for itself at sign-in (`POST /keys` with
+ * `sign_in: true`). Accepted from the request because it grants nothing: it only
+ * marks the key as one a password change and "Sign out everywhere" revoke.
+ */
+export const SIGN_IN_PROVENANCE: ApiKeyProvenance = 'sign_in';
+
+/**
  * Name prefix of every connect key (`app:<appName>:<store>`). Reserved from
  * user-created names so the two namespaces stay visually distinct — provenance
  * itself is carried by {@link CONNECT_PROVENANCE}, never by this string.
  */
 export const CONNECT_KEY_NAME_PREFIX = 'app:';
 
+/**
+ * The name the phone apps give the key they mint for themselves at sign-in (`useAuth.ts`),
+ * unchanged since the apps first minted keys. App builds before v2026.9.14 send nothing else with
+ * it, and builds before {@link SIGN_IN_PROVENANCE} existed send no `sign_in`. The desktop app used
+ * it too until it named its key "Companion desktop · <date>"; that name always comes with a
+ * capability and `sign_in`, so it needs no match here.
+ */
+export const PHONE_KEY_NAME = /^Companion mobile · \d{4}-\d{2}-\d{2}$/;
+
 export interface CreateApiKeyDto {
   name: string;
   scopes?: string[];
   capability?: ApiKeyCapability;
   expires_at?: string;
+  /** The app is minting its own sign-in key; see {@link SIGN_IN_PROVENANCE}. */
+  sign_in?: boolean;
 }
 
 export interface UpdateApiKeyDto {
@@ -143,4 +166,24 @@ export interface ValidatedApiKey {
  */
 export function isManagedAppPrincipal(key: { managedBy?: ApiKeyProvenance | null }): boolean {
   return key.managedBy === CONNECT_PROVENANCE;
+}
+
+/**
+ * The installed app a connect key was minted for (`ci-openclaw` for
+ * `app:ci-openclaw:ci-marketplace`), or `null` for any key the connect flow did
+ * not mint. Provenance decides first, as in {@link isManagedAppPrincipal}; the
+ * name is read only once `managed_by` has vouched for it, so a hand-made key
+ * named `app:ci-openclaw:x` names no app.
+ */
+export function connectAppNameOf(key: {
+  managedBy?: ApiKeyProvenance | null;
+  name?: string | null;
+}): string | null {
+  if (!isManagedAppPrincipal(key) || !key.name?.startsWith(CONNECT_KEY_NAME_PREFIX)) {
+    return null;
+  }
+
+  const appName = key.name.slice(CONNECT_KEY_NAME_PREFIX.length).split(':')[0];
+
+  return appName ? appName : null;
 }

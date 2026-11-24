@@ -39,6 +39,10 @@ function makeResolver() {
     // The query path also reaches events through matching media; nothing here has any.
     findEventIdsForMedia: jest.fn().mockResolvedValue([] as string[]),
     countEntitiesForContents: jest.fn().mockResolvedValue(0),
+    // The How filter's ledger lookup for content candidates; none match by default.
+    idsMatchingSourceSystems: jest.fn().mockResolvedValue(new Set<string>()),
+    // Which content hits are a note's Content mirror; none, unless a test says so.
+    noteMirrorIds: jest.fn(async (_context: unknown, _ids: string[]) => new Set<string>()),
   };
   const itemService = {
     getEntitiesForItems: jest.fn().mockResolvedValue([] as Identifier[]),
@@ -207,6 +211,73 @@ describe('SearchResolver.search — combinable filters', () => {
     expect(result.totalCount).toBe(1);
   });
 
+  it('leaves threads, tasks and feed actions out of a dated query, whatever their last write says', async () => {
+    const { resolver, searchService, entityResolutionService } = makeResolver();
+    const inRange = new Date('2026-03-01');
+    searchService.search.mockResolvedValue([
+      { type: 'thread', id: 't1' },
+      { type: 'task', id: 'k1' },
+      { type: 'action', id: 'a1' },
+      { type: 'note', id: 'n1' },
+      { type: 'event', id: 'e1' },
+    ]);
+    entityResolutionService.resolve.mockResolvedValue(
+      resolveMap([
+        { type: 'thread', id: 't1', entity: { id: 't1', updatedAt: inRange, createdAt: inRange } },
+        { type: 'task', id: 'k1', entity: { id: 'k1', updatedAt: inRange, createdAt: inRange } },
+        { type: 'action', id: 'a1', entity: { id: 'a1', updatedAt: inRange, createdAt: inRange } },
+        { type: 'note', id: 'n1', entity: { id: 'n1', updatedAt: inRange, createdAt: inRange } },
+        { type: 'event', id: 'e1', entity: { startTime: new Date('2026-03-20') } },
+      ]),
+    );
+
+    const result = await resolver.search(ctx, {
+      query: 'hi',
+      startTime: '2026-02-01',
+      endTime: '2026-04-01',
+    } as SearchInput);
+
+    // A note keeps riding its write time: only the kinds with no time of their own drop out.
+    expect(nodeIds(result).sort()).toEqual(['event:e1', 'note:n1']);
+  });
+
+  it('keeps tasks in a dated query that names them, as the caller asked for that kind', async () => {
+    const { resolver, searchService, entityResolutionService } = makeResolver();
+    const inRange = new Date('2026-03-01');
+    searchService.search.mockResolvedValue([{ type: 'task', id: 'k1' }]);
+    entityResolutionService.resolve.mockResolvedValue(
+      resolveMap([{ type: 'task', id: 'k1', entity: { id: 'k1', updatedAt: inRange, createdAt: inRange } }]),
+    );
+
+    const result = await resolver.search(ctx, {
+      query: 'hi',
+      includeTypes: ['task'],
+      startTime: '2026-02-01',
+      endTime: '2026-04-01',
+    } as SearchInput);
+
+    expect(result.edges).toHaveLength(1);
+  });
+
+  it('still returns threads and tasks for the same query without a date range', async () => {
+    const { resolver, searchService, entityResolutionService } = makeResolver();
+    const written = new Date('2026-03-01');
+    searchService.search.mockResolvedValue([
+      { type: 'thread', id: 't1' },
+      { type: 'task', id: 'k1' },
+    ]);
+    entityResolutionService.resolve.mockResolvedValue(
+      resolveMap([
+        { type: 'thread', id: 't1', entity: { id: 't1', updatedAt: written, createdAt: written } },
+        { type: 'task', id: 'k1', entity: { id: 'k1', updatedAt: written, createdAt: written } },
+      ]),
+    );
+
+    const result = await resolver.search(ctx, { query: 'hi' } as SearchInput);
+
+    expect(result.edges).toHaveLength(2);
+  });
+
   it('sorts by time ascending and descending', async () => {
     const entries: Entry[] = [
       { type: 'event', id: 'old', entity: { startTime: new Date('2026-01-01') } },
@@ -243,47 +314,64 @@ describe('SearchResolver.search — combinable filters', () => {
     expect(eventService.getEntitiesForEvents).toHaveBeenCalledTimes(1);
     expect(browserActivityService.getEntitiesForBrowserActivities).toHaveBeenCalledTimes(1);
     expect(communicationService.getEntitiesForCommunications).toHaveBeenCalledTimes(1);
-    // Files are part of the default browse like every other indexed type — the
-    // What picker's File entry is the one control over whether they show up.
-    expect(fileService.getEntitiesForFiles).toHaveBeenCalledTimes(1);
+    // Files have no date of their own, so the unfiltered browse leaves them out
+    // (see BROWSE_OPT_IN_TYPES).
+    expect(fileService.getEntitiesForFiles).not.toHaveBeenCalled();
     // No filters -> end bound to "now" so recent items are returned, not all history.
     const eventOptions = eventService.getEntitiesForEvents.mock.calls[0][1] as { endTime?: Date };
     expect(eventOptions.endTime).toBeInstanceOf(Date);
   });
 
-  // Files used to be opted *out* of the timed browse unless a caller passed
-  // includeFiles — which only the gallery did. That made the same explorer URL
-  // mean different things view to view, and made the File type picker a no-op
-  // everywhere else. Files are now part of the default browse; the type filter
-  // is the single control over whether they appear.
-  describe('includeFiles (files in the timed browse)', () => {
-    it('interleaves files with the other timed types by default', async () => {
-      const { resolver, eventService, fileService, fileChunkService, entityResolutionService } =
-        makeResolver();
-      eventService.getEntitiesForEvents.mockResolvedValue([{ type: 'event', id: 'e1' }]);
-      fileService.getEntitiesForFiles.mockResolvedValue([{ type: 'file', id: 'f1' }]);
+  // Files are opt-in on the unfiltered browse, like people and places: a file's
+  // only timestamp is its row write time, which put whole imports ahead of the
+  // real timeline. The type filter (including the What picker's exclude-list)
+  // and `includeFiles` still reach them, and alongside events the files an event
+  // already shows are dropped.
+  describe('files in the timed browse', () => {
+    it('leaves files out of the unfiltered browse', async () => {
+      const { resolver, eventService, fileService, fileChunkService } = makeResolver();
 
       await resolver.search(ctx, {} as SearchInput);
 
       expect(eventService.getEntitiesForEvents).toHaveBeenCalledTimes(1);
-      expect(fileService.getEntitiesForFiles).toHaveBeenCalledTimes(1);
-      // File chunks stay includeTypes-only — a document's many same-timestamp
-      // chunks would still bury the browse.
+      expect(fileService.getEntitiesForFiles).not.toHaveBeenCalled();
+      expect(fileService.countEntitiesForFiles).not.toHaveBeenCalled();
       expect(fileChunkService.getEntitiesForFileChunks).not.toHaveBeenCalled();
-      expect(idsResolvedTo(entityResolutionService.resolve)).toEqual([
-        { type: 'event', id: 'e1' },
-        { type: 'file', id: 'f1' },
-      ]);
     });
 
-    it('honours an explicit type filter that narrows to files', async () => {
+    it('keeps every file when the caller narrows to files', async () => {
       const { resolver, fileService, eventService } = makeResolver();
       fileService.getEntitiesForFiles.mockResolvedValue([{ type: 'file', id: 'f1' }]);
 
       await resolver.search(ctx, { includeTypes: ['file'] } as SearchInput);
 
       expect(fileService.getEntitiesForFiles).toHaveBeenCalledTimes(1);
+      expect(fileService.getEntitiesForFiles.mock.calls[0][1]).toMatchObject({ excludeEventLinked: false });
       expect(eventService.getEntitiesForEvents).not.toHaveBeenCalled();
+    });
+
+    it("reaches files through the What picker's exclude-list, dropping event-linked ones", async () => {
+      const { resolver, fileService, eventService, entityResolutionService } = makeResolver();
+      eventService.getEntitiesForEvents.mockResolvedValue([{ type: 'event', id: 'e1' }]);
+      fileService.getEntitiesForFiles.mockResolvedValue([{ type: 'file', id: 'f1' }]);
+
+      await resolver.search(ctx, { excludeTypes: ['note'] } as SearchInput);
+
+      expect(fileService.getEntitiesForFiles.mock.calls[0][1]).toMatchObject({ excludeEventLinked: true });
+      expect(fileService.countEntitiesForFiles.mock.calls[0][1]).toMatchObject({ excludeEventLinked: true });
+      expect(idsResolvedTo(entityResolutionService.resolve)).toEqual([
+        { type: 'event', id: 'e1' },
+        { type: 'file', id: 'f1' },
+      ]);
+    });
+
+    it('opts files in with includeFiles: true', async () => {
+      const { resolver, fileService } = makeResolver();
+
+      await resolver.search(ctx, { includeFiles: true } as SearchInput);
+
+      expect(fileService.getEntitiesForFiles).toHaveBeenCalledTimes(1);
+      expect(fileService.getEntitiesForFiles.mock.calls[0][1]).toMatchObject({ excludeEventLinked: true });
     });
 
     it('still honours an explicit type filter that excludes files', async () => {
@@ -294,13 +382,12 @@ describe('SearchResolver.search — combinable filters', () => {
       expect(fileService.getEntitiesForFiles).not.toHaveBeenCalled();
     });
 
-    it('lets a caller opt files out without touching excludeTypes', async () => {
-      const { resolver, fileService, eventService } = makeResolver();
+    it('lets includeFiles: false win over a type filter that names files', async () => {
+      const { resolver, fileService } = makeResolver();
 
-      await resolver.search(ctx, { includeFiles: false } as SearchInput);
+      await resolver.search(ctx, { includeTypes: ['file', 'event'], includeFiles: false } as SearchInput);
 
       expect(fileService.getEntitiesForFiles).not.toHaveBeenCalled();
-      expect(eventService.getEntitiesForEvents).toHaveBeenCalledTimes(1);
     });
   });
 });
@@ -442,6 +529,84 @@ describe('SearchResolver.search — undated types stay out of the unfiltered bro
     });
   });
 
+  // A note folded into the graph (`fold-notes`) gets a Content row with the
+  // note's own id and its stored HTML as text, so the list showed every folded
+  // note twice, the second time as raw markup.
+  it("drops notes' Content mirrors from the browse fetch and from its total", async () => {
+    const { resolver, contentService } = makeResolver();
+
+    await resolver.search(ctx, {} as SearchInput);
+
+    expect(contentService.getEntitiesForContents.mock.calls[0][1]).toMatchObject({
+      excludeNoteMirrors: true,
+    });
+    expect(contentService.countEntitiesForContents.mock.calls[0][1]).toMatchObject({
+      excludeNoteMirrors: true,
+    });
+  });
+
+  it("drops a note's Content mirror from a query and keeps the note", async () => {
+    const { resolver, searchService, contentService, entityResolutionService } = makeResolver();
+    searchService.search.mockResolvedValue([
+      { type: 'note', id: 'n1' },
+      { type: 'content', id: 'n1' },
+      { type: 'content', id: 'c1' },
+    ]);
+    contentService.noteMirrorIds.mockResolvedValue(new Set(['n1']));
+
+    await resolver.search(ctx, { query: 'Lisbon' } as SearchInput);
+
+    expect(contentService.noteMirrorIds).toHaveBeenCalledWith(ctx, ['n1', 'c1']);
+    expect(idsResolvedTo(entityResolutionService.resolve)).toEqual([
+      { type: 'note', id: 'n1' },
+      { type: 'content', id: 'c1' },
+    ]);
+  });
+
+  // The note's own entry can be missing from the index, or ranked past the
+  // candidate cut while its mirror made it in.
+  it('lists the note in place of a mirror that was found without it', async () => {
+    const { resolver, searchService, contentService, entityResolutionService } = makeResolver();
+    searchService.search.mockResolvedValue([
+      { type: 'content', id: 'c1' },
+      { type: 'content', id: 'n1' },
+    ]);
+    contentService.noteMirrorIds.mockResolvedValue(new Set(['n1']));
+
+    await resolver.search(ctx, { query: 'Lisbon' } as SearchInput);
+
+    expect(idsResolvedTo(entityResolutionService.resolve)).toEqual([
+      { type: 'content', id: 'c1' },
+      { type: 'note', id: 'n1' },
+    ]);
+  });
+
+  it('drops the mirror outright where notes are filtered out', async () => {
+    const { resolver, searchService, contentService, entityResolutionService } = makeResolver();
+    searchService.search.mockResolvedValue([
+      { type: 'content', id: 'n1' },
+      { type: 'content', id: 'c1' },
+    ]);
+    contentService.noteMirrorIds.mockResolvedValue(new Set(['n1']));
+
+    await resolver.search(ctx, { query: 'Lisbon', includeTypes: ['content'] } as SearchInput);
+
+    expect(idsResolvedTo(entityResolutionService.resolve)).toEqual([{ type: 'content', id: 'c1' }]);
+  });
+
+  it("lists a tagged note's mirror as the note, once", async () => {
+    const { resolver, tagService, contentService, entityResolutionService } = makeResolver();
+    tagService.getEntitiesForTags.mockResolvedValue([
+      { type: 'content', id: 'n1' },
+      { type: 'note', id: 'n1' },
+    ]);
+    contentService.noteMirrorIds.mockResolvedValue(new Set(['n1']));
+
+    await resolver.search(ctx, { tags: ['trip'] } as SearchInput);
+
+    expect(idsResolvedTo(entityResolutionService.resolve)).toEqual([{ type: 'note', id: 'n1' }]);
+  });
+
   it('does not apply the event-linked exclusion to a tag search', async () => {
     const { resolver, tagService, contentService } = makeResolver();
     tagService.getEntitiesForTags.mockResolvedValue([{ type: 'content', id: 'c1' }]);
@@ -451,15 +616,13 @@ describe('SearchResolver.search — undated types stay out of the unfiltered bro
     expect(contentService.getEntitiesForContents).not.toHaveBeenCalled();
   });
 
-  // The gate must not touch `file`: #2110 deliberately made files part of the
-  // default timeline (opt-OUT via includeFiles). They remain the residual
-  // undated head this change does not address.
-  it('leaves files in the default browse, as #2110 decided', async () => {
+  // Files joined the gate on 2026-10-30 (they were left in by #2110).
+  it('gates files out of the default browse too', async () => {
     const { resolver, fileService } = makeResolver();
 
     await resolver.search(ctx, {} as SearchInput);
 
-    expect(fileService.getEntitiesForFiles).toHaveBeenCalledTimes(1);
+    expect(fileService.getEntitiesForFiles).not.toHaveBeenCalled();
   });
 });
 
@@ -592,16 +755,29 @@ describe('SearchResolver.search — the How filter narrows every sourced kind', 
   });
 
   it('keeps the query path to rows from the chosen source, without collapsing it to events', async () => {
-    const { resolver, searchService, entityResolutionService, eventService } = makeResolver();
+    const { resolver, searchService, entityResolutionService, eventService, contentService } = makeResolver();
     searchService.search.mockResolvedValue([
       { type: 'content', id: 'c1' },
+      { type: 'content', id: 'c2' },
       { type: 'note', id: 'n1' },
       { type: 'event', id: 'e1' },
       { type: 'browser-activity', id: 'b1' },
     ] as Identifier[]);
+    // Content is matched on the platform that delivered it, which only the
+    // ledger knows: c1 says `file` in its column and is kept, c2 is not.
+    contentService.idsMatchingSourceSystems.mockResolvedValue(new Set(['c1']));
     entityResolutionService.resolve.mockResolvedValue(
       resolveMap([
-        { type: 'content', id: 'c1', entity: { sourceSystem: 'reddit', updatedAt: new Date('2026-09-01') } },
+        {
+          type: 'content',
+          id: 'c1',
+          entity: { id: 'c1', sourceSystem: 'file', updatedAt: new Date('2026-09-01') },
+        },
+        {
+          type: 'content',
+          id: 'c2',
+          entity: { id: 'c2', sourceSystem: 'file', updatedAt: new Date('2026-09-01') },
+        },
         { type: 'note', id: 'n1', entity: { updatedAt: new Date('2026-09-02') } },
         { type: 'event', id: 'e1', entity: { sourceSystem: 'gmail', startTime: new Date('2026-09-03') } },
         // Browser activity keeps the column's snake_case name on its entity.
@@ -617,6 +793,7 @@ describe('SearchResolver.search — the How filter narrows every sourced kind', 
 
     // Relevance order, i.e. the candidate order the search returned them in.
     expect(nodeIds(result)).toEqual(['content:c1', 'browser-activity:b1']);
+    expect(contentService.idsMatchingSourceSystems).toHaveBeenCalledWith(ctx, ['c1', 'c2'], ['reddit']);
     // The event-only who / where restriction must not have been triggered.
     expect(eventService.getEntitiesForEvents).not.toHaveBeenCalled();
   });

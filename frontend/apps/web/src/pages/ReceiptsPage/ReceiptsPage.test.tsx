@@ -163,6 +163,23 @@ describe('ReceiptsPage', () => {
     expect(total).not.toHaveTextContent('$');
   });
 
+  it('keeps the phone filters together and uses compact receipt rows', async () => {
+    renderWithProviders(<ReceiptsPage />, {
+      route: '/memory/receipts',
+      mocks: [receiptsMock({}, [makeReceipt()], 7)],
+    });
+
+    expect(await screen.findByText('Hornbach')).toBeInTheDocument();
+
+    const toolbar = screen.getByTestId('receipts-toolbar');
+    expect(toolbar).toHaveClass('grid', 'grid-cols-[minmax(0,1fr)_9rem]', 'device:flex');
+    expect(toolbar).toContainElement(screen.getByPlaceholderText('Search by merchant…'));
+    expect(toolbar).toContainElement(screen.getByLabelText('Extraction state'));
+    expect(toolbar).toContainElement(screen.getByText('7 receipts'));
+
+    expect(screen.getByTestId('receipt-row')).toHaveClass('gap-2', 'p-2', 'device:gap-3', 'device:p-3');
+  });
+
   it('counts a single line as "1 line" and several as "lines"', async () => {
     renderWithProviders(<ReceiptsPage />, {
       route: '/memory/receipts',
@@ -226,7 +243,7 @@ describe('ReceiptsPage', () => {
       ],
     });
 
-    fireEvent.change(await screen.findByPlaceholderText('Search by merchant...'), {
+    fireEvent.change(await screen.findByPlaceholderText('Search by merchant…'), {
       target: { value: '  bauhaus  ' },
     });
 
@@ -288,7 +305,7 @@ describe('ReceiptsPage', () => {
       });
 
       expect(await screen.findByText('Bauhaus')).toBeInTheDocument();
-      expect(screen.getByPlaceholderText('Search by merchant...')).toHaveValue('bauhaus');
+      expect(screen.getByPlaceholderText('Search by merchant…')).toHaveValue('bauhaus');
     });
 
     it('writes what is typed into the ?q= param rather than local-only state', async () => {
@@ -311,7 +328,7 @@ describe('ReceiptsPage', () => {
       expect(await screen.findByText('Hornbach')).toBeInTheDocument();
       expect(screen.getByTestId('params').textContent).toBe('');
 
-      fireEvent.change(screen.getByPlaceholderText('Search by merchant...'), {
+      fireEvent.change(screen.getByPlaceholderText('Search by merchant…'), {
         target: { value: 'bauhaus' },
       });
 

@@ -1,6 +1,6 @@
 # CI gate proposal
 
-> **Status, re-verified 2026-09-07: partly applied.** This is still a proposal — the open items below are decisions nobody has taken yet, and §3.4 in particular is a repository-settings change no file in this repo can make. But the opening line of this document used to read *"Nothing here has been applied"*, and that has been false since 2026-09-06. Three of its recommendations shipped, one of them in a form this document did not propose. Read §0 before acting on anything below, or you will redo landed work.
+> **Status, re-verified 2026-10-20: historical record (`pr-gate.yml` retired 2026-09-17).** On 2026-09-06 through 2026-09-08, `pr-gate.yml` and six required status checks on `main` were enabled. After `pr-gate.yml` widened to include sharded frontend unit suites (~28–40 runner-minutes per PR), `pr-gate.yml` was deleted on 2026-09-17 and the remaining three auto-triggered workflows (`benchmark-unit.yml`, `mobile-release.yml`, `desktop-release.yml`) were gated to `workflow_dispatch` via `ci-local gate --repo CI-Server --apply` (see [`docs/CI.md`](../CI.md)). All workflows in `.github/workflows/` are now `workflow_dispatch`-only, and fast pre-PR checks run locally via `make pr-gate` (`make lint`, `make typecheck`, `make docs-check`, and `depcheck:ratchet`).
 >
 > The original measurement — 2026-08-26 against `main` at `15fde65c5` — still stands as the *evidence* for the argument (§2). Nothing in the applied set re-measured it.
 

@@ -21,6 +21,7 @@ import { PositionModule } from '@ci/domains/position';
 
 import { EmbeddingEntity } from './entities/EmbeddingEntity';
 import { IndexSkipEntity } from './entities/IndexSkipEntity';
+import { MobileSearchDocumentEntity } from './entities/MobileSearchDocumentEntity';
 import { VectorEntity } from './entities/VectorEntity';
 import { AnswerSearchIndexListener } from './listeners/AnswerSearchIndexListener';
 import { BrowserActivitySearchIndexListener } from './listeners/BrowserActivitySearchIndexListener';
@@ -51,7 +52,7 @@ import { VectorService } from './services/VectorService';
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([EmbeddingEntity, IndexSkipEntity, VectorEntity]),
+    TypeOrmModule.forFeature([MobileSearchDocumentEntity, EmbeddingEntity, IndexSkipEntity, VectorEntity]),
     BrowserActivityModule,
     ConversationModule,
     EmbeddingModule,
@@ -92,8 +93,13 @@ import { VectorService } from './services/VectorService';
 })
 export class SearchIngressModule {}
 
-export { EmbeddingEntity, IndexSkipEntity, VectorEntity };
-export { OrphanCleanupService, SEARCH_TABLES } from './services/OrphanCleanupService';
+export { MobileSearchDocumentEntity, EmbeddingEntity, IndexSkipEntity, VectorEntity };
+export { DOCUMENT_BODY_MAX_CHARS } from './entities/MobileSearchDocumentEntity';
+export {
+  OrphanCleanupService,
+  REOPEN_INDEX_LEDGER_SQL,
+  SEARCH_TABLES,
+} from './services/OrphanCleanupService';
 export type {
   OrphanCleanupOptions,
   OrphanCleanupResult,
@@ -102,6 +108,12 @@ export type {
 } from './services/OrphanCleanupService';
 export { ENTITY_SOURCE_MAP } from './entitySourceMap';
 export * from './searchTexts';
-export { buildWeightedVectorSql } from './services/VectorService';
+export {
+  buildVectorUpsertBatchStatement,
+  buildVectorUpsertStatement,
+  buildWeightedVectorSql,
+  type SearchDocumentText,
+  searchDocumentText,
+} from './services/VectorService';
 export type { WeightedText } from './types';
 export type { EntitySource } from './entitySourceMap';

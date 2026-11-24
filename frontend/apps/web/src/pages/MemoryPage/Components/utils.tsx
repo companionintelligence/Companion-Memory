@@ -1,4 +1,7 @@
+import { IEC_UNITS, formatBytes as formatSharedBytes } from '@ci/common';
 import { Calendar, User, MapPin, Package, FileText, Contact, Lightbulb, Target } from '@ci/shadcn/icons';
+
+import { HOUR_MINUTE, type DateTimeFormatter } from '@/lib/dateTimeFormat';
 
 import type { EntityItem } from '../../MemoryPage/useEntityService';
 
@@ -23,26 +26,16 @@ export function formatDuration(minutes: number): string {
   return parts.join(', ');
 }
 
-export function formatDateTime(dateStr: string, timeStr?: string): string {
+/**
+ * The date a grid card shows ("Jan 15, 2026"). Date only, despite the name: it used to take an
+ * optional "HH:MM" to append, forced to 12-hour, and no caller ever passed one — times go through
+ * `useDateTimeFormat()` so they follow the person's time format.
+ */
+export function formatDateTime(dateStr: string): string {
   try {
     const date = new Date(dateStr);
     if (isNaN(date.getTime())) {
       return dateStr;
-    }
-
-    if (timeStr) {
-      const [hours, minutes] = timeStr.split(':');
-      const dateTime = new Date(date);
-      dateTime.setHours(parseInt(hours, 10), parseInt(minutes, 10));
-
-      return dateTime.toLocaleDateString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-        hour12: true,
-      });
     }
 
     return date.toLocaleDateString('en-US', {
@@ -136,7 +129,11 @@ export function getEntityTimestamp(entity: EntityItem): Date | null {
  * only when the event spans multiple days. The surrounding date-group header
  * already carries the month/year context, so the card stays uncluttered.
  */
-export function formatEventTimeRange(start: string, end?: string | null): string {
+export function formatEventTimeRange(
+  start: string,
+  end: string | null | undefined,
+  fmt: DateTimeFormatter,
+): string {
   const startDate = new Date(start);
 
   if (isNaN(startDate.getTime())) {
@@ -146,15 +143,16 @@ export function formatEventTimeRange(start: string, end?: string | null): string
   const time = (d: Date) => {
     const opts: Intl.DateTimeFormatOptions = { hour: 'numeric' };
 
-    if (d.getMinutes() !== 0) {
+    // On the hour, 12-hour drops the minutes ("8 AM"). A bare "08" does not read as a time, so
+    // 24-hour always keeps them ("08:00").
+    if (d.getMinutes() !== 0 || fmt.timeFormat === 'h23') {
       opts.minute = '2-digit';
     }
 
-    return d.toLocaleTimeString('en-US', opts);
+    return fmt.time(d, opts, 'en-US');
   };
 
-  const dateTime = (d: Date) =>
-    `${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}, ${time(d)}`;
+  const dateTime = (d: Date) => `${fmt.date(d, { month: 'short', day: 'numeric' }, 'en-US')}, ${time(d)}`;
 
   if (!end) {
     return time(startDate);
@@ -471,7 +469,7 @@ export function formatLoadedCount(input: {
 }
 
 /** Compact per-row timestamp: time-of-day for today, "Mon D" this year, otherwise "Mon D, YYYY". */
-export function formatRowTime(date: Date | null, now: Date = new Date()): string {
+export function formatRowTime(date: Date | null, fmt: DateTimeFormatter, now: Date = new Date()): string {
   if (!date) {
     return '';
   }
@@ -482,7 +480,7 @@ export function formatRowTime(date: Date | null, now: Date = new Date()): string
     date.getDate() === now.getDate();
 
   if (sameDay) {
-    return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    return fmt.time(date, HOUR_MINUTE, 'en-US');
   }
 
   if (date.getFullYear() === now.getFullYear()) {
@@ -515,21 +513,13 @@ export function getEntityTypeIcon(type: string) {
   }
 }
 
-// Got from the top answer here: https://stackoverflow.com/questions/15900485/correct-way-to-convert-size-in-bytes-to-kb-mb-gb-in-javascript
+/** "1.5 KiB" — the explorer's binary units, a fraction only where there is one, a string taken as digits. */
 export function formatBytes(bytes: number | string, decimals = 2) {
-  if (typeof bytes === 'string') {
-    bytes = parseInt(bytes);
-  }
+  const count = typeof bytes === 'string' ? parseInt(bytes) : bytes;
 
-  if (!+bytes) {
+  if (!+count) {
     return '0 Bytes';
   }
 
-  const k = 1024;
-  const dm = decimals < 0 ? 0 : decimals;
-  const sizes = ['Bytes', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB', 'ZiB', 'YiB'];
-
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-
-  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
+  return formatSharedBytes(count, { units: IEC_UNITS, decimals, trimZeros: true });
 }

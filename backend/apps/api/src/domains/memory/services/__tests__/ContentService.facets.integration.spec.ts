@@ -14,6 +14,7 @@ import { EventBaseEntity } from '../../entities/EventBaseEntity';
 import { EventEntity } from '../../entities/EventEntity';
 import { ContentService } from '../ContentService';
 import type { GraphDeltaWriter } from '../GraphDeltaWriter';
+import { SourceSystemService } from '../SourceSystemService';
 
 /**
  * The content library's facets, read along the indexes of
@@ -255,6 +256,52 @@ describeWithDb(`ContentService.getFacets reads along indexes (${availability.tar
       'media:image/jpeg',
       'note:text/plain',
     ]);
+  });
+
+  it('gives the How picker those same platforms, and every content filter matches on them', async () => {
+    const sourceSystemService = new SourceSystemService(dataSource, contentService);
+
+    // The picker's content leg is the facet, not the column: `google_photos`
+    // is offered though every such row says `file`, and `dropbox` is not,
+    // though a (deleted-event) row carries it in its column.
+    await expect(
+      sourceSystemService.getDistinctSourceSystems(ownerCtx, { includeTypes: ['content'] }),
+    ).resolves.toEqual(['file', 'google_photos', 'netflix', 'reddit', 'spotify']);
+    // The other kinds still answer from their own column (the live event's).
+    await expect(sourceSystemService.getDistinctSourceSystems(ownerCtx)).resolves.toEqual([
+      'facets_spec',
+      'file',
+      'google_photos',
+      'netflix',
+      'reddit',
+      'spotify',
+    ]);
+
+    // The explorer's browse and its count: the two live Google Photos rows,
+    // found through the ledger…
+    const photos = await contentService.getEntitiesForContents(ownerCtx, { connectors: ['google_photos'] });
+
+    expect(photos).toHaveLength(2);
+    expect(photos.map((row) => row.id)).toContain(liveVideoId);
+    await expect(
+      contentService.countEntitiesForContents(ownerCtx, { connectors: ['google_photos'] }),
+    ).resolves.toBe(2);
+
+    // …and "file" is only the note no platform claims, not those photos.
+    const files = await contentService.getEntitiesForContents(ownerCtx, { connectors: ['file'] });
+
+    expect(files).toHaveLength(1);
+    expect(files[0].id).not.toBe(liveVideoId);
+
+    // The search paths that narrow after picking candidates ask the same rule.
+    const candidates = [liveVideoId, files[0].id];
+
+    await expect(
+      contentService.idsMatchingSourceSystems(ownerCtx, candidates, ['google_photos']),
+    ).resolves.toEqual(new Set([liveVideoId]));
+    await expect(contentService.idsMatchingSourceSystems(ownerCtx, candidates, ['file'])).resolves.toEqual(
+      new Set([files[0].id]),
+    );
   });
 
   it('remembers the unledgered arm per user until it is forgotten', async () => {

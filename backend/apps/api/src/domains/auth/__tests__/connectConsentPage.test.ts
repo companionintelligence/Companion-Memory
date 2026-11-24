@@ -42,6 +42,12 @@ describe('renderConnectConsentPage capability disclosure', () => {
     expect(html).not.toContain('Full access');
   });
 
+  it('names the job grant in words for the chat agents, which are the only apps that get it', () => {
+    const html = render(['memory', 'intents', 'mcp', 'agent-jobs']);
+    expect(html).toContain('Send tasks to your agent, and work on and report back on them');
+    expect(html).not.toContain('Access &quot;agent-jobs&quot;');
+  });
+
   it('discloses FULL access for an empty-scope key (only an app on the reviewed allowlist gets one)', () => {
     const html = render([]);
     expect(html).toContain('Full access to your Companion data');

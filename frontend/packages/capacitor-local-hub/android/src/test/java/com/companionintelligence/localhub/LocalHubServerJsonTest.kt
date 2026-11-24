@@ -207,5 +207,73 @@ class LocalHubServerJsonTest {
         // the key outright on a Kotlin null, so JSONObject.NULL is what keeps the shape stable.
         assertTrue("lastError must be present, not omitted", body.has("lastError"))
         assertSame(JSONObject.NULL, body.get("lastError"))
+        // Same rule for owner: a row queued before stamping existed reads as an explicit null.
+        assertTrue("owner must be present, not omitted", body.has("owner"))
+        assertSame(JSONObject.NULL, body.get("owner"))
+    }
+
+    @Test
+    fun theOwnerStamp_isForwardedToTheStore_andEchoedOnEveryItem() {
+        val outbox = FakeOutbox()
+        outbox.listResult = listOf(outboxItem(id = "item-1", owner = "stamp-a"))
+
+        val created = serve(
+            request(
+                Method.POST,
+                "/api/outbox",
+                body = validEnqueueBody().dropLast(1) + ""","owner":"stamp-a"}""",
+            ),
+            outbox,
+        )
+        val listed = JSONObject(serve(request(Method.GET, "/api/outbox"), outbox).text())
+
+        assertEquals(201, created.code())
+        assertEquals(listOf<String?>("stamp-a"), outbox.enqueueOwners)
+        assertEquals("stamp-a", listed.getJSONArray("items").getJSONObject(0).getString("owner"))
+    }
+
+    @Test
+    fun anEnqueueWithoutAnOwner_isStillAccepted_asOneFromAnOlderClient() {
+        val outbox = FakeOutbox()
+
+        val response = serve(request(Method.POST, "/api/outbox", body = validEnqueueBody()), outbox)
+
+        assertEquals(201, response.code())
+        assertEquals(listOf<String?>(null), outbox.enqueueOwners)
+    }
+
+    @Test
+    fun deletingTheCollection_clearsEveryItem_andSaysHowMany() {
+        val outbox = FakeOutbox()
+        outbox.deleteAllResult = 7
+
+        val response = serve(request(Method.DELETE, "/api/outbox"), outbox)
+
+        assertEquals(200, response.code())
+        assertEquals(1, outbox.deleteAllCalls)
+        assertEquals(7, JSONObject(response.text()).getInt("deleted"))
+    }
+
+    @Test
+    fun clearingTheCollection_stillNeedsTheBearer() {
+        val outbox = FakeOutbox()
+
+        val response = serve(request(Method.DELETE, "/api/outbox", authorization = null), outbox)
+
+        assertEquals(401, response.code())
+        assertFalse(outbox.wasTouched)
+    }
+
+    @Test
+    fun aNonStringOwner_isRejected_beforeTheStoreIsTouched() {
+        val outbox = FakeOutbox()
+
+        val response = serve(
+            request(Method.POST, "/api/outbox", body = validEnqueueBody().dropLast(1) + ""","owner":42}"""),
+            outbox,
+        )
+
+        assertEquals(400, response.code())
+        assertFalse(outbox.wasTouched)
     }
 }

@@ -1,10 +1,12 @@
 import { useMemo, useState } from 'react';
 
-import { ApolloClient } from '@apollo/client';
 import { Sheet } from '@ci/shadcn';
 import { act, fireEvent, screen } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { GET_TAG_SUGGESTIONS } from '@/components/TagInput';
+import { DateTimeFormatOverride } from '@/hooks/useDateTimeFormat';
+import { createDateTimeFormatter } from '@/lib/dateTimeFormat';
 import { renderWithProviders } from '@/test/renderWithProviders';
 
 import { withFresherEntity, type EntityItem, type MemoryEntity } from '../../useEntityService';
@@ -25,16 +27,35 @@ vi.mock('@/components/EntityRelationshipCards/EntityRelationshipCards', async (i
   return { ...actual, EntityRelationshipCards: () => null };
 });
 
+const apollo = vi.hoisted(() => ({ query: undefined as ((...args: unknown[]) => unknown) | undefined }));
+
+vi.mock('@apollo/client/react', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@apollo/client/react')>();
+
+  return {
+    ...actual,
+    useApolloClient: () => {
+      const client = actual.useApolloClient();
+
+      return Object.create(client, {
+        query: {
+          value: (...a: Parameters<typeof client.query>) => (apollo.query ?? client.query.bind(client))(...a),
+        },
+      }) as typeof client;
+    },
+  };
+});
+
 const host = { setActiveEntity: vi.fn(), refetch: vi.fn() };
 
 /** A routable entity: `event` used to resolve to an `/events/:id` "full page". */
 const EVENT_UUID = '019fd7c0-641c-76dd-8ed7-a5053faff6f1';
 
-function routableEvent(): EntityItem {
+function routableEvent(name = "Mom's birthday"): EntityItem {
   return {
     __typename: 'EventType',
     id: btoa(`event:${EVENT_UUID}`),
-    name: "Mom's birthday",
+    name,
     description: 'Cake at seven.',
     tags: [],
   } as unknown as EntityItem;
@@ -66,6 +87,31 @@ describe('EntityDetailScaffold', () => {
     expect(sheet).toHaveClass('pb-[var(--safe-area-bottom)]');
     expect(sheet).toHaveClass('[&>button]:top-[calc(var(--safe-area-top)+1rem)]');
     expect(await screen.findByRole('heading', { name: 'Project Planning Assistant' })).toBeInTheDocument();
+  });
+
+  // The drawer called an untitled chat "Thread", its kind, while Chat called it for when it started.
+  it('heads an untitled chat with the name Chat gives it', async () => {
+    renderWithProviders(
+      <DateTimeFormatOverride formatter={createDateTimeFormatter({ timeFormat: 'h23', timeZone: 'UTC' })}>
+        <EntityDrawerHostProvider value={host}>
+          <Sheet open>
+            <FallbackDetails
+              entity={
+                {
+                  __typename: 'ThreadType',
+                  id: btoa('thread:01a17e07-73a0-7abc-8def-0123456789ab'),
+                  name: null,
+                  description: null,
+                  tags: [],
+                } as unknown as EntityItem
+              }
+            />
+          </Sheet>
+        </EntityDrawerHostProvider>
+      </DateTimeFormatOverride>,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Chat · Oct 27, 15:43' })).toBeInTheDocument();
   });
 
   /**
@@ -111,6 +157,88 @@ describe('EntityDetailScaffold', () => {
 
     // Nothing in the drawer body sends iOS out to Safari.
     expect(sheet.querySelectorAll('a[target="_blank"]')).toHaveLength(0);
+  });
+
+  /**
+   * QA re-test of #2930: an Instagram message whose title ends in a URL
+   * (`… https://www.threads.com/@hannahstocking/post/DZoTALDGmu6`) drew a heading
+   * 496pt wide on a 402pt screen. It ran under the close button and pushed the four
+   * header actions (Open full page, Chat, Edit, Delete) off the right edge.
+   *
+   * On a phone the title now owns the first row and the actions sit beside the
+   * subtitle below it. jsdom does no layout, so pin the responsive grid contract
+   * that creates those rows.
+   */
+  it('gives a long mobile title its own row and moves actions beside the subtitle', async () => {
+    const url = 'https://www.threads.com/@hannahstocking/post/DZoTALDGmu6';
+
+    renderWithProviders(
+      <EntityDrawerHostProvider value={host}>
+        <Sheet open>
+          <FallbackDetails entity={routableEvent(`rest in peace to my buddy ${url}`)} />
+        </Sheet>
+      </EntityDrawerHostProvider>,
+    );
+
+    const title = await screen.findByRole('heading', { name: new RegExp(url.replace(/[.?]/g, '\\$&')) });
+    const header = title.parentElement;
+    const actions = screen.getByTestId('entity-detail-actions');
+    const subtitle = header?.querySelector('[data-slot="sheet-description"]');
+
+    expect(header).toHaveClass('grid', 'p-3', 'sm:p-5');
+    expect(title).toHaveClass('col-span-2', 'sm:col-span-1', 'min-w-0', 'break-words');
+    expect(actions).toHaveClass('row-start-2', 'sm:row-start-1', 'shrink-0');
+    expect(subtitle).toHaveClass('col-start-1', 'row-start-2');
+    expect(header).toContainElement(actions);
+
+    const sheet = screen.getByTestId('entity-detail-sheet');
+    expect(sheet.querySelector('[data-slot="sheet-header"]')?.nextElementSibling).toHaveClass(
+      'p-3',
+      'sm:p-5',
+    );
+    expect(screen.getByRole('button', { name: 'Close' }).parentElement).toBe(sheet);
+  });
+
+  it('offers the global tag vocabulary in the shared drawer editor', async () => {
+    renderWithProviders(
+      <EntityDrawerHostProvider value={host}>
+        <Sheet open>
+          <EntityDetailScaffold
+            entity={routableEvent()}
+            title="Mom's birthday"
+            subtitle="Event"
+            taggable
+            tagsEditable
+          />
+        </Sheet>
+      </EntityDrawerHostProvider>,
+      {
+        mocks: [
+          {
+            request: { query: GET_TAG_SUGGESTIONS },
+            result: {
+              data: {
+                tags: {
+                  __typename: 'TagConnection' as const,
+                  edges: [
+                    {
+                      __typename: 'TagEdge' as const,
+                      node: { __typename: 'TagType' as const, label: 'family' },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        ],
+      },
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit details' }));
+    const input = await screen.findByRole('textbox', { name: "Tags for Mom's birthday" });
+    fireEvent.focus(input);
+
+    expect(await screen.findByRole('button', { name: 'family' })).toBeInTheDocument();
   });
 });
 
@@ -160,14 +288,15 @@ describe('EntityDetailScaffold media refresh', () => {
   const A = '019fd7c0-641c-76dd-8ed7-a5053faff6f1';
   const B = '019fd7c0-641c-76dd-8ed7-a5053faff6f2';
 
-  let query: MockInstance;
+  const query = vi.fn();
 
   beforeEach(() => {
-    query = vi.spyOn(ApolloClient.prototype, 'query');
+    query.mockReset();
+    apollo.query = query;
   });
 
   afterEach(() => {
-    query.mockRestore();
+    apollo.query = undefined;
   });
 
   /**

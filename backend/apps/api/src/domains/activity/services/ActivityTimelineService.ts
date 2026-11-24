@@ -6,6 +6,7 @@ import type { UserServiceContext } from '@ci/common/context';
 import { EntityResolutionService } from '@ci/domains/entity-resolution';
 import {
   ContentService,
+  effectiveSourceSystemPredicate,
   eventsForMatchingMedia,
   mergeIdentifiers,
   searchReachesEvents,
@@ -161,12 +162,19 @@ export class ActivityTimelineService {
     const query = filters.query?.trim();
 
     if (query) {
+      // Agents' conversation turns count only when How names the agent, as the explorer lists them.
+      const showAgentTurnsFrom = filters.connectors?.filter(Boolean) ?? [];
       const searchOptions =
         filters.includeTypes != null && filters.includeTypes.length > 0
-          ? { query, maxResults: SEARCH_BUCKET_LIMIT, includeTypes: filters.includeTypes }
+          ? { query, maxResults: SEARCH_BUCKET_LIMIT, includeTypes: filters.includeTypes, showAgentTurnsFrom }
           : filters.excludeTypes != null && filters.excludeTypes.length > 0
-            ? { query, maxResults: SEARCH_BUCKET_LIMIT, excludeTypes: filters.excludeTypes }
-            : { query, maxResults: SEARCH_BUCKET_LIMIT };
+            ? {
+                query,
+                maxResults: SEARCH_BUCKET_LIMIT,
+                excludeTypes: filters.excludeTypes,
+                showAgentTurnsFrom,
+              }
+            : { query, maxResults: SEARCH_BUCKET_LIMIT, showAgentTurnsFrom };
 
       identifiers = await this.searchService.search(context, searchOptions);
 
@@ -246,11 +254,32 @@ export class ActivityTimelineService {
       parts.push(await this.getFilteredEventDailyCounts(context, start, end, timezone, filters));
     }
 
-    const sourced: Array<[IndexableEntity, { table: string; timeColumn: string; extraWhere?: string }]> = [
+    const sourced: Array<
+      [
+        IndexableEntity,
+        {
+          table: string;
+          timeColumn: string;
+          extraWhere?: string;
+          sourcePredicate?: (placeholder: string) => string;
+        },
+      ]
+    > = [
       ['browser-activity', { table: 'ci.browser_activity', timeColumn: 'time' }],
       ['communication', { table: 'ci.communications', timeColumn: 'time' }],
       // Event-linked content is a facet of its event, which is counted above.
-      ['content', { table: 'ci.content', timeColumn: 'updated_at', extraWhere: 'event_id IS NULL' }],
+      [
+        'content',
+        {
+          table: 'ci.content',
+          timeColumn: 'updated_at',
+          extraWhere: 'event_id IS NULL',
+          // By the platform that delivered the row, as the list filters it
+          // (ContentService.getEntitiesForContents) — its column says `file`.
+          sourcePredicate: (placeholder) =>
+            effectiveSourceSystemPredicate('content', (expression) => `${expression} = ANY(${placeholder})`),
+        },
+      ],
       [
         'item',
         { table: 'ci.objects', timeColumn: 'updated_at', extraWhere: 'merged_into_object_id IS NULL' },
@@ -333,6 +362,26 @@ export class ActivityTimelineService {
     return rows.map((row) => ({ date: row.date, count: row.count }));
   }
 
+  /**
+   * Per-day counts of the events the explorer lists under these filters (the
+   * What / Who / Where / How dimensions, which only events carry).
+   *
+   * A day's number is the number of rows the list files under it, so an event
+   * counts when the list shows it: only a tombstoned one (`is_deleted`) is out.
+   * That is the test `CalendarEventService.applyEventFilters` applies for the
+   * list, its `totalCount` and the map pins, and the one
+   * `CalendarEventService.aggregateHourlyActivity` applies to the rollup the
+   * unfiltered heatmap reads. This query alone lacked it, so a deleted event
+   * counted on its day only while a filter was on.
+   *
+   * A cancelled, no-show, skipped or predicted event still counts, because the
+   * list still shows it. `EVENT_HAPPENED_SQL` answers a different question
+   * (where the user was) and would have this rail count fewer events than the
+   * list it sits beside. If those events should leave the heatmap, they leave
+   * the list and the rollup with it, as one change.
+   * `ActivityTimelineService.eventLiveness.integration.spec.ts` runs this query
+   * against the list's own reader.
+   */
   private async getFilteredEventDailyCounts(
     context: UserServiceContext,
     start: string,
@@ -344,6 +393,7 @@ export class ActivityTimelineService {
     let paramIndex = 5;
     const clauses: string[] = [
       'event.user_id = $1',
+      'event.is_deleted = false',
       `event.start_time >= ($2::date::timestamp AT TIME ZONE $4)`,
       `event.start_time < (($3::date + 1)::timestamp AT TIME ZONE $4)`,
     ];
@@ -384,7 +434,6 @@ export class ActivityTimelineService {
         OR event.location_name ILIKE ANY($${paramIndex})
       )`);
       params.push(filters.places.map((name) => `%${name}%`));
-      paramIndex += 1;
     }
 
     const rows = await this.dataSource.query<Array<{ date: string; count: number }>>(
@@ -411,6 +460,8 @@ export class ActivityTimelineService {
       timeColumn: string;
       /** Keep rows whose `source_system` is one of these (the How filter). */
       sourceSystems?: string[];
+      /** The How test for a table whose column alone cannot answer it; given the list's placeholder. */
+      sourcePredicate?: (placeholder: string) => string;
       /** Extra SQL predicate, already scoped to the table's own columns. */
       extraWhere?: string;
     },
@@ -420,7 +471,11 @@ export class ActivityTimelineService {
 
     if (spec.sourceSystems && spec.sourceSystems.length > 0) {
       params.push(spec.sourceSystems);
-      clauses.push(`AND source_system = ANY($${params.length})`);
+      clauses.push(
+        spec.sourcePredicate
+          ? `AND ${spec.sourcePredicate(`$${params.length}`)}`
+          : `AND source_system = ANY($${params.length})`,
+      );
     }
 
     if (spec.extraWhere) {

@@ -44,7 +44,11 @@ struct ModelStatusResult {
 /// One download per model at a time; a second `start` for the same model is ignored rather than
 /// racing a second writer onto the same `.part` file.
 final class ModelDownloader: NSObject {
-  typealias ProgressHandler = (_ modelId: String, _ status: ModelStatus, _ downloaded: Int64, _ total: Int64) -> Void
+  /// `error` is the failure message, present only with `.error` — the JS event carries it so the UI
+  /// can say why (Android sends the same field).
+  typealias ProgressHandler = (
+    _ modelId: String, _ status: ModelStatus, _ downloaded: Int64, _ total: Int64, _ error: String?
+  ) -> Void
 
   private let onProgress: ProgressHandler
   private var session: URLSession!
@@ -53,6 +57,7 @@ final class ModelDownloader: NSObject {
 
   private final class Download {
     let info: LocalLLMModelInfo
+    let task: URLSessionDataTask
     let handle: FileHandle
     let destination: URL
     let partial: URL
@@ -61,9 +66,17 @@ final class ModelDownloader: NSObject {
     let resumeOffset: Int64
     var received: Int64 = 0
     var expectedTotal: Int64
+    /// Set (under the downloader's lock) by ``ModelDownloader/cancelDownload(_:)`` and
+    /// ``ModelDownloader/delete(_:)`` before the task is cancelled, so `finish` can tell "the user
+    /// abandoned this" — drop the `.part` — from "the connection paused", which keeps it to resume.
+    var discardPartial = false
 
-    init(info: LocalLLMModelInfo, handle: FileHandle, destination: URL, partial: URL, resumeOffset: Int64) {
+    init(
+      info: LocalLLMModelInfo, task: URLSessionDataTask, handle: FileHandle, destination: URL,
+      partial: URL, resumeOffset: Int64
+    ) {
       self.info = info
+      self.task = task
       self.handle = handle
       self.destination = destination
       self.partial = partial
@@ -83,6 +96,12 @@ final class ModelDownloader: NSObject {
     configuration.timeoutIntervalForRequest = 60
     configuration.timeoutIntervalForResource = 60 * 60 * 6
     self.session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+  }
+
+  private func report(
+    _ modelId: String, _ status: ModelStatus, _ downloaded: Int64, _ total: Int64, error: String? = nil
+  ) {
+    onProgress(modelId, status, downloaded, total, error)
   }
 
   /// Current on-disk state, with byte progress when a download is in flight or was interrupted.
@@ -117,32 +136,65 @@ final class ModelDownloader: NSObject {
     }
 
     if FileManager.default.fileExists(atPath: partial.path) {
-      // Interrupted, not in flight. Reported as `downloading` with real byte progress — the next
-      // `downloadModel` resumes from here rather than starting over.
-      return ModelStatusResult(status: .downloading, bytesDownloaded: fileSize(partial),
-                               totalBytes: info.sizeBytes, error: nil)
+      let onDisk = fileSize(partial)
+
+      switch LocalLLMPolicy.partialState(partialBytes: onDisk, expectedBytes: info.sizeBytes) {
+      case .empty:
+        break
+      case .interrupted:
+        // Not in flight (checked above) and short of the whole file: the download was interrupted.
+        // Reported as an error, with the bytes it reached, so the UI offers Retry — `downloadModel`
+        // resumes from this `.part` — rather than a "downloading" state that only offers Cancel.
+        return ModelStatusResult(
+          status: .error, bytesDownloaded: onDisk, totalBytes: info.sizeBytes,
+          error: LocalLLMPolicy.interruptedDownloadMessage)
+      case .finishing:
+        return ModelStatusResult(
+          status: .downloading, bytesDownloaded: onDisk, totalBytes: info.sizeBytes, error: nil)
+      case .oversize:
+        // Longer than the whole file: a different file than the catalog pins, not a slow download.
+        return ModelStatusResult(
+          status: .error, bytesDownloaded: onDisk, totalBytes: info.sizeBytes,
+          error: "Downloaded file is \(onDisk) bytes, expected \(info.sizeBytes). Delete and re-download.")
+      }
     }
 
     return ModelStatusResult(status: .notDownloaded, bytesDownloaded: 0, totalBytes: info.sizeBytes, error: nil)
   }
 
-  /// Starts (or resumes) the download. Throws only on conditions the caller can act on; transport
-  /// failures surface through the progress handler as `.error`.
+  /// Starts (or resumes) the download of the catalog's own pinned ``LocalLLMModelInfo/url`` — never a
+  /// URL a caller supplied — and verifies the result against the catalog's
+  /// ``LocalLLMModelInfo/sizeBytes``, never against whatever the server claims. Throws only on
+  /// conditions the caller can act on; transport failures surface through the progress handler as
+  /// `.error`.
   func start(_ info: LocalLLMModelInfo) throws {
     if isDownloading(info.modelId) { return }
 
     let destination = try LocalLLMModels.modelFile(info)
     if FileManager.default.fileExists(atPath: destination.path), fileSize(destination) == info.sizeBytes {
-      onProgress(info.modelId, .ready, info.sizeBytes, info.sizeBytes)
+      report(info.modelId, .ready, info.sizeBytes, info.sizeBytes)
 
       return
     }
 
-    guard freeDiskBytes() > minimumFreeDiskBytes else {
-      throw IntentToolError.transport("Not enough free space to download the model (need ~1 GB).")
+    let partial = try LocalLLMModels.partialFile(info)
+
+    // A partial that is already as long as the whole file yet never got promoted cannot be resumed
+    // (`Range` past the end is a 416) and cannot be trusted; start over.
+    if LocalLLMPolicy.resumePlan(partialBytes: fileSize(partial), expectedBytes: info.sizeBytes) == .restart {
+      try? FileManager.default.removeItem(at: partial)
     }
 
-    let partial = try LocalLLMModels.partialFile(info)
+    // Only what is still to fetch has to fit: the bytes of a resumable `.part` are already on disk.
+    let free = LocalLLMModels.freeDiskBytes()
+    let onDisk = fileSize(partial)
+
+    guard LocalLLMPolicy.hasEnoughDisk(freeBytes: free, sizeBytes: info.sizeBytes, bytesAlreadyOnDisk: onDisk) else {
+      throw LocalLLMError.insufficientDisk(
+        requiredBytes: LocalLLMPolicy.requiredFreeDiskBytes(sizeBytes: info.sizeBytes, bytesAlreadyOnDisk: onDisk),
+        availableBytes: free ?? 0)
+    }
+
     if !FileManager.default.fileExists(atPath: partial.path) {
       FileManager.default.createFile(atPath: partial.path, contents: nil)
     }
@@ -157,20 +209,20 @@ final class ModelDownloader: NSObject {
     }
 
     let task = session.dataTask(with: request)
-    let download = Download(info: info, handle: handle, destination: destination,
+    let download = Download(info: info, task: task, handle: handle, destination: destination,
                             partial: partial, resumeOffset: resumeOffset)
 
     lock.lock()
     active[task.taskIdentifier] = download
     lock.unlock()
 
-    onProgress(info.modelId, .downloading, resumeOffset, info.sizeBytes)
+    report(info.modelId, .downloading, resumeOffset, info.sizeBytes)
     task.resume()
   }
 
   /// Cancels any in-flight download and removes both the finished file and the partial.
   func delete(_ info: LocalLLMModelInfo) {
-    cancel(info.modelId)
+    _ = abandonActiveDownload(of: info.modelId)
 
     if let destination = try? LocalLLMModels.modelFile(info) {
       try? FileManager.default.removeItem(at: destination)
@@ -180,17 +232,40 @@ final class ModelDownloader: NSObject {
     }
   }
 
-  /// Cancels an in-flight download, leaving the `.part` file so it can be resumed later.
-  func cancel(_ modelId: String) {
-    session.getAllTasks { tasks in
-      for task in tasks {
-        self.lock.lock()
-        let matches = self.active[task.taskIdentifier]?.info.modelId == modelId
-        self.lock.unlock()
-
-        if matches { task.cancel() }
-      }
+  /// Stops an in-flight download and drops its `.part`, then reports `not_downloaded` — the final
+  /// `modelDownloadProgress` the caller is promised. Also clears a `.part` left by an interrupted
+  /// attempt (which `status` reports as `downloading`), so the UI's Cancel is never a dead button.
+  /// A model that is already fully on disk is left alone.
+  func cancelDownload(_ info: LocalLLMModelInfo) {
+    if let destination = try? LocalLLMModels.modelFile(info),
+      FileManager.default.fileExists(atPath: destination.path),
+      fileSize(destination) == info.sizeBytes
+    {
+      return
     }
+
+    // In flight: `finish` deletes the partial and reports once the task has actually stopped, so no
+    // late byte can land after the file is gone.
+    if abandonActiveDownload(of: info.modelId) { return }
+
+    if let partial = try? LocalLLMModels.partialFile(info) {
+      try? FileManager.default.removeItem(at: partial)
+    }
+    report(info.modelId, .notDownloaded, 0, info.sizeBytes)
+  }
+
+  /// Marks every in-flight download of `modelId` as abandoned and cancels its task. Returns whether
+  /// there was one. (A cancel that is *not* an abandonment — the connection paused — leaves the
+  /// `.part` for the next `start` to resume.)
+  private func abandonActiveDownload(of modelId: String) -> Bool {
+    lock.lock()
+    let downloads = active.values.filter { $0.info.modelId == modelId }
+    downloads.forEach { $0.discardPartial = true }
+    lock.unlock()
+
+    downloads.forEach { $0.task.cancel() }
+
+    return !downloads.isEmpty
   }
 
   private func isDownloading(_ modelId: String) -> Bool {
@@ -201,14 +276,7 @@ final class ModelDownloader: NSObject {
   }
 
   private func fileSize(_ url: URL) -> Int64 {
-    (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) as? Int64 ?? 0
-  }
-
-  private func freeDiskBytes() -> Int64 {
-    let path = (try? LocalLLMModels.modelsDirectory()) ?? URL(fileURLWithPath: NSTemporaryDirectory())
-    let values = try? path.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
-
-    return values?.volumeAvailableCapacityForImportantUsage ?? Int64.max
+    (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int64 ?? 0
   }
 }
 
@@ -266,7 +334,7 @@ extension ModelDownloader: URLSessionDataDelegate {
     }
 
     download.received += Int64(data.count)
-    onProgress(download.info.modelId, .downloading, download.downloadedTotal, download.expectedTotal)
+    report(download.info.modelId, .downloading, download.downloadedTotal, download.expectedTotal)
   }
 
   func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
@@ -284,12 +352,24 @@ extension ModelDownloader: URLSessionDataDelegate {
 
     try? download.handle.close()
 
+    if download.discardPartial {
+      // Abandoned by the user (cancelDownload / delete), including the case where the cancel raced
+      // the last byte: nothing of it is kept.
+      try? FileManager.default.removeItem(at: download.partial)
+      report(download.info.modelId, .notDownloaded, 0, download.info.sizeBytes)
+
+      return
+    }
+
     if let error {
-      // The `.part` file is intentionally left in place: the next start() resumes from it. A
-      // cancellation is a pause, not a failure, so it is reported as such.
+      // The `.part` file is intentionally left in place: the next start() resumes from it. It is an
+      // `error` either way — a dropped connection, the app backgrounded, a stray cancellation — and
+      // the message goes out with the event, because a UI that is told only "error" cannot say why
+      // (and `status()` will report the same `.part` as interrupted on the next poll).
       let cancelled = (error as NSError).code == NSURLErrorCancelled
-      onProgress(download.info.modelId, cancelled ? .downloading : .error,
-                 fileSize(download.partial), download.expectedTotal)
+      let message = cancelled ? LocalLLMPolicy.interruptedDownloadMessage : error.localizedDescription
+
+      report(download.info.modelId, .error, fileSize(download.partial), download.expectedTotal, error: message)
 
       if !cancelled {
         NSLog("[LocalLLM] model download failed: %@", error.localizedDescription)
@@ -301,10 +381,24 @@ extension ModelDownloader: URLSessionDataDelegate {
     let finalSize = fileSize(download.partial)
 
     guard finalSize == download.info.sizeBytes else {
+      if finalSize > download.info.sizeBytes {
+        // The server finished cleanly and sent MORE than the pinned file holds: this is a different
+        // file, not a slow one, so retrying the same request cannot fix it. Surface it as an error
+        // (`status` reports the same from the `.part`) instead of parking at "downloading" forever.
+        NSLog("[LocalLLM] model download is larger than expected: %lld of %lld bytes", finalSize, download.info.sizeBytes)
+        report(
+          download.info.modelId, .error, finalSize, download.info.sizeBytes,
+          error: "Downloaded file is \(finalSize) bytes, expected \(download.info.sizeBytes). Delete and re-download.")
+
+        return
+      }
+
       // Truncated rather than failed-outright: keep the partial so a retry resumes, and report the
       // mismatch instead of promoting a file that would fail deep inside the engine at load time.
       NSLog("[LocalLLM] model download incomplete: %lld of %lld bytes", finalSize, download.info.sizeBytes)
-      onProgress(download.info.modelId, .downloading, finalSize, download.info.sizeBytes)
+      report(
+        download.info.modelId, .error, finalSize, download.info.sizeBytes,
+        error: LocalLLMPolicy.interruptedDownloadMessage)
 
       return
     }
@@ -314,9 +408,11 @@ extension ModelDownloader: URLSessionDataDelegate {
         try FileManager.default.removeItem(at: download.destination)
       }
       try FileManager.default.moveItem(at: download.partial, to: download.destination)
-      onProgress(download.info.modelId, .ready, finalSize, finalSize)
+      report(download.info.modelId, .ready, finalSize, finalSize)
     } catch {
-      onProgress(download.info.modelId, .error, finalSize, download.info.sizeBytes)
+      report(
+        download.info.modelId, .error, finalSize, download.info.sizeBytes,
+        error: "Could not save the downloaded model: \(error.localizedDescription)")
       NSLog("[LocalLLM] could not promote the downloaded model: %@", error.localizedDescription)
     }
   }

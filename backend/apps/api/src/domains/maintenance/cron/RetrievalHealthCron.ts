@@ -7,6 +7,7 @@ import { FeatureService } from '@ci/common/feature';
 import { LoggerService } from '@ci/common/logging';
 import { Cron } from '@ci/common/schedule';
 import { ActionService } from '@ci/domains/intelligence';
+import { listOnboardedUserIds } from '@ci/domains/user';
 
 import { type RaisableAlert, RetrievalHealthService } from '../services/RetrievalHealthService';
 import { RetrievalQueryLogService } from '../services/RetrievalQueryLogService';
@@ -205,12 +206,8 @@ export class RetrievalHealthCron {
     return rows.length > 0;
   }
 
-  /** Same population every other fan-out cron uses. */
-  private async listOnboardedUserIds(): Promise<string[]> {
-    const rows = (await this.dataSource.query('SELECT id FROM ci.users WHERE onboarded = true')) as Array<{
-      id: string;
-    }>;
-
-    return rows.map((row) => String(row.id));
+  /** The same population every other fan-out on this appliance covers. */
+  private listOnboardedUserIds(): Promise<string[]> {
+    return listOnboardedUserIds(this.dataSource);
   }
 }

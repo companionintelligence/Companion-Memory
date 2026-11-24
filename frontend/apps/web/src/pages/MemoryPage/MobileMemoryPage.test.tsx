@@ -107,13 +107,12 @@ describe('MemoryPage — ?saved_search on a mobile viewport', () => {
     h.capturedArgs = undefined;
 
     const savedSearchMock: MockedResponse = {
-      request: { query: GET_SAVED_SEARCH },
-      variableMatcher: () => true,
+      request: { query: GET_SAVED_SEARCH, variables: () => true },
       result: {
         data: {
           savedSearch: {
             __typename: 'SavedSearchType',
-            id: 'saved-search-1',
+            id: btoa('saved-search:saved-search-1'),
             name: 'Sunset trips',
             description: null,
             query: 'sunset',
@@ -132,6 +131,11 @@ describe('MemoryPage — ?saved_search on a mobile viewport', () => {
               places: null,
               hasLocation: true,
               semantic: null,
+              direction: null,
+              fileKinds: null,
+              view: null,
+              areas: null,
+              bbox: null,
             },
           },
         },

@@ -10,6 +10,7 @@ describe('forecastQuality', () => {
     expect(isDisplayableLabel('Activist')).toBe(false);
     expect(isDisplayableLabel('Riot')).toBe(false);
     expect(isDisplayableLabel('No Think')).toBe(false);
+    expect(isDisplayableLabel('Label')).toBe(false);
   });
 
   it('keeps real L0 classes and named stretches', () => {

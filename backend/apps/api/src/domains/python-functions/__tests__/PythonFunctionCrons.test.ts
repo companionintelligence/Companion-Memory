@@ -13,8 +13,16 @@ const logger = { setContext() {}, log() {}, warn() {}, error() {} } as unknown a
  * @param userIds onboarded users (`SELECT id FROM ci.users …`).
  * @param usersWithSummaries users the dossier precondition query returns;
  *   defaults to every onboarded user so the un-gated crons are unaffected.
+ * @param usersWithLiveRun users with a prediction run still waiting or going.
+ *   `dispatchUnlessRunning` skips them and hands everyone else to `dispatch`,
+ *   as the real one does.
  */
-function makeCrons(userIds: string[], smartRotation = false, usersWithSummaries = userIds) {
+function makeCrons(
+  userIds: string[],
+  smartRotation = false,
+  usersWithSummaries = userIds,
+  usersWithLiveRun: string[] = [],
+) {
   const rows = (ids: string[]) => ids.map((id) => ({ id }));
   // Untyped on purpose: assertions read the bound parameters (calls[n][1]),
   // which a one-argument signature would type away.
@@ -22,8 +30,12 @@ function makeCrons(userIds: string[], smartRotation = false, usersWithSummaries 
     sql.includes('ci.summaries') ? rows(usersWithSummaries) : rows(userIds),
   );
   const dataSource = { query } as unknown as DataSource;
+  const dispatch = jest.fn().mockResolvedValue(true);
   const pythonFunctionService = {
-    dispatch: jest.fn().mockResolvedValue(true),
+    dispatch,
+    dispatchUnlessRunning: jest.fn(async (...args: unknown[]) =>
+      usersWithLiveRun.includes(args[2] as string) ? false : dispatch(...args),
+    ),
   } as unknown as PythonFunctionService;
   const featureService = {
     isFeatureEnabled: jest.fn().mockResolvedValue(smartRotation),
@@ -44,21 +56,65 @@ describe('PythonFunctionCrons', () => {
 
     expect(pythonFunctionService.dispatch).toHaveBeenCalledTimes(2);
 
-    const hourKey = new Date().toISOString().slice(0, 13);
+    const hourKey = new Date(Date.now() - 60 * 60 * 1000).toISOString().slice(0, 13);
+    const window = expect.objectContaining({ start_time: expect.any(String), end_time: expect.any(String) });
 
     expect(pythonFunctionService.dispatch).toHaveBeenCalledWith(
       'summary',
       'hourly_summary',
       'user-1',
-      {},
+      window,
       { singletonKey: `fn:hourly_summary:user-1:${hourKey}` },
     );
     expect(pythonFunctionService.dispatch).toHaveBeenCalledWith(
       'summary',
       'hourly_summary',
       'user-2',
-      {},
+      window,
       { singletonKey: `fn:hourly_summary:user-2:${hourKey}` },
+    );
+  });
+
+  it('names the hour in the job, so one that waits in the queue still summarizes that hour', async () => {
+    jest.useFakeTimers({ now: new Date('2026-11-02T14:05:00.000Z') });
+
+    try {
+      const { crons, pythonFunctionService } = makeCrons(['user-1']);
+
+      await crons.hourlySummaries();
+
+      expect(pythonFunctionService.dispatch).toHaveBeenCalledWith(
+        'summary',
+        'hourly_summary',
+        'user-1',
+        { start_time: '2026-11-02T13:00:00.000Z', end_time: '2026-11-02T14:00:00.000Z' },
+        // The key SummaryBackfillService gives this same hour, so the two dedupe.
+        { singletonKey: 'fn:hourly_summary:user-1:2026-11-02T13' },
+      );
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('keeps one waiting copy per user of work that names no window', async () => {
+    const { crons, pythonFunctionService } = makeCrons(['user-1']);
+
+    await crons.actions();
+    await crons.insights();
+
+    expect(pythonFunctionService.dispatch).toHaveBeenCalledWith(
+      'summary',
+      'actions_generation',
+      'user-1',
+      { lookback_days: 7 },
+      { singletonKey: 'fn:actions_generation:user-1:current' },
+    );
+    expect(pythonFunctionService.dispatch).toHaveBeenCalledWith(
+      'summary',
+      'insights_generation',
+      'user-1',
+      { lookback_hours: 72 },
+      { singletonKey: 'fn:insights_generation:user-1:current' },
     );
   });
 
@@ -86,6 +142,37 @@ describe('PythonFunctionCrons', () => {
       {},
       { singletonKey: `fn:hbpe:user-1:${dayKey}` },
     );
+  });
+
+  // Predict, the 02:30 nightly and the start-up sweep each use their own key
+  // and the queue refuses only an identical one that has not started. A
+  // restart, or a Predict shortly before 02:30, queued a second whole pipeline.
+  it.each([['hbpeNightly'], ['hbpeBootstrapSweep']] as const)(
+    '%s skips a user whose prediction run is still waiting or going',
+    async (method) => {
+      const { crons, pythonFunctionService } = makeCrons(['user-1', 'user-2'], false, undefined, ['user-1']);
+
+      await crons[method]();
+
+      expect(pythonFunctionService.dispatchUnlessRunning).toHaveBeenCalledTimes(2);
+      expect(pythonFunctionService.dispatch).toHaveBeenCalledTimes(1);
+      expect(pythonFunctionService.dispatch).toHaveBeenCalledWith(
+        'hbpe',
+        expect.any(String),
+        'user-2',
+        {},
+        expect.anything(),
+      );
+    },
+  );
+
+  it('leaves the summary crons on plain dispatch', async () => {
+    const { crons, pythonFunctionService } = makeCrons(['user-1'], false, undefined, ['user-1']);
+
+    await crons.dailySummaries();
+
+    expect(pythonFunctionService.dispatchUnlessRunning).not.toHaveBeenCalled();
+    expect(pythonFunctionService.dispatch).toHaveBeenCalledTimes(1);
   });
 
   it('keeps fanning out when one user fails to enqueue', async () => {
@@ -170,15 +257,13 @@ describe('PythonFunctionCrons', () => {
 
       await crons.dossierRefresh();
 
-      const hourKey = new Date().toISOString().slice(0, 13);
-
       expect(pythonFunctionService.dispatch).toHaveBeenCalledTimes(1);
       expect(pythonFunctionService.dispatch).toHaveBeenCalledWith(
         'summary',
         'dossier_refresh',
         'user-2',
         { lookback_days: 30 },
-        { singletonKey: `fn:dossier_refresh:user-2:${hourKey}` },
+        { singletonKey: 'fn:dossier_refresh:user-2:current' },
       );
     });
 

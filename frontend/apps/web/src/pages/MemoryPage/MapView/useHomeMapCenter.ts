@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
-import { gql, useApolloClient } from '@apollo/client';
+import { gql } from '@apollo/client';
+import { useApolloClient } from '@apollo/client/react';
 import { fetchJson } from '@ci/common';
 
 import { useAuth } from '@/hooks';
@@ -31,6 +32,10 @@ export interface HomePlaceNode {
   longitude?: number | null;
 }
 
+interface HomePlaceData {
+  places: { edges: Array<{ node: HomePlaceNode }> };
+}
+
 function normalizeName(value: string): string {
   return value.trim().toLowerCase().replace(/[.,]/g, '');
 }
@@ -40,9 +45,7 @@ function normalizeName(value: string): string {
  */
 export function pickHomeCity(
   page:
-    | { data?: Array<{ key?: string | null; answer?: { text?: string | null } | null }> }
-    | null
-    | undefined,
+    { data?: Array<{ key?: string | null; answer?: { text?: string | null } | null }> } | null | undefined,
 ): string | null {
   // Keyed by `question_key`, not `id`: the id is minted per appliance, so
   // indexing by it finds nothing on any database but the one the ids were
@@ -140,7 +143,7 @@ export function useHomeMapCenter(enabled = true): {
           return;
         }
 
-        const { data } = await client.query({
+        const { data } = await client.query<HomePlaceData>({
           query: HOME_PLACE_QUERY,
           variables: { query: city, first: 20 },
         });

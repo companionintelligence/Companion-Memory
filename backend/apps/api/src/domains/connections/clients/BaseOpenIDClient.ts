@@ -1,8 +1,8 @@
-import config from '@ci/configuration';
-
 import type { Connection } from '../entities/ConnectionEntity';
+import { type CallbackRequestOrigin, openIdCallbackUrl } from '../utils/callbackUrls';
 
 import { BaseClient } from './BaseClient';
+import { providerApiUrl } from './providerApiUrl';
 import type { TokenExchange } from './types';
 
 /**
@@ -15,8 +15,8 @@ export abstract class BaseOpenIDClient extends BaseClient {
 
   protected abstract baseUrl: string;
 
-  async getAuthorizationUrl(connection: Connection): Promise<string> {
-    const callbackUrl = config.auth.openid.callbackUrl || `https://${config.hostname}/openid/callback`;
+  async getAuthorizationUrl(connection: Connection, request?: CallbackRequestOrigin): Promise<string> {
+    const callbackUrl = openIdCallbackUrl(request);
 
     const returnTo = new URL(callbackUrl);
     returnTo.searchParams.set('connection_id', connection.id);
@@ -41,7 +41,8 @@ export abstract class BaseOpenIDClient extends BaseClient {
       throw new Error('API key not configured on connection');
     }
 
-    const url = endpoint.startsWith('http') ? endpoint : `${this.baseUrl}${endpoint}`;
+    // Only the provider's own API gets the key (see `providerApiUrl`).
+    const url = providerApiUrl(this.baseUrl, endpoint);
 
     const separator = url.includes('?') ? '&' : '?';
     const fullUrl = `${url}${separator}key=${apiKey}`;

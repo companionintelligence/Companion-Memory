@@ -1,23 +1,29 @@
 /**
  * In-memory fakes for the NodeEntity / RelationshipEntity repositories, shaped
  * for GraphIngestService's SET-BASED ingest path (createQueryBuilder + insert()
- * ... onConflict ... returning). These simulate exactly the two operations the
+ * ... returning, with the ON CONFLICT clause spliced in by
+ * executeInsertWithRawConflict and run on the query runner). These simulate exactly the two operations the
  * service performs against each repository:
  *
  *   - a SELECT built via `.createQueryBuilder(alias).where(...).andWhere(Brackets)`
  *     resolved with `.getMany()`, and
  *   - a batched `.createQueryBuilder().insert().into(...).values(rows)
- *     .onConflict('…').returning(cols).execute()` — DO UPDATE for nodes (a
- *     conflicting row keeps its id and takes the incoming name/description/
- *     properties), DO NOTHING for relationships.
+ *     .returning(cols)` run through the builder's query runner — DO UPDATE for nodes (a
+ *     conflicting row keeps its id, takes the incoming name/description unless
+ *     null, and MERGES the incoming properties by `mergeIngestedProperties` with
+ *     the `unionKeys` parameter the service binds; a merge tombstone is left
+ *     alone and not returned, as the conflict action's WHERE does), DO NOTHING
+ *     for relationships.
  *
  * The fakes ignore the exact SQL text and instead apply the service's actual
  * idempotency predicate (entities: (owner,type,linkedTable,linkedId); rels:
  * (owner,from,to,type)) to an in-memory row store, so a re-ingest dedups just as
  * Postgres' ON CONFLICT would. That keeps the specs asserting OBSERVABLE ingest
  * behaviour (dedup, mapping, error isolation) rather than a specific statement
- * shape.
+ * shape. The property merge the SQL performs is proven against real Postgres in
+ * GraphIngestService.propertyMerge.integration.spec.ts; here it is the TS twin.
  */
+import { mergeIngestedProperties, userEditedKeys } from '../../utils/ingestedProperties';
 
 interface StoredNode {
   entityId: string;
@@ -93,6 +99,7 @@ export function makeFakeNodeRepository(
     const wanted: Array<{ userId?: string; entityType: string; linkedTable: string; linkedId: string }> = [];
     let ownerId: string | undefined;
     let insertRows: StoredNode[] | null = null;
+    const parameters: Record<string, unknown> = {};
 
     const qb: Record<string, unknown> = {};
     Object.assign(qb, {
@@ -145,37 +152,73 @@ export function makeFakeNodeRepository(
 
         return qb;
       },
-      onConflict: () => qb,
-      returning: () => qb,
-      execute: async () => {
-        if (opts.failInsert) {
-          throw new Error('db unavailable');
-        }
+      setParameter: (name: string, value: unknown) => {
+        parameters[name] = value;
 
-        const raw: Array<Record<string, unknown>> = [];
-        for (const row of insertRows ?? []) {
-          const key = nodeCoord(row);
-          const current = store.get(key);
-          // ON CONFLICT DO UPDATE: the stored row keeps its entity_id (and every
-          // reference to it) and takes the incoming content. RETURNING yields
-          // the row that actually exists, which is what the service maps keys to.
-          const landed = current
-            ? { ...current, name: row.name, description: row.description, properties: row.properties }
-            : row;
-
-          store.set(key, landed);
-          (current ? updated : inserted).push(landed);
-          raw.push({
-            entity_id: landed.entityId,
-            entity_type: landed.entityType,
-            linked_table: landed.linkedTable,
-            linked_id: landed.linkedId,
-          });
-        }
-
-        return { raw };
+        return qb;
       },
+      returning: () => qb,
+      getQuery: () => 'INSERT INTO "fake"',
+      getParameters: () => parameters,
+      connection: {
+        driver: { escapeQueryWithParameters: (sql: string, params: unknown) => [sql, params] },
+      },
+      queryRunner: { query: async () => runInsert() },
     });
+
+    const runInsert = async () => {
+      if (opts.failInsert) {
+        throw new Error('db unavailable');
+      }
+
+      const raw: Array<Record<string, unknown>> = [];
+      for (const row of insertRows ?? []) {
+        const key = nodeCoord(row);
+        const current = store.get(key);
+
+        // The conflict action's WHERE: a tombstone is neither updated nor
+        // returned.
+        if (current?.mergedIntoEntityId != null) {
+          continue;
+        }
+
+        // ON CONFLICT DO UPDATE: the stored row keeps its entity_id (and every
+        // reference to it), takes the incoming name/description unless null,
+        // and merges the incoming properties. RETURNING yields the row that
+        // actually exists, which is what the service maps keys to.
+        // A name or description a person set by hand stays, as the conflict
+        // action's CASE keeps it.
+        const handSet = current ? userEditedKeys(current.properties) : [];
+        const landed = current
+          ? {
+              ...current,
+              name: handSet.includes('name') ? current.name : (row.name ?? current.name),
+              description: handSet.includes('description')
+                ? current.description
+                : (row.description ?? current.description),
+              properties: mergeIngestedProperties(
+                current.properties,
+                row.properties,
+                (parameters.unionKeys as string[] | undefined) ?? [],
+              ),
+            }
+          : row;
+
+        store.set(key, landed);
+        (current ? updated : inserted).push(landed);
+        raw.push({
+          entity_id: landed.entityId,
+          entity_type: landed.entityType,
+          linked_table: landed.linkedTable,
+          linked_id: landed.linkedId,
+          name: landed.name,
+          description: landed.description,
+          properties: landed.properties,
+        });
+      }
+
+      return raw;
+    };
 
     return qb;
   }
@@ -250,25 +293,31 @@ export function makeFakeRelationshipRepository(opts: { failSelect?: boolean; fai
 
         return qb;
       },
-      onConflict: () => qb,
-      execute: async () => {
-        if (opts.failInsert) {
-          throw new Error('db unavailable');
-        }
-
-        for (const row of insertRows ?? []) {
-          const key = relCoord(row);
-          if (store.has(key)) {
-            continue;
-          } // ON CONFLICT DO NOTHING
-
-          store.set(key, row);
-          inserted.push(row);
-        }
-
-        return { raw: [] };
+      getQuery: () => 'INSERT INTO "fake"',
+      getParameters: () => {},
+      connection: {
+        driver: { escapeQueryWithParameters: (sql: string, params: unknown) => [sql, params] },
       },
+      queryRunner: { query: async () => runInsert() },
     });
+
+    const runInsert = async () => {
+      if (opts.failInsert) {
+        throw new Error('db unavailable');
+      }
+
+      for (const row of insertRows ?? []) {
+        const key = relCoord(row);
+        if (store.has(key)) {
+          continue;
+        } // ON CONFLICT DO NOTHING
+
+        store.set(key, row);
+        inserted.push(row);
+      }
+
+      return [];
+    };
 
     return qb;
   }

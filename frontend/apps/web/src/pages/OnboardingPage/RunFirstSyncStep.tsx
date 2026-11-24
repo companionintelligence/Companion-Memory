@@ -1,4 +1,5 @@
 import { fetchJson } from '@ci/common';
+import { Button } from '@ci/shadcn';
 
 import { useAuth } from '@/hooks';
 
@@ -16,6 +17,13 @@ export function RunFirstSyncStep() {
       headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
     }).catch(() => undefined);
 
+    await onboard();
+  }
+
+  // The wizard promises "every step is skippable", and this is the one step the shared footer
+  // does not draw, so it carries its own way out. Finishing without the sync only skips the
+  // sync request: the owner still lands in the app, and connectors sync on their own schedule.
+  async function finishWithoutSync() {
     await onboard();
   }
 
@@ -48,6 +56,17 @@ export function RunFirstSyncStep() {
       >
         {submitting ? 'Finishing…' : 'Run my first sync and finish'}
       </OnboardingButton>
+
+      <Button
+        type="button"
+        variant="ghost"
+        size="lg"
+        className="h-11 text-base"
+        disabled={submitting}
+        onClick={() => void finishWithoutSync()}
+      >
+        Finish without syncing
+      </Button>
     </div>
   );
 }

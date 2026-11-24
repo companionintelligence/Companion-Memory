@@ -115,7 +115,13 @@ describe('createAsk bounds the two fields the asker fully controls', () => {
       { userId: 'asker-1' },
       {
         responderUserId: 'responder-1',
-        query: { queryType: 'content', dataClass: 'Photos', prompt: 'photos of us?' },
+        query: {
+          queryType: 'content',
+          dataClass: 'Photos',
+          prompt: 'photos of us?',
+          // The stripped U+200B is recorded so the owner's card can say so.
+          promptHiddenCharactersRemoved: true,
+        },
       },
     );
   });

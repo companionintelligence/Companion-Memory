@@ -39,6 +39,31 @@ function payload(): Payload {
 }
 
 describe('GraphEventListener.handleRelationshipUpserted', () => {
+  it('passes an omitted properties bag through as undefined, and forwards removeProperties', async () => {
+    const { listener, createOrUpdateRelationship } = makeListener();
+
+    await listener.handleRelationshipUpserted({
+      ownerId: 'owner-1',
+      relationship: {
+        relationshipId: 'rel-1',
+        fromEntityId: 'entity-1',
+        toEntityId: 'entity-2',
+        relationshipType: 'KNOWS',
+        mergeProperties: true,
+        removeProperties: ['source'],
+      },
+    } as Payload);
+
+    const [, write] = createOrUpdateRelationship.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(write.properties).toBeUndefined();
+    expect(write.strength).toBeUndefined();
+    expect(write.isBidirectional).toBeUndefined();
+    expect(write).toMatchObject({ mergeProperties: true, removeProperties: ['source'] });
+  });
+
   it('writes the relationship via GraphUtilityService.createOrUpdateRelationship', async () => {
     const { listener, createOrUpdateRelationship } = makeListener();
 

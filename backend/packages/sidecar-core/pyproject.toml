@@ -1,0 +1,30 @@
+# Shared library. Consumed by ci-hbpe and ci-summary; see the root
+# pyproject.toml for the naming and layout conventions.
+#
+# What the two FastAPI sidecars have in common that is not telemetry: the
+# pg-boss function runner and its routes, the shared-bearer middleware, the
+# LLM-host rewrite, and the user-timezone validation. Each service used to
+# carry its own copy of every one of these, and the copies drifted.
+#
+# Like ci-telemetry, this package is not in the mypy quarantine: it is checked
+# strictly, and so is anything else added under backend/packages.
+
+[project]
+name = "ci-sidecar-core"
+version = "0.1.0"
+description = "Function runner, bearer auth and host-rewrite scaffolding shared by the CI-Server Python sidecars"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi",
+    "httpx",
+    "pydantic",
+    "structlog",
+]
+
+[tool.uv.build-backend]
+module-name = "ci.sidecar"
+namespace = true
+
+[build-system]
+requires = ["uv_build>=0.9,<0.14"]
+build-backend = "uv_build"

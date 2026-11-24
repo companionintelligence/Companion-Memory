@@ -51,6 +51,9 @@ describe('CalendarEventService.create — source idempotency', () => {
         transaction: jest.fn(async (cb: (m: unknown) => unknown) =>
           cb({
             getRepository: (cls: unknown): unknown => (cls === EventBaseEntity ? baseRepo : repo),
+            // The refresh of a re-delivered row reads it under a lock; these
+            // rows carry no merge bases yet, and the locked read finds none.
+            query: jest.fn(async () => []),
           }),
         ),
       },

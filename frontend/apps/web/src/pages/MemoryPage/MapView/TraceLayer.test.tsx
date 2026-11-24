@@ -1,13 +1,13 @@
 import type { ReactNode } from 'react';
 
-import { useQuery } from '@apollo/client';
-import { act, render } from '@testing-library/react';
+import { useQuery } from '@apollo/client/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import type { LatLngBounds } from 'leaflet';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { boundsToBbox } from '../bbox';
 
-import { PositionTraceLayer } from './TraceLayer';
+import { PositionTraceLayer, TraceToggleControl } from './TraceLayer';
 
 /**
  * `PositionTraceLayer` needs a real Leaflet map instance for `useMap` /
@@ -79,8 +79,8 @@ vi.mock('react-leaflet', () => ({
 // Same technique as useEntityService.test.tsx / useSearchService.test.ts: mock
 // Apollo's useQuery directly so the variables it's called with can be
 // asserted without standing up a real network layer.
-vi.mock('@apollo/client', async (orig) => ({
-  ...(await orig<typeof import('@apollo/client')>()),
+vi.mock('@apollo/client/react', async (orig) => ({
+  ...(await orig<typeof import('@apollo/client/react')>()),
   useQuery: vi.fn(),
 }));
 
@@ -189,5 +189,34 @@ describe('PositionTraceLayer', () => {
 
     expect(secondBbox).toEqual(currentBbox());
     expect(secondBbox).not.toEqual(firstBbox);
+  });
+
+  it('keeps its status line above the playback bar on desktop rather than in the corner the bar covers', () => {
+    setResult({ loading: true });
+    render(<PositionTraceLayer enabled fitToTrace={false} />);
+
+    // jsdom has no layout, so this pins the placement: the bar spans the map's
+    // bottom edge at the same z-index, and a status at bottom-4 sat under it.
+    // The bar publishes how far up it reaches (PlaybackBar.test.tsx covers that
+    // half); the status has to sit on that, not on a fixed guess at it.
+    const wrapper = screen.getByText('Loading your location history…').parentElement;
+
+    expect(wrapper).toHaveClass('device:bottom-[calc(var(--playback-bar-clearance,0.5rem)+0.5rem)]');
+    expect(wrapper).not.toHaveClass('device:bottom-4');
+  });
+});
+
+describe('TraceToggleControl', () => {
+  it('shows the mobile history state compactly and keeps the full accessible action', () => {
+    const onToggle = vi.fn();
+
+    render(<TraceToggleControl enabled={false} onToggle={onToggle} compact />);
+
+    const toggle = screen.getByRole('button', { name: 'Show location history' });
+
+    expect(toggle).toHaveTextContent('HistoryOff');
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(toggle);
+    expect(onToggle).toHaveBeenCalledTimes(1);
   });
 });

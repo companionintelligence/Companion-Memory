@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 
 import { cn } from '@ci/shadcn';
 
+import { resolveMediaUrl } from '@/components/entities/resolveMediaUrl';
+
 /**
  * The one avatar rendering used everywhere a Person (or the signed-in user)
  * appears — the People grid, the person editor's preview, the nav/power rail
@@ -158,17 +160,11 @@ export function paletteFor(label: string | null | undefined): { readonly bg: str
  * initials instead of their photo.
  */
 function resolveAvatarUrl(avatarUrl: string | null | undefined): string | undefined {
-  const trimmed = avatarUrl?.trim();
-
-  if (!trimmed) {
-    return undefined;
-  }
-
-  if (/^https?:\/\//.test(trimmed) || trimmed.startsWith('data:')) {
-    return trimmed;
-  }
-
-  return `/static${trimmed}`;
+  // The shared media resolver is the convention above (absolute / `data:` as-is,
+  // a relative path under `/static`) — and, on the native shells, the one that
+  // prefixes the Memory origin, so a bundled app does not request the avatar
+  // from `capacitor://localhost`.
+  return resolveMediaUrl(avatarUrl?.trim());
 }
 
 interface Props {

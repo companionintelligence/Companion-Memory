@@ -1,5 +1,6 @@
 import { useSearchParams } from 'react-router-dom';
 
+import { useAnswersFromDevice } from '@/api/powersync/deviceFallback';
 import { MemoryEmptyState } from '@/pages/MemoryPage/Components';
 import {
   countActiveFilters,
@@ -7,6 +8,8 @@ import {
 } from '@/pages/MemoryPage/Components/ExplorerToolbar/filterParams';
 
 import { EntityResultList } from '../ListView';
+import { LocalListView } from '../LocalListView';
+import { useEntityService } from '../useEntityService';
 
 /**
  * The everything browse behind a bare `/memory`: one flat list of whatever the
@@ -26,13 +29,23 @@ import { EntityResultList } from '../ListView';
  * Sort control offers here only inside a When filter (see sortOptions) — and
  * by then the When override has kept the undated kinds out of the request
  * (see resolveExplorerTypes), so the headings are meaningful again.
+ *
+ * When the Memory server does not answer and this phone has a synced replica,
+ * the same URL renders LocalListView instead — the list the device can give,
+ * labelled as such (see deviceFallback.ts).
  */
 export function ExploreView() {
   const [searchParams] = useSearchParams();
+  const [{ error }] = useEntityService();
+  const offline = useAnswersFromDevice(error);
   const hasQuery = Boolean(searchParams.get('search')?.trim());
   const grouped = searchParams.get('sortBy') === 'time';
   const filteredBrowse = countActiveFilters(searchParams) > 0 || hasQuery;
   const { droppedByWhen } = resolveExplorerTypes(searchParams);
+
+  if (offline) {
+    return <LocalListView />;
+  }
 
   return (
     <EntityResultList

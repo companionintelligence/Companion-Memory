@@ -1,18 +1,27 @@
-import { useQuery } from '@apollo/client';
+import { NetworkStatus } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { useLiveChanges } from '@/hooks/useLiveChanges';
+import { useRefetchOnReturn } from '@/hooks/useRefetchOnReturn';
 
 import { type RhythmDay, useScheduleService } from './useScheduleService';
 
 // Mock Apollo's useQuery rather than standing up MockedProvider: everything
 // under test here is what the hook does to the response and what options it
 // asks for, both of which the network layer would only obscure.
-vi.mock('@apollo/client', async (orig) => ({
-  ...(await orig<typeof import('@apollo/client')>()),
+vi.mock('@apollo/client/react', async (orig) => ({
+  ...(await orig<typeof import('@apollo/client/react')>()),
   useQuery: vi.fn(),
 }));
 
+vi.mock('@/hooks/useLiveChanges', () => ({ useLiveChanges: vi.fn() }));
+vi.mock('@/hooks/useRefetchOnReturn', () => ({ useRefetchOnReturn: vi.fn() }));
+
 const mockedUseQuery = vi.mocked(useQuery);
+const mockedUseLiveChanges = vi.mocked(useLiveChanges);
+const mockedUseRefetchOnReturn = vi.mocked(useRefetchOnReturn);
 
 const GENERATED_AT = '2026-08-05T03:00:00.000Z';
 
@@ -23,17 +32,29 @@ interface QueryShape {
   weekForecast?: { generatedAt: string; days: RhythmDay[] } | null;
 }
 
-function setResult(data: QueryShape | undefined, error?: Error) {
+function setResult(
+  data: QueryShape | undefined,
+  error?: Error,
+  previousData?: QueryShape,
+  networkStatus?: number,
+) {
   mockedUseQuery.mockReturnValue({
     data,
+    previousData,
     loading: false,
     error,
     refetch,
+    networkStatus,
   } as unknown as ReturnType<typeof useQuery>);
 }
 
 function lastOptions() {
-  return mockedUseQuery.mock.calls.at(-1)?.[1] as { errorPolicy?: string; variables: Record<string, string> };
+  return mockedUseQuery.mock.calls.at(-1)?.[1] as {
+    errorPolicy?: string;
+    variables: Record<string, string>;
+    pollInterval?: number;
+    skipPollAttempt?: () => boolean;
+  };
 }
 
 /** The UTC date key HorizonGrid looks the rhythm lane up by. */
@@ -193,6 +214,104 @@ describe('useScheduleService — failure', () => {
     expect(result.current.error).toBe(true);
     expect(result.current.events).toEqual([]);
   });
+
+  /** A one-hour event starting `hours` after the start of `day`. */
+  function eventAt(id: string, day: Date, hours: number) {
+    const start = new Date(day.getTime() + hours * 3_600_000);
+
+    return {
+      id,
+      startTime: start.toISOString(),
+      endTime: new Date(start.getTime() + 3_600_000).toISOString(),
+    };
+  }
+
+  it('keeps the week on screen when a refresh fails outright', () => {
+    // A dropped connection comes back from Apollo as `data: undefined`, not as
+    // the last answer; the grid used to go blank about 15 s into an outage.
+    const window = currentWindow();
+    const standup = eventAt('standup', window.start, 33);
+
+    setResult(undefined, new Error('Failed to fetch'), { eventsInRange: [standup], weekForecast: null });
+
+    const { result } = renderHook(() => useScheduleService(window.start, window.end));
+
+    expect(result.current.events).toEqual([standup]);
+    expect(result.current.error).toBe(true);
+  });
+
+  it('carries over only the kept events that fall in this window', () => {
+    // Paging while offline: what resolved last is the week before.
+    const window = currentWindow();
+    const lastWeek = eventAt('last-week', addDays(window.start, -7), 10);
+    const overlapping = eventAt('overnight', window.start, -0.5);
+    const inside = eventAt('inside', window.start, 50);
+
+    setResult(undefined, new Error('Failed to fetch'), { eventsInRange: [lastWeek, overlapping, inside] });
+
+    const { result } = renderHook(() => useScheduleService(window.start, window.end));
+
+    expect(result.current.events.map((event) => event.id)).toEqual(['overnight', 'inside']);
+  });
+
+  it('keeps them through the retry that follows, until it answers', () => {
+    // Back online, the refetch clears the error before it has data; the week
+    // must not blink empty in between.
+    const window = currentWindow();
+    const standup = eventAt('standup', window.start, 33);
+
+    setResult(undefined, undefined, { eventsInRange: [standup] });
+
+    const { result } = renderHook(() => useScheduleService(window.start, window.end));
+
+    expect(result.current.events).toEqual([standup]);
+  });
+
+  it('keeps the last forecast through a failed read, but not over an answer that has none', () => {
+    const window = currentWindow();
+    const forecast = { generatedAt: GENERATED_AT, days: [rhythmDay(keyInside(window))] };
+
+    setResult(undefined, new Error('Failed to fetch'), { eventsInRange: [], weekForecast: forecast });
+    const offline = renderHook(() => useScheduleService(window.start, window.end));
+    expect(offline.result.current.generatedAt).toBe(GENERATED_AT);
+
+    // The forecast resolver answers null when the engine is off or cold.
+    setResult({ eventsInRange: null, weekForecast: null }, new Error('events failed'), {
+      eventsInRange: [],
+      weekForecast: forecast,
+    });
+    const answered = renderHook(() => useScheduleService(window.start, window.end));
+    expect(answered.result.current.generatedAt).toBeNull();
+  });
+
+  it('carries nothing over while paging to another window with nothing wrong', () => {
+    // The next week is loading for the first time; the page shows it loading.
+    const window = currentWindow();
+    const forecast = { generatedAt: GENERATED_AT, days: [rhythmDay(keyInside(window))] };
+
+    setResult(
+      undefined,
+      undefined,
+      { eventsInRange: [eventAt('overnight', window.start, -0.5)], weekForecast: forecast },
+      NetworkStatus.setVariables,
+    );
+
+    const { result } = renderHook(() => useScheduleService(window.start, window.end));
+
+    expect(result.current.events).toEqual([]);
+    expect(result.current.rhythm).toEqual([]);
+    expect(result.current.fetching).toBe(true);
+  });
+
+  it('shows what a refresh that worked returned, even when that is nothing', () => {
+    const window = currentWindow();
+
+    setResult({ eventsInRange: [] }, undefined, { eventsInRange: [eventAt('deleted', window.start, 33)] });
+
+    const { result } = renderHook(() => useScheduleService(window.start, window.end));
+
+    expect(result.current.events).toEqual([]);
+  });
 });
 
 describe('useScheduleService — refetch identity', () => {
@@ -208,5 +327,35 @@ describe('useScheduleService — refetch identity', () => {
     rerender();
 
     expect(result.current.refetch).toBe(first);
+  });
+});
+
+describe('useScheduleService — staying current', () => {
+  it('polls every half minute as the fallback, skipping the poll while the tab is hidden', () => {
+    setResult({ eventsInRange: [] });
+    renderHook(() => useScheduleService(new Date('2026-08-03T00:00:00Z'), new Date('2026-08-10T00:00:00Z')));
+
+    const options = lastOptions();
+    expect(options.pollInterval).toBe(30_000);
+
+    Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+    expect(options.skipPollAttempt?.()).toBe(true);
+    Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+    expect(options.skipPollAttempt?.()).toBe(false);
+  });
+
+  it('refetches on a calendar change from the server and on return to the tab', () => {
+    setResult({ eventsInRange: [] });
+    renderHook(() => useScheduleService(new Date('2026-08-03T00:00:00Z'), new Date('2026-08-10T00:00:00Z')));
+
+    expect(mockedUseLiveChanges).toHaveBeenCalledWith(['calendar'], expect.any(Function));
+    const [, onChange] = mockedUseLiveChanges.mock.calls.at(-1)!;
+    const [onReturn] = mockedUseRefetchOnReturn.mock.calls.at(-1)!;
+    refetch.mockClear();
+
+    onChange();
+    onReturn();
+
+    expect(refetch).toHaveBeenCalledTimes(2);
   });
 });

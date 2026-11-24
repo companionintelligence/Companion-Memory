@@ -1,7 +1,5 @@
 # GPU model residency and Ollama tuning
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 A shipped appliance runs a chat model, an embedding model, the HBPE sidecar and
 the summary sidecar against **one** GPU. Three Ollama settings decide how they
 share it, and two of the three are routinely blamed for problems they do not

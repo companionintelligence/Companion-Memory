@@ -1,4 +1,10 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { LessThan, Repository, type QueryDeepPartialEntity } from 'typeorm';
 import { v7 as uuid7 } from 'uuid';
@@ -9,7 +15,13 @@ import { MessageService, ThreadService } from '@ci/domains/conversations';
 import { EventService, INTERACTIVE_JOB_PRIORITY } from '@ci/domains/events';
 import { TaskService, isActiveTaskStatus } from '@ci/domains/planning';
 
-import { AGENT_DISPATCH_QUEUE, DISPATCH_QUEUED_STALE_MS, DISPATCH_RUNNING_STALE_MS } from '../constants';
+import {
+  AGENT_DISPATCH_QUEUE,
+  DISPATCH_QUEUED_STALE_MS,
+  DISPATCH_RUNNING_STALE_MS,
+  HARNESS_CONNECT_APP,
+  STALE_SWEEP_BATCH,
+} from '../constants';
 import { buildDispatchPacket } from '../dispatchPacket';
 import {
   AgentJobEntity,
@@ -50,6 +62,18 @@ export type SteerInput = {
   action: 'continue' | 'redirect' | 'halt';
   message?: string;
 };
+
+/**
+ * Who is calling a harness-side route (packet, checkpoint).
+ *
+ * - `owner`: the account holder signed in (a session or CI-Portal token), or
+ *   this service itself closing a stale job.
+ * - `api-key`: any api key, with the installed app it was minted for when the
+ *   connect flow minted it (`connectApp`), else `null`.
+ */
+export type JobCaller = { kind: 'owner' } | { kind: 'api-key'; connectApp: string | null };
+
+export const OWNER_CALLER: JobCaller = { kind: 'owner' };
 
 @Injectable()
 export class AgentDispatchService {
@@ -163,8 +187,14 @@ export class AgentDispatchService {
     return entity ? AgentJobEntity.toEgressType(entity) : null;
   }
 
-  async getPacket(context: UserServiceContext, id: string): Promise<AgentJob['packet']> {
+  async getPacket(
+    context: UserServiceContext,
+    id: string,
+    caller: JobCaller = OWNER_CALLER,
+  ): Promise<AgentJob['packet']> {
     const job = await this.requireJob(context, id);
+
+    assertHarnessCaller(job, caller);
 
     // The harness fetches the packet before it checkpoints, which makes this the
     // one place a halt can actually reach it: the packet body carries no status,
@@ -180,8 +210,15 @@ export class AgentDispatchService {
     return job.packet;
   }
 
-  async checkpoint(context: UserServiceContext, id: string, input: CheckpointInput): Promise<AgentJob> {
+  async checkpoint(
+    context: UserServiceContext,
+    id: string,
+    input: CheckpointInput,
+    caller: JobCaller = OWNER_CALLER,
+  ): Promise<AgentJob> {
     const job = await this.requireJob(context, id);
+
+    assertHarnessCaller(job, caller);
 
     // A terminal job does not accept more work. Without this, a late or
     // duplicated callback — the harness retries, or `agent_end` fires once more
@@ -271,14 +308,20 @@ export class AgentDispatchService {
   async failStale(now = new Date()): Promise<number> {
     const queuedCutoff = new Date(now.getTime() - DISPATCH_QUEUED_STALE_MS);
     const runningCutoff = new Date(now.getTime() - DISPATCH_RUNNING_STALE_MS);
-    const stale = [
-      ...(await this.jobRepository.find({
-        where: { status: 'queued', createdAt: LessThan(queuedCutoff) },
-      })),
-      ...(await this.jobRepository.find({
-        where: { status: 'running', updatedAt: LessThan(runningCutoff) },
-      })),
-    ];
+    // One query, OR-ed and bounded, on the partial `agent_jobs_open_idx
+    // (status, created_at, updated_at) WHERE status IN ('queued','running')`.
+    // This runs every minute and almost always finds nothing; as two separate
+    // unbounded finds it was two sequential scans of the table per tick, since
+    // the other indexes lead with `thread_id` / `user_id`. The cap only bounds
+    // one tick: anything left over is still stale next minute.
+    const stale = await this.jobRepository.find({
+      where: [
+        { status: 'queued', createdAt: LessThan(queuedCutoff) },
+        { status: 'running', updatedAt: LessThan(runningCutoff) },
+      ],
+      order: { createdAt: 'ASC' },
+      take: STALE_SWEEP_BATCH,
+    });
 
     let closed = 0;
 
@@ -527,6 +570,35 @@ export class AgentDispatchService {
     }
 
     return job;
+  }
+}
+
+/**
+ * Refuse a packet fetch or checkpoint from any api key but the harness's own.
+ *
+ * Both routes are the harness's half of a job: the packet carries the task and
+ * its `ask`, and a checkpoint writes turns stamped `openclaw` and can mark the
+ * owner's task done. They used to accept any key that reached the controller,
+ * so any app holding `memory` (a voice speaker, a glasses bridge) could read a
+ * job's packet and forge its result. A key reaches here only if it carries the
+ * job scope AND the connect flow minted it for the app that works this job
+ * (`HARNESS_CONNECT_APP`). Rotation keeps the app name, so a rotated key still
+ * matches.
+ *
+ * The owner signed in is let through: they hold full authority over their own
+ * jobs already, and halting one goes through `steer`, which stays theirs.
+ */
+function assertHarnessCaller(job: AgentJob, caller: JobCaller): void {
+  if (caller.kind === 'owner') {
+    return;
+  }
+
+  const harnessApp = HARNESS_CONNECT_APP[job.harnessId];
+
+  if (!harnessApp || caller.connectApp !== harnessApp) {
+    throw new ForbiddenException(
+      `Only the ${harnessApp ?? job.harnessId} app working job ${job.id} can fetch its packet or report on it`,
+    );
   }
 }
 

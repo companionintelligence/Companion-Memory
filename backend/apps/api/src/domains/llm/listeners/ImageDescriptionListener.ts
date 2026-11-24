@@ -56,9 +56,7 @@ export const VIDEO_YIELD_MAX_WAIT_MS = 5 * 60_000;
 
 /** One model call's outcome: a label, nothing usable, or a model that takes no images at all. */
 type LabelAttempt =
-  | { outcome: 'labelled'; value: FileDescription }
-  | { outcome: 'unusable' }
-  | { outcome: 'unsupported' };
+  { outcome: 'labelled'; value: FileDescription } | { outcome: 'unusable' } | { outcome: 'unsupported' };
 
 /**
  * Writes a title and description onto a file once its preview exists.

@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
-import { useLazyQuery } from '@apollo/client';
+import { useLazyQuery } from '@apollo/client/react';
 import { GlobalUID } from '@ci/common';
 import { Button, Input, Select } from '@ci/shadcn';
 import { useNavigate } from 'react-router-dom';
@@ -31,6 +31,10 @@ export const OBJECT_BY_IDENTIFIER = gql(`
         name
         brand
         model
+      }
+      ownedItem {
+        id
+        name
       }
       product {
         id
@@ -88,6 +92,7 @@ export function ScanBarcodeModal({ open, onClose }: Props) {
   const [namespace, setNamespace] = useState<ObjectIdentifierNamespace>('GTIN');
   const [value, setValue] = useState('');
   const [message, setMessage] = useState<string | null>(null);
+  const codeInputRef = useRef<HTMLInputElement>(null);
 
   const [lookup, { loading }] = useLazyQuery(OBJECT_BY_IDENTIFIER, { fetchPolicy: 'network-only' });
 
@@ -120,17 +125,20 @@ export function ScanBarcodeModal({ open, onClose }: Props) {
       }
 
       const match = data?.objectByIdentifier;
+      // The unit the code claims or, for a model code, the unit of that model
+      // you own (an Amazon import leaves the ASIN on the model, not the unit).
+      const target = match?.item ?? match?.ownedItem;
 
-      if (match?.item) {
+      if (target) {
         close();
-        navigate(`/items/${GlobalUID.parse('item', match.item.id)}`);
+        navigate(`/items/${GlobalUID.parse('item', target.id)}`);
 
         return;
       }
 
       if (match?.product) {
-        // A GTIN identifies the MODEL, not the unit — a match on one says the
-        // catalog knows the product but nothing you own carries the code.
+        // A GTIN identifies the MODEL, not the unit. A match on one with no
+        // owned unit says the catalog knows the product and you own none.
         setMessage(
           `That code identifies "${match.product.title}", a product model. Nothing you own claims it yet.`,
         );
@@ -153,7 +161,20 @@ export function ScanBarcodeModal({ open, onClose }: Props) {
         }
       }}
     >
-      <ResponsiveDialog.Content className="sm:max-w-[480px]">
+      <ResponsiveDialog.Content
+        className="sm:max-w-[480px]"
+        // Focus the code field through the dialog's own focus scope, not with
+        // `autoFocus`. React's autoFocus runs at commit, before the scope starts
+        // listening, so the scope never records the field as focused. Opened from
+        // the + menu, the closing menu then hands focus back to its trigger, and
+        // the trap has nothing to return it to: the sheet opened with nothing
+        // focused on a phone. Focused here, the scope remembers it and pulls
+        // focus straight back.
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          codeInputRef.current?.focus();
+        }}
+      >
         <ResponsiveDialog.Header>
           <ResponsiveDialog.Title>Scan a code</ResponsiveDialog.Title>
           <ResponsiveDialog.Description>
@@ -176,7 +197,7 @@ export function ScanBarcodeModal({ open, onClose }: Props) {
           </Select>
 
           <Input
-            autoFocus
+            ref={codeInputRef}
             aria-label="Code value"
             placeholder="Scan or type a code"
             value={value}

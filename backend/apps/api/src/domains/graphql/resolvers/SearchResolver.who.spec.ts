@@ -69,6 +69,8 @@ function makeResolver() {
       return [{ id: CONTENT.id, type: 'content' as IndexableEntity }];
     }),
     countEntitiesForContents: jest.fn(async () => 1),
+    // No content row here is a note's Content mirror (see SearchResolver.foldNoteMirrors).
+    noteMirrorIds: jest.fn(async () => new Set<string>()),
   };
 
   const entityResolutionService = {
@@ -136,12 +138,9 @@ function makeResolver() {
   return { resolver, calls };
 }
 
+/** The id segment of each cursor; a first page's cursor carries the browse total as a third segment. */
 function globalIds(page: { edges: Array<{ cursor: string }> }): string[] {
-  return page.edges.map((edge) => {
-    const decoded = Buffer.from(edge.cursor, 'base64').toString('utf8');
-
-    return decoded.slice(decoded.indexOf('::') + 2);
-  });
+  return page.edges.map((edge) => Buffer.from(edge.cursor, 'base64').toString('utf8').split('::')[1]);
 }
 
 describe('SearchResolver — the Who filter reaches communications', () => {

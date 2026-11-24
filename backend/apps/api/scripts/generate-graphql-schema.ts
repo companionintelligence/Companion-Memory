@@ -8,6 +8,7 @@ import { GraphQLSchemaBuilderModule, GraphQLSchemaFactory } from '@nestjs/graphq
 import { printSchema, lexicographicSortSchema } from 'graphql';
 
 import { GraphQLModule } from '@ci/domains/graphql';
+import { JsonObjectScalar } from '@ci/domains/graphql/scalars/JsonObjectScalar';
 
 function scanForResolvers(
   moduleRef: Type<unknown> | object,
@@ -75,7 +76,9 @@ async function generateSchema() {
   await app.init();
 
   const schemaFactory = app.get(GraphQLSchemaFactory);
-  const schema = await schemaFactory.create(resolvers);
+  // The scalar is passed in: the builder's context does not discover `@Scalar` providers, and
+  // `answerEvidence` is typed Object, which only the JSONObject scalar maps.
+  const schema = await schemaFactory.create(resolvers, [JsonObjectScalar]);
   const sortedSchema = lexicographicSortSchema(schema);
   const schemaAsString = printSchema(sortedSchema);
 

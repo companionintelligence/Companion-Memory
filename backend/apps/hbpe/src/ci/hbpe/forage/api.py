@@ -11,7 +11,7 @@ import numpy as np
 from fastapi import APIRouter, FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from ci.hbpe.auth import install_sidecar_auth, require_uuid
+from ci.hbpe.auth import install_sidecar_auth, require_user_id
 
 from .lake import lake_from_spec, sam_saturday_lake
 from .persist import write_trial
@@ -100,10 +100,8 @@ store = TrialStore()
 
 
 def _user_id(user_id: str | None) -> str:
-    if not user_id:
-        raise HTTPException(status_code=401, detail="user_id is required")
     # Becomes the trial file's name on disk (persist.write_trial) — UUID or nothing.
-    return require_uuid(user_id)
+    return require_user_id(user_id)
 
 
 def _payload(user_id: str, trial: ForageTrial) -> dict:

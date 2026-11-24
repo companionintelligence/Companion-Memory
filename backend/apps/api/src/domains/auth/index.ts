@@ -18,7 +18,7 @@
  */
 
 import { Module } from '@nestjs/common';
-import { JwtModule } from '@nestjs/jwt';
+import { JwtModule, type JwtSignOptions } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
@@ -39,7 +39,7 @@ import { ConnectCodeEntity } from './entities/ConnectCodeEntity';
 import { SessionEntity } from './entities/SessionEntity';
 import { SignupCodeEntity } from './entities/SignupCodeEntity';
 import { ConnectRequestAuthGuard } from './guards/ConnectRequestAuthGuard';
-import { CsrfGuard } from './guards/CsrfGuard';
+import { CookieCsrfGuard, CsrfGuard } from './guards/CsrfGuard';
 import { ApiKeyService } from './services/ApiKeyService';
 import { ApiKeyStrategy } from './services/ApiKeyStrategy';
 import { AuthService } from './services/AuthService';
@@ -64,7 +64,7 @@ import { SignupCodeService } from './services/SignupCodeService';
     JwtModule.register({
       secret: config.auth.jwt.authTokenSecret,
       signOptions: {
-        expiresIn: config.auth.jwt.authTokenExpiration,
+        expiresIn: config.auth.jwt.authTokenExpiration as JwtSignOptions['expiresIn'],
       },
     }),
   ],
@@ -74,6 +74,7 @@ import { SignupCodeService } from './services/SignupCodeService';
     JwtStrategy,
     SignupCodeService,
     CsrfGuard,
+    CookieCsrfGuard,
     CsrfService,
     LoginThrottleService,
     ApiKeyService,
@@ -105,5 +106,5 @@ export { ApiKeyService };
 // irreversible) and the approval controller (which refuses to take the owner's
 // answer from one). Exported from the barrel because `no-cross-domain-internals`
 // forbids reaching into `auth/types` from another domain.
-export { isManagedAppPrincipal, CONNECT_PROVENANCE } from './types';
+export { connectAppNameOf, isManagedAppPrincipal, CONNECT_PROVENANCE } from './types';
 export type { ApiKeyProvenance, ValidatedApiKey } from './types';

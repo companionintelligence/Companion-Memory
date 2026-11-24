@@ -154,6 +154,7 @@ warn_unused_configs = true
 # all of them — so every member is named here.
 packages = [
     "ci.hbpe",
+    "ci.sidecar",
     "ci.summary",
     "ci.telemetry",
 ]
@@ -177,10 +178,20 @@ module = [
 ignore_errors = true
 
 [[tool.mypy.overrides]]
+# Carved back out of the quarantine above: annotated from the start, and strict.
+# A named module outranks the ``ci.hbpe.*`` pattern.
+module = [
+    "ci.hbpe.pipeline.reserialize_queue",
+    "ci.summary.parser_worker",
+]
+ignore_errors = false
+
+[[tool.mypy.overrides]]
 # Third-party packages that ship no type information.
 module = [
     "markitdown.*",
     "nest_asyncio.*",
+    "psycopg2.*",
     "structlog.*",
 ]
 ignore_missing_imports = true

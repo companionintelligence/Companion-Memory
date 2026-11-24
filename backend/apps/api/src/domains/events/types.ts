@@ -23,6 +23,17 @@ export type Acknowledgement = {
    */
   jobId: string;
 
+  /**
+   * When this job was ENQUEUED (`pgboss.job.created_on`) — so a listener can
+   * tell how long the work waited before reaching it, and drop work that is no
+   * longer worth doing (AnswerInferenceListener). A retry keeps the original
+   * time; a dead-letter replay is a new job and gets a new one.
+   *
+   * Optional, unlike `jobId`: LocalEventService runs listeners inline, so
+   * nothing ever waited and there is no queue row to read it from.
+   */
+  enqueuedAt?: Date;
+
   done: () => void;
   fail: (reason: unknown) => void;
 
@@ -132,6 +143,32 @@ export type QueueOptions = {
 
 export type EventPayload<E extends keyof EventPayloads> = EventPayloads[E];
 
+/** pg-boss's job lifecycle, in its own words. */
+export type QueuedJobState = 'created' | 'retry' | 'active' | 'completed' | 'cancelled' | 'failed';
+
+/**
+ * One job as the queue sees it — what {@link EventService.getJob} returns.
+ *
+ * Deliberately the few fields a caller deciding "is this delivery still alive,
+ * and what will failing it do?" needs, rather than pg-boss's whole row: the
+ * events domain owns `pgboss.job`, and a domain that wants to reason about one
+ * of its own jobs should not have to learn that table's column names to do it.
+ */
+export interface QueuedJob {
+  id: string;
+  queue: string;
+  state: QueuedJobState;
+  /**
+   * Retries already spent. pg-boss increments it when it fetches a job that
+   * has been started before, so failing a job whose `retryCount` has reached
+   * `retryLimit` dead-letters it instead of retrying it.
+   */
+  retryCount: number;
+  retryLimit: number;
+  /** When the current (or last) delivery was fetched. Null if it never has been. */
+  startedOn: Date | null;
+}
+
 /**
  * Options accepted by {@link EventService.send} and {@link EventService.sendMany}.
  */
@@ -158,4 +195,30 @@ export type EventSendOptions = {
    * it too, via a plain setTimeout before running listeners inline.
    */
   startAfter?: Date | string | number;
+
+  /**
+   * How long THIS job may wait unstarted (`created` or `retry`) before pg-boss
+   * archives it instead of running it, in minutes. Overrides the queue's own
+   * `retentionMinutes` for one send, which is the point: a queue shared by work
+   * that must survive a long backlog and work that is worthless after an hour
+   * can only express the second per job. Only the pg-boss implementation honours
+   * it — `LocalEventService` runs listeners inline, so nothing ever waits.
+   *
+   * The drop is pg-boss's `archive()` sweep, so it is silent by design: no
+   * failure, no retry, no dead letter. Reach for it only for work whose next
+   * scheduled run would redo it anyway.
+   */
+  retentionMinutes?: number;
+
+  /**
+   * Seconds THIS job may stay `active` without a heartbeat before pg-boss fails
+   * (and so retries) it. For deferred jobs whose external executor reports in
+   * while it works (see `EventService.touchJob`), so a run lost with its
+   * executor is let go in minutes instead of at the queue's expiry. pg-boss
+   * refuses less than 10. Per job rather than on the queue: pg-boss keeps a
+   * queue setting that a later `updateQueue` leaves out, so an older release
+   * whose executor never reports in would inherit it. Only the pg-boss
+   * implementation honours it.
+   */
+  heartbeatSeconds?: number;
 };

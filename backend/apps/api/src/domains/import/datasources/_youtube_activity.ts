@@ -17,7 +17,9 @@ import crypto from 'node:crypto';
 
 import { youtubeLikeIdentity, youtubeSubscriptionIdentity, youtubeVideoIdFromUrl } from '@ci/domains/memory';
 
+import { decodeEntities } from './htmlToText';
 import type { Graph } from './timeline';
+import { textContent } from './timeline';
 
 const ANCHOR_RE = /<a [^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/g;
 
@@ -30,18 +32,6 @@ export function isYouTubeProduct(product: string | undefined): boolean {
 
 export function sha1(s: string): string {
   return crypto.createHash('sha1').update(s).digest('hex');
-}
-
-// Minimal HTML-entity decode for the few entities MyActivity emits.
-export function decodeEntities(s: string): string {
-  return s
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&emsp;/g, ' ');
 }
 
 // Google writes the timestamp with a narrow no-break space (U+202F) and a
@@ -156,7 +146,7 @@ export function youtubeActivityGraph(cell: ActivityCell, opts: YouTubeActivityOp
         id: activityId(url, ts, opts.index),
         classification: 'search',
         timestamp: ts,
-        content: { filename: 'search.txt', mediaType: 'text/plain', data: async () => Buffer.from(query) },
+        content: textContent('search.txt', query),
         metadata: {
           Title: query || undefined,
           Text: query || undefined,
@@ -229,11 +219,7 @@ export function youtubeActivityGraph(cell: ActivityCell, opts: YouTubeActivityOp
         id: channelId ? youtubeSubscriptionIdentity(channelId).id : activityId(channel.url, ts, opts.index),
         classification: 'subscription',
         timestamp: ts,
-        content: {
-          filename: 'subscription.txt',
-          mediaType: 'text/plain',
-          data: async () => Buffer.from(name || channel.url),
-        },
+        content: textContent('subscription.txt', name || channel.url),
         metadata: {
           Title: name || channel.url || undefined,
           Channel: name || undefined,

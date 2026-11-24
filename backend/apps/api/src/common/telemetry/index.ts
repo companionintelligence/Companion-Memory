@@ -1,4 +1,12 @@
-export { scrubEvent, scrubString } from './scrubEvent';
+export { isKeyInUrlRequest } from './outgoingRequests';
+export {
+  scrubBreadcrumb,
+  scrubEvent,
+  scrubLog,
+  scrubSpan,
+  scrubString,
+  scrubTransaction,
+} from './scrubEvent';
 export {
   dropWhenUserOptedOut,
   gateSentryTransport,

@@ -25,12 +25,14 @@ import { PythonRunCallbackGuard } from './guards/PythonRunCallbackGuard';
 import { PythonFunctionDispatchListener } from './listeners/PythonFunctionDispatchListener';
 import { PythonFunctionService } from './services/PythonFunctionService';
 import { PythonFunctionTokenService } from './services/PythonFunctionTokenService';
+import { SummaryServiceYieldGate } from './services/SummaryServiceYieldGate';
 
 @Module({
   imports: [EventsModule, LoggingModule, JwtModule.register({})],
   providers: [
     PythonFunctionService,
     PythonFunctionTokenService,
+    SummaryServiceYieldGate,
     PythonRunCallbackGuard,
     PythonFunctionDispatchListener,
     PythonFunctionCrons,
@@ -41,5 +43,7 @@ import { PythonFunctionTokenService } from './services/PythonFunctionTokenServic
 export class PythonFunctionsModule {}
 
 export { PythonFunctionService };
-export { PYTHON_FUNCTION_QUEUES, PYTHON_FUNCTIONS } from './types';
+export { PythonFunctionRunEvent } from './events';
+export { PYTHON_RUN_TOKEN_PURPOSE } from './services/PythonFunctionTokenService';
+export { PYTHON_FUNCTION_QUEUE_OPTIONS, PYTHON_FUNCTION_QUEUES, PYTHON_FUNCTIONS } from './types';
 export type { PythonFunctionTarget } from './types';

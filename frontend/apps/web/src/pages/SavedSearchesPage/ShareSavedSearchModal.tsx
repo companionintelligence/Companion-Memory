@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 
-import { useMutation } from '@apollo/client';
+import { useMutation } from '@apollo/client/react';
 import { Button, Dialog, IconButton, Label, useToast } from '@ci/shadcn';
 import { Check, ClipboardCopy, Mail, MessageSquare, QrCode as QrCodeIcon } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
@@ -14,6 +14,12 @@ import { shareUrl } from './shareLink';
 interface Props {
   savedSearch: FragmentType<typeof SavedSearchGridItemFragment>;
   onClose: () => void;
+  /**
+   * Data attributes for the dialog's content. "Save & share" in the header
+   * search panel marks it as part of that panel, so a click inside the
+   * dialog doesn't close the panel underneath (and this dialog with it).
+   */
+  contentProps?: Record<`data-${string}`, string>;
 }
 
 // Mirrors LifeScope's tagUpdateSharing: the server mints/rotates the capability
@@ -35,7 +41,7 @@ const SET_SAVED_SEARCH_SHARING = gql(`
   }
 `);
 
-export function ShareSavedSearchModal({ savedSearch: savedSearchMask, onClose }: Props) {
+export function ShareSavedSearchModal({ savedSearch: savedSearchMask, onClose, contentProps }: Props) {
   const savedSearch = useFragment(SavedSearchGridItemFragment, savedSearchMask);
   const { t } = useTranslation();
   const { toast } = useToast();
@@ -144,7 +150,7 @@ export function ShareSavedSearchModal({ savedSearch: savedSearchMask, onClose }:
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <Dialog.Content className="sm:max-w-[560px]">
+      <Dialog.Content {...contentProps} className="sm:max-w-[560px]">
         <Dialog.Header>
           <Dialog.Title>Share “{name}”</Dialog.Title>
           <Dialog.Description>
@@ -188,7 +194,7 @@ export function ShareSavedSearchModal({ savedSearch: savedSearchMask, onClose }:
                     readOnly
                     value={url}
                     onFocus={(e) => e.currentTarget.select()}
-                    className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm break-all"
+                    className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-base shadow-sm break-all md:text-sm"
                   />
                   <IconButton
                     variant="outline"

@@ -186,6 +186,15 @@ interface GraphRelationshipDeletedPayload extends EventPayload {
   relationshipId: string;
 }
 
+/**
+ * An ABSENT optional field means "leave the stored value alone"; `null` means
+ * "clear it". The payload crosses pg-boss as JSON, which drops `undefined`
+ * keys, so the distinction survives the queue only if no producer or consumer
+ * coerces an absent field to `null` — `GraphUtilityService.createOrUpdateNode`
+ * applies every field that is not `undefined`, and a `null` linked key detaches
+ * an imported row from the `(owner, entity_type, linked_table, linked_id)`
+ * coordinate its importer upserts on.
+ */
 interface GraphNodeUpsertedPayload extends EventPayload {
   ownerId: string;
   node: GraphPersonCreatedPayload['person'] & {
@@ -193,13 +202,18 @@ interface GraphNodeUpsertedPayload extends EventPayload {
     linkedTable?: string | null;
     linkedId?: string | null;
     mergeProperties?: boolean;
+    /** Keys deleted from the stored bag after `properties` is merged in, at write time. */
+    removeProperties?: string[];
   };
 }
 
+/** Same absent-vs-`null` contract as {@link GraphNodeUpsertedPayload}. */
 interface GraphRelationshipUpsertedPayload extends EventPayload {
   ownerId: string;
   relationship: GraphRelationshipInput & {
     mergeProperties?: boolean;
+    /** Keys deleted from the stored bag after `properties` is merged in, at write time. */
+    removeProperties?: string[];
   };
 }
 

@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
@@ -356,10 +356,33 @@ export class ThingVisionListener {
         continue;
       }
 
+      // A PERSON SAID NO. "Not a thing" (`rejectObservation`) leaves the row
+      // unconfirmed and unlinked under method `user`, so the check above lets
+      // it through. Taking the same photo again must not undo that answer by
+      // linking the sighting or minting a thing from it.
+      if (observation.resolutionMethod === 'user') {
+        this.logger.log('Sighting was answered by a person, not linking or minting', {
+          observationId: observation.id,
+        });
+
+        continue;
+      }
+
       // THE LADDER GETS FIRST REFUSAL. If the thing in frame is already an
       // owned unit — a barcode, an embedding, the place it lives — the sighting
       // links to that unit and this pass mints nothing.
       const resolved = await this.resolutionService.resolveAndApply(serviceContext, observation.id);
+
+      // The row this pass read can be answered between `create` and here. The
+      // ladder never produces method `user`, so an outcome carrying it means a
+      // person got there first, and `applied: false` is not a decline to mint on.
+      if (resolved?.method === 'user') {
+        this.logger.log('Sighting was answered by a person mid-pass, not minting', {
+          observationId: observation.id,
+        });
+
+        continue;
+      }
 
       if (resolved?.applied === true) {
         this.logger.log('Sighting matched an existing thing, not minting', {
@@ -387,6 +410,10 @@ export class ThingVisionListener {
         // the schema's 1.0 default would claim the latter.
         identityMethod: 'vision',
         identityConfidence: VISION_IDENTITY_CONFIDENCE,
+        // The photo is a sighting of it, linked below, so the thing starts out
+        // last seen when it was taken, as a sighting a match or a person links does.
+        lastSeenAt: observedAt,
+        ...(observation.placeEntityId != null && { lastSeenPlaceEntityId: observation.placeEntityId }),
         ...this.physicalPropertiesOf(itemData),
         metadata: {
           original_analysis: itemData,

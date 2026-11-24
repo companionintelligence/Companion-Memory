@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { act, renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -9,8 +9,8 @@ import { EntityServiceProvider, resolveLiveEntity, useEntityService } from './us
 // Same technique as useSearchService.test.ts: mock Apollo's useQuery directly
 // so the variables/fetchMore contract can be asserted without reproducing the
 // large SEARCH_QUERY document.
-vi.mock('@apollo/client', async (orig) => ({
-  ...(await orig<typeof import('@apollo/client')>()),
+vi.mock('@apollo/client/react', async (orig) => ({
+  ...(await orig<typeof import('@apollo/client/react')>()),
   useQuery: vi.fn(),
 }));
 
@@ -60,8 +60,24 @@ function setResult(
   } as unknown as ReturnType<typeof useQuery>);
 }
 
+type QueryOptions = { variables: Record<string, unknown>; skip?: boolean };
+
+/**
+ * The options of the hook's last read of `document`. The hook makes two: the search itself
+ * (always first, so `mock.calls[0]` names its document) and the name sort's cut-short side query.
+ */
+function lastOptionsOf(document: unknown) {
+  return mockedUseQuery.mock.calls.filter(([doc]) => doc === document).at(-1)?.[1] as QueryOptions;
+}
+
 function lastOptions() {
-  return mockedUseQuery.mock.calls.at(-1)?.[1] as { variables: Record<string, unknown> };
+  return lastOptionsOf(mockedUseQuery.mock.calls[0]?.[0]);
+}
+
+function lastCutShortOptions() {
+  const searchDocument = mockedUseQuery.mock.calls[0]?.[0];
+
+  return mockedUseQuery.mock.calls.filter(([doc]) => doc !== searchDocument).at(-1)?.[1] as QueryOptions;
 }
 
 interface ServiceParams {
@@ -69,7 +85,9 @@ interface ServiceParams {
   includeTypes?: string[];
   excludeTypes?: string[];
   tags?: string[];
-  bbox?: number[];
+  areas?: number[][];
+  sortBy?: string;
+  shareToken?: string;
 }
 
 function renderService(params: ServiceParams) {
@@ -145,12 +163,18 @@ describe('useEntityService', () => {
     expect(lastOptions().variables.tags).toEqual(['travel', 'food']);
   });
 
-  it('only sends bbox once all four coordinates are present', () => {
-    renderService({ searchQuery: '', bbox: [1, 2, 3] });
-    expect(lastOptions().variables.bbox).toBeUndefined();
+  it('sends only the areas that carry all four coordinates', () => {
+    renderService({ searchQuery: '', areas: [[1, 2, 3]] });
+    expect(lastOptions().variables.areas).toBeUndefined();
 
-    renderService({ searchQuery: '', bbox: [1, 2, 3, 4] });
-    expect(lastOptions().variables.bbox).toEqual([1, 2, 3, 4]);
+    renderService({
+      searchQuery: '',
+      areas: [
+        [1, 2, 3, 4],
+        [5, 6],
+      ],
+    });
+    expect(lastOptions().variables.areas).toEqual([[1, 2, 3, 4]]);
   });
 
   it('paginates by requesting the next cursor and appending, not replacing, results', async () => {
@@ -197,6 +221,68 @@ describe('useEntityService', () => {
     };
 
     expect(merged.search.edges.map((e) => e.cursor)).toEqual(['c1', 'c2']);
+  });
+
+  describe('whether a name sort was cut short', () => {
+    function bigLibrary(nameSortCutShort: boolean) {
+      setResult({
+        data: {
+          search: {
+            totalCount: 853,
+            nameSortCutShort,
+            pageInfo: { hasNextPage: true, endCursor: 'c0' },
+            edges: [edge('e0', 'c0')],
+          },
+        },
+      });
+    }
+
+    it('asks on its own, so a server without the field fails only the note', () => {
+      bigLibrary(true);
+
+      const { result } = renderService({ searchQuery: '', sortBy: 'name' });
+
+      expect(lastCutShortOptions()).toMatchObject({
+        skip: false,
+        errorPolicy: 'ignore',
+        fetchPolicy: 'cache-and-network',
+      });
+      expect(lastCutShortOptions().variables).toMatchObject({ query: '', sortBy: 'name' });
+      expect(lastCutShortOptions().variables.first).toBeUndefined();
+      expect(result.current[0].nameSortCutShort).toBe(true);
+    });
+
+    it.each([
+      ['a time sort', { searchQuery: '', sortBy: 'time' }],
+      ['search text', { searchQuery: 'paris', sortBy: 'name' }],
+      ['tags', { searchQuery: '', sortBy: 'name', tags: ['travel'] }],
+      ['a shared link', { searchQuery: '', sortBy: 'name', shareToken: 'tok' }],
+    ] as const)('does not ask under %s', (_label, params) => {
+      bigLibrary(true);
+
+      const { result } = renderService({ ...params, tags: 'tags' in params ? [...params.tags] : undefined });
+
+      expect(lastCutShortOptions().skip).toBe(true);
+      expect(result.current[0].nameSortCutShort).toBe(false);
+    });
+
+    it('does not ask when the whole list is no bigger than one kind is read for', () => {
+      setResult({
+        data: {
+          search: {
+            totalCount: 500,
+            nameSortCutShort: true,
+            pageInfo: { hasNextPage: false, endCursor: null },
+            edges: [edge('e0')],
+          },
+        },
+      });
+
+      const { result } = renderService({ searchQuery: '', sortBy: 'name' });
+
+      expect(lastCutShortOptions().skip).toBe(true);
+      expect(result.current[0].nameSortCutShort).toBe(false);
+    });
   });
 
   describe('the entity backing the open detail drawer', () => {

@@ -39,7 +39,10 @@ export class ToolsRegistrationService implements OnModuleInit {
    * are loaded, so the check sees the full registry (rather than racing module-init order).
    */
   private validateDomains(): void {
-    for (const schema of this.toolRegistry.getAvailableTools()) {
+    // Every owner's tools, not `getAvailableTools()`: with no caller that hides any tool owned by
+    // one account, and the `messaging.*` intents (owned by the BlueBubbles connector's owner) would
+    // skip this check.
+    for (const schema of this.toolRegistry.getOutboundCatalogToolsForEveryOwner()) {
       if (!isIntentDomain(schema.domain)) {
         throw new Error(`Tool ${schema.name} references unknown domain "${schema.domain}"`);
       }
@@ -59,7 +62,8 @@ export class ToolsRegistrationService implements OnModuleInit {
    * catchable by review; that is what the per-tool rationale comments are for.
    */
   private validateLocalCapability(): void {
-    const schemas = this.toolRegistry.getAvailableTools();
+    // Every owner's tools, for the same reason as validateDomains.
+    const schemas = this.toolRegistry.getOutboundCatalogToolsForEveryOwner();
 
     for (const schema of schemas) {
       if (schema.localCapable && schema.privacy.external) {

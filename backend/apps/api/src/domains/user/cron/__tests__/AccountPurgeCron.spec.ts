@@ -13,10 +13,14 @@ const emptySummary: PurgeRunSummary = {
   purged: 0,
   failed: 0,
   unpinned: 0,
+  stalled: 0,
   outcomes: [],
 };
 
-function build(purgeDueAccounts: jest.Mock) {
+function build(
+  purgeDueAccounts: jest.Mock,
+  reportStalledPurges = jest.fn().mockResolvedValue({ count: 0, oldest: [] }),
+) {
   const logger = {
     setContext: jest.fn(),
     log: jest.fn(),
@@ -24,9 +28,9 @@ function build(purgeDueAccounts: jest.Mock) {
     error: jest.fn(),
   } as unknown as LoggerService;
 
-  const service = { purgeDueAccounts } as unknown as AccountPurgeService;
+  const service = { purgeDueAccounts, reportStalledPurges } as unknown as AccountPurgeService;
 
-  return { cron: new AccountPurgeCron(service, logger), logger };
+  return { cron: new AccountPurgeCron(service, logger), logger, reportStalledPurges };
 }
 
 describe('AccountPurgeCron', () => {
@@ -56,6 +60,18 @@ describe('AccountPurgeCron', () => {
     expect(purgeDueAccounts).not.toHaveBeenCalled();
   });
 
+  it('still reports accounts left unpurged while the purge is switched off', async () => {
+    // An off switch forgotten after an incident would otherwise keep every
+    // ended account's data with nothing in the logs to say so.
+    config.accountDeletion.purge.enabled = false;
+
+    const { cron, reportStalledPurges } = build(jest.fn().mockResolvedValue(emptySummary));
+
+    await cron.purgeDueAccounts();
+
+    expect(reportStalledPurges).toHaveBeenCalledTimes(1);
+  });
+
   it('does not start a second run while one is still going', async () => {
     // A purge of a large account can outlast the hourly tick. Overlapping runs
     // would have two batch loops deleting the same rows out from under each
@@ -67,14 +83,15 @@ describe('AccountPurgeCron', () => {
     });
 
     const purgeDueAccounts = jest.fn().mockReturnValue(inFlight);
-    const { cron, logger } = build(purgeDueAccounts);
+    const { cron } = build(purgeDueAccounts);
 
     const first = cron.purgeDueAccounts();
 
     await cron.purgeDueAccounts();
 
+    // The schedule's `exclusive` guard turned the second tick away (and logged
+    // it through the decorator's own logger).
     expect(purgeDueAccounts).toHaveBeenCalledTimes(1);
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('previous run still in progress'));
 
     release();
     await first;
@@ -86,11 +103,10 @@ describe('AccountPurgeCron', () => {
       .mockRejectedValueOnce(new Error('database went away'))
       .mockResolvedValueOnce(emptySummary);
 
-    const { cron, logger } = build(purgeDueAccounts);
+    const { cron } = build(purgeDueAccounts);
 
+    // The decorator logs the failure and releases the guard.
     await cron.purgeDueAccounts();
-
-    expect(logger.error).toHaveBeenCalled();
 
     await cron.purgeDueAccounts();
 

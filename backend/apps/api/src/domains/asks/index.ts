@@ -19,6 +19,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { MemoryModule } from '@ci/domains/memory';
 import { SearchNextModule } from '@ci/domains/search-next';
 import { UserEntity } from '@ci/domains/user';
 
@@ -58,6 +59,8 @@ import { SharedSearchConsentService } from './services/SharedSearchConsentServic
       UserEntity,
     ]),
     SearchNextModule,
+    // PlaceService: a photo ask finds photos by the place they were taken, as chat does.
+    MemoryModule,
   ],
   providers: [
     AskService,
@@ -127,6 +130,7 @@ export type { ShareAuthorization } from './services/SharedSearchConsentService';
 export { SHARE_DISCLOSURE, applySearchCeiling, ceilingForShare } from './searchCeiling';
 export type { ClampableConnection, ShareDisclosure } from './searchCeiling';
 export { evaluateGrant, canonicalDataClass, canonicalQueryType, isGrantActive } from './grantMatch';
+export { normalizeText } from './canonical';
 export { TRUST_TIERS } from './types';
 export {
   DEFAULT_WINDOW_MS,
@@ -148,8 +152,10 @@ export {
   parseAskActor,
   parseDisclosureRung,
   parseGrantQueryType,
+  parseNaturalLanguageGrant,
   ASK_ACTOR_KINDS,
   MAX_ACTOR_LABEL_LENGTH,
+  type ParsedNaturalLanguageGrant,
 } from './askInput';
 export { ASK_TTL_HOURS_ENV_VAR, DEFAULT_ASK_TTL_HOURS, askTtlHours, defaultAskExpiry } from './askDeadline';
 export { inferAnswerForm, buildDisclosedAnswer, formDisclosesItems, countFreeSummary } from './disclosure';
@@ -157,12 +163,24 @@ export {
   DISCLOSURE_RUNGS,
   applyDisclosureCeiling,
   disclosureCeiling,
+  groupDisclosureCeiling,
   minRung,
+  minTrustTier,
   narrowerForm,
   narrowestRung,
+  photoAskMayMatchPlaces,
+  resolveGroupTier,
   rungAtLeast,
   rungForForm,
 } from './policy';
+export { AUDIT_SAID_PLACEHOLDER, computeAuditSaid, verifyAuditSaid } from './auditSaid';
+export {
+  ISO_27560_DPV_SCHEMA_VERSION,
+  buildIso27560ConsentReceipt,
+  verifyIso27560ConsentReceipt,
+  type BuildConsentReceiptOptions,
+  type Iso27560ConsentReceipt,
+} from './consentReceipt';
 export {
   ASK_ARCHETYPES,
   askGrammarSchema,

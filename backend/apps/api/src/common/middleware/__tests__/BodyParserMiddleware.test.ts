@@ -1,9 +1,10 @@
+import { UnsupportedMediaTypeException } from '@nestjs/common';
 import type { Reflector } from '@nestjs/core';
 import { json, urlencoded } from 'express';
 import type { NextFunction, Request, Response } from 'express';
 
 import { BODY_LIMIT_KEY } from '../../decorators';
-import { BodyParserMiddleware } from '../BodyParserMiddleware';
+import { BodyParserMiddleware, isSignedPeerContentType, transportHasBody } from '../BodyParserMiddleware';
 
 // Stub the express parsers: capture the options they're constructed with and
 // hand back a pass-through handler so use() completes synchronously.
@@ -175,6 +176,127 @@ describe('BodyParserMiddleware per-route @BodyLimit override', () => {
   });
 });
 
+describe('BodyParserMiddleware signed peer surface', () => {
+  function run(url: string, headers: Record<string, string>) {
+    jest.clearAllMocks();
+    const middleware = new BodyParserMiddleware({ get: () => undefined } as unknown as Reflector);
+    const req = { originalUrl: url, url, path: url, baseUrl: '', headers } as unknown as Request;
+    const next = jest.fn();
+
+    middleware.use(req, {} as Response, next);
+
+    return { next, jsonOptions: (json as jest.Mock).mock.calls[0]?.[0] };
+  }
+
+  it('refuses a non-JSON body with 415 before any parser runs', () => {
+    for (const url of ['/agent/v1/ask', '/Agent/V1/ask', '/agent/v1/trust-tasks']) {
+      const bodies: Record<string, string>[] = [
+        { 'content-type': 'application/x-www-form-urlencoded', 'content-length': '12' },
+        { 'content-type': 'text/plain', 'transfer-encoding': 'chunked' },
+        { 'content-length': '12' },
+      ];
+
+      for (const headers of bodies) {
+        expect(() => run(url, headers)).toThrow(UnsupportedMediaTypeException);
+        expect(json).not.toHaveBeenCalled();
+        expect(urlencoded).not.toHaveBeenCalled();
+      }
+    }
+  });
+
+  it('captures the raw bytes of a JSON body', () => {
+    const { next, jsonOptions } = run('/agent/v1/ask', {
+      'content-type': 'application/json; charset=utf-8',
+      'content-length': '12',
+    });
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(typeof jsonOptions?.verify).toBe('function');
+  });
+
+  /**
+   * `json()` decodes with the DECLARED charset while the digest is over the
+   * UTF-8 reading of the bytes, and Content-Type is not signed. Only UTF-8 (or
+   * no charset, which `json()` reads as UTF-8) keeps the two readings the same.
+   */
+  it('refuses JSON in any charset but UTF-8, and any other parameter, with 415', () => {
+    for (const type of [
+      'application/json; charset=utf-7',
+      'application/json; charset=UTF-16',
+      'application/json; charset=utf-16le',
+      'application/json; charset=iso-8859-1',
+      'application/json; charset=utf8',
+      'application/json; charset="utf-7"',
+      'application/json; charset=utf-8; charset=utf-7',
+      'application/json; charset=utf-8; foo=bar',
+      'application/json; foo=bar',
+      'application/json;',
+      'application/json; charset=',
+      'application/json; charset=utf-8x',
+      'application/jsonx',
+      'application/json-patch+json',
+    ]) {
+      expect(() => run('/agent/v1/ask', { 'content-type': type, 'content-length': '12' })).toThrow(
+        UnsupportedMediaTypeException,
+      );
+      expect(json).not.toHaveBeenCalled();
+    }
+  });
+
+  it('accepts plain application/json and application/json with charset=utf-8', () => {
+    for (const type of [
+      'application/json',
+      'Application/JSON',
+      'application/json; charset=utf-8',
+      'application/json;charset=UTF-8',
+      'application/json; Charset="utf-8"',
+    ]) {
+      const { next, jsonOptions } = run('/agent/v1/ask', { 'content-type': type, 'content-length': '12' });
+
+      expect(next).toHaveBeenCalledTimes(1);
+      expect(typeof jsonOptions?.verify).toBe('function');
+    }
+  });
+
+  it('lets a bodyless request through whatever its content type', () => {
+    const bodyless: Record<string, string>[] = [{}, { 'content-type': 'text/plain', 'content-length': '0' }];
+
+    for (const headers of bodyless) {
+      expect(run('/agent/v1/ask/abc12345', headers).next).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('leaves form bodies alone everywhere else', () => {
+    const { next, jsonOptions } = run('/api/agent/v1/ask', {
+      'content-type': 'application/x-www-form-urlencoded',
+      'content-length': '12',
+    });
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(jsonOptions?.verify).toBeUndefined();
+  });
+});
+
+describe('isSignedPeerContentType', () => {
+  it('accepts only application/json, bare or with charset=utf-8', () => {
+    expect(isSignedPeerContentType(undefined)).toBe(false);
+    expect(isSignedPeerContentType('application/json')).toBe(true);
+    expect(isSignedPeerContentType(' application/json ; charset = utf-8 ')).toBe(true);
+    expect(isSignedPeerContentType('application/json; charset=utf-7')).toBe(false);
+    expect(isSignedPeerContentType('application/json; charset=utf-16')).toBe(false);
+  });
+});
+
+describe('transportHasBody', () => {
+  it('reads the body from the transport headers, erring towards a body', () => {
+    expect(transportHasBody({})).toBe(false);
+    expect(transportHasBody({ 'content-length': '0' })).toBe(false);
+    expect(transportHasBody({ 'content-length': '1' })).toBe(true);
+    expect(transportHasBody({ 'transfer-encoding': 'chunked' })).toBe(true);
+    expect(transportHasBody({ 'content-length': 'nonsense' })).toBe(true);
+  });
+});
+
 describe('BodyParserMiddleware NDJSON streaming bypass', () => {
   it('leaves the raw stream untouched for application/x-ndjson on /v1/*', () => {
     for (const url of [
@@ -210,5 +332,64 @@ describe('BodyParserMiddleware NDJSON streaming bypass', () => {
       urlencodedLimit: '10mb',
       parsersInvoked: true,
     });
+  });
+
+  it('leaves raw streams untouched for Portable Web Spaces (/pws and /pws/*)', () => {
+    for (const url of ['/pws', '/pws/service', '/pws/space/s-1/notes/n-1']) {
+      for (const contentType of ['application/json', 'application/octet-stream']) {
+        expect(runMiddleware(url, contentType).parsersInvoked).toBe(false);
+      }
+    }
+  });
+
+  it('configures DIDComm JSON media types on /didcomm routes only', () => {
+    runMiddleware('/didcomm/message', 'application/didcomm-encrypted+json');
+    expect((json as jest.Mock).mock.calls[0]?.[0]?.type).toEqual([
+      'application/json',
+      'application/didcomm-encrypted+json',
+      'application/didcomm-signed+json',
+      'application/didcomm-plain+json',
+    ]);
+
+    runMiddleware('/api/health', 'application/json');
+    expect((json as jest.Mock).mock.calls[0]?.[0]?.type).toBe('application/json');
+  });
+});
+
+/**
+ * The peer surface's signatures cover a digest of the body as sent, so the raw
+ * bytes must be kept for every spelling of the prefix express routes there: in
+ * any case, and for an absolute-form request, which express routes by its
+ * parsed path. A lookalike prefix keeps none.
+ */
+describe('BodyParserMiddleware signed peer prefix', () => {
+  it.each(['/AGENT/V1/ask', '/agent/v1/trust-tasks'])('keeps the raw body for %s', (url) => {
+    runMiddleware(url, 'application/json');
+
+    expect(typeof (json as jest.Mock).mock.calls[0][0].verify).toBe('function');
+  });
+
+  it('keeps the raw body for an absolute-form request, matched by its parsed path', () => {
+    jest.clearAllMocks();
+    const middleware = new BodyParserMiddleware({ get: () => undefined } as unknown as Reflector);
+    const req = {
+      originalUrl: 'http://host/agent/v1/ask',
+      url: 'http://host/agent/v1/ask',
+      path: '/agent/v1/ask',
+      baseUrl: '',
+      headers: { 'content-type': 'application/json' },
+    } as unknown as Request;
+    const next = jest.fn();
+
+    middleware.use(req, {} as Response, next);
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(typeof (json as jest.Mock).mock.calls[0][0].verify).toBe('function');
+  });
+
+  it.each(['/agent/v10/ask', '/agentv1', '/v1/events'])('keeps no raw body for %s', (url) => {
+    runMiddleware(url, 'application/json');
+
+    expect((json as jest.Mock).mock.calls[0][0].verify).toBeUndefined();
   });
 });

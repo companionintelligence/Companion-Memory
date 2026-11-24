@@ -8,7 +8,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { EmbeddingModule } from '@ci/common/embeddings';
 import { ConversationModule } from '@ci/domains/conversations';
 import { EventsModule } from '@ci/domains/events';
-import { MemoryModule } from '@ci/domains/memory';
+import { MemoryModule, SELF_ENTITY_PROVISIONER } from '@ci/domains/memory';
 import { NotesModule } from '@ci/domains/notes';
 import { UserModule } from '@ci/domains/user';
 
@@ -22,9 +22,21 @@ import {
 } from './entities/ObjectIdentifierEntity';
 import { type Relationship, RelationshipEntity } from './entities/RelationshipEntity';
 import {
+  computeEntityAliasSimilarity,
+  EntityGraphGatewayService,
+  type ExistingGraphEntity,
+  type GraphEntityCandidate,
+  type GraphEntityProvenance,
+  type GraphWriterOrigin,
+  normalizeEntityKey,
+  normalizeEntityName,
+  type ReconciledEntityAction,
+} from './services/EntityGraphGatewayService';
+import {
   type EntityIdentifierBatchEntry,
   EntityIdentifierService,
   type IdentifierKey,
+  unusableIdentifiers,
 } from './services/EntityIdentifierService';
 import { GraphExpansionService } from './services/GraphExpansionService';
 import { GraphIngestService } from './services/GraphIngestService';
@@ -59,9 +71,13 @@ import { RelationshipService } from './services/RelationshipService';
     UserModule,
   ],
   providers: [
+    EntityGraphGatewayService,
     EntityIdentifierService,
     GraphExpansionService,
     GraphIngestService,
+    // Memory's KnownPlacesService needs the self entity provisioned, and cannot
+    // inject GraphIngestService itself — see memory/services/selfEntityProvisioner.ts.
+    { provide: SELF_ENTITY_PROVISIONER, useExisting: GraphIngestService },
     GraphService,
     ItemRelationshipService,
     NodeService,
@@ -69,6 +85,7 @@ import { RelationshipService } from './services/RelationshipService';
     RelationshipService,
   ],
   exports: [
+    EntityGraphGatewayService,
     EntityIdentifierService,
     GraphExpansionService,
     GraphIngestService,
@@ -82,15 +99,27 @@ import { RelationshipService } from './services/RelationshipService';
 export class GraphModule {}
 
 export {
+  computeEntityAliasSimilarity,
+  EntityGraphGatewayService,
   EntityIdentifierService,
   GraphExpansionService,
   GraphIngestService,
   GraphService,
   ItemRelationshipService,
   NodeService,
+  normalizeEntityKey,
+  normalizeEntityName,
   ObjectIdentifierService,
   RelationshipService,
 };
+export type {
+  ExistingGraphEntity,
+  GraphEntityCandidate,
+  GraphEntityProvenance,
+  GraphWriterOrigin,
+  ReconciledEntityAction,
+};
+export { unusableIdentifiers };
 export {
   EntityIdentifierEntity,
   ItemRelationshipEntity,
@@ -116,12 +145,17 @@ export type {
   GraphEntityMappingDto,
   GraphRelationshipInputDto,
   GraphIngestResult,
+  ImportedEntityMatch,
+  ImportedEntityRef,
+  ImportedEntityRekey,
+  MergedAwayEntity,
 } from './services/GraphIngestService';
 export type {
   ItemRelationshipInputDto,
   BulkItemRelationshipResult,
 } from './services/ItemRelationshipService';
 export { RelationshipMap, RelationshipType } from './types';
+export type { CreateRelationshipDto } from './types';
 export {
   SINGLE_VALUED_RELATIONSHIP_TYPES,
   SYMMETRIC_RELATIONSHIP_TYPES,
@@ -132,7 +166,10 @@ export {
 export {
   type IdentifierKind,
   type PersonNameParts,
+  PHONE_EXTENSION_PATTERN,
   classifyParticipant,
+  hasPhoneExtension,
+  isPhoneShaped,
   normalizeEmail,
   normalizeIdentifier,
   normalizeName,

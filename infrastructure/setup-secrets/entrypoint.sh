@@ -26,9 +26,10 @@ set -eu
 
 SECRETS_FILE="${SECRETS_FILE:-/run/secrets/.env.secrets}"
 # Where the per-service projections go. Standalone compose mounts one named
-# volume per service at $ROOT/<service>; the Hub manifest binds the same
-# subdirectories of its secrets host path. Either way each service then
-# mounts its own subdirectory as /run/secrets and reads
+# volume per service at $ROOT/<service>; the Hub manifest binds a folder per
+# service there, kept beside the master on the host, never inside it (a Hub
+# refuses a mount's folder inside one a service can write to). Either way each
+# service then mounts its own folder as /run/secrets and reads
 # /run/secrets/.env.secrets exactly as before.
 PROJECTION_ROOT="${SECRETS_PROJECTION_ROOT:-/run/secrets/services}"
 
@@ -73,9 +74,9 @@ project() {
 }
 
 # THE map: which service reads which key. Derived from each image's
-# entrypoint (`get_secret NAME` calls) and the powersync/dbconnstr compose
-# wrappers. A new key or a new reader is an edit here, on purpose — the
-# alternative was every service seeing everything.
+# entrypoint (`get_secret NAME` calls, infrastructure/powersync/entrypoint.sh)
+# and the dbconnstr compose wrapper. A new key or a new reader is an edit here,
+# on purpose: the alternative was every service seeing everything.
 project_all() {
   # api, worker and migrate-database share the ci/api image and entrypoint.
   project api \

@@ -82,8 +82,10 @@ export function applyCurrentLocation(
     latitude: formatExactCoordinate(fix.latitude),
     longitude: formatExactCoordinate(fix.longitude),
     address: address === '' ? draft.address : address,
-    name: nameIsPlaceholder ? (address === '' ? 'Current location' : address) : draft.name,
-    placeKind: draft.placeKind === '' ? 'address' : draft.placeKind,
+    // The street is the address, not the place's name, and a GPS fix is not
+    // the kind "address". A blank name stays blank so the user names it.
+    name: nameIsPlaceholder ? (address === '' ? 'Current location' : '') : draft.name,
+    placeKind: draft.placeKind,
   };
 }
 

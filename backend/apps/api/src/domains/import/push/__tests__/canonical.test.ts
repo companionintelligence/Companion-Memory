@@ -1,3 +1,6 @@
+import { DEAD_EVENT_STATUSES } from '@ci/domains/memory';
+
+import { IMPORTED_EVENT_STATUSES } from '../../datasources/timeline';
 import type { StagedItem } from '../../entities/StagedItemEntity';
 import {
   communicationAttachmentsFrom,
@@ -82,6 +85,36 @@ describe('toCanonical', () => {
 
     expect(record.dated).toBe(false);
     expect(record.startTime).toBe('2026-08-12T00:00:00.000Z');
+  });
+
+  it('lifts a stated event status out of metadata', () => {
+    for (const status of IMPORTED_EVENT_STATUSES) {
+      expect(recordFor({ classification: 'event', metadata: { eventStatus: status } }).eventStatus).toBe(
+        status,
+      );
+    }
+
+    expect(recordFor({ classification: 'event' }).eventStatus).toBeNull();
+  });
+
+  it('drops a status outside the closed list rather than send it', () => {
+    // `events_status_check` would refuse any of these and fail the whole batch,
+    // and the planner's statuses are not a source's to state. Nor is a vendor's
+    // free-text `Status` (Uber, PayPal, a Google order), which is a different
+    // key altogether.
+    for (const eventStatus of ['CANCELLED', 'canceled', 'completed', 'no_show', 'Delivered', true, 1]) {
+      expect(recordFor({ classification: 'event', metadata: { eventStatus } }).eventStatus).toBeNull();
+    }
+
+    expect(recordFor({ classification: 'trip', metadata: { Status: 'completed' } }).eventStatus).toBeNull();
+  });
+
+  it("states a cancellation in the vocabulary the calendar's readers treat as dead", () => {
+    // LIVE_EVENT_SQL, Known places and daily metrics all leave out the dead
+    // statuses. If the two lists drift, an imported cancellation counts again.
+    const dead: readonly string[] = DEAD_EVENT_STATUSES;
+
+    expect(IMPORTED_EVENT_STATUSES.filter((status) => dead.includes(status))).toEqual(['cancelled']);
   });
 });
 

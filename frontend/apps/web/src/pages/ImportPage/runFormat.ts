@@ -9,6 +9,8 @@
  * deliberately.
  */
 
+import { ARCHIVE_NAME } from './groupImportFiles';
+
 /**
  * Human label per stage kind, for the stage bar.
  *
@@ -131,20 +133,66 @@ export function runStatusLabel(status: string): string {
   return RUN_STATUS_LABELS[status] ?? status;
 }
 
+/** What each importer is called, as far as labelling a run needs the catalogue. */
+export type ServiceTitles = readonly { readonly name: string; readonly title: string }[];
+
 /**
  * Turn a run's detected data-source names into what the catalogue calls them.
  *
  * Falls back to a de-underscored version of the raw name rather than hiding a
  * source the catalogue does not know about: a parser can outlive its catalogue
  * entry, and "kindle_reading" read badly but read.
+ *
+ * Each service is named ONCE, in the order it first appears. `data_sources`
+ * records one entry per recognized FILE, not per service — a real Google Takeout
+ * is 47 entries of which 30 are `google_my_activity` — so the one-for-one map
+ * this used to be put the same badge on a run card three times over and made the
+ * "+44" it counted from them a count of files. Deduped on the LABEL, not the
+ * raw name, so two importers the catalogue gives one title read as one service
+ * too.
  */
-export function serviceLabels(
-  names: readonly string[],
-  sources: readonly { readonly name: string; readonly title: string }[],
-): string[] {
+export function serviceLabels(names: readonly string[], sources: ServiceTitles): string[] {
   const titles = new Map(sources.map((source) => [source.name, source.title]));
 
-  return names.map((name) => titles.get(name) ?? name.replace(/_/g, ' '));
+  return [...new Set(names.map((name) => titles.get(name) ?? name.replace(/_/g, ' ')))];
+}
+
+/**
+ * The runner's sub-label for a stage ("parsing gmail (1/2)", "pushing") — while
+ * it is still true.
+ *
+ * The runner writes `phase` as a stage works and nothing clears it when the
+ * stage ends (`ImportRunService.completeStage` leaves the column alone), so a
+ * finished stage keeps whatever it said last: a completed Read reading "parsing
+ * fitbit (56/57)" and a completed Save reading "pushing", in-progress words under
+ * a green check. A completed stage has no sub-label; the check says it.
+ *
+ * A failed stage keeps its phase on purpose: where it stopped is the first thing
+ * anyone asks about one that did not finish. It says that it stopped, though.
+ * The bare phase is in the present tense, so a failed Unpack read "Unpack
+ * extracting" beside its red error and Try again, as if it were still at work.
+ *
+ * A queued or cancelled stage says nothing. The runner only writes `phase` while
+ * it holds the stage, so a queued one that has a phase got it on an earlier
+ * attempt: Try again and the orphan requeue both put a stage back to `queued`
+ * without clearing it, and the stage sat reading "extracting" while it waited.
+ * Cancelling a run only cancels its queued stages (`ImportRunService.cancel`),
+ * so a cancelled stage's phase is from an earlier attempt too.
+ */
+export function stagePhase(stage: { readonly status: string; readonly phase: string | null }): string | null {
+  if (!stage.phase) {
+    return null;
+  }
+
+  if (stage.status === 'running') {
+    return stage.phase;
+  }
+
+  if (stage.status === 'failed') {
+    return `failed while ${stage.phase}`;
+  }
+
+  return null;
 }
 
 /**
@@ -166,7 +214,7 @@ export function humanizeUnit(unit: string | null | undefined): string | null {
     return null;
   }
 
-  const trimmed = unit.trim().replace(/\.(zip|tar|tgz|gz|7z|rar)$/i, '');
+  const trimmed = unit.trim().replace(ARCHIVE_NAME, '');
 
   if (trimmed.length === 0) {
     return null;

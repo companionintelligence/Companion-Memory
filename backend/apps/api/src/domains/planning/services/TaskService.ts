@@ -1,16 +1,24 @@
 import { createHash } from 'crypto';
 
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, MoreThan, Repository } from 'typeorm';
+import { In, MoreThan, Repository, type SelectQueryBuilder } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
-import { UserServiceContext } from '@ci/common/context';
+import { SYSTEM_USER, UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { withoutUndefined } from '@ci/common/persistence';
+import {
+  type KeysetByPage,
+  type KeysetPageArgs,
+  type SeekKey,
+  keysetPaginateBy,
+  withoutUndefined,
+} from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
+import { LiveChangesService } from '@ci/domains/live-changes';
 import { CalendarEventService, EventEntity } from '@ci/domains/memory';
 
+import { classifyTaskL0 } from '../engine/taskL0Classifier';
 import { type Task, TaskEntity } from '../entities/TaskEntity';
 import {
   type TaskPendingChange,
@@ -18,7 +26,7 @@ import {
   TaskPendingChangeEntity,
 } from '../entities/TaskPendingChangeEntity';
 import { TaskCreatedEvent, TaskUpdatedEvent, TaskRemovedEvent } from '../events';
-import { TITLE_MATCH_TASK_STATUSES } from '../taskStatus';
+import { CLOSED_TASK_STATUSES, TITLE_MATCH_TASK_STATUSES } from '../taskStatus';
 import type { CreateTaskDto, CreateTaskPendingChangeDto, FindTasksOptions, UpdateTaskDto } from '../types';
 
 const PLANNED_BLOCK = 'planned_block';
@@ -34,6 +42,20 @@ const PLANNED_BLOCK = 'planned_block';
  * query to every user's tasks. Cron fan-out enqueuers resolve a real user id
  * before calling in.
  */
+/**
+ * The task list's order — what {@link TaskService.findAll} sorts by and
+ * {@link TaskService.findPage} seeks on: soonest deadline first, with the
+ * undated last (`NULLS LAST` is explicit because Postgres puts NULLs first in
+ * an ascending sort), then priority, newest first among equals, and the id so
+ * the order is total.
+ */
+const TASK_LIST_ORDER: readonly SeekKey[] = [
+  { expr: 'task.due_at', order: 'ASC', nulls: 'LAST', nullable: true, read: 'CAST(task.due_at AS text)' },
+  { expr: 'task.priority', order: 'ASC' },
+  { expr: 'task.created_at', order: 'DESC', read: 'CAST(task.created_at AS text)' },
+  { expr: 'task.id', order: 'DESC' },
+];
+
 @Injectable()
 export class TaskService {
   constructor(
@@ -46,8 +68,23 @@ export class TaskService {
     private readonly eventService: EventService,
     private readonly calendarEventService: CalendarEventService,
     private readonly logger: LoggerService,
+    /**
+     * Tells the user's other open sessions to re-read. Optional only so suites
+     * can build the service by hand; the module is global in the app.
+     */
+    @Optional() private readonly liveChanges?: LiveChangesService,
   ) {
     this.logger.setContext(TaskService.name);
+  }
+
+  /**
+   * Every write to a task or to its review queue ends here. The signalling
+   * bus call beside each one feeds the indexers; this feeds the calendar and
+   * plan pages another device has open, which otherwise learn of the change
+   * on their next poll.
+   */
+  private async announceChanged(userId: string | typeof SYSTEM_USER): Promise<void> {
+    await this.liveChanges?.publish(userId, 'tasks');
   }
 
   /**
@@ -131,15 +168,21 @@ export class TaskService {
       await this.assertOwnsParent(context, data.parentId);
     }
 
+    const l0Class =
+      data.l0Class !== undefined ? data.l0Class : classifyTaskL0(data.title, data.description, data.notes);
+
     const record = this.taskRepository.create({
       ...data,
       id: data.id || uuidv7(),
       userId: context.userId,
+      l0Class,
     });
 
     const entity = await this.taskRepository.save(record);
 
     await this.eventService.send(TaskCreatedEvent, { taskId: entity.id, userId: entity.userId });
+
+    await this.announceChanged(entity.userId);
 
     return TaskEntity.toEgressType(entity);
   }
@@ -159,6 +202,10 @@ export class TaskService {
   }
 
   async findByIds(context: UserServiceContext, ids: string[]): Promise<(Task | null)[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+
     const results = await this.taskRepository.find({
       where: { id: In(ids), userId: context.userId },
     });
@@ -205,36 +252,18 @@ export class TaskService {
   }
 
   /**
-   * Open work first, then by soonest deadline. Tasks without a due date sort
-   * last rather than first — `NULLS LAST` is explicit because Postgres defaults
-   * to `NULLS FIRST` for ascending order.
+   * By soonest deadline, in {@link TASK_LIST_ORDER}. Every task that matches
+   * `options`; {@link findPage} reads the same list one page at a time.
    */
   async findAll(context: UserServiceContext, options: FindTasksOptions = {}): Promise<Task[]> {
-    let query = this.taskRepository
-      .createQueryBuilder('task')
-      .where('task.user_id = :userId', { userId: context.userId });
+    let query = this.listScope(this.taskRepository.createQueryBuilder('task'), context, options);
 
-    if (options.status?.length) {
-      query = query.andWhere('task.status IN (:...status)', { status: options.status });
-    }
+    TASK_LIST_ORDER.forEach((key, i) => {
+      const nulls = key.nulls === 'LAST' ? 'NULLS LAST' : undefined;
 
-    if (options.scheduledFor) {
-      query = query.andWhere('task.scheduled_for = :scheduledFor', {
-        scheduledFor: options.scheduledFor,
-      });
-    }
-
-    if (options.parentId !== undefined) {
       query =
-        options.parentId === null
-          ? query.andWhere('task.parent_id IS NULL')
-          : query.andWhere('task.parent_id = :parentId', { parentId: options.parentId });
-    }
-
-    query = query
-      .orderBy('task.due_at', 'ASC', 'NULLS LAST')
-      .addOrderBy('task.priority', 'ASC')
-      .addOrderBy('task.created_at', 'DESC');
+        i === 0 ? query.orderBy(key.expr, key.order, nulls) : query.addOrderBy(key.expr, key.order, nulls);
+    });
 
     if (options.limit) {
       query = query.limit(options.limit);
@@ -245,8 +274,78 @@ export class TaskService {
     return results.map((entity) => TaskEntity.toEgressType(entity));
   }
 
+  /**
+   * One page of {@link findAll}'s list, in its order, read with a `LIMIT` and a
+   * seek past the cursor row instead of every task that matches. The cursor is
+   * the row id; one that matches no row yields an empty page. The `COUNT(*)`
+   * behind `totalCount` — over the same filter — runs only when `countTotal`
+   * is set.
+   */
+  async findPage(
+    context: UserServiceContext,
+    args: KeysetPageArgs,
+    options: Omit<FindTasksOptions, 'limit'> & { countTotal?: boolean } = {},
+  ): Promise<KeysetByPage<Task>> {
+    const page = await keysetPaginateBy(this.taskRepository, args, {
+      alias: 'task',
+      keys: TASK_LIST_ORDER,
+      idExpr: 'task.id',
+      countTotal: options.countTotal,
+      scope: (qb) => this.listScope(qb, context, options),
+    });
+
+    return { ...page, entities: page.entities.map((entity) => TaskEntity.toEgressType(entity)) };
+  }
+
+  /** The rows {@link findAll} and {@link findPage} list: the caller's tasks, narrowed by `options`. */
+  private listScope(
+    qb: SelectQueryBuilder<TaskEntity>,
+    context: UserServiceContext,
+    options: Omit<FindTasksOptions, 'limit'>,
+  ): SelectQueryBuilder<TaskEntity> {
+    qb = qb.where('task.user_id = :userId', { userId: context.userId });
+
+    if (options.status?.length) {
+      qb = qb.andWhere('task.status IN (:...status)', { status: options.status });
+    }
+
+    if (options.scheduledFor) {
+      qb = qb.andWhere('task.scheduled_for = :scheduledFor', { scheduledFor: options.scheduledFor });
+    }
+
+    if (options.parentId !== undefined) {
+      qb =
+        options.parentId === null
+          ? qb.andWhere('task.parent_id IS NULL')
+          : qb.andWhere('task.parent_id = :parentId', { parentId: options.parentId });
+    }
+
+    if (options.parentIds) {
+      qb = qb.andWhere('task.parent_id IN (:...parentIds)', { parentIds: options.parentIds });
+    }
+
+    return qb;
+  }
+
   async findChildren(context: UserServiceContext, parentId: string): Promise<Task[]> {
     return this.findAll(context, { parentId });
+  }
+
+  /** {@link findChildren} for a page of parents in one read, keyed by parent id, in `findAll`'s order. */
+  async findChildrenOf(context: UserServiceContext, parentIds: string[]): Promise<Map<string, Task[]>> {
+    const byParent = new Map<string, Task[]>();
+
+    if (parentIds.length === 0) {
+      return byParent;
+    }
+
+    for (const task of await this.findAll(context, { parentIds })) {
+      if (task.parentId != null) {
+        byParent.set(task.parentId, [...(byParent.get(task.parentId) ?? []), task]);
+      }
+    }
+
+    return byParent;
   }
 
   async update(context: UserServiceContext, id: string, data: UpdateTaskDto): Promise<Task | null> {
@@ -262,11 +361,37 @@ export class TaskService {
       await this.assertOwnsParent(context, data.parentId, id);
     }
 
+    // The Plan UI's "Notes" field reads and writes `description`, while scan
+    // automation (`appendNotes`) writes to `notes`. When a caller updates or
+    // clears `description` without explicitly setting `notes`, fold `notes`
+    // into `description` so the user's edit replaces or clears the displayed
+    // text cleanly rather than leaving stale automation notes behind.
+    if (data.description !== undefined && data.notes === undefined && record.notes != null) {
+      record.notes = null;
+    }
+
     Object.assign(record, withoutUndefined(data));
+
+    if (
+      data.l0Class === undefined &&
+      (data.title !== undefined ||
+        data.description !== undefined ||
+        data.notes !== undefined ||
+        !record.l0Class ||
+        record.l0Class === 'UNKNOWN')
+    ) {
+      record.l0Class = classifyTaskL0(record.title, record.description, record.notes);
+    }
 
     const entity = await this.taskRepository.save(record);
 
+    if (data.status != null && CLOSED_TASK_STATUSES.includes(data.status)) {
+      await this.resolvePendingChangesOfClosedTask(context, entity.id);
+    }
+
     await this.eventService.send(TaskUpdatedEvent, { taskId: entity.id, userId: entity.userId });
+
+    await this.announceChanged(entity.userId);
 
     return TaskEntity.toEgressType(entity);
   }
@@ -298,6 +423,8 @@ export class TaskService {
 
     await this.eventService.send(TaskUpdatedEvent, { taskId: entity.id, userId: entity.userId });
 
+    await this.announceChanged(entity.userId);
+
     return TaskEntity.toEgressType(entity);
   }
 
@@ -318,13 +445,21 @@ export class TaskService {
     record.status = 'done';
     record.completedAt = record.completedAt ?? new Date();
 
+    if (!record.l0Class || record.l0Class === 'UNKNOWN') {
+      record.l0Class = classifyTaskL0(record.title, record.description, record.notes);
+    }
+
     if (actualMinutes != null) {
       record.actualMinutes = actualMinutes;
     }
 
     const entity = await this.taskRepository.save(record);
 
+    await this.resolvePendingChangesOfClosedTask(context, entity.id);
+
     await this.eventService.send(TaskUpdatedEvent, { taskId: entity.id, userId: entity.userId });
+
+    await this.announceChanged(entity.userId);
 
     return TaskEntity.toEgressType(entity);
   }
@@ -345,6 +480,8 @@ export class TaskService {
 
     await this.eventService.send(TaskUpdatedEvent, { taskId: entity.id, userId: entity.userId });
 
+    await this.announceChanged(entity.userId);
+
     return TaskEntity.toEgressType(entity);
   }
 
@@ -364,6 +501,8 @@ export class TaskService {
 
     await this.eventService.send(TaskUpdatedEvent, { taskId: entity.id, userId: entity.userId });
 
+    await this.announceChanged(entity.userId);
+
     return TaskEntity.toEgressType(entity);
   }
 
@@ -381,9 +520,46 @@ export class TaskService {
 
     const entity = await this.taskRepository.save(record);
 
+    await this.resolvePendingChangesOfClosedTask(context, entity.id);
+
     await this.eventService.send(TaskUpdatedEvent, { taskId: entity.id, userId: entity.userId });
 
+    await this.announceChanged(entity.userId);
+
     return TaskEntity.toEgressType(entity);
+  }
+
+  /**
+   * Closing a task settles every question automation still had open about it.
+   *
+   * ═══ WHY ═══
+   *
+   * A `schedule` suggestion is filed while a task is open; the task is later
+   * finished — by the user, or by `TodoProcessService` / `VerifyDoneService`
+   * noticing it got done — and the suggestion row stayed `pending`. Nothing
+   * read it against the task's status: the board filed the task under
+   * Proposed because `hasPendingChange` was checked before "is it closed", the
+   * calendar drawer offered it, and placing it was refused with `skipped`
+   * because `PlannedBlockService` will not schedule a done task. Eleven such
+   * ghosts on one dev database by the time it was noticed.
+   *
+   * `declined` rather than a new status: the question was answered — by the
+   * task closing, not by the user — and `declined` is the one status whose
+   * reader (`hasDeclinedChangeSince`) does the right thing with it, which is
+   * to stop re-asking. `acceptPendingChange` of a `complete` change passes
+   * through here on its way to marking its own row `accepted`; its later
+   * `save` of the loaded row is the final write, so that row ends `accepted`.
+   *
+   * Only `pending` rows: an already-resolved row keeps the verdict it has.
+   */
+  private async resolvePendingChangesOfClosedTask(
+    context: UserServiceContext,
+    taskId: string,
+  ): Promise<void> {
+    await this.pendingChangeRepository.update(
+      { taskId, userId: context.userId, status: 'pending' },
+      { status: 'declined', resolvedAt: new Date() },
+    );
   }
 
   /**
@@ -405,6 +581,8 @@ export class TaskService {
     const entity = await this.taskRepository.save(record);
 
     await this.eventService.send(TaskUpdatedEvent, { taskId: entity.id, userId: entity.userId });
+
+    await this.announceChanged(entity.userId);
 
     return TaskEntity.toEgressType(entity);
   }
@@ -433,6 +611,7 @@ export class TaskService {
 
     if (result.affected != null && result.affected > 0) {
       await this.eventService.send(TaskRemovedEvent, { taskId: id, userId: context.userId });
+      await this.announceChanged(context.userId);
 
       return true;
     }
@@ -485,6 +664,7 @@ export class TaskService {
       existing.confidence = data.confidence ?? existing.confidence;
 
       const updated = await this.pendingChangeRepository.save(existing);
+      await this.announceChanged(context.userId);
 
       return TaskPendingChangeEntity.toEgressType(updated);
     }
@@ -501,6 +681,7 @@ export class TaskService {
     });
 
     const entity = await this.pendingChangeRepository.save(record);
+    await this.announceChanged(context.userId);
 
     return TaskPendingChangeEntity.toEgressType(entity);
   }
@@ -575,7 +756,7 @@ export class TaskService {
       return { task: null, change: null };
     }
 
-    let task: Task | null = null;
+    let task: Task | null;
 
     if (change.kind === 'complete') {
       task = await this.complete(context, change.taskId);
@@ -610,6 +791,7 @@ export class TaskService {
     change.status = 'accepted';
     change.resolvedAt = new Date();
     const saved = await this.pendingChangeRepository.save(change);
+    await this.announceChanged(context.userId);
 
     return { task, change: TaskPendingChangeEntity.toEgressType(saved) };
   }
@@ -630,6 +812,7 @@ export class TaskService {
     change.resolvedAt = new Date();
 
     const saved = await this.pendingChangeRepository.save(change);
+    await this.announceChanged(context.userId);
 
     return TaskPendingChangeEntity.toEgressType(saved);
   }

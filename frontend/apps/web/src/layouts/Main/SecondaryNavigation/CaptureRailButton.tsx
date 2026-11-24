@@ -5,6 +5,8 @@ import { useCaptureModal } from '@/hooks';
 
 import { usePowerRail } from '../PowerRailContext';
 
+import { RAIL_SECTION_HEIGHT, RAIL_SECTION_INSET, railRowTone } from './railRow';
+
 /**
  * Capture as a rail destination — first row, above Plan, mobile only.
  * Desktop already has Capture in the header Add menu; a second entry point
@@ -32,8 +34,10 @@ export function CaptureRailButton() {
         open();
       }}
       className={cn(
-        'relative rounded-md border-l-2 border-transparent transition hover:bg-accent hover:text-accent-foreground active:scale-95',
-        expanded ? 'flex w-full items-center gap-3 px-2 py-2 text-left' : 'p-2',
+        'relative flex items-center rounded-md transition active:scale-95',
+        RAIL_SECTION_HEIGHT,
+        expanded ? ['w-full gap-3 text-left', RAIL_SECTION_INSET] : 'justify-center',
+        railRowTone(false),
       )}
     >
       <Camera className="h-6 w-6 shrink-0" strokeWidth={1.25} />

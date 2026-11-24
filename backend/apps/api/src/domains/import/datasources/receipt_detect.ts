@@ -86,9 +86,50 @@ const RECEIPT_SENDER_LOCAL_RE =
 const RECEIPT_SENDER_DOMAIN_RE =
   /@(?:[a-z0-9-]+\.)*(?:amazon\.[a-z.]+|apple\.com|paypal\.[a-z.]+|ebay\.[a-z.]+|etsy\.com|shopify\.com|squareup\.com|stripe\.com|uber\.com|ubereats\.com|lyft\.com|doordash\.com|grubhub\.com|instacart\.com|target\.com|walmart\.com|bestbuy\.com|newegg\.com|steampowered\.com|gog\.com|humblebundle\.com|bandcamp\.com|google\.com|itunes\.com|booking\.com|airbnb\.com)\b/i;
 
-/** A money amount: a symbol-prefixed or code-suffixed decimal. */
+/**
+ * How much of a message body the receipt checks read, in characters.
+ *
+ * The body is third-party text: anyone can mail the owner, and live Gmail and
+ * Outlook sync run these checks on the web process. Every pattern below is
+ * linear, so this is a ceiling rather than a speed fix; it is double the 32,000
+ * characters a receipt's stored text keeps (`gmail.ts`), and an order total or
+ * order number that has not appeared by then is not one this rule would trust.
+ */
+export const RECEIPT_SCAN_CHARS = 64 * 1024;
+
+function scannedBody(bodyText: string | undefined): string {
+  const body = bodyText ?? '';
+
+  return body.length > RECEIPT_SCAN_CHARS ? body.slice(0, RECEIPT_SCAN_CHARS) : body;
+}
+
+/**
+ * How much of the Subject and From headers the receipt checks read. They are
+ * third-party text too, and `RECEIPT_SENDER_LOCAL_RE` is not linear: each
+ * `<shop` opening scans to the next `@` or space, so a From header of 40,000
+ * characters of `<shop` repeated took 0.7 s and doubling it quadruples that. A
+ * real From or Subject header is a few hundred characters.
+ */
+export const RECEIPT_HEADER_SCAN_CHARS = 4 * 1024;
+
+function scannedHeader(value: string): string {
+  return value.length > RECEIPT_HEADER_SCAN_CHARS ? value.slice(0, RECEIPT_HEADER_SCAN_CHARS) : value;
+}
+
+/**
+ * A money amount: a symbol-prefixed or code-suffixed decimal.
+ *
+ * The code-suffixed half used to be `\b\d[\d,]*\.\d{2}…`, which could start at
+ * every digit that follows a comma; on a long run of digits and commas with no
+ * decimal point each start scanned to the end of the run, so the test was
+ * quadratic in the run. It now starts only at the beginning of a run
+ * (`(?<![\d,])`) and says which of the run's digits `\b` would have accepted:
+ * the first digit when the run follows a non-word character, or else any digit
+ * that follows a comma. Every run reaches its `.` at the same place whichever
+ * digit it starts from, so the set of matching texts is unchanged.
+ */
 const CURRENCY_AMOUNT_RE =
-  /(?:[$€£¥₹]\s?\d[\d,]*(?:\.\d{2})?)|(?:\b\d[\d,]*\.\d{2}\s?(?:USD|EUR|GBP|CAD|AUD|JPY|INR)\b)/;
+  /(?:[$€£¥₹]\s?\d[\d,]*(?:\.\d{2})?)|(?:(?<![\d,])(?:(?<!\w),*\d|\d*,+\d)[\d,]*\.\d{2}\s?(?:USD|EUR|GBP|CAD|AUD|JPY|INR)\b)/;
 
 /** Structure words that make a page of numbers a receipt. */
 const RECEIPT_BODY_WORD_RE =
@@ -134,13 +175,13 @@ export function receiptHeaderSignal(
   headers: Record<string, string> | undefined,
   subject?: string,
 ): ReceiptHeaderSignal {
-  const subj = subject ?? header(headers, 'Subject');
+  const subj = scannedHeader(subject ?? header(headers, 'Subject'));
 
   if (STRONG_SUBJECT_RE.test(subj)) {
     return 'strong';
   }
 
-  const from = header(headers, 'From');
+  const from = scannedHeader(header(headers, 'From'));
   const senderSignal = RECEIPT_SENDER_LOCAL_RE.test(from) || RECEIPT_SENDER_DOMAIN_RE.test(from);
 
   if (WEAK_SUBJECT_RE.test(subj) || senderSignal) {
@@ -156,9 +197,9 @@ export function receiptSignals(
   subject?: string,
   bodyText?: string,
 ): ReceiptSignals {
-  const subj = subject ?? header(headers, 'Subject');
-  const from = header(headers, 'From');
-  const body = bodyText ?? '';
+  const subj = scannedHeader(subject ?? header(headers, 'Subject'));
+  const from = scannedHeader(header(headers, 'From'));
+  const body = scannedBody(bodyText);
 
   return {
     strongSubject: STRONG_SUBJECT_RE.test(subj),
@@ -245,7 +286,12 @@ const SYMBOL_CURRENCY: Record<string, string> = {
 };
 
 // Apple writes "Order ID: MXPQ1234RS", Amazon "Order #111-2233445-6677889".
-const ORDER_ID_RE = /order\s*(?:#|no\.?|number|id)\s*[:\s]?\s*([A-Za-z0-9][A-Za-z0-9-]{4,})/i;
+//
+// Each run of whitespace has one owner. The old `\s*[:\s]?\s*` let two `\s*`
+// share a run, so a label followed by a long blank stretch and no id was
+// retried at every split of it: quadratic. `\s*(?::\s*)?` accepts the same
+// texts and captures the same id.
+const ORDER_ID_RE = /order\s*(?:#|no\.?|number|id)\s*(?::\s*)?([A-Za-z0-9][A-Za-z0-9-]{4,})/i;
 
 /**
  * ISO-4217 codes the total parser accepts as a trailing currency.
@@ -270,8 +316,15 @@ const CURRENCY_CODES = new Set([
   'BRL',
 ]);
 
+/**
+ * A labelled total. Same rule as ORDER_ID_RE: the old
+ * `\s*[:-]?\s*([$€£¥₹])?\s*` put three `\s*` side by side, so "Total" followed
+ * by a long blank stretch and no amount was retried at every way of splitting
+ * the stretch three ways, which is cubic. Here each blank stretch belongs to
+ * one `\s*`; the texts it accepts and the groups it captures are the same.
+ */
 const TOTAL_RE =
-  /(?:order\s+total|grand\s+total|total\s+charged|amount\s+(?:paid|charged|due)|total)\s*[:-]?\s*([$€£¥₹])?\s*([\d,]+\.\d{2})(?:\s*([A-Za-z]{3})(?![A-Za-z]))?/i;
+  /(?:order\s+total|grand\s+total|total\s+charged|amount\s+(?:paid|charged|due)|total)\s*(?:[:-]\s*)?(?:([$€£¥₹])\s*)?([\d,]+\.\d{2})(?:\s*([A-Za-z]{3})(?![A-Za-z]))?/i;
 
 /**
  * The merchant a message came from: the From display name when it has one, else
@@ -337,7 +390,7 @@ export function extractReceiptFields(
     out.merchant = merchant;
   }
 
-  const body = bodyText ?? '';
+  const body = scannedBody(bodyText);
   const order = ORDER_ID_RE.exec(body) ?? ORDER_ID_RE.exec(header(headers, 'Subject'));
 
   if (order) {

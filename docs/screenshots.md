@@ -1,7 +1,5 @@
 # Screenshots & visual documentation
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 This guide tracks the UI screenshots we want in the docs and how to capture them
 consistently. Screenshots can only be taken against a **running** stack, so they
 are produced manually (not in CI) and committed under `docs/images/`.
@@ -39,8 +37,7 @@ are produced manually (not in CI) and committed under `docs/images/`.
 ## Conventions
 
 - **Use the seeded demo data only.** Never capture a screen containing real
-  personal data, secrets, tokens, or `.env` values — this repo is private and
-  confidential.
+  personal data, secrets, tokens, or `.env` values.
 - Scrub anything sensitive (API keys, OAuth tokens, email addresses other than
   the demo user) before committing.
 - Keep files reasonably sized (prefer < 500 KB; compress large PNGs).
@@ -116,8 +113,10 @@ hub tabs) and `layouts/Main/SecondaryNavigation/selfSections.ts` (the Self tabs)
   submenu. Chat's recent threads render nested under its own row in the rail
   submenu (moved from the old, now-removed Chat rail group); on the phone,
   ChatSidebar's own thread list is unreachable (it portals to a slot mobile
-  never renders), so the drawer submenu is the only way to switch conversation
-  there. The Explorer is the Events section at `/memory/events`; `/memory` on
+  never renders), so the page carries its own **Chats** and **New chat**
+  buttons (`PhoneChatBar`) and the drawer submenu is how you switch
+  conversation from elsewhere. The Explorer is the Events section at
+  `/memory/events`; `/memory` on
   its own is now a **real route** (the unfiltered explorer, all kinds), not a
   redirect.
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ScheduleEvent } from '@/api/useScheduleService';
+import { createDateTimeFormatter, DEVICE_DATE_TIME_FORMATTER } from '@/lib/dateTimeFormat';
 
 import {
   TIMELINE_AXIS_PAD_DAYS,
@@ -97,7 +98,7 @@ describe('buildTimelineData', () => {
     const visit = event('yt', new Date(2026, 7, 17, 10), 'A video');
     visit.metadata = { url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' };
 
-    const { data } = buildTimelineData([visit], monday);
+    const { data } = buildTimelineData([visit], monday, DEVICE_DATE_TIME_FORMATTER);
 
     expect(data.events).toHaveLength(1);
     expect(data.events[0].media).toBeUndefined();
@@ -106,21 +107,53 @@ describe('buildTimelineData', () => {
     expect(data.events[0].text.text).toContain('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
   });
 
+  it('escapes calendar text, which other people write, before TimelineJS reads it as HTML', () => {
+    const monday = new Date(2026, 7, 17);
+    const invite = event('invite', new Date(2026, 7, 17, 10), 'Sync <style>body{display:none}</style>');
+    invite.locationName = 'Room <b>4</b>';
+    invite.description = 'Agenda <img src="https://tracker.example/t.gif">';
+
+    const [slide] = buildTimelineData([invite], monday, DEVICE_DATE_TIME_FORMATTER).data.events;
+
+    expect(slide.text.headline).toBe('Sync &lt;style&gt;body{display:none}&lt;/style&gt;');
+    expect(slide.text.text).toContain('Room &lt;b&gt;4&lt;/b&gt;');
+    expect(slide.text.text).toContain('Agenda &lt;img src="https://tracker.example/t.gif"&gt;');
+    expect(`${slide.text.headline}${slide.text.text}`).not.toContain('<');
+  });
+
   it('caps the deck so TimelineJS does not mount a novel of slides', () => {
     const monday = new Date(2026, 7, 17);
     const flood = Array.from({ length: 40 }, (_, index) =>
       event(`e-${index}`, new Date(2026, 7, 17, 8, index), `Item ${index}`),
     );
 
-    expect(buildTimelineData(flood, monday).data.events).toHaveLength(12);
+    expect(buildTimelineData(flood, monday, DEVICE_DATE_TIME_FORMATTER).data.events).toHaveLength(12);
   });
 
   it('includes a hidden axis-pad era so minor ticks cover zoomed-out neighbours', () => {
     const monday = new Date(2026, 7, 17);
-    const { data } = buildTimelineData([event('only', new Date(2026, 7, 17, 10))], monday);
+    const { data } = buildTimelineData(
+      [event('only', new Date(2026, 7, 17, 10))],
+      monday,
+      DEVICE_DATE_TIME_FORMATTER,
+    );
 
     expect(data.eras).toHaveLength(1);
     expect(data.eras?.[0].start_date.day).toBe('15');
     expect(data.eras?.[0].end_date.day).toBe('19');
+  });
+
+  it("writes each slide's time in the chosen hour cycle", () => {
+    const monday = new Date(2026, 7, 17);
+    const slideText = (timeFormat: 'h12' | 'h23') =>
+      buildTimelineData(
+        [event('late', new Date(2026, 7, 17, 15, 43))],
+        monday,
+        // No zone: this test builds its instants on the runner's clock, so it reads them there.
+        createDateTimeFormatter({ timeFormat }),
+      ).data.events[0].text.text;
+
+    expect(slideText('h23')).toMatch(/^15:43/);
+    expect(slideText('h12')).toMatch(/^3:43\sPM/i);
   });
 });

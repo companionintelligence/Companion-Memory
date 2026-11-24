@@ -2,3 +2,4 @@
 dist
 docs
 .llm-endpoint.json
+.llm-residency-calibration.json

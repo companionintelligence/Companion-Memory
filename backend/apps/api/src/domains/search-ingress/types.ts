@@ -4,6 +4,15 @@ export interface UpsertEmbeddingDto {
   entityType: IndexableEntity;
   entityId: string;
   embedding: number[];
+  /** `searchDocumentHash` of what `embedding` was made from, when the caller knows it. */
+  sourceHash?: string | null;
+}
+
+/** A row's search document, for {@link EmbeddingService.upsertDocument} to embed if it changed. */
+export interface UpsertEmbeddingDocumentDto {
+  entityType: IndexableEntity;
+  entityId: string;
+  text: string;
 }
 
 /**
@@ -18,6 +27,14 @@ export interface UpsertEmbeddingDto {
 export interface WeightedText {
   text: string;
   weight: number;
+  /**
+   * Indexed into the tsvector only, left out of the device document
+   * ({@link searchDocumentText}). For extra spellings that exist so Postgres's
+   * parser finds a word (a file name split at its punctuation): a phone's FTS
+   * tokenizer splits them itself, and putting them in the document would
+   * rewrite, and resend to every phone, each document that carries one.
+   */
+  vectorOnly?: boolean;
 }
 
 export interface UpsertVectorDto {

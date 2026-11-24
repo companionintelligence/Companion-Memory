@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 export const TRUST_MODES = ['cautious', 'balanced', 'hands_off'] as const;
 export type TrustMode = (typeof TRUST_MODES)[number];

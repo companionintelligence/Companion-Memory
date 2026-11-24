@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   HttpCode,
   HttpStatus,
@@ -9,23 +10,37 @@ import {
   Param,
   Patch,
   Post,
+  Req,
+  UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
-import { z } from 'zod';
+import type { Request } from 'express';
+import { z } from 'zod/v3';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import {
+  AGENT_JOBS_SCOPE,
   API_KEY_CAPABILITIES,
   CAPTURE_SCOPE,
   INTENTS_SCOPE,
   MCP_SCOPE,
   MEMORY_SCOPE,
+  READ_CAPABILITY,
+  RequireCapability,
 } from '@ci/common/decorators';
-import { JwtOrPortalAuthGuard } from '@ci/common/guards';
+import { ApiKeyGuard, type ApiKeyScopedRequest, JwtOrPortalAuthGuard } from '@ci/common/guards';
 import { ValidationPipe } from '@ci/common/pipes';
 
 import { ApiKeyService } from '../services/ApiKeyService';
-import { CONNECT_KEY_NAME_PREFIX, type CreateApiKeyDto, type UpdateApiKeyDto } from '../types';
+import { extractApiKey } from '../services/ApiKeyStrategy';
+import {
+  CONNECT_KEY_NAME_PREFIX,
+  type CreateApiKeyDto,
+  isManagedAppPrincipal,
+  PHONE_KEY_NAME,
+  SIGN_IN_PROVENANCE,
+  type UpdateApiKeyDto,
+} from '../types';
 
 /**
  * `app:` is reserved for connection keys minted by the consent flow
@@ -50,7 +65,9 @@ const apiKeyName = z
  * that authenticates fine and is then refused everywhere — a silent, hard-to-diagnose dead key.
  * An empty array keeps its grandfathered meaning: full user authority.
  */
-const apiKeyScopes = z.array(z.enum([MEMORY_SCOPE, INTENTS_SCOPE, MCP_SCOPE, CAPTURE_SCOPE])).optional();
+const apiKeyScopes = z
+  .array(z.enum([MEMORY_SCOPE, INTENTS_SCOPE, MCP_SCOPE, CAPTURE_SCOPE, AGENT_JOBS_SCOPE]))
+  .optional();
 
 /**
  * What the key may DO on the surfaces its scopes reach. Optional on both create and update so a
@@ -64,6 +81,11 @@ export const createApiKeySchema = z.object({
   scopes: apiKeyScopes,
   capability: apiKeyCapability,
   expires_at: z.string().datetime().optional(),
+  /**
+   * The phone or desktop app minting the key it will sign in with. Tags it `sign_in`, which a
+   * password change, "Sign out everywhere" and the app's own sign-out revoke.
+   */
+  sign_in: z.boolean().optional(),
 });
 
 // The name here is NOT refined: rejecting `app:` on the request body would also 400 a
@@ -79,9 +101,11 @@ export const updateApiKeySchema = z.object({
 
 /**
  * Guarded by {@link JwtOrPortalAuthGuard}: a session JWT (settings UI) or a
- * portal OIDC bearer (Companion Capture exchanging its short-lived id_token
- * for a durable key at sign-in) — never an api key, so a leaked key cannot
- * mint successors that outlive its revocation.
+ * Portal bearer that carries the user's authority here (a phone pairing with a
+ * token addressed to this Memory exchanges it for a durable key). Never an api
+ * key, so a leaked key cannot mint successors that outlive its revocation, and
+ * never a capture client's Portal token, which stays confined to the capture
+ * scope instead of becoming a key.
  */
 @Controller('keys')
 export class ApiKeyController {
@@ -95,7 +119,62 @@ export class ApiKeyController {
   ) {
     const serviceContext = toServiceContext(context);
 
-    return this.apiKeyService.create(serviceContext, input);
+    // App builds from before `sign_in` existed send only the key's name, so the name alone tags it
+    // too: the same rule migration 20261006065846 applied to the keys already on disk.
+    const signIn = input.sign_in === true || PHONE_KEY_NAME.test(input.name);
+
+    return this.apiKeyService.create(serviceContext, input, signIn ? SIGN_IN_PROVENANCE : null);
+  }
+
+  /**
+   * Whether the key on this request is one Memory would accept: 204 if so, 401 if not.
+   *
+   * For CI-Hub's edge. The Hub lets a request to Memory through without a Hub session when it
+   * carries an API key (the phone apps hold nothing else), and asks this, server to server,
+   * before it does -- so a made-up key stops at the Hub instead of reaching Memory from the
+   * internet. Any usable key passes, whatever its scopes: what a key may do is decided per
+   * route when the real request arrives, as it always was. Declared without a guard for that
+   * reason (`ApiKeyGuard` would refuse a scope-limited key on a route that names no scope).
+   * Answers nothing a caller could not learn by sending the key to any other route.
+   *
+   * Declared before `:id` so `check` is never read as a key id.
+   */
+  @Get('check')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async check(@Req() req: Request): Promise<void> {
+    const raw = extractApiKey(req);
+
+    if (!raw || !(await this.apiKeyService.validateKey(raw))) {
+      throw new UnauthorizedException();
+    }
+  }
+
+  /**
+   * Revoke the key this request authenticated with: how the phone and desktop apps sign out.
+   *
+   * They hold nothing but that key, and every other route here takes a session or a Portal bearer
+   * precisely so a key cannot mint or manage keys. Giving a key up is the one thing it may do to
+   * itself, at any capability: it ends its own access and reaches no other credential. An
+   * installed app's key is refused: the Hub owns those and revokes them when the app is
+   * disconnected. A scope-limited one never gets here (the guard's scope rule), and an
+   * empty-scope one (the bulk importer's) is refused by its provenance.
+   *
+   * Declared before `:id` so `current` is never read as a key id.
+   */
+  @UseGuards(ApiKeyGuard)
+  @RequireCapability(READ_CAPABILITY)
+  @Delete('current')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async revokeCurrent(@Context() context: RequestContext, @Req() req: ApiKeyScopedRequest): Promise<void> {
+    if (!req.apiKeyId) {
+      throw new UnauthorizedException();
+    }
+
+    if (isManagedAppPrincipal({ managedBy: req.apiKeyManagedBy })) {
+      throw new ForbiddenException('Your Hub manages this key. Disconnect the app from the Hub instead.');
+    }
+
+    await this.apiKeyService.remove(toServiceContext(context), req.apiKeyId);
   }
 
   @UseGuards(JwtOrPortalAuthGuard)

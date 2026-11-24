@@ -7,7 +7,6 @@ from typing import Any
 import structlog
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
-from sqlalchemy.pool import NullPool
 
 from .config import settings
 
@@ -24,9 +23,20 @@ class DatabaseManager:
     def _connect(self):
         """Establish database connection."""
         try:
+            # A small pool, not NullPool. Every `execute_query` is its own
+            # `engine.connect()`, and a summary run issues dozens of them
+            # (activities, insight and action aggregators, dossier, timezone)
+            # — with NullPool each one was a fresh TCP connect + auth +
+            # `SET search_path` + close, and Postgres saw connection churn
+            # from a process that is otherwise idle. `pool_pre_ping` keeps the
+            # restart tolerance NullPool gave for free: a pooled connection the
+            # server dropped is detected and replaced before the query runs.
             self.engine = create_engine(
                 settings.database_url,
-                poolclass=NullPool,  # Simple connection management
+                pool_size=3,
+                max_overflow=2,
+                pool_pre_ping=True,
+                pool_recycle=1800,
                 echo=False,
                 connect_args={"options": "-c search_path=ci,public"},
             )

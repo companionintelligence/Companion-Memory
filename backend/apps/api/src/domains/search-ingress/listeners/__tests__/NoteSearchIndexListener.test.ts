@@ -7,6 +7,13 @@ function makeListener(note: Record<string, unknown> | null = null) {
   const notesService = { findById: jest.fn().mockResolvedValue(note) };
   const embeddingGenerationService = { generateEmbedding: jest.fn().mockResolvedValue([0.1, 0.2]) };
   const embeddingService = {
+    upsertDocument: jest.fn(
+      async (_ctx: unknown, data: { text: string }, generate: (text: string) => Promise<number[]>) => {
+        await generate(data.text);
+
+        return 'embedded';
+      },
+    ),
     upsert: jest.fn().mockResolvedValue(null),
     remove: jest.fn().mockResolvedValue(true),
   };
@@ -50,7 +57,7 @@ describe('NoteSearchIndexListener.indexNote / updateNote', () => {
 
     await listener.indexNote({ noteId: 'ghost' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalled();
   });
 
@@ -64,9 +71,10 @@ describe('NoteSearchIndexListener.indexNote / updateNote', () => {
 
     await listener.indexNote({ noteId: 'note-1' } as never);
 
-    expect(embeddingService.upsert).toHaveBeenCalledWith(
+    expect(embeddingService.upsertDocument).toHaveBeenCalledWith(
       { userId: 'user-1' },
-      { entityType: 'note', entityId: 'note-1', embedding: [0.1, 0.2] },
+      { entityType: 'note', entityId: 'note-1', text: expect.any(String) },
+      expect.any(Function),
     );
     expect(vectorService.upsert).toHaveBeenCalledWith(
       { userId: 'user-1' },
@@ -91,9 +99,10 @@ describe('NoteSearchIndexListener.indexNote / updateNote', () => {
 
     await listener.updateNote({ noteId: 'note-1' } as never);
 
-    expect(embeddingService.upsert).toHaveBeenCalledWith(
+    expect(embeddingService.upsertDocument).toHaveBeenCalledWith(
       { userId: 'user-1' },
       expect.objectContaining({ entityType: 'note', entityId: 'note-1' }),
+      expect.any(Function),
     );
   });
 
@@ -107,7 +116,7 @@ describe('NoteSearchIndexListener.indexNote / updateNote', () => {
 
     await listener.indexNote({ noteId: 'note-2' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(vectorService.upsert).not.toHaveBeenCalled();
   });
 
@@ -121,9 +130,10 @@ describe('NoteSearchIndexListener.indexNote / updateNote', () => {
 
     await listener.indexNote({ noteId: 'note-3' } as never);
 
-    expect(embeddingService.upsert).toHaveBeenCalledWith(
+    expect(embeddingService.upsertDocument).toHaveBeenCalledWith(
       { userId: 'user-1' },
       expect.objectContaining({ entityType: 'note' }),
+      expect.any(Function),
     );
   });
 
@@ -146,7 +156,7 @@ describe('NoteSearchIndexListener.indexNote / updateNote', () => {
 
       await listener.indexNote({ noteId: 'note-4' } as never);
 
-      expect(embeddingService.upsert).not.toHaveBeenCalled();
+      expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
       expect(vectorService.upsert).toHaveBeenCalled();
     });
   });

@@ -2,26 +2,33 @@
    Header: "Activity Type,Date,Favorite,Title,Distance,Calories,Time,Avg HR,..."
    with Date "2023-01-15 10:30:00". One 'workout' event per row.
 
-   Garmin also ships a complex DI_CONNECT JSON archive; this importer targets the
-   simple Activities.csv only. Recognition is hardened so it does not collide with
+   Garmin's full account export (a DI_CONNECT JSON archive) is read through
+   _garmin_connect_export.ts. Recognition is hardened so it does not collide with
    the Strava export, whose activities.csv also carries "Activity Type"/"Distance"
    columns — we additionally require a Garmin-distinctive column.
 */
 import fs from 'node:fs';
-import { open, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { garminExportFileKind, importGarminExportFile, isRegularFile } from './_garmin_connect_export';
 import { parseCSV } from './csv';
-import type { FileImporter, Recognition, DirEntry } from './registry';
+import { CsvExportImporter, type CsvExportSpec, entryRoot } from './csvImporter';
+import type { DirEntry, Recognition } from './registry';
 import { registerDataSource } from './registry';
+import { readHead } from './sniff';
 import type { ImportParams } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
-// A Garmin Activities.csv header has "Activity Type" AND "Distance" (case-insensitive),
-// plus at least one Garmin-distinctive column. The extra column is what keeps this from
-// matching a Strava activities.csv, which also carries Activity Type/Distance but lacks
-// these fields (Strava uses "Activity Date", "Activity ID", "Max Heart Rate", etc.).
-const GARMIN_MARKERS = ['favorite', 'calories', 'avg hr', 'aerobic te'];
+// A Garmin Activities.csv header has the columns "Activity Type", "Date" and "Distance"
+// (whole cells, case-insensitive), plus at least one column only Garmin writes.
+//
+// Strava's activities.csv also carries Activity Type and Distance, and its full header
+// has a "Calories" column too, so a substring test with Calories as a marker claimed it:
+// every Strava activity came in a second time as an undated "Garmin Connect" workout,
+// because the parser reads "Date" and Strava's column is "Activity Date". Requiring the
+// "Date" cell this parser reads, and only markers Strava lacks, keeps the two apart.
+const GARMIN_REQUIRED = ['activity type', 'date', 'distance'];
+const GARMIN_MARKERS = ['favorite', 'avg hr', 'aerobic te'];
 function headerIsGarmin(text: string): boolean {
   let header = text;
   const nl = header.indexOf('\n');
@@ -33,127 +40,57 @@ function headerIsGarmin(text: string): boolean {
     header = header.slice(1);
   }
 
-  const lower = header.toLowerCase();
-  if (!lower.includes('activity type') || !lower.includes('distance')) {
+  const cells = new Set(
+    header.split(',').map((cell) => cell.trim().replace(/^"|"$/g, '').trim().toLowerCase()),
+  );
+  if (!GARMIN_REQUIRED.every((c) => cells.has(c))) {
     return false;
   }
 
-  return GARMIN_MARKERS.some((m) => lower.includes(m));
+  return GARMIN_MARKERS.some((m) => cells.has(m));
 }
 
-export class GarminFileImporter implements FileImporter {
-  async recognize(_ctx: unknown, entry: DirEntry): Promise<Recognition> {
-    const root = entry.fullPath || entry.fsRoot || entry.filename;
-    if (!root) {
-      return { confidence: 0 };
+export class GarminFileImporter extends CsvExportImporter {
+  protected readonly spec: CsvExportSpec = {
+    isNamed: (name) => name === 'activities.csv',
+    headerMatches: (fpath) => this.headerMatches(fpath),
+    namedNeedsHeader: true,
+    confidence: { named: 0.95, sniffed: 0.85 },
+  };
+
+  // The account export's activity and sleep files are claimed one by one, so
+  // the rest of its DI_CONNECT folder is left to the other importers.
+  async recognize(ctx: unknown, entry: DirEntry): Promise<Recognition> {
+    const root = entryRoot(entry);
+
+    if (root && garminExportFileKind(root) && (await isRegularFile(root))) {
+      return { confidence: 0.95 };
     }
 
-    let st: fs.Stats;
-    try {
-      st = await stat(root);
-    } catch {
-      return { confidence: 0 };
+    return super.recognize(ctx, entry);
+  }
+
+  async fileImport(ctx: unknown, entry: DirEntry, params: ImportParams): Promise<void> {
+    const root = entryRoot(entry);
+    const kind = root ? garminExportFileKind(root) : undefined;
+
+    if (root && kind && (await isRegularFile(root))) {
+      await importGarminExportFile(root, kind, params);
+
+      return;
     }
 
-    if (st.isFile()) {
-      const base = path.basename(root).toLowerCase();
-      if (path.extname(base) !== '.csv') {
-        return { confidence: 0 };
-      }
-
-      if (!(await this.headerMatches(root))) {
-        return { confidence: 0 };
-      }
-
-      // Exact "Activities.csv" name is a stronger signal than a generic .csv match.
-      return base === 'activities.csv' ? { confidence: 0.95 } : { confidence: 0.85 };
-    }
-
-    if (st.isDirectory()) {
-      try {
-        const names = await readdir(root);
-        const exact = names.find((n) => n.toLowerCase() === 'activities.csv');
-        if (exact && (await this.headerMatches(path.join(root, exact)))) {
-          return { confidence: 0.95 };
-        }
-
-        for (const name of names) {
-          if (path.extname(name).toLowerCase() !== '.csv') {
-            continue;
-          }
-
-          if (await this.headerMatches(path.join(root, name))) {
-            return { confidence: 0.85 };
-          }
-        }
-      } catch {
-        /* ignore */
-      }
-
-      return { confidence: 0, dir_threshold: 0.7 };
-    }
-
-    return { confidence: 0 };
+    await super.fileImport(ctx, entry, params);
   }
 
   // Read only the first ~4KB to inspect the CSV header row.
   private async headerMatches(fpath: string): Promise<boolean> {
-    let handle: Awaited<ReturnType<typeof open>> | undefined;
-    try {
-      handle = await open(fpath, 'r');
-      const buf = Buffer.alloc(4096);
-      const { bytesRead } = await handle.read(buf, 0, 4096, 0);
+    const head = await readHead(fpath);
 
-      return headerIsGarmin(buf.toString('utf8', 0, bytesRead));
-    } catch {
-      return false;
-    } finally {
-      await handle?.close().catch(() => undefined);
-    }
+    return head != null && headerIsGarmin(head);
   }
 
-  async fileImport(_ctx: unknown, entry: DirEntry, params: ImportParams): Promise<void> {
-    const root = entry.fullPath || entry.fsRoot || entry.filename;
-    if (!root) {
-      return;
-    }
-
-    let stat: fs.Stats;
-    try {
-      stat = fs.statSync(root);
-    } catch {
-      return;
-    }
-
-    if (stat.isFile()) {
-      await this.processFile(root, params);
-    } else if (stat.isDirectory()) {
-      let names: string[];
-      try {
-        names = fs.readdirSync(root);
-      } catch {
-        return;
-      }
-
-      const exact = names.find((n) => n.toLowerCase() === 'activities.csv');
-      if (exact && (await this.headerMatches(path.join(root, exact)))) {
-        await this.processFile(path.join(root, exact), params);
-      } else {
-        for (const name of names) {
-          if (path.extname(name).toLowerCase() !== '.csv') {
-            continue;
-          }
-
-          const fpath = path.join(root, name);
-          if (await this.headerMatches(fpath)) {
-            await this.processFile(fpath, params);
-          }
-        }
-      }
-    }
-  }
-
-  private async processFile(fpath: string, params: ImportParams): Promise<void> {
+  protected async processFile(fpath: string, params: ImportParams): Promise<void> {
     const base = path.basename(fpath);
     let raw: string;
     try {
@@ -214,7 +151,7 @@ export class GarminFileImporter implements FileImporter {
         id: `garmin:${base}:${(row['Date'] || '').trim()}:${index}`,
         classification: 'workout',
         timestamp: ts,
-        content: { filename: 'workout.txt', mediaType: 'text/plain', data: async () => Buffer.from(text) },
+        content: textContent('workout.txt', text),
         metadata: {
           'Activity Type': activityType || undefined,
           Title: title || activityType || undefined,
@@ -233,6 +170,6 @@ registerDataSource({
   name: 'garmin',
   title: 'Garmin Connect',
   icon: '',
-  description: 'Activities from a Garmin Connect export (Activities.csv).',
+  description: 'Activities and sleep from a Garmin Connect export (Activities.csv or the account export).',
   newFileImporter: () => new GarminFileImporter(),
 });

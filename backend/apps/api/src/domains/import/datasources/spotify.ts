@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import { readdir, stat as fsStat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { walkFiles } from './fsWalk';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams, Graph, Metadata } from './timeline';
@@ -15,6 +16,10 @@ interface StreamingEntry {
   artistName?: string;
   trackName?: string;
   msPlayed?: number;
+  // The account data export's StreamingHistory_podcast_*.json rows name the
+  // show and episode instead of a track and artist.
+  podcastName?: string;
+  episodeName?: string;
 }
 
 interface EndsongEntry {
@@ -62,26 +67,8 @@ function spotifyUrl(uri: string | undefined): string | undefined {
   return m ? `https://open.spotify.com/${m[1]}/${m[2]}` : undefined;
 }
 
-async function* walkStreamFiles(root: string, depth = 0): AsyncGenerator<string> {
-  if (depth > 4) {
-    return;
-  }
-
-  let entries: fs.Dirent[];
-  try {
-    entries = await readdir(root, { withFileTypes: true });
-  } catch {
-    return;
-  }
-
-  for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-    const p = path.join(root, e.name);
-    if (e.isDirectory()) {
-      yield* walkStreamFiles(p, depth + 1);
-    } else if (e.isFile() && STREAM_FILE.test(e.name)) {
-      yield p;
-    }
-  }
+function walkStreamFiles(root: string): AsyncGenerator<string> {
+  return walkFiles(root, { maxDepth: 4, sorted: true, match: (name) => STREAM_FILE.test(name) });
 }
 
 export class SpotifyFileImporter implements FileImporter {
@@ -331,22 +318,41 @@ export class SpotifyFileImporter implements FileImporter {
 
     const track = e.trackName ?? '';
     const artist = e.artistName ?? '';
+    const show = e.podcastName ?? '';
+    const episode = e.episodeName ?? '';
+    const isEpisode = !track && !!(show || episode);
     const g: Graph = {
       item: {
+        // `track` is empty on a podcast row and stays in the id, so the id
+        // matches what earlier imports of the same row produced.
         id: `spotify:${file}:${idx}:${e.endTime ?? ''}:${track}:${e.msPlayed ?? ''}`,
         classification: 'listen',
         timestamp: ts,
         timespanEnd: played !== undefined ? end : undefined,
         content: {
-          filename: 'track.txt',
+          filename: isEpisode ? 'episode.txt' : 'track.txt',
           mediaType: 'audio/ogg',
-          data: async () => Buffer.from(`${artist} — ${track}`),
+          data: async () =>
+            Buffer.from(
+              isEpisode
+                ? show && episode
+                  ? `${show} — ${episode}`
+                  : show || episode
+                : `${artist} — ${track}`,
+            ),
         },
-        metadata: {
-          Track: track || undefined,
-          Artist: artist || undefined,
-          'ms Played': e.msPlayed,
-        },
+        metadata: isEpisode
+          ? {
+              Type: 'podcast',
+              Episode: episode || undefined,
+              Show: show || undefined,
+              'ms Played': e.msPlayed,
+            }
+          : {
+              Track: track || undefined,
+              Artist: artist || undefined,
+              'ms Played': e.msPlayed,
+            },
       },
     };
     params.pipeline.push(g);

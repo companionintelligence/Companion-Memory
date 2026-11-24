@@ -1,7 +1,5 @@
 # The jobs system — reference
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 What every background job on this appliance is, what it does, and how the machine
 that runs it works. Read against the worktree at the time of writing; every claim
 carries a `path:line`. **Counts re-verified against `main` @ `cee410cf1`
@@ -22,7 +20,7 @@ PR list. Companion documents: [`jobs-schedule-review.md`](jobs-schedule-review.m
 | Listener bindings | **119** `@OnEvent` methods across 59 files |
 | Distinct event names consumed | **99** |
 | pg-boss queues created at boot | **42** (41 from listeners + `dead-letter`) |
-| Scheduled methods | **59** `@Cron` methods across 34 files — all via the `@ci/common/schedule` wrapper |
+| Scheduled methods | **60** `@Cron` methods across 34 files — all via the `@ci/common/schedule` wrapper |
 | Crons pinned to the worker role | **14** |
 | Queues pinned to the worker role | **6** (5 import + `derivation-run`) |
 | Pipeline stages behind one `pipeline.slice` event | **43** |
@@ -73,7 +71,7 @@ invariants are enforced at registration, i.e. before Nest even starts:
 | `localConcurrency` | in-process worker slots for this queue — **can only lower**, never raise | `queues.perQueueConcurrency` (6) |
 | `role` | which process **consumes** this queue | `web` |
 | `lane` | name of a slot pool shared with other queues: members draw from ONE in-process semaphore sized to the smallest member's `localConcurrency`. The four Ollama-bound background queues share `ollama-background`, so at most one background generation is at the runner at a time | none (own semaphore) |
-| `yieldsTo` | name of a yield gate (`yieldGates.ts`); while it says "yield", the loop takes no new lease — jobs stay `created` like `paused`, the running job finishes. `image-description` names `interactive-chat`, which closes while any thread has a chat turn queued/running | none (never yields) |
+| `yieldsTo` | name of a yield gate (`yieldGates.ts`); while it says "yield", the loop takes no new lease — jobs stay `created` like `paused`, the running job finishes. `image-description` names `interactive-chat`, which closes while any thread has a chat turn queued/running. `py-fn-summary` names `summary-service`, which stays closed while the summary service has no chat model or already holds four runs | none (never yields) |
 
 ### 1.2 Boot
 
@@ -317,11 +315,26 @@ other event.
 
 Instead `DeadLetterReaperListener` **polls** `pgboss.job` every 2 minutes
 (`'40 */2 * * * *'`), copying up to 500 rows into `ci.pipeline_dead_letters`
-keyed on the originating pg-boss job id (natural idempotency key; anti-join plus
-`ON CONFLICT (id) DO NOTHING`). It never completes or deletes the pg-boss row.
+keyed on the pg-boss id of the dead-letter copy, not of the job that failed
+(pg-boss inserts the copy as a new row). That id is the idempotency key for the
+anti-join and the `ON CONFLICT (id) DO NOTHING`. It never completes or deletes
+the pg-boss row.
 The same tick purges up to 500 **replayed** rows older than 30 days.
 **An unreplayed letter has no TTL at any age** — its payload is frequently the
 only surviving copy of a record the source will not re-send.
+
+Replay sends a letter back to the queue it failed on, read from the `queue`
+that `PGBossEventService` writes into every failure output, and to no other
+queue. Sending it to every listener of the event would re-run the ones that
+had succeeded: a `file.uploaded` that failed only `file-preview-generation`
+would run all six of its listeners again. Three kinds of letter are routed
+another way. A `python.function.run` goes to its target's queue. A
+`pipeline.slice` or `pipeline.sweep` goes to the queue its stage declares
+today, because every pipeline queue listens for both and refuses a stage that
+rides another. A letter whose queue no longer listens for its event (a release
+moved the listener) goes to every queue that does, since the old queue's worker
+would complete it without running anything. See "pg-boss drops the originating
+queue" under Counting traps for the letters that still fan out.
 
 ### 1.7 Retention — what actually happens to a finished job
 
@@ -421,7 +434,7 @@ from `@nestjs/schedule`. It adds three things Nest's own wrapper does not:
 The tick is swallowed after logging, matching the framework's behaviour: the tick
 is lost, the schedule keeps running.
 
-> The wrapper's own docstring still says "~34 scheduled methods". It is 59.
+> The wrapper's own docstring still says "~34 scheduled methods". It is 60.
 
 ### 1.10 Observability
 
@@ -438,7 +451,7 @@ their grace period — an authority `write` ("mutating, but nothing that deletes
 does not describe. It previously carried no auth guard at all, gated instead on
 `request.socket.remoteAddress` being loopback; that is the immediate peer rather
 than the client, and both proxies this repo ships (the `make dev` Caddy route,
-and the Vite dev server's `/api` proxy, which binds `0.0.0.0`) dial the API on
+and the Vite dev server's `/api` proxy, which then bound `0.0.0.0`) dial the API on
 localhost, so any caller on the network satisfied it. An operator inside the
 container now needs a session or a full-capability API key like anyone else.
 
@@ -504,14 +517,29 @@ pins it, parsing both `expireInHours` and the fallback out of the files that set
 them so the assertion cannot be reverted along with the fix.
 
 Deadlines are **not** how liveness is detected on the import lane, and never
-were: `ImportStageListener` heartbeats the stage claim every 30 s and
-`ImportRunService.resumeInterrupted` re-enqueues anything silent for
-`STALE_STAGE_MINUTES` (10), on boot and every fifth minute. That reads a signal
-the work itself emits and catches a wedged stage in minutes; the deadline is the
-catastrophe backstop underneath it, sized to be unreachable by healthy work.
-`runStage` also claims through `beginStage`, so a redelivery of a stage a live
-owner still holds logs and returns instead of doing the work twice — which
-bounds the damage of an expiry without making one harmless.
+were: `ImportStageListener` heartbeats the stage claim every 30 s, and
+`ImportRunService.reclaimOrphanedStages` takes back a stage whose pg-boss worker
+has been silent for `IMPORT_STAGE_ORPHAN_SECONDS` (180 s) — every minute, and at
+boot — failing the dead worker's job **through pg-boss**, so pg-boss's own retry
+(same job id, same place in line) or dead-letter decides what happens next.
+`resumeInterrupted`'s ten-minute rule (`STALE_STAGE_MINUTES`, every fifth
+minute) stays beneath it as the backstop for claims no pg-boss job holds. That
+reads a signal the work itself emits and catches a dead worker in about four
+minutes; the deadline is the catastrophe backstop underneath it, sized to be
+unreachable by healthy work. Before the reaper, a worker restarted mid-parse
+took twelve minutes to recover (reproduced 2026-09-29), behind a brand-new job
+at the back of the queue, and its own job sat `active` until this deadline
+expired it into a no-op retry.
+
+`runStage` claims through `claimStage`, so a redelivery of a stage a live owner
+still holds logs and returns instead of doing the work twice. The claim carries
+a **fencing token**: the owner's heartbeat, progress, completion and failure
+writes land only while it matches, so an owner that was merely slow and lost
+its stage stops at its next report, cannot complete it or advance the run
+behind its replacement, and acknowledges its delivery with `defer` (pg-boss
+re-issues a failed job under the same id; completing it would complete the
+replacement). Neither recovery pass ever takes a stage the calling process is
+running.
 
 #### The 34 queues that declared nothing, and the verdict on each
 
@@ -602,7 +630,7 @@ row-level expiry and the in-process execution deadline, and a blank one means
 | `import-media` | **2** | **worker** | `short` | **43 200 s** | `import.stage` (media) |
 | `import-push` | **1** | **worker** | `short` | **43 200 s** | `import.stage` (push) |
 | `import-stages` | **1** | **worker** | — *(deliberate)* | **43 200 s** | Legacy drain + deleted-stage fallback |
-| `py-fn-summary` | 6 | web | `short` | **1800 s** | `python.function.run` → Summary sidecar. **Deferred completion** |
+| `py-fn-summary` | **1** | web | `short` | **1800 s** | `python.function.run` → Summary sidecar. **Deferred completion**; `yieldsTo: summary-service` |
 | `py-fn-hbpe` | 6 | web | `short` | **14400 s** | `python.function.run` → HBPE sidecar. **Deferred completion**, `retryLimit 2`, `retryDelay 300` |
 | `ingest-coalesce` | 6 | web | `short` | **3600 s** | `ingest.coalesce`, `retryDelay 60` |
 | `etl` | 6 | web | `short` | — | `connectionSyncJob.execute`, `connectionSyncJob.transform` |
@@ -616,7 +644,7 @@ row-level expiry and the in-process execution deadline, and a blank one means
 | `geocode` | 6 | web | — | — | `event.geocode-batch-request` |
 | `estimate-location` | 6 | web | — | — | `event.estimate-location-batch-request` |
 | `media-dimensions` | 6 | web | — | — | `file.media-dimensions-backfill-request` *(deprecated shim)* |
-| `document-parsing` | 6 | web | — | — | `file.uploaded` → text extraction |
+| `document-parsing` | 6 | web | — | — | `file.uploaded` → text extraction. `retryLimit 5`, `retryDelay 30`, so a document outlasts a parser restart |
 | `file-preview-generation` | 6 | web | — | — | `file.uploaded` → thumbnails |
 | `memory-file-entity` | 6 | web | — | — | `file.uploaded` → graph File node |
 | `import-inbox-provision` | 6 | web | — | — | `user.created` → inbox drop folders |
@@ -739,17 +767,19 @@ declare it is never held back (`domains/pipeline/schedule.ts:1070,1077`).
 | `connectionSyncJob.execute` | `etl` | Claim a job atomically, fetch one page from a provider, write the raw payload | `SyncOrchestrator.executeSyncJobs` cron only |
 | `connectionSyncJob.transform` | `etl` | Claim atomically (1 h stale-claim window), map the provider payload into the memory model | `SyncOrchestrator.executeTransformJobs` cron only |
 
-Every stage runs under a shared `runStage` spine: claim → scratch dir → 30 s
-heartbeat → runner → `completeStage` → `advance` (which enqueues the successor),
-or `failStage` + rethrow.
+Every stage runs under a shared `runStage` spine: claim (with its fencing
+token and delivering job) → scratch dir → 30 s heartbeat → runner →
+`completeStage` → `advance` (which enqueues the successor), or `failStage` +
+rethrow — every write fenced on the claim, and a claim lost to the orphan
+reaper ending the delivery with `defer`.
 
 ### LLM
 
 | Event | Queue | What it does | Triggered by |
 |---|---|---|---|
 | `chat.generate` | `llm` | One chat turn. Flips `generation_status` to running, builds the turn, streams from Ollama, persists. **Survives leaving the page; Stop cancels it.** `INTERACTIVE_JOB_PRIORITY`, `singletonKey chat-generate:<threadId>` | `POST /llm/generate` |
-| `chat.summarization` | `llm-background` | Sidebar title for an unnamed thread. Try/caught and only logged — never retried | Chained from a successful `chat.generate`, only when the thread has no name |
-| `infer.question.answer` | `llm-background` | Infer a first-person answer to an unanswered profile question from what the appliance knows, rather than asking. Embedding call + `ci_search` query + generation, 60 s timeout | `AnswerInferenceCron` (flag off) or `SmartRotationListener` (flag on) |
+| `chat.summarization` | `llm-background` | Sidebar title for an unnamed thread. `INTERACTIVE_JOB_PRIORITY`, so it is not served behind the answer-inference backlog on this queue; `singletonKey chat-summarize:<threadId>`. A failure — including a model reply with nothing usable in it (empty, punctuation only, a bare thinking trace) — fails the job: retried 3× with backoff (~10–20 s, 20–40 s, 40–80 s). On the last attempt the listener does not dead-letter: it names the thread from the person's first message (cut at a word boundary, ≤60 characters) with one conditional `UPDATE` that only matches while the title is still empty, so a real title is never overwritten | Chained from a successful `chat.generate`, only when the thread has no name |
+| `infer.question.answer` | `llm-background` | Infer a first-person answer to an unanswered profile question from what the appliance knows, rather than asking. Embedding call + `ci_search` query + generation, bounded by `llm.answerInferenceTimeoutMs` (270 s). **At most one outstanding per owner, and at most one per `llm.answerInferenceIntervalMinutes` (20) per owner** — both selectors apply `inferenceDispatchOpenSql` (`domains/intelligence/inferenceDispatchGate.ts`). Sent with `retentionMinutes: 60`, so a job that waits unstarted for an hour is dropped by pg-boss rather than replayed | `AnswerInferenceCron` (flag off) or `SmartRotationListener` (flag on) |
 | `python.function.run` | `py-fn-summary` | POST to the Summary sidecar (`/functions/run`, 30 s *accept* timeout only), then `ack.defer()`. Completed by the callback webhook | The `PythonFunctionCrons` fan-outs, `SmartRotationListener` |
 | `python.function.run` | `py-fn-hbpe` | Same, aimed at HBPE. 4 h expiry because bootstrap trains models for hours | `hbpeNightly`, `hbpeBootstrapSweep`, `ForecastResolver.triggerHbpe` |
 
@@ -783,7 +813,7 @@ or `failStage` + rethrow.
 
 ## 4. Schedules
 
-59 `@Cron` methods. All use the wrapper. Expressions are 6-field (second-first)
+60 `@Cron` methods. All use the wrapper. Expressions are 6-field (second-first)
 unless marked **5f**, in which case they fire on second 0 — the crowded second
 the 6-field schedules were deliberately staggered off.
 
@@ -803,7 +833,8 @@ the 6-field schedules were deliberately staggered off.
 | `5 * * * * *` | `SyncOrchestrator.orchestrateSyncJobs` | web | Every minute — walk active connections × endpoints × iteration types and create pending sync jobs. In-process `orchestrating` flag is the only overlap guard |
 | `8,38 * * * * *` | `SyncOrchestrator.executeSyncJobs` | web | Twice a minute — dispatch up to `5 − inFlight` pending jobs. **The only executor of pending sync jobs, including user-initiated Sync Now** |
 | `15 * * * * *` | `SyncOrchestrator.executeTransformJobs` | web | Every minute — dispatch at most **2** transforms appliance-wide, oldest-first |
-| `30 */5 * * * *` | `ImportStageListener.sweepOnSchedule` | **worker** | Reclaim stages stuck `running` >10 min back to `queued`, then re-enqueue **at most one** stage per unfinished run — the lowest-`seq` queued one, picked by a `LEFT JOIN LATERAL … ORDER BY s.seq LIMIT 1`, and only when no stage of that run is currently `running` (a queued stage behind a running one is waiting *by design*) |
+| `15 * * * * *` | `ImportStageListener.reapOrphansOnSchedule` | **worker** | The orphan reaper (`ImportRunService.reclaimOrphanedStages`): a `running` stage claimed through a pg-boss job, silent for `IMPORT_STAGE_ORPHAN_SECONDS` (180 s) and not running in this process, goes back to `queued` and its job is failed through pg-boss — retried in place, or at the retry limit dead-lettered with the stage failed to match. Reads a partial index of running stages. `exclusive` |
+| `30 */5 * * * *` | `ImportStageListener.sweepOnSchedule` | **worker** | The reaper pass above first; then reclaim stages stuck `running` >10 min back to `queued` (the backstop, for claims no pg-boss job holds), then re-enqueue **at most one** stage per unfinished run — the lowest-`seq` queued one, picked by a `LEFT JOIN LATERAL … ORDER BY s.seq LIMIT 1`, and only when no stage of that run is currently `running` (a queued stage behind a running one is waiting *by design*). Stages this process is running are exempt from both reclaims |
 | `0 17 * * * *` | `StagedUploadPurgeCron.runOnSchedule` | **worker** | Restage orphaned claims, purge expired staged uploads, walk the uploads root for orphans |
 | `50 40 6 * * *` | `ImportRetentionCron.runOnSchedule` | **worker** | Reclaim staged payload for drained runs >7 d, prune run history >90 d |
 | `0 */10 * * * *` | `BlueBubblesSyncCron.runOnSchedule` | **worker** | iMessage pull for the first onboarded account. Guard is a claim on the config row (`BlueBubblesConfigService.claimSync`), not an in-process flag — the old per-process flag couldn't span the web/worker split and double-ran |
@@ -826,7 +857,10 @@ the 6-field schedules were deliberately staggered off.
 
 Each takes **10 users per tick** from an **in-process** round-robin cursor.
 `answer_infer` and `question_feed` are additionally skipped when the pg-boss
-backlog exceeds 500.
+backlog exceeds 500 — counted on `default` and `smart-rotation` only, so it
+never sees `llm-background`. What actually bounds `answer_infer` is the
+per-owner dispatch gate it shares with `AnswerInferenceCron` (see
+`infer.question.answer` above).
 
 | Schedule | Work type | Priority |
 |---|---|---|
@@ -867,6 +901,11 @@ backlog exceeds 500.
 | `20 15 * * * *` | `ConsumptionSweepCron.sweepOnSchedule` | Hourly reaper for `ci.consumption_windows` / `ci.consumed_nonces` — deletes rows idle past the rate-limit/nonce windows they serve (60× the 60 s rate-limit window, 12× the 5 min signature lifetime). In-process re-entrancy guard |
 | `20 40 3 * * *` | `SyncWindowSweepCron.sweepOnSchedule` | Daily PowerSync retention: clears `sync_period` on `ci.events` / `ci.entities` rows older than the 30-day device window. Ages rows out of sync, does not delete them. In-process re-entrancy guard |
 
+One recurring task is not a job at all: `compact` on PowerSync's bucket storage runs
+hourly from `infrastructure/powersync/entrypoint.sh`, inside that container, so no job
+control or registry name reaches it. See `infrastructure/powersync/README.md`,
+"Compacting".
+
 ### Everything else — web role
 
 | Schedule | Registry name | Gate | What it does |
@@ -874,7 +913,7 @@ backlog exceeds 500.
 | `25 */15 * * * *` | `ActivityRollupCron.refreshRollup` | none | **Eight unbounded full-table aggregates**, every 15 min, no time or user predicate |
 | `0 10 * * * *` | `DailyMetricsCron.refreshRecent` | none | Four phases; `findAllOnboarded()` called **four times** per tick. Only `refreshPlaces` is capped (25 users) |
 | `28 */20 * * * *` | `FeedQueueCron.topUpFeedQueue` | **inverted** — runs only while `smart.rotation` is OFF | Top up `ci.feed_queue` for every onboarded user |
-| `55 * * * * *` | `AnswerInferenceCron.cronInferAnswers` | off when `smart.rotation` on | **Every minute.** A `ci.questions × ci.users` CROSS JOIN with a window function and a correlated anti-join, 1440×/day |
+| `55 * * * * *` | `AnswerInferenceCron.cronInferAnswers` | off when `smart.rotation` on | **Ticks every minute; dispatches per owner at most once per `llm.answerInferenceIntervalMinutes` (20), and never while that owner's last inference is still waiting or running.** Before that gate it sent one job a minute per owner whatever the queue held — 240/h on a four-person appliance, more than one GPU slot can finish, so core-1's queue fell ~4 h behind with 941 waiting (2026-10-17). The query is a `ci.questions × ci.users` CROSS JOIN with a window function and a correlated anti-join, 1440×/day, but gated owners are filtered out of the user set before any per-question work |
 | `45 */5 * * * *` | `MemoryCompactionCron.cronCompactMemories` | `agent.memory.compaction` — **default false** | Up to 25 sequential LLM generations **in-process on the web role**, not over pg-boss |
 | `3 */10 * * * *` | `TurnFragmentCron.cronWriteTurnFragments` | `agent.memory.turnFragments` — **default false** | Fan out one turn-fragment job per user with completed turns. Interval config-driven, bounded 5–15 min |
 | `0 20 * * * *` | `AccountPurgeCron.purgeDueAccounts` | `accountDeletion.purge.enabled` (true) | Hard-delete accounts past the 30-day grace, ≤5 per run. **The only cron with a real distributed mutex** (`pg_try_advisory_lock` per account) |
@@ -926,6 +965,15 @@ itself — those rows displayed "Maintenance" in the Category column while
 selecting *Maintenance* resolved category → event names out of `JOB_TYPES` and
 returned none of them.
 
+Two more turned up on the 2026-10-02 iOS QA run and were closed the same way:
+`planning.fire_reminders` (the per-user reminder tick, every minute, so a few
+hundred completed rows at any moment) and
+`maintenance.person-stub-backfill-request` (the post-import people pass). Each
+had a listener and a producer but no entry, which left Jobs Health with a
+permanent "N jobs have no taxonomy entry" warning and kept the reminder tick out
+of the Planning chip's count. A new event with a listener needs its entry in the
+same change; the Health warning is the only thing that notices when it is missing.
+
 (`communication.created` was never in this set; it is generated by
 `searchIndexTypes()` and additionally disambiguated by `JOB_TYPES_BY_QUEUE`.)
 Conversely, ~14 `JOB_TYPES` entries describe legacy `graph.*` events with zero
@@ -939,10 +987,16 @@ never produce a job.
   aggregate must exclude the queue **by name** — on a live appliance that was
   1,191 of a reported 13,907 "pending" jobs, each of which *also* counted under
   "failed" on its original queue.
-- **The reaper loses the originating queue.** `ci.pipeline_dead_letters.queue` is
-  fed `j.name`, but the `WHERE` pins `j.name = 'dead-letter'` — so every row
-  reads `queue = 'dead-letter'`. pg-boss's dead-letter insert never carries the
-  source queue name onto the DLQ row, so it is not recoverable at reap time.
+- **pg-boss drops the originating queue.** Its dead-letter insert copies only
+  `data` and `output`, so the DLQ row never says which queue the job died on.
+  `PGBossEventService` now writes `queue` into the failure output on both of
+  its failure paths, and the reaper records that as
+  `ci.pipeline_dead_letters.queue`. Rows reaped before that, and jobs pg-boss
+  failed itself by expiry (its output carries no queue), still read
+  `queue = 'dead-letter'`. Replay sends those, and letters whose queue no
+  longer listens for their event, to every queue listening for the event. A
+  `python.function.run` goes to its target's queue instead, and a
+  `pipeline.slice` or `pipeline.sweep` to its stage's queue.
 - **Fetch failures are structurally invisible.** pg-boss's `manager.fetch` wraps
   its query in an **empty catch** and returns `rows || []`. The defensive
   `try/catch` around `boss.fetch()` can essentially never fire, so a database
@@ -950,7 +1004,7 @@ never produce a job.
   metric.
 - **`last run` is not `last success`.** The wrapper stamps `ci.cron_runs` twice
   for exactly this reason; read the success column.
-- **`pgboss.schedule` is permanently empty** while ~59 real crons run beside it.
+- **`pgboss.schedule` is permanently empty** while ~60 real crons run beside it.
 
 ### Structural notes
 

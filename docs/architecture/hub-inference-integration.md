@@ -1,6 +1,5 @@
 # CI-Server (Companion Memory) — Local-LLM Integration with CI Hub
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
 > Status: **Historical design / proposal.** Supersedes the earlier "Companion Memory, hermes,
 > openclaw — Config & Secret Injection from CI Hub" draft, which assumed Companion
 > Memory was an unknown third-party binary. **It is not: Companion Memory _is_

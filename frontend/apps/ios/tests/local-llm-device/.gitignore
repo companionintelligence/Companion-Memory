@@ -1,0 +1,4 @@
+LocalLLMBench.xcodeproj/
+.build/
+results/
+plans/

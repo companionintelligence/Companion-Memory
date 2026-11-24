@@ -23,6 +23,7 @@ services:
       LLM_DEFAULT_CHAT_MODEL: ${LLM_DEFAULT_CHAT_MODEL:-}
       # Embeddings stay on native Ollama even when chat runs on vLLM/Lemonade;
       # falls back to OLLAMA_HOST when unset.
+      LLM_EMBEDDING_API_BASE: ${LLM_EMBEDDING_API_BASE:-}
       OLLAMA_EMBED_HOST: ${OLLAMA_EMBED_HOST:-}
       HBPE_HOST: http://hbpe-service:8002
       # `api` exists only in the staging/production overrides — there is no base
@@ -92,8 +93,13 @@ services:
   database:
     environment:
       PASSWORD: ${DATABASE_ADMIN_PASSWORD}
+    # Loopback only, like docker-compose.local.yml. The superuser password and
+    # the object-store root keys below come from .env, which starts life as a
+    # copy of the committed .env.default, and Docker's own iptables rules skip
+    # ufw, so an all-interfaces bind handed both to anyone on the network.
+    # Reach them from another machine through an SSH tunnel instead.
     ports:
-      - 5432:5432
+      - 127.0.0.1:5432:5432
 
   gateway:
     image: ci/gateway
@@ -142,8 +148,9 @@ services:
     environment:
       USERNAME: ${OBJECT_STORE_USERNAME}
       PASSWORD: ${OBJECT_STORE_PASSWORD}
+    # Loopback only; see the note on `database` above.
     ports:
-      - 9000:9000
+      - 127.0.0.1:9000:9000
 
   summary-service:
     # Pass the shared LLM config from .env explicitly (not via env_file) so

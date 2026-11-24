@@ -13,8 +13,14 @@ const AutonomySection = lazy(() =>
   import('./sections/AutonomySection').then((m) => ({ default: m.AutonomySection })),
 );
 const ModelSection = lazy(() => import('./sections/ModelSection').then((m) => ({ default: m.ModelSection })));
+const OnDeviceModelSection = lazy(() =>
+  import('./sections/OnDeviceModelSection').then((m) => ({ default: m.OnDeviceModelSection })),
+);
 const LocationSection = lazy(() =>
   import('./sections/LocationSection').then((m) => ({ default: m.LocationSection })),
+);
+const AppLockSection = lazy(() =>
+  import('./sections/AppLockSection').then((m) => ({ default: m.AppLockSection })),
 );
 const SafariExtensionSection = lazy(() =>
   import('./sections/SafariExtensionSection').then((m) => ({ default: m.SafariExtensionSection })),
@@ -30,6 +36,12 @@ const ApiKeysSection = lazy(() =>
   import('./sections/ApiKeysSection').then((m) => ({ default: m.ApiKeysSection })),
 );
 const OAuthSection = lazy(() => import('./sections/OAuthSection').then((m) => ({ default: m.OAuthSection })));
+const PrivacySection = lazy(() =>
+  import('./sections/PrivacySection').then((m) => ({ default: m.PrivacySection })),
+);
+const TrustProtocolsSection = lazy(() =>
+  import('./sections/TrustProtocolsSection').then((m) => ({ default: m.TrustProtocolsSection })),
+);
 const DataPortabilitySection = lazy(() =>
   import('./sections/DataPortabilitySection').then((m) => ({ default: m.DataPortabilitySection })),
 );
@@ -44,8 +56,12 @@ function sectionElement(section: string): ReactNode {
       return <AutonomySection />;
     case 'model':
       return <ModelSection />;
+    case 'on-device':
+      return <OnDeviceModelSection />;
     case 'location':
       return <LocationSection />;
+    case 'app-lock':
+      return <AppLockSection />;
     case 'safari':
       return <SafariExtensionSection />;
     case 'bluebubbles':
@@ -58,6 +74,10 @@ function sectionElement(section: string): ReactNode {
       return <ApiKeysSection />;
     case 'oauth':
       return <OAuthSection />;
+    case 'privacy':
+      return <PrivacySection />;
+    case 'protocols':
+      return <TrustProtocolsSection />;
     case 'data':
       return <DataPortabilitySection />;
     default:

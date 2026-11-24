@@ -198,12 +198,17 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
       'ever fill it. On the reference corpus that is 16,325 outbound iMessages whose chat.db row has ' +
       'neither recipients nor a partner handle (see migration 20260819000941) — the counterpart is ' +
       'genuinely unrecorded, and a name invented from a filename is the defect migration ' +
-      '20260818220731 exists to undo. Note also what a re-import does NOT do here: from_entity_id and ' +
+      '20260818220731 exists to undo. Those rows were written before the push named the owner as the ' +
+      'sender of every outbound message: one imported now is from the owner and is not counted, so an ' +
+      'outbound row here comes from an older build, or from a run that could not read the owner. ' +
+      'Note also what a re-import does NOT do here: from_entity_id and ' +
       'to_entity_ids are absent from INGEST_REFRESH_COLUMNS.communication (deliberately — they are ' +
       'resolved server-side), so re-ingesting an existing triple leaves them as they are. The parser ' +
       'fixes that stage participant edges (imessage.ts outbound fan-out, googlevoice.ts ' +
       'counterpartEdges) apply to rows written for the first time; migration 20260819000959 is the ' +
-      'repair for rows already stored, and it too reads ci_import.staged_items.',
+      'repair for rows already stored, and it too reads ci_import.staged_items. Agent chat turns ' +
+      "(`POST /memory/turn`, category 'agent-turn') are not counted: they are the owner talking to an " +
+      'agent, and there is no person on the other end to link.',
     mirrors: null,
     sql: String.raw`
       WITH bad AS (
@@ -211,6 +216,10 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
           FROM ci.communications
          WHERE from_entity_id IS NULL
            AND (to_entity_ids IS NULL OR cardinality(to_entity_ids) = 0)
+           -- An agent chat turn (MemoryController.turn, AGENT_TURN_MESSAGE_CATEGORY)
+           -- is the owner talking to an agent: no Person is on the other end,
+           -- so an empty participant set is the honest value.
+           AND category IS DISTINCT FROM 'agent-turn'
       )
       SELECT count(*)::bigint AS count,
              ${breakdownBy('source_system')} AS breakdown,
@@ -406,11 +415,13 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
     //
     // KNOWN BLIND SPOT, stated because a silent one is the failure mode this file
     // exists to prevent: the 2 mis-typed `contact_list` rows are invisible here.
-    // Their parser stamps only {Source, File}, so nothing in the row's own data
-    // says "contact" — only a source-scoped sweep could catch them, and this
-    // check cannot. A datasource whose contact entities carry no contact metadata at all
-    // is only reachable by a source list, which is exactly what this check is
-    // built to avoid needing.
+    // Their parser stamped only {Source, File} when it wrote them, so nothing in
+    // those rows' own data says "contact" — only a source-scoped sweep could catch
+    // them, and this check cannot. (It now also keeps `Names` / `Emails` / `Phones`,
+    // as does `applecontacts.ts`, so rows written since would be visible.) A
+    // datasource whose contact entities carry no contact metadata at all is only
+    // reachable by a source list, which is exactly what this check is built to
+    // avoid needing.
     sql: String.raw`
       WITH bad AS (
         SELECT entity_id, name, linked_table, owner_user_id
@@ -460,6 +471,99 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
       SELECT COALESCE(sum(n), 0)::bigint AS count,
              (SELECT to_jsonb(d) FROM (SELECT name, n AS rows FROM dupe ORDER BY n DESC, name LIMIT 1) d) AS sample
         FROM dupe
+    `,
+  },
+  {
+    id: 'contact-person-merges-several-people',
+    severity: 'medium',
+    title:
+      'Imported Person rows whose card names are different people — colleagues collapsed onto one shared line',
+    scope: 'ci.entities',
+    remedy:
+      'A contact import used to key each card on its smallest handle, and digits sort before letters, so ' +
+      "every card from one office keyed on the switchboard (or the fax) and staged as ONE entity: the row's " +
+      '`properties.Names` lists all of them, its Emails/Phones mix their details, and it feeds the ' +
+      "duplicate detector every colleague's number. The parsers now pass over shared handles " +
+      '(`markSharedContactHandles`). To repair a row, RE-IMPORT the same export: the push moves the row ' +
+      'onto the new key of the colleague it is named after and rewrites it with that one card, and mints ' +
+      'the others fresh (push/legacyKeys.ts). A row that survives a re-import was kept deliberately — no ' +
+      'card claiming it bears its name — and needs a person to split it by hand; there is no unmerge. ' +
+      'MEDIUM because a name is a poor identity: a typo in both parts of one person’s name reads as two people.',
+    mirrors: 'src/domains/import/staging/identity.ts',
+    // The SQL twin of `namesDescribeDifferentPeople`: two names are different
+    // people when both carry a name element — a letter token of 2+ characters,
+    // honorifics, suffixes and connectives aside — and no element of one equals,
+    // or is a 3+ letter prefix of, an element of the other. A relation ("Tom's
+    // mom") and a handle written into the name field are no evidence either way.
+    //
+    // Two translation notes. The TypeScript side folds accents with NFKD, which
+    // Postgres cannot do without `unaccent` (not installed), so `translate`
+    // folds the Latin accents a real address book carries; a name in another
+    // script has no ASCII elements and, as in TypeScript, is no evidence. And it
+    // strips honorifics/suffixes wherever they sit, where the tokenizer strips
+    // them only at the ends, so a name using one as a middle name ("Md") can
+    // read as different here and not there — close enough for a MEDIUM count,
+    // which is all this is.
+    //
+    // `Names` is the accumulating key only vCard declares, so in practice this
+    // watches `import:vcard`; applecontacts and contactlist declare none, and a
+    // collapse there left no trace to count — the second person simply vanished.
+    sql: String.raw`
+      WITH names AS (
+        SELECT e.entity_id, n.ord, n.value AS card_name
+          FROM ci.entities e
+          CROSS JOIN LATERAL jsonb_array_elements_text(e.properties->'Names') WITH ORDINALITY AS n(value, ord)
+         WHERE e.entity_type = 'Person'
+           AND e.linked_table LIKE 'import:%'
+           AND e.merged_into_entity_id IS NULL
+           AND jsonb_typeof(e.properties->'Names') = 'array'
+           AND jsonb_array_length(e.properties->'Names') > 1
+           AND n.value !~* '[''’]s(\s|$)'
+           AND position('@' in n.value) = 0
+      ),
+      elements AS (
+        SELECT DISTINCT names.entity_id, names.ord, t AS element
+          FROM names,
+               regexp_split_to_table(
+                 translate(regexp_replace(lower(names.card_name), '[''’]', '', 'g'),
+                           'àáâãäåāèéêëēìíîïīòóôõöøōùúûüūñçýÿ',
+                           'aaaaaaaeeeeeiiiiiooooooouuuuuncyy'),
+                 '[^a-z]+') AS t
+         WHERE length(t) >= 2
+           AND t NOT IN ('and', 'at', 'da', 'de', 'del', 'della', 'der', 'di', 'du', 'for', 'from',
+                         'la', 'le', 'of', 'the', 'van', 'von',
+                         'mr', 'mrs', 'ms', 'miss', 'mz', 'mx', 'dr', 'prof', 'professor', 'sir', 'madam',
+                         'lady', 'lord', 'rev', 'reverend', 'hon', 'honorable', 'dame', 'fr', 'father', 'rabbi',
+                         'jr', 'sr', 'ii', 'iii', 'iv', 'phd', 'md', 'esq', 'jd')
+      ),
+      named AS (
+        SELECT DISTINCT entity_id, ord FROM elements
+      ),
+      collapsed AS (
+        SELECT DISTINCT a.entity_id
+          FROM named a
+          JOIN named b ON b.entity_id = a.entity_id AND b.ord > a.ord
+         WHERE NOT EXISTS (
+                 SELECT 1
+                   FROM elements x
+                   JOIN elements y ON y.entity_id = x.entity_id
+                  WHERE x.entity_id = a.entity_id
+                    AND x.ord = a.ord
+                    AND y.ord = b.ord
+                    AND (x.element = y.element
+                         OR (least(length(x.element), length(y.element)) >= 3
+                             AND (left(x.element, length(y.element)) = y.element
+                                  OR left(y.element, length(x.element)) = x.element))))
+      ),
+      bad AS (
+        SELECT e.entity_id, e.name, e.linked_table, e.owner_user_id, e.properties->'Names' AS names
+          FROM ci.entities e
+          JOIN collapsed c USING (entity_id)
+      )
+      SELECT count(*)::bigint AS count,
+             ${breakdownBy('linked_table')} AS breakdown,
+             ${SAMPLE} AS sample
+        FROM bad
     `,
   },
 
@@ -585,7 +689,7 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
   {
     id: 'content-media-mimetype-mismatch',
     severity: 'medium',
-    title: "ci.content typed 'media' whose mimetype is not an image, video or audio type",
+    title: "ci.content typed 'media' whose mimetype is not an image, video, audio or watch-record type",
     scope: 'ci.content',
     remedy:
       "The type discriminator drives rendering: a row typed 'media' gets a player or a thumbnail, so an " +
@@ -593,10 +697,21 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
       "('application/vnd.android.package-archive') belong typed 'app', not 'media'. Each mimetype in " +
       'the breakdown is a mapping the pushing parser got wrong — fix it at the source, then re-type ' +
       'the existing rows.',
-    mirrors: null,
+    mirrors: 'src/domains/memory/services/contentFacetsSql.ts MEDIA_KINDS/OTHER_MEDIA_TYPE',
     // NULL mimetype is excluded deliberately: "media with no declared type" is a
     // weaker and much more common smell (most importers never set one), and
     // folding it in here would bury the actual mismatches under it.
+    //
+    // 'application/dash+xml' is excluded for the same reason, not because it is
+    // rare: it is the WATCH_MEDIA_TYPE sentinel netflix.ts, hulu.ts,
+    // disney_plus.ts, youtube.ts and _youtube_activity.ts all write, on purpose,
+    // for a "you watched this" record that never had a downloaded file —
+    // contentFacetsSql.ts's OTHER_MEDIA_TYPE bucket exists for exactly these
+    // rows ("watch and listen records, documents") and the content grid renders
+    // them from the tier-0 embed player, not from mimetype. On a full Drive
+    // corpus this check found 68,533 such YouTube rows alongside 14 real
+    // mismatches (Amazon ebooks/purchases) — the sentinel was burying the
+    // signal 4,895 to 1.
     sql: String.raw`
       WITH bad AS (
         SELECT id, source_system, mimetype, left(external_id, 80) AS external_id
@@ -604,6 +719,7 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
          WHERE type = 'media'
            AND mimetype IS NOT NULL
            AND mimetype !~* '^(image|video|audio)/'
+           AND mimetype <> 'application/dash+xml'
       )
       SELECT count(*)::bigint AS count,
              ${breakdownBy('mimetype')} AS breakdown,

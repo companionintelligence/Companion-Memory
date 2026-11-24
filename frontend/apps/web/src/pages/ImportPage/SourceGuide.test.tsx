@@ -67,9 +67,30 @@ describe('SourceGuide alt path', () => {
     expect(screen.getByRole('heading', { name: 'No account? Request it by mail' })).toBeInTheDocument();
     expect(screen.getByText('Fill out the form.')).toBeInTheDocument();
 
-    const altCta = screen.getByRole('link', { name: /open the spotify data request page/i });
+    const altCta = screen.getByRole('link', { name: /open the spotify export page/i });
 
     expect(altCta).toHaveAttribute('href', 'https://spotify.com/privacy/request');
+  });
+
+  it('renders a link inside a step as a visible link that opens in a new tab', () => {
+    render(
+      <SourceGuide
+        guide={guide({
+          altPath: {
+            title: 'Recurring sync',
+            steps: ['Create a connection to [Dropbox](/providers/01a10dc2-7dc5-7d4c-b3ab-7d3caaf7ebd3).'],
+          },
+        })}
+      />,
+    );
+
+    const link = screen.getByRole('link', { name: 'Dropbox' });
+
+    expect(link).toHaveAttribute('href', '/providers/01a10dc2-7dc5-7d4c-b3ab-7d3caaf7ebd3');
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+    // Styled by the list it sits in, not by the markdown renderer.
+    expect(link.closest('ol')?.className).toMatch(/\[&_a\]:text-blue-600/);
   });
 
   it('renders alt-path steps with no CTA when the alt path has no url', () => {
@@ -82,7 +103,7 @@ describe('SourceGuide alt path', () => {
     );
 
     expect(screen.getByText('Reach out through the help center.')).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: /data request page/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /export page/i })).not.toBeInTheDocument();
   });
 
   it('renders no alt-path section at all when the guide has none', () => {

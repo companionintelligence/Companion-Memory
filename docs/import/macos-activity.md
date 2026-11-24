@@ -104,9 +104,11 @@ the current text before saving an in-flight label to avoid a stale-write race.
 
 HBPE's existing bootstrap/nightly pipeline labels these hourly summaries and
 serializes their lower-confidence gap-filling tokens alongside event tokens.
-Run the normal pipeline, or its operator `POST /trigger?user_id=<owner UUID>`
-endpoint, after backfill completes. Existing model outputs change only after
-serialization/training; old data outside configured HBPE history/day budgets
+Run the normal pipeline after backfill completes, for example with the
+`triggerHbpe` GraphQL mutation. The sidecar's operator
+`POST /trigger?user_id=<owner UUID>` endpoint answers 404 unless
+`HBPE_ENABLE_ADMIN_ROUTES=1` is set on the hbpe container. Existing model
+outputs change only after serialization/training; old data outside configured HBPE history/day budgets
 will not automatically expand those budgets. Measure forecast quality on held-out
 days before claiming an accuracy gain. This change provides additional evidence,
 not a measured improvement in model accuracy.

@@ -1,5 +1,6 @@
 import { Badge } from '@ci/shadcn';
 
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 import { appLabel } from '@/lib/appLabel';
 
 import type { ActivityOutcome, ActivityRow as Row } from './useActivity';
@@ -17,7 +18,7 @@ const OUTCOME_COPY: Record<ActivityOutcome, { label: string; className: string }
   success: { label: 'ran', className: 'text-muted-foreground' },
   error: { label: 'failed', className: 'text-destructive' },
   timeout: { label: 'timed out', className: 'text-destructive' },
-  refused: { label: 'refused', className: 'font-medium text-amber-600 dark:text-amber-500' },
+  refused: { label: 'refused', className: 'font-medium text-warning dark:text-amber-500' },
 };
 
 function outcomeCopy(outcome: ActivityOutcome) {
@@ -38,6 +39,7 @@ interface Props {
 }
 
 export function ActivityRow({ row }: Props) {
+  const fmt = useDateTimeFormat();
   const outcome = outcomeCopy(row.outcome);
   const who = appLabel(row.principalName) ?? (row.principal === 'managed-app' ? 'An app' : 'You');
   const duration = formatDuration(row.durationMs);
@@ -59,9 +61,7 @@ export function ActivityRow({ row }: Props) {
         </span>
         <code className="text-sm">{row.intent}</code>
         <span className={`text-sm ${outcome.className}`}>{outcome.label}</span>
-        <span className="ml-auto text-xs text-muted-foreground">
-          {new Date(row.occurredAt).toLocaleString()}
-        </span>
+        <span className="ml-auto text-xs text-muted-foreground">{fmt.dateTime(row.occurredAt)}</span>
       </div>
 
       <div className="flex flex-wrap items-center gap-1.5">

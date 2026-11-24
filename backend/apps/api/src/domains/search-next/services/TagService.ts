@@ -1,9 +1,17 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, Repository, type EntityManager } from 'typeorm';
+import {
+  DataSource,
+  In,
+  Repository,
+  type EntityManager,
+  type EntityTarget,
+  type ObjectLiteral,
+} from 'typeorm';
 import { v7 as uuid7 } from 'uuid';
 
 import { type ServiceContext, SYSTEM_USER, type UserServiceContext } from '@ci/common/context';
+import { resolvePageShape } from '@ci/common/persistence';
 
 import { CategoryDirectionOptoutEntity } from '../entities/CategoryDirectionOptoutEntity';
 import { EntityCategoryEntity } from '../entities/EntityCategoryEntity';
@@ -11,6 +19,7 @@ import { type EntityTag, EntityTagEntity } from '../entities/EntityTagEntity';
 import { TagCategoryEntity } from '../entities/TagCategoryEntity';
 import { TagDirectionEntity } from '../entities/TagDirectionEntity';
 import { type Tag, TagEntity, TimestampedTag } from '../entities/TagEntity';
+import { TAGGABLE_ENTITY_OWNERSHIP_QUERIES } from '../taggableEntityOwnership';
 import {
   TAG_KINDS,
   type CreateTagDto,
@@ -25,12 +34,34 @@ type FindOpts = {
   includeEntities?: boolean;
 };
 
+/** Relay args for {@link TagService.findEntityRefsPage}; the cursors are the tagged entities themselves. */
+export interface TagEntityRefsPageArgs {
+  first?: number;
+  after?: EntityIdentifier<TaggableEntity> | null;
+  last?: number;
+  before?: EntityIdentifier<TaggableEntity> | null;
+}
+
+export interface TagEntityRefsPage {
+  /** Newest assignment first. */
+  entities: EntityTag[];
+  hasNextPage: boolean;
+  hasPreviousPage: boolean;
+}
+
 /**
  * The most categories a single entity may carry (CI-Planning's `entity_categories`
  * caps this at 3 in the service layer, not in SQL — `setEntityCategories`
  * mirrors that rather than adding a DB constraint nothing else here has).
  */
 const ENTITY_CATEGORY_CAP = 3;
+
+/**
+ * Shape check only, run before an entity id reaches a `uuid` column: a value
+ * that fails it can name no entity, and letting Postgres reject the cast would
+ * answer "not yours" with an error instead of a refusal.
+ */
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export type UpdateTagResult = {
   /** The surviving tag. On a merge this is the pre-existing target, not the edited one. */
@@ -97,6 +128,10 @@ export class TagService {
   }
 
   async findByIds(context: ServiceContext, ids: string[]): Promise<(Tag | null)[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+
     const entities = await this.tagRepository.find({
       where: {
         id: In(ids),
@@ -121,10 +156,75 @@ export class TagService {
           userId: context.userId,
         }),
       },
-      relations: includeEntities ? ['entities'] : [],
+      relations: includeEntities ? { entities: true } : {},
     });
 
     return entity ? TagEntity.toEgressType(entity) : null;
+  }
+
+  /**
+   * One page of the entities carrying `tagId`, newest assignment first — read
+   * from `entity_tag` with a `LIMIT` rather than through
+   * `relations: ['entities']`, which hydrated every assignment the tag has (a
+   * tag on ten thousand photos was ten thousand rows for a page of fifty).
+   *
+   * `null` when the tag is not the caller's. The cursor is the tagged entity
+   * `(type, id)` — unique under the tag — resolved to its assignment's position;
+   * one that matches no assignment yields an empty page, never the first one.
+   */
+  async findEntityRefsPage(
+    context: ServiceContext,
+    tagId: string,
+    args: TagEntityRefsPageArgs,
+  ): Promise<TagEntityRefsPage | null> {
+    const tag = await this.findById(context, tagId);
+
+    if (tag == null) {
+      return null;
+    }
+
+    const isBackward = args.last != null || args.before != null;
+    const { limit } = resolvePageShape({ first: args.first, last: args.last });
+    const repository = this.dataSource.getRepository(EntityTagEntity);
+    const cursorRef = isBackward ? args.before : args.after;
+    let cursorRowId: string | null = null;
+
+    if (cursorRef) {
+      const cursorRow = await repository.findOne({
+        select: { id: true },
+        where: { tagId, entityType: cursorRef.type, entityId: cursorRef.id },
+      });
+
+      if (cursorRow == null) {
+        return { entities: [], hasNextPage: false, hasPreviousPage: isBackward };
+      }
+
+      cursorRowId = cursorRow.id;
+    }
+
+    // The assignment id is the order: an identity column, so newest first is
+    // `id DESC`, and a page is one index range under the tag.
+    const query = repository
+      .createQueryBuilder('et')
+      .where('et.tagId = :tagId', { tagId })
+      .orderBy('et.id', isBackward ? 'ASC' : 'DESC')
+      .limit(limit + 1);
+
+    if (cursorRowId != null) {
+      query.andWhere(isBackward ? 'et.id > :cursorRowId' : 'et.id < :cursorRowId', { cursorRowId });
+    }
+
+    const rows = await query.getMany();
+    const hasExtra = rows.length > limit;
+    const page = (hasExtra ? rows.slice(0, limit) : rows).map((row) => EntityTagEntity.toEgressType(row));
+
+    if (isBackward) {
+      page.reverse();
+
+      return { entities: page, hasNextPage: args.before != null, hasPreviousPage: hasExtra };
+    }
+
+    return { entities: page, hasNextPage: hasExtra, hasPreviousPage: args.after != null };
   }
 
   async findByLabel(context: UserServiceContext, label: string, opts: FindOpts = {}): Promise<Tag | null> {
@@ -139,7 +239,7 @@ export class TagService {
         label,
         userId: context.userId,
       },
-      relations: includeEntities ? ['entities'] : [],
+      relations: includeEntities ? { entities: true } : {},
     });
 
     return entity ? TagEntity.toEgressType(entity) : null;
@@ -415,6 +515,76 @@ export class TagService {
     });
   }
 
+  /**
+   * Replace the current user's complete tag set for one entity.
+   *
+   * Known-place editing submits one combined multi-tag field. Applying the
+   * additions and removals in separate mutations could leave a half-updated
+   * category set after a failure; this keeps that replacement atomic.
+   */
+  async replaceEntityTags(
+    context: UserServiceContext,
+    entity: EntityIdentifier<TaggableEntity>,
+    requestedLabels: string[],
+  ): Promise<boolean> {
+    const labels = [...new Set(requestedLabels.map((label) => this.validateLabel(label)))];
+
+    return this.dataSource.transaction(async (manager) => {
+      const tagRepository = manager.getRepository(TagEntity);
+      const entityTagRepository = manager.getRepository(EntityTagEntity);
+      const desiredTagIds = new Set<string>();
+
+      for (const label of labels) {
+        let tag = await tagRepository.findOne({ where: { label, userId: context.userId } });
+
+        if (tag == null) {
+          tag = await tagRepository.save(
+            tagRepository.create({
+              id: uuid7(),
+              label,
+              userId: context.userId,
+            }),
+          );
+        }
+
+        desiredTagIds.add(tag.id);
+      }
+
+      const current = await entityTagRepository
+        .createQueryBuilder('et')
+        .innerJoinAndSelect('et.tag', 'tag')
+        .where('et.entityId = :entityId', { entityId: entity.id })
+        .andWhere('et.entityType = :entityType', { entityType: entity.type })
+        .andWhere('tag.userId = :userId', { userId: context.userId })
+        .getMany();
+
+      for (const assignment of current) {
+        if (!desiredTagIds.has(assignment.tagId)) {
+          await entityTagRepository.delete({
+            tagId: assignment.tagId,
+            entityId: entity.id,
+            entityType: entity.type,
+          });
+        }
+      }
+
+      for (const tagId of desiredTagIds) {
+        await entityTagRepository
+          .createQueryBuilder()
+          .insert()
+          .values({
+            tagId,
+            entityType: entity.type,
+            entityId: entity.id,
+          })
+          .orIgnore()
+          .execute();
+      }
+
+      return true;
+    });
+  }
+
   async getTagsForEntity(
     context: ServiceContext,
     entityId: EntityIdentifier<TaggableEntity>,
@@ -586,7 +756,10 @@ export class TagService {
   // (`server/src/services/tags.ts`, the "Tag taxonomy" sections). Every write
   // below is owner-scoped through the SAME `userScope`/ownership pattern the
   // rest of this file already uses, and every DELETE against these five
-  // tables lives here — nowhere else may grow its own.
+  // tables lives here — nowhere else may grow its own. `setEntityCategories`
+  // is the one write keyed on a caller-named ENTITY rather than on a tag, so
+  // it owner-checks the entity too (`ownsEntity`); scoping the tags alone left
+  // its DELETE open to any entity id.
   //
   // `entity_tag.level` deliberately gets no setter here: this milestone adds
   // the column (default 1, so nothing that predates it changes) but nothing
@@ -617,20 +790,21 @@ export class TagService {
 
   /** The direction tags an intention tag belongs to (empty = Unsorted). */
   async getTagDirections(context: ServiceContext, intentionTagId: string): Promise<Tag[]> {
-    const query = this.dataSource
-      .getRepository(TagEntity)
-      .createQueryBuilder('t')
-      .innerJoin(TagDirectionEntity, 'td', 'td.direction_tag_id = t.id')
-      .where('td.intention_tag_id = :intentionTagId', { intentionTagId })
-      .orderBy('t.label', 'ASC');
+    return (await this.getTagDirectionsForTags(context, [intentionTagId])).get(intentionTagId) ?? [];
+  }
 
-    if (context.userId !== SYSTEM_USER) {
-      query.andWhere('t.user_id = :userId', { userId: context.userId });
-    }
-
-    const entities = await query.getMany();
-
-    return entities.map((entity) => TagEntity.toEgressType(entity));
+  /** {@link getTagDirections} for a page of intention tags in one read, keyed by intention tag id. */
+  async getTagDirectionsForTags(
+    context: ServiceContext,
+    intentionTagIds: string[],
+  ): Promise<Map<string, Tag[]>> {
+    return this.linkedTags(
+      context,
+      TagDirectionEntity,
+      'intention_tag_id',
+      'direction_tag_id',
+      intentionTagIds,
+    );
   }
 
   /**
@@ -686,20 +860,21 @@ export class TagService {
 
   /** The category tags an intention tag belongs to (empty = Unsorted). */
   async getTagCategories(context: ServiceContext, intentionTagId: string): Promise<Tag[]> {
-    const query = this.dataSource
-      .getRepository(TagEntity)
-      .createQueryBuilder('t')
-      .innerJoin(TagCategoryEntity, 'tc', 'tc.category_tag_id = t.id')
-      .where('tc.intention_tag_id = :intentionTagId', { intentionTagId })
-      .orderBy('t.label', 'ASC');
+    return (await this.getTagCategoriesForTags(context, [intentionTagId])).get(intentionTagId) ?? [];
+  }
 
-    if (context.userId !== SYSTEM_USER) {
-      query.andWhere('t.user_id = :userId', { userId: context.userId });
-    }
-
-    const entities = await query.getMany();
-
-    return entities.map((entity) => TagEntity.toEgressType(entity));
+  /** {@link getTagCategories} for a page of intention tags in one read, keyed by intention tag id. */
+  async getTagCategoriesForTags(
+    context: ServiceContext,
+    intentionTagIds: string[],
+  ): Promise<Map<string, Tag[]>> {
+    return this.linkedTags(
+      context,
+      TagCategoryEntity,
+      'intention_tag_id',
+      'category_tag_id',
+      intentionTagIds,
+    );
   }
 
   /**
@@ -753,20 +928,68 @@ export class TagService {
    * `category_direction_optouts`).
    */
   async getCategoryDirectionOptouts(context: ServiceContext, categoryTagId: string): Promise<Tag[]> {
+    return (await this.getCategoryDirectionOptoutsForTags(context, [categoryTagId])).get(categoryTagId) ?? [];
+  }
+
+  /** {@link getCategoryDirectionOptouts} for a page of category tags in one read, keyed by category tag id. */
+  async getCategoryDirectionOptoutsForTags(
+    context: ServiceContext,
+    categoryTagIds: string[],
+  ): Promise<Map<string, Tag[]>> {
+    return this.linkedTags(
+      context,
+      CategoryDirectionOptoutEntity,
+      'category_tag_id',
+      'direction_tag_id',
+      categoryTagIds,
+    );
+  }
+
+  /**
+   * The caller's tags linked from each of `ids` through a membership table
+   * (`keyColumn` → `tagColumn`), by label, keyed by the id they are linked
+   * from. One read of the links in label order, one hydration of the distinct
+   * tags; a key with no links is absent from the map.
+   */
+  private async linkedTags(
+    context: ServiceContext,
+    link: EntityTarget<ObjectLiteral>,
+    keyColumn: string,
+    tagColumn: string,
+    ids: string[],
+  ): Promise<Map<string, Tag[]>> {
+    const byKey = new Map<string, Tag[]>();
+
+    if (ids.length === 0) {
+      return byKey;
+    }
+
     const query = this.dataSource
-      .getRepository(TagEntity)
-      .createQueryBuilder('t')
-      .innerJoin(CategoryDirectionOptoutEntity, 'cdo', 'cdo.direction_tag_id = t.id')
-      .where('cdo.category_tag_id = :categoryTagId', { categoryTagId })
+      .getRepository(link)
+      .createQueryBuilder('link')
+      .select(`link.${keyColumn}`, 'key')
+      .addSelect('t.id', 'tag_id')
+      .innerJoin(TagEntity, 't', `t.id = link.${tagColumn}`)
+      .where(`link.${keyColumn} IN (:...ids)`, { ids })
       .orderBy('t.label', 'ASC');
 
     if (context.userId !== SYSTEM_USER) {
       query.andWhere('t.user_id = :userId', { userId: context.userId });
     }
 
-    const entities = await query.getMany();
+    const links = await query.getRawMany<{ key: string; tag_id: string }>();
+    const tags = await this.findByIds(context, [...new Set(links.map((row) => row.tag_id))]);
+    const tagById = new Map(tags.flatMap((tag) => (tag ? [[tag.id, tag] as const] : [])));
 
-    return entities.map((entity) => TagEntity.toEgressType(entity));
+    for (const { key, tag_id } of links) {
+      const tag = tagById.get(tag_id);
+
+      if (tag) {
+        byKey.set(key, [...(byKey.get(key) ?? []), tag]);
+      }
+    }
+
+    return byKey;
   }
 
   /**
@@ -852,13 +1075,28 @@ export class TagService {
    * `entity_tag`'s own shape is app- rather than FK-enforced). Any id that is
    * not one of the caller's own `kind = 'category'` tags is silently dropped.
    * An empty array clears the entity's categories.
+   *
+   * Returns null when the entity does not exist or belongs to another user. It
+   * is the same answer for both, so a refusal says nothing about someone else's
+   * ids. `entity_categories` has no FK to the entity, so this check is the only
+   * thing standing between a caller and any uuid they name. Without it, one
+   * user's call deleted another user's assignments on that entity and attached
+   * the caller's own categories in their place.
+   *
+   * User context only, because the check needs a concrete owner to compare
+   * against. A system caller would have to name one, the way `tagEntities`
+   * makes it pass `forUserId`, and nothing needs that yet.
    */
   async setEntityCategories(
-    context: ServiceContext,
+    context: UserServiceContext,
     entityId: EntityIdentifier<TaggableEntity>,
     categoryTagIds: string[],
-  ): Promise<Tag[]> {
+  ): Promise<Tag[] | null> {
     const { type, id } = entityId;
+
+    if (!UUID_SHAPE.test(id)) {
+      return null;
+    }
 
     const uniqueIds = [...new Set(categoryTagIds)].slice(0, ENTITY_CATEGORY_CAP);
 
@@ -876,7 +1114,20 @@ export class TagService {
       .filter((candidate): candidate is TagEntity => candidate != null);
 
     return this.dataSource.transaction(async (manager) => {
-      await manager.getRepository(EntityCategoryEntity).delete({ entityType: type, entityId: id });
+      if (!(await this.ownsEntity(manager, context.userId, entityId))) {
+        return null;
+      }
+
+      // Only rows pointing at the caller's own category tags. The ownership
+      // check above is the fix. This bounds the damage of a mistake in it (a
+      // wrong owner column for one type) to the caller's own rows.
+      await manager.query(
+        `DELETE FROM ci_search.entity_categories ec
+          WHERE ec.entity_type = $1
+            AND ec.entity_id = $2
+            AND ec.category_tag_id IN (SELECT t.id FROM ci_search.tags t WHERE t.user_id = $3)`,
+        [type, id, context.userId],
+      );
 
       for (const [position, category] of ordered.entries()) {
         await manager
@@ -895,6 +1146,31 @@ export class TagService {
   /** User-scoping fragment shared by the owner-checked reads and writes. */
   private userScope(context: ServiceContext): { userId?: string } {
     return context.userId === SYSTEM_USER ? {} : { userId: context.userId };
+  }
+
+  /**
+   * Whether `entity` names a row `userId` owns (see `taggableEntityOwnership.ts`
+   * for which rows, per type). Takes the write's own manager so the check runs
+   * inside its transaction, ahead of its first statement.
+   */
+  private async ownsEntity(
+    manager: EntityManager,
+    userId: string,
+    entity: EntityIdentifier<TaggableEntity>,
+  ): Promise<boolean> {
+    const query = TAGGABLE_ENTITY_OWNERSHIP_QUERIES.get(entity.type);
+
+    if (query == null) {
+      throw new Error(`Invalid entity type: ${entity.type}`);
+    }
+
+    const [row]: Array<{ owned: boolean }> = await manager.query(query.sql, [
+      entity.id,
+      userId,
+      ...query.discriminatorParams,
+    ]);
+
+    return row?.owned === true;
   }
 
   /**

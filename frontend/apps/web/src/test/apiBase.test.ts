@@ -2,6 +2,7 @@ import {
   buildApiUrl,
   clearPersistedApiBaseUrl,
   getApiBaseUrl,
+  getWebOrigin,
   initApiBaseUrl,
   isIosPlatform,
   isLocalApplianceOrigin,
@@ -217,5 +218,60 @@ describe('apiBase — native detection + persistence', () => {
     delete (globalThis as unknown as { window?: unknown }).window;
     setApiBaseUrl('');
     expect(needsNativeCloudConnect()).toBe(false);
+  });
+});
+
+// A link that leaves the app (a share link, its QR code, a webhook address) has to
+// name a host other devices can reach. Inside the bundled shell the page origin is
+// `capacitor://localhost` (iOS) / `https://localhost` (Android): it exists only in
+// that WebView.
+describe('apiBase — getWebOrigin() for links that leave the app', () => {
+  afterEach(() => {
+    delete (globalThis as unknown as { window?: unknown }).window;
+    setApiBaseUrl('');
+  });
+
+  it('is the page origin on web, where the page IS the Memory', () => {
+    (globalThis as unknown as { window?: unknown }).window = {
+      location: { origin: 'https://ci.example.com' },
+    };
+
+    expect(getWebOrigin()).toBe('https://ci.example.com');
+  });
+
+  it('is the paired Memory — never the WebView origin — in the iOS shell', () => {
+    (globalThis as unknown as { window?: unknown }).window = {
+      Capacitor: { isNativePlatform: () => true, getPlatform: () => 'ios' },
+      location: { origin: 'capacitor://localhost' },
+    };
+    setApiBaseUrl('https://memory.example.com/');
+
+    expect(getWebOrigin()).toBe('https://memory.example.com');
+  });
+
+  it('is the paired Memory — never the WebView origin — in the Android shell', () => {
+    (globalThis as unknown as { window?: unknown }).window = {
+      Capacitor: { isNativePlatform: () => true, getPlatform: () => 'android' },
+      location: { origin: 'https://localhost' },
+    };
+    setApiBaseUrl('http://192.168.1.9:8642');
+
+    expect(getWebOrigin()).toBe('http://192.168.1.9:8642');
+  });
+
+  it('is empty in a native shell with no server paired yet, not the WebView origin', () => {
+    (globalThis as unknown as { window?: unknown }).window = {
+      Capacitor: { isNativePlatform: () => true },
+      location: { origin: 'capacitor://localhost' },
+    };
+    setApiBaseUrl('');
+
+    expect(getWebOrigin()).toBe('');
+  });
+
+  it('is empty without a window (SSR)', () => {
+    delete (globalThis as unknown as { window?: unknown }).window;
+
+    expect(getWebOrigin()).toBe('');
   });
 });

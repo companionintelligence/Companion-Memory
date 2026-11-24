@@ -2,13 +2,83 @@ import { RRule, type Options as RRuleOptions } from 'rrule';
 
 import { wallClockInTZ, wallClockToUTC } from '@ci/common/time/zoned';
 
+import { hourlyRuleCanAdvance } from './ruleChecks';
 import type { ExpansionLimits, ExpansionWindow, RecurrenceSpec } from './types';
 
 export const DEFAULT_LIMITS: ExpansionLimits = {
   maxOccurrencesPerSeries: 512,
   maxIterations: 50_000,
+  // The same ceiling as maxIterations: a rule that produces nothing may walk no
+  // further than one that produces a date every period was already allowed to.
+  maxPeriods: 50_000,
   maxTotalOccurrences: 1000,
 };
+
+/** rrule's parsed options; the package does not export the type by name. */
+type ParsedOptions = RRule['options'];
+
+const HOUR_MS = 3_600_000;
+const DAY_MS = 24 * HOUR_MS;
+
+/**
+ * The least a single period moves rrule's counter forward, per FREQ, at
+ * INTERVAL=1. A year is at least 365 days, a month at least 28, a week's step
+ * at least 7 days after the first (which can be shorter, hence the slack in
+ * {@link periodsToPass}), a day exactly one, and an hourly step at least an hour.
+ */
+const MIN_PERIOD_MS: Record<number, number> = {
+  [RRule.YEARLY]: 365 * DAY_MS,
+  [RRule.MONTHLY]: 28 * DAY_MS,
+  [RRule.WEEKLY]: 7 * DAY_MS,
+  [RRule.DAILY]: DAY_MS,
+  [RRule.HOURLY]: HOUR_MS,
+};
+
+/**
+ * Periods after which rrule's counter is certainly past `floatingTo`, so every
+ * date the rule can put at or before it has already been produced. The `+ 3`
+ * covers the period DTSTART falls in (a year or month starts before DTSTART, a
+ * first week can be short) and the one `floatingTo` falls in.
+ */
+function periodsToPass(options: ParsedOptions, floatingTo: number): number {
+  const span = Math.max(0, floatingTo - options.dtstart.getTime());
+
+  return Math.ceil(span / (MIN_PERIOD_MS[options.freq] * options.interval)) + 3;
+}
+
+class PeriodBudgetSpent extends Error {}
+
+/**
+ * Make rrule stop after `periods` periods even when it produces no dates.
+ *
+ * rrule checks `UNTIL`, `COUNT` and the caller's callback only on dates it
+ * produces, and offers no hook per period. What it does do is read
+ * `options.interval` on every period: rrule 2.8.1's `iter()` reads it once on
+ * entry, then twice per period (the zero-interval check after the period's
+ * dates, and `DateTime.add` stepping the counter). A getter that counts those
+ * reads and throws once they pass the budget ends the walk from inside. The
+ * tests pin this against the installed rrule: a rule that produces nothing must
+ * come back fast, and every ordinary rule must expand exactly as before.
+ */
+function limitPeriods(options: ParsedOptions, periods: number): void {
+  const interval = options.interval;
+  const allowedReads = 1 + 2 * periods;
+  let reads = 0;
+
+  Object.defineProperty(options, 'interval', {
+    configurable: true,
+    enumerable: true,
+    get() {
+      reads += 1;
+
+      if (reads > allowedReads) {
+        throw new PeriodBudgetSpent();
+      }
+
+      return interval;
+    },
+  });
+}
 
 /**
  * How far outside the real window the FLOATING search runs.
@@ -140,39 +210,77 @@ export function expandSeries(
     return { starts: [], truncated: true, limit: 'maxIterations' };
   }
 
+  // Shapes rrule never returns from, re-checked on its own parsed options so
+  // that no caller can reach the walk with one: a step that does not move the
+  // counter forward, a sub-hourly step (refused upstream by parseRecurrence),
+  // and an hourly step that never lands on a BYHOUR hour. See ruleChecks.ts.
+  const { freq, interval, byhour } = rule.options;
+
+  if (
+    !Number.isInteger(interval) ||
+    interval < 1 ||
+    freq > RRule.HOURLY ||
+    (freq === RRule.HOURLY &&
+      byhour !== null &&
+      byhour.length > 0 &&
+      !hourlyRuleCanAdvance(interval, byhour, spec.dtstartFloating.getUTCHours()))
+  ) {
+    return { starts: [], truncated: true, limit: 'maxPeriods' };
+  }
+
   const floatingFrom = floatingMsOf(window.from, spec.timeZone) - WINDOW_PAD_MS;
   const floatingTo = floatingMsOf(window.to, spec.timeZone) + WINDOW_PAD_MS;
   const floating: Date[] = [];
   let truncated = false;
   let limit: keyof ExpansionLimits | undefined;
 
-  rule.all((date, index) => {
-    if (index >= caps.maxIterations) {
-      truncated = true;
-      limit = 'maxIterations';
+  // Bound the walk by the window, not only by produced dates. When the window
+  // is the nearer bound, stopping there loses nothing: every in-window date has
+  // been produced by then. Only the absolute ceiling makes a result partial.
+  const windowPeriods = periodsToPass(rule.options, floatingTo);
+  const periods = Math.min(windowPeriods, caps.maxPeriods);
 
-      return false;
-    }
+  limitPeriods(rule.options, periods);
 
-    const at = date.getTime();
-
-    if (at > floatingTo) {
-      return false;
-    }
-
-    if (at >= floatingFrom) {
-      if (floating.length >= caps.maxOccurrencesPerSeries) {
+  try {
+    rule.all((date, index) => {
+      if (index >= caps.maxIterations) {
         truncated = true;
-        limit = 'maxOccurrencesPerSeries';
+        limit = 'maxIterations';
 
         return false;
       }
 
-      floating.push(date);
+      const at = date.getTime();
+
+      if (at > floatingTo) {
+        return false;
+      }
+
+      if (at >= floatingFrom) {
+        if (floating.length >= caps.maxOccurrencesPerSeries) {
+          truncated = true;
+          limit = 'maxOccurrencesPerSeries';
+
+          return false;
+        }
+
+        floating.push(date);
+      }
+
+      return true;
+    });
+  } catch (error) {
+    if (!(error instanceof PeriodBudgetSpent)) {
+      throw error;
     }
 
-    return true;
-  });
+    // Spent on the window bound: complete, nothing was cut off.
+    if (windowPeriods > caps.maxPeriods) {
+      truncated = true;
+      limit = 'maxPeriods';
+    }
+  }
 
   // Keyed by instant so an RDATE that merely restates a rule occurrence does not
   // double it, and so EXDATE cancels by the one spelling every TZID converges on.

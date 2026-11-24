@@ -21,7 +21,7 @@ jest.mock('exifr', () => ({ __esModule: true, default: { parse: jest.fn() } }));
 import exifr from 'exifr';
 
 // Stub execFile so the ffprobe call is deterministic without the binary (the
-// callback must deliver one {stdout, stderr} object — see _exif.test.ts).
+// callback must deliver one {stdout, stderr} object — see common/media/__tests__/exif.test.ts).
 jest.mock('node:child_process', () => ({
   ...jest.requireActual<typeof import('node:child_process')>('node:child_process'),
   execFile: jest.fn(),
@@ -33,7 +33,7 @@ import { execFile } from 'node:child_process';
 // execFile) before any `const` in this file initializes. Grab the handle after.
 const mockExecFile = execFile as unknown as jest.Mock;
 
-import { _resetFfprobeAvailability } from '../_exif';
+import { _resetFfprobeAvailability } from '@ci/common/media/exif';
 import { allDataSources } from '../registry';
 import type { ImportParams } from '../timeline';
 import '../generic';
@@ -127,6 +127,24 @@ describe('generic importer timestamps', () => {
 
     expect(item.timestamp?.toISOString()).toBe('2024-03-05T09:30:00.000Z');
     expect(item.metadata['Timestamp Source']).toBe('Container');
+  });
+
+  it('dates a voice memo from its container creation_time', async () => {
+    // A Voice Memos .m4a (audio/mp4) records when it was made the same way a
+    // video does; audio used to skip the container read and land undated.
+    mockFfprobe({
+      format: {
+        tags: { major_brand: 'M4A ', creation_time: '2026-09-28T01:15:00.000000Z' },
+        duration: '41.2',
+      },
+      streams: [{ codec_type: 'audio', codec_name: 'aac' }],
+    });
+    const [item] = await runImport(await dirWith('Temple bells.m4a', Buffer.from('notreallyanm4a')));
+
+    expect(item.content.mediaType).toBe('audio/mp4');
+    expect(item.timestamp?.toISOString()).toBe('2026-09-28T01:15:00.000Z');
+    expect(item.metadata['Timestamp Source']).toBe('Container');
+    expect(item.metadata.Duration).toBe(41.2);
   });
 
   it('classifies by what the file IS — media vs plain file', async () => {

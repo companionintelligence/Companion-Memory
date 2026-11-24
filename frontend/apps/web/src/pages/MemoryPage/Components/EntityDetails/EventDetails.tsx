@@ -1,8 +1,11 @@
-import { useMutation } from '@apollo/client';
+import { useMutation, useQuery } from '@apollo/client/react';
 import { MapPin } from '@ci/shadcn/icons';
 
 import { gql, useFragment } from '@/graphql';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
 
+import { readCoordinates, readGeoJsonPoint } from '../../MapView/mapCoordinates';
 import type { MemoryEntityOf } from '../../useEntityService';
 import { EVENT_FRAGMENT } from '../EntityCard/EventCard';
 import { eventDisplayTitle, formatBytes } from '../utils';
@@ -10,6 +13,40 @@ import { eventDisplayTitle, formatBytes } from '../utils';
 import { EntityDetailScaffold, EntityMedia, resolveStaticUrl } from './EntityDetailScaffold';
 import { pickPageUrl } from './GenericDetails';
 import { hasRichMedia, RichMediaCard } from './RichMediaCard';
+
+/**
+ * Fetched by the drawer alone, not folded into the shared card fragment: every
+ * list, grid, timeline and map reads that fragment for a page of rows at a
+ * time, and neither field is shown anywhere but here. `metadata` is the
+ * connector's free-form JSON bag; `contents` is a sub-connection whose nodes
+ * each resolve a player and a link preview. One event open in the drawer is
+ * the only place either is wanted (as GET_COMMUNICATION_ATTACHMENTS).
+ */
+export const GET_EVENT_DRAWER_EXTRAS = gql(`
+  query GetEventDrawerExtras($id: ID!) {
+    node(id: $id) {
+      __typename
+      id
+      ... on EventType {
+        # The connector's catch-all for what has no column — for a social.like
+        # event that is the liked Page's URL, which the drawer offers as a link.
+        metadata
+        # What the event is about, for events that ARE a watch/listen/read: the
+        # first linked content rows, with their resolved preview and player.
+        contents(first: 3) {
+          edges {
+            node {
+              id
+              title
+              contentUrl: url
+              ...RichMediaData
+            }
+          }
+        }
+      }
+    }
+  }
+`);
 
 const UPDATE_EVENT = gql(`
   mutation UpdateEventDetail($input: UpdateEventInput!) {
@@ -23,16 +60,14 @@ const UPDATE_EVENT = gql(`
 
 type LocationProperties = {
   address?: string | null;
-  latitude?: number | null;
-  longitude?: number | null;
   [key: string]: unknown;
 };
 
 type EventLocationFields = {
   eventType?: string | null;
   locationName?: string | null;
+  /** Every query that opens this drawer aliases `locationCoordinates` to this key. */
   mapCoordinates?: unknown;
-  locationCoordinates?: unknown;
 };
 
 type DetailItem = {
@@ -55,19 +90,12 @@ function formatTitleCase(value?: string | null): string | null {
     .replace(/\w\S*/g, (word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase());
 }
 
-function formatDateTime(value?: string | null): string | null {
+function formatDateTime(value: string | null | undefined, fmt: DateTimeFormatter): string | null {
   if (!value) {
     return null;
   }
 
-  const date = new Date(value);
-
-  return isNaN(date.getTime())
-    ? value
-    : date.toLocaleString('en-US', {
-        dateStyle: 'medium',
-        timeStyle: 'short',
-      });
+  return fmt.tryDateTime(value, { dateStyle: 'medium', timeStyle: 'short' }, 'en-US') ?? value;
 }
 
 function formatDuration(start?: string | null, end?: string | null): string | null {
@@ -103,67 +131,8 @@ function formatDuration(start?: string | null, end?: string | null): string | nu
   return parts.join(' ');
 }
 
-function readGeoJsonPoint(value: unknown): { lat: number; lng: number } | null {
-  if (value == null || typeof value !== 'object') {
-    return null;
-  }
-
-  const coords = (value as { coordinates?: unknown }).coordinates;
-
-  if (!Array.isArray(coords) || coords.length < 2) {
-    return null;
-  }
-
-  const [lng, lat] = coords;
-
-  return typeof lat === 'number' && typeof lng === 'number' && !isNaN(lat) && !isNaN(lng)
-    ? { lat, lng }
-    : null;
-}
-
-function readPropertyCoordinates(properties: LocationProperties): { lat: number; lng: number } | null {
-  return typeof properties.latitude === 'number' &&
-    typeof properties.longitude === 'number' &&
-    !isNaN(properties.latitude) &&
-    !isNaN(properties.longitude)
-    ? { lat: properties.latitude, lng: properties.longitude }
-    : null;
-}
-
 function formatCoordinates(coords: { lat: number; lng: number } | null): string | null {
   return coords ? `${coords.lat.toFixed(6)}, ${coords.lng.toFixed(6)}` : null;
-}
-
-function formatPropertyValue(value: unknown): string | null {
-  if (value == null || value === '') {
-    return null;
-  }
-
-  if (typeof value === 'boolean') {
-    return value ? 'Yes' : 'No';
-  }
-
-  if (typeof value === 'string' || typeof value === 'number') {
-    return String(value);
-  }
-
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return null;
-  }
-}
-
-function extraLocationDetails(properties: LocationProperties): DetailItem[] {
-  const hidden = new Set(['address', 'latitude', 'longitude']);
-
-  return Object.entries(properties)
-    .filter(([key]) => !hidden.has(key))
-    .map(([key, value]) => ({
-      label: formatTitleCase(key) ?? key,
-      value: formatPropertyValue(value),
-    }))
-    .filter((item): item is DetailItem => Boolean(item.value));
 }
 
 function DetailSection({ title, items }: { title: string; items: DetailItem[] }) {
@@ -186,7 +155,7 @@ function DetailSection({ title, items }: { title: string; items: DetailItem[] })
             key={item.label}
             className="grid grid-cols-[7rem_minmax(0,1fr)] gap-3 py-2 first:pt-0 last:pb-0"
           >
-            <span className="text-xs uppercase tracking-wide text-muted-foreground">{item.label}</span>
+            <span className="text-xs text-muted-foreground">{item.label}</span>
             <span className="min-w-0 break-words text-sm text-foreground/90">{item.value}</span>
           </div>
         ))}
@@ -198,16 +167,33 @@ function DetailSection({ title, items }: { title: string; items: DetailItem[] })
 export function EventDetails({ entity }: Props) {
   const data = useFragment(EVENT_FRAGMENT, entity);
   const [updateEvent] = useMutation(UPDATE_EVENT);
+  const fmt = useDateTimeFormat();
+  const { data: extrasData } = useQuery(GET_EVENT_DRAWER_EXTRAS, {
+    variables: { id: entity.id },
+    fetchPolicy: 'cache-first',
+  });
+  const extras = extrasData?.node?.__typename === 'EventType' ? extrasData.node : null;
 
   const props = (data.location?.properties ?? {}) as LocationProperties;
   const eventFields = entity as EventLocationFields;
-  const mapCoordinates = readGeoJsonPoint(eventFields.mapCoordinates ?? eventFields.locationCoordinates);
-  const coordinates = readPropertyCoordinates(props) ?? mapCoordinates;
+  // The event's own point first (a photo's GPS fix), then the linked place's,
+  // which is the order the map pin uses. An event can be linked to a place
+  // without a point of its own. The place's typed latitude/longitude come from
+  // its location_point at full precision. The `lat`/`lng` in its properties
+  // are snapped to 3 decimals for geocoded places and missing for hand-made
+  // ones, so they are only the last resort (as in PlaceDetails).
+  const coordinates =
+    readGeoJsonPoint(eventFields.mapCoordinates) ??
+    readCoordinates({ latitude: data.location?.latitude, longitude: data.location?.longitude }) ??
+    readCoordinates(props);
   const locationItems: DetailItem[] = [
     { label: 'Place', value: data.location?.name ?? data.locationName ?? eventFields.locationName ?? '' },
-    { label: 'Address', value: props.address ?? '' },
+    // The bag is free-form JSON. An object here would crash the render.
+    { label: 'Address', value: typeof props.address === 'string' ? props.address : '' },
     { label: 'Coordinates', value: formatCoordinates(coordinates) ?? '' },
-    ...extraLocationDetails(props),
+    // Nothing else from the place's properties. The rest of that bag is the
+    // pipeline's bookkeeping (`promote`, `source`, `place_id`, `type`) and
+    // listing it printed raw JSON in the drawer.
   ].filter((item) => item.value);
 
   // Photo/video events: the ORIGINAL is what renders (a 300px PREVIEW upscaled
@@ -234,7 +220,7 @@ export function EventDetails({ entity }: Props) {
   // A watch / listen / read event is ABOUT its content row: when that row has
   // a resolved preview or a player, the drawer leads with it (poster, facts,
   // click-to-play) rather than with a bare title and two timestamps.
-  const richContent = (data.contents?.edges ?? [])
+  const richContent = (extras?.contents?.edges ?? [])
     .map((edge) => edge.node)
     .find((node) => hasRichMedia(node));
 
@@ -250,7 +236,7 @@ export function EventDetails({ entity }: Props) {
   // Facebook Page's `page_url`, a post's `permalink_url`). The related
   // entity's relationship card is the in-app way there; this is the way OUT,
   // and it opens a new tab like every other off-appliance link in the drawer.
-  const pageUrl = pickPageUrl((data.metadata ?? {}) as Record<string, unknown>);
+  const pageUrl = pickPageUrl((extras?.metadata ?? {}) as Record<string, unknown>);
 
   return (
     <EntityDetailScaffold
@@ -284,8 +270,8 @@ export function EventDetails({ entity }: Props) {
       }}
       metaItems={[
         { label: 'Source', value: formatTitleCase(data.sourceSystem) },
-        { label: 'Starts', value: formatDateTime(data.startTime) },
-        { label: 'Ends', value: formatDateTime(data.endTime) },
+        { label: 'Starts', value: formatDateTime(data.startTime, fmt) },
+        { label: 'Ends', value: formatDateTime(data.endTime, fmt) },
         { label: 'Duration', value: formatDuration(data.startTime, data.endTime) },
         { label: 'Type', value: formatTitleCase(eventFields.eventType) ?? 'Event' },
         {

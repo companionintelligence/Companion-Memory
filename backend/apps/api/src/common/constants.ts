@@ -32,6 +32,24 @@ export function isUniqueViolation(err: unknown): boolean {
   return code === PgErrorCode.UNIQUE_VIOLATION || driverCode === PgErrorCode.UNIQUE_VIOLATION;
 }
 
+/**
+ * True when an error is a Postgres integrity-constraint violation: SQLSTATE
+ * class 23, which covers foreign key (23503), restrict (23001), unique (23505),
+ * not-null (23502), check (23514) and exclusion (23P01) failures. Looks on the
+ * error itself and on TypeORM's nested `driverError`, like {@link isUniqueViolation}.
+ *
+ * What sets these apart from a deadlock (40P01), a lock timeout (55P03) or a
+ * dropped connection is that they are deterministic: the same statement against
+ * the same rows raises the same error, so repeating it cannot succeed.
+ */
+export function isIntegrityConstraintViolation(err: unknown): boolean {
+  const { code, driverError } = (err ?? {}) as { code?: unknown; driverError?: { code?: unknown } };
+
+  return [code, driverError?.code].some(
+    (candidate) => typeof candidate === 'string' && candidate.startsWith('23'),
+  );
+}
+
 export enum ContentType {
   PHOTO = 'Photo',
   VIDEO = 'Video',

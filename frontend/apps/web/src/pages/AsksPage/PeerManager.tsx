@@ -22,6 +22,8 @@ export interface PeerRow {
   trustTier: string;
   status: string;
   revokedAt?: string | null;
+  /** Twelve digits both people can compare to check the link; only on links made by key. */
+  safetyCode?: string | null;
 }
 
 interface Props {
@@ -97,6 +99,10 @@ export function PeerManager({ peers, busy = false, onChangeTier, onRevoke, onAdd
 
             <p className="text-muted-foreground text-xs break-all">{peer.memoryEndpoint}</p>
 
+            {peer.safetyCode && !revoked ? (
+              <SafetyCode code={peer.safetyCode} name={peer.displayName || peer.peerHandle} />
+            ) : null}
+
             {revoked ? (
               <p className="text-muted-foreground text-xs">
                 You ended this link. Their box can no longer ask yours anything.
@@ -153,10 +159,15 @@ export function PeerManager({ peers, busy = false, onChangeTier, onRevoke, onAdd
                   </Card>
                 ) : null}
 
-                <div>
+                <div className="flex flex-wrap items-center gap-2">
                   <Button size="sm" variant="ghost" disabled={busy} onClick={() => onRevoke(peer.id)}>
                     End this link
                   </Button>
+                  {peer.safetyCode ? (
+                    <span className="text-muted-foreground text-xs">
+                      Their Companion is told, and ends its link too.
+                    </span>
+                  ) : null}
                 </div>
               </>
             )}
@@ -165,6 +176,25 @@ export function PeerManager({ peers, busy = false, onChangeTier, onRevoke, onAdd
       })}
 
       <AddPeerForm busy={busy} onAdd={onAdd} />
+    </div>
+  );
+}
+
+/**
+ * The numbers to compare, and what comparing them proves. Read aloud or held up
+ * side by side; over the same channel the invite went through, they prove
+ * nothing, which is why the copy names a different one.
+ */
+export function SafetyCode({ code, name }: { code: string; name: string }) {
+  return (
+    <div className="bg-muted flex flex-col gap-1 rounded-md px-3 py-2">
+      <span className="font-mono text-sm tracking-wider" aria-label={`Safety code ${code}`}>
+        {code}
+      </span>
+      <span className="text-muted-foreground text-xs">
+        To be sure this is really {name}, compare these numbers with them on a call or in person. Theirs
+        should match exactly; if they do not, end this link.
+      </span>
     </div>
   );
 }
@@ -193,7 +223,11 @@ function AddPeerForm({ busy, onAdd }: { busy: boolean; onAdd: Props['onAdd'] }) 
 
   return (
     <Card className="flex flex-col gap-2 p-4">
-      <p className="font-medium">Link someone new</p>
+      <p className="font-medium">Link by address instead</p>
+      <p className="text-muted-foreground text-xs">
+        For a Companion that cannot use invites. A link entered by hand names no key, so you cannot ask them
+        from here; an invite links you both properly.
+      </p>
 
       <label className="flex flex-col gap-1">
         <span className="text-sm">Their handle</span>
@@ -209,10 +243,14 @@ function AddPeerForm({ busy, onAdd }: { busy: boolean; onAdd: Props['onAdd'] }) 
         <span className="text-sm">Their Companion’s address</span>
         <Input
           value={memoryEndpoint}
-          placeholder="https://ada.example/api/peer"
+          placeholder="https://ada.example/api/agent/v1"
           disabled={busy}
           onChange={(event) => setMemoryEndpoint(event.target.value)}
         />
+        <span className="text-muted-foreground text-xs">
+          Their Companion’s peer address. It ends in /agent/v1; behind Companion Memory’s gateway that is{' '}
+          {'https://<their host>/api/agent/v1'}.
+        </span>
       </label>
 
       <label className="flex flex-col gap-1">

@@ -39,8 +39,14 @@ describe('ci asks history', () => {
 
     await expect(asksHistoryCommand(ctx, { limit: 'lots' })).rejects.toMatchObject({
       exitCode: 2,
-      message: expect.stringContaining('--limit takes a number'),
+      message: expect.stringContaining('--limit takes a whole number'),
     });
+  });
+
+  it.each(['-3', '0', '1.5'])('rejects --limit %j before making a call', async (limit) => {
+    const ctx = harness({}, {});
+
+    await expect(asksHistoryCommand(ctx, { limit })).rejects.toMatchObject({ exitCode: 2 });
   });
 
   it('says so when there is no history yet', async () => {

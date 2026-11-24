@@ -251,9 +251,14 @@ test.describe('application shell', () => {
 
     await logout.click();
 
-    // Signed out for real: the app lands on /login and a protected route no
-    // longer opens.
-    await expect(page).toHaveURL(/\/login/, { timeout: 20_000 });
+    // The row only asks; the alertdialog's own "Log out" is what signs out.
+    const confirm = page.getByRole('alertdialog');
+    await expect(confirm.getByText('Log out?')).toBeVisible();
+    await confirm.getByRole('button', { name: 'Log out' }).click();
+
+    // Signed out for real: the app lands on the splash (`/`) or `/login`, and
+    // a protected route no longer opens.
+    await expect(page).toHaveURL(/^https?:\/\/[^/]+\/(login)?(\?.*)?$/, { timeout: 20_000 });
 
     await page.goto('/memory/events');
     await expect(page).toHaveURL(/\/login/);

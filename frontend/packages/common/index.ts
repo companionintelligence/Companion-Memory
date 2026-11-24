@@ -2,7 +2,21 @@ export { EmptyState } from './src/components/EmptyState';
 export { ErrorPage } from './src/components/error-page';
 export { LoadingPage } from './src/components/loading-page';
 export { Portal } from './src/components/portal';
-export { MOBILE_BREAKPOINT, DeviceLayoutProvider, useDeviceLayout, usePageTitle } from './src/hooks';
+export {
+  MOBILE_BREAKPOINT,
+  TABLET_MAX_BREAKPOINT,
+  TABLET_MIN_BREAKPOINT,
+  DeviceLayoutProvider,
+  resolveDeviceSizeClass,
+  useDeviceLayout,
+  useOverflowsRight,
+  usePageTitle,
+  useScrollOverflow,
+  prefersReducedMotion,
+  useDebounced,
+  useReducedMotion,
+} from './src/hooks';
+export type { DeviceSizeClass, ScrollOverflow } from './src/hooks';
 export { GlobalUID } from './src/utils/GlobalUID';
 export { apiKeyHeaders, getApiKey, setApiKey } from './src/utils/apiAuth';
 export { API_CONTRACT, MIN_SERVER_CONTRACT, memoryContractNotice } from './src/utils/apiContract';
@@ -11,17 +25,36 @@ export {
   buildApiUrl,
   clearPersistedApiBaseUrl,
   getApiBaseUrl,
+  getPersistedApiBaseUrl,
+  getWebOrigin,
   initApiBaseUrl,
   isIosPlatform,
   isLocalApplianceOrigin,
+  isAndroidPlatform,
   isNativePlatform,
   isTauriPlatform,
   needsNativeCloudConnect,
+  pageServedByApi,
   persistApiBaseUrl,
   resolveHttpOrigin,
   setApiBaseUrl,
   subscribeApiBaseUrl,
 } from './src/utils/apiBase';
+export {
+  APP_LOCK_GRACES,
+  APP_LOCK_GRACE_LABELS,
+  appLockPlugin,
+  describeBiometry,
+  lockScreenQueueNote,
+} from './src/utils/appLock';
+export type {
+  AppLockBiometry,
+  AppLockGrace,
+  AppLockPluginBridge,
+  AppLockSettings,
+  AppLockStatus,
+  LockScreenQueueCounts,
+} from './src/utils/appLock';
 export {
   CONNECTION_REPROBE_INTERVAL_MS,
   LOCAL_PROBE_TIMEOUT_MS,
@@ -29,13 +62,19 @@ export {
   ConnectionModeProvider,
   resolveConnectionMode,
   useConnectionMode,
+  useOptionalConnectionMode,
+  getLatestConnectionMode,
+  isConnectionModeResolved,
+  memoryAnswers,
+  requestConnectionRefresh,
+  registerCachedDataProbe,
 } from './src/utils/connectionMode';
-export type { ConnectionMode } from './src/utils/connectionMode';
+export type { CachedDataProbe, ConnectionMode } from './src/utils/connectionMode';
 export { createHookContext } from './src/utils/createHookContext';
+export { BINARY_UNITS, DECIMAL_UNITS, IEC_UNITS, formatBytes } from './src/utils/formatBytes';
+export type { FormatBytesOptions } from './src/utils/formatBytes';
 export {
   BACKGROUND_MAX_ACCURACY_METERS,
-  BACKGROUND_MIN_DISTANCE_METERS,
-  BACKGROUND_MIN_INTERVAL_MS,
   HOME_GEOFENCE_RADIUS_METERS,
   LOCATION_ENABLED_STORAGE_KEY,
   LOCATION_MODE_CHANGE_EVENT,
@@ -50,7 +89,7 @@ export {
   captureNote,
   createLocationSampler,
   deviceSourceKey,
-  fixFromBackgroundGeolocationLocation,
+  fixFromNativeLocationEvent,
   fixFromGeolocationPosition,
   forgetQueuedNote,
   haversineMeters,
@@ -66,7 +105,7 @@ export {
   writeLocationTrackingMode,
 } from './src/utils/deviceSources';
 export type {
-  BackgroundGeolocationLocation,
+  NativeLocationEvent,
   CaptureLocationOptions,
   DeviceLocationFix,
   LocationCaptureOutcome,
@@ -84,16 +123,114 @@ export {
   apiFetch,
   fetchJson,
   streamingFetch,
+  type ApiFetchInit,
   type FetchJsonIssue,
 } from './src/utils/fetchJson';
-export { localHubPlugin, localHubSession, type LocalHubSession } from './src/utils/localHub';
+export {
+  OFFLINE_ALLOWED_PATH_PREFIXES,
+  OFFLINE_WRITE_MESSAGE,
+  OfflineWriteError,
+  applianceWritesBlocked,
+  assertApplianceWritable,
+  isOfflineWriteError,
+  subscribeOfflineWriteBlocked,
+} from './src/utils/offlineWrites';
+export type { OfflineWriteBlockedEvent } from './src/utils/offlineWrites';
+export {
+  discoverLanAppliances,
+  localHubPlugin,
+  localHubSession,
+  publishWidgetSnapshot,
+  readWidgetActions,
+  acknowledgeWidgetActions,
+  clearWidgetSnapshot,
+  type DiscoveredLanAppliance,
+  type DiscoverLanAppliancesOptions,
+  type DiscoverLanAppliancesResult,
+  type LocalHubSession,
+} from './src/utils/localHub';
+export {
+  buildWidgetSnapshot,
+  forecastBuilt,
+  parseWidgetDestination,
+  WIDGET_SNAPSHOT_VERSION,
+} from './src/utils/widgetSnapshots';
+export type {
+  CompanionWidgetSnapshot,
+  WidgetAction,
+  WidgetSnapshotInput,
+  WidgetTask,
+} from './src/utils/widgetSnapshots';
+export {
+  cancelLocalLlmDownload,
+  deleteLocalLlmModel,
+  downloadLocalLlmModel,
+  ensureLocalLlmLoaded,
+  isAnswerCutShort,
+  isContextExhausted,
+  isLocalLlmReady,
+  LocalLlmGenerationError,
+  localLlmPlatform,
+  localLlmPlugin,
+  onLocalLlmDownloadProgress,
+  probeLocalLlm,
+  resetLocalLlmConversation,
+  setLocalSearchReplicaFile,
+  streamLocalLlm,
+  unloadLocalLlm,
+} from './src/utils/localLlm';
+export type {
+  LoadLocalLlmOptions,
+  LocalLlmAvailability,
+  LocalLlmDownloadProgress,
+  LocalLlmGenerationStats,
+  LocalLlmLoadResult,
+  LocalLlmModelState,
+  LocalLlmModelStatus,
+  LocalLlmModelStatusResult,
+  LocalLlmPluginApi,
+  LocalLlmProbe,
+  LocalLlmTokenEvent,
+  StreamLocalLlmOptions,
+  StreamLocalLlmResult,
+} from './src/utils/localLlm';
+export {
+  LOCAL_LLM_CATALOG,
+  LOCAL_LLM_DISK_HEADROOM_BYTES,
+  LOCAL_LLM_MODEL_LIST,
+  evaluateModelFit,
+  findLocalLlmModel,
+  gpuAllowedOn,
+  formatModelBytes,
+  localLlmModelsFor,
+} from './src/utils/localLlmCatalog';
+export type {
+  LocalLlmAccelerator,
+  LocalLlmCapability,
+  LocalLlmDeviceFacts,
+  LocalLlmFit,
+  LocalLlmModelId,
+  LocalLlmModelSpec,
+  LocalLlmPlatform,
+} from './src/utils/localLlmCatalog';
+export { LOCAL_TOOLS_OFF_REFUSAL, isLocalWriteRequest } from './src/utils/localLlmToolsOff';
+export {
+  DEFAULT_LOCAL_LLM_PREFS,
+  getLocalLlmPrefs,
+  parseLocalLlmPrefs,
+  setLocalLlmPrefs,
+  subscribeLocalLlmPrefs,
+} from './src/utils/localLlmPrefs';
+export type { LocalLlmMode, LocalLlmPrefs } from './src/utils/localLlmPrefs';
 export {
   OUTBOX_MAX_ATTEMPTS,
   OUTBOX_MAX_ITEMS,
   OUTBOX_WARN_AT,
+  clearOutbox,
   enqueueOutboxItem,
   getOutboxItem,
   listOutbox,
+  outboxOwnerStamp,
   recordOutboxAttempt,
   removeOutboxItem,
   retryOutboxItem,
@@ -117,6 +254,10 @@ export {
   NOTE_OUTBOX_KIND,
   POSITION_OUTBOX_KIND,
   OutboxQueueProvider,
+  SIGN_OUT_DRAIN_TIMEOUT_MS,
+  clearOutboxAfterSignOut,
+  countUnsentBeforeSignOut,
+  drainOutboxBeforeSignOut,
   finishStagesFor,
   flushOutbox,
   isPermanentFlushFailure,
@@ -129,14 +270,22 @@ export {
 } from './src/utils/outboxFlush';
 export type { FlushOutboxOptions, FlushOutboxSummary, OutboxQueueState } from './src/utils/outboxFlush';
 export {
+  SECURE_STORE_KEYS,
   addAppStateListener,
   addAppUrlOpenListener,
+  getLaunchUrl,
   addBackButtonListener,
-  addBackgroundLocationWatcher,
+  claimNativeReplica,
+  clearNativeReplicaSync,
+  configureNativeReplicaSync,
+  downloadDesktopRecommendedModel,
+  getDesktopRecommendedModel,
+  releaseNativeReplica,
+  startSignificantLocationUpdates,
   closeBrowser,
   exitApp,
+  getBackgroundUpload,
   getCurrentDeviceLocation,
-  getLaunchUrl,
   getNativeCurrentLocation,
   getNativeLocationAuthorization,
   hasNotificationPermission,
@@ -145,9 +294,9 @@ export {
   isDeviceLocationError,
   openAuthSession,
   openExternalUrl,
+  openLinkOutsideApp,
   openNativeAppSettings,
   openNativeLocationSettings,
-  removeBackgroundLocationWatcher,
   requestNativeLocationAuthorization,
   requestNotificationPermission,
   scanQrCode,
@@ -155,25 +304,35 @@ export {
   secureStorageGet,
   secureStorageRemove,
   secureStorageSet,
+  setBackgroundUpload,
   setStatusBarStyle,
+  setSystemBarsBackground,
   syncNativeIntentConfig,
   takeNativePhoto,
 } from './src/utils/nativeBridge';
 export type {
-  BackgroundGeolocationError,
+  BackgroundUploadState,
+  DesktopModelDownload,
+  DesktopRecommendedModel,
+  NativeReplicaSyncOptions,
+  NativeLocationError,
   BarcodeScanErrorCode,
   DeviceLocationErrorCode,
   LocalNotification,
   NativeCurrentLocation,
   NativeLocationAuthorization,
+  SignificantLocationOptions,
 } from './src/utils/nativeBridge';
 export { AuthSessionCancelledError, BarcodeScanError, DeviceLocationError } from './src/utils/nativeBridge';
 export {
   OIDC_NATIVE_CALLBACK_URL,
   OIDC_NATIVE_CLIENT_FLAG,
   OIDC_NATIVE_SCHEME,
+  beginNativeOidcSignIn,
   claimNativeOidcCode,
+  hasPendingNativeOidcSignIn,
   parseOidcCallbackUrl,
+  takePendingNativeOidcSignIn,
 } from './src/utils/oidcNative';
 export type { OidcCallbackParams } from './src/utils/oidcNative';
 export {

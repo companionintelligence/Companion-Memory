@@ -1,10 +1,16 @@
 import { Injectable } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, MoreThan, Repository } from 'typeorm';
+import { In, MoreThan, Repository, type SelectQueryBuilder } from 'typeorm';
 import { v7 as uuid7 } from 'uuid';
 
 import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/common/context';
+import {
+  type KeysetByPage,
+  type KeysetPageArgs,
+  type SeekKey,
+  keysetPaginateBy,
+} from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 
 import { ThreadEntity, type Thread } from '../entities/ThreadEntity';
@@ -12,6 +18,17 @@ import { ThreadCreatedEvent, ThreadUpdatedEvent, ThreadRemovedEvent } from '../e
 import type { CreateThreadDto, UpdateThreadDto } from '../types';
 
 import { MessageService } from './MessageService';
+
+/**
+ * The threads list's order — what {@link ThreadService.findAll} sorts by and
+ * {@link ThreadService.findPage} seeks on: most recently updated first (the
+ * column is nullable in the table, and NULLs lead a descending sort), the id
+ * breaking ties so the order is total.
+ */
+const THREAD_LIST_ORDER: readonly SeekKey[] = [
+  { expr: 'thread.updated_at', order: 'DESC', nullable: true, read: 'CAST(thread.updated_at AS text)' },
+  { expr: 'thread.thread_id', order: 'DESC' },
+];
 
 @Injectable()
 export class ThreadService {
@@ -43,23 +60,62 @@ export class ThreadService {
     return ThreadEntity.toEgressType(entity);
   }
 
+  /**
+   * Every live thread of the caller, most recently updated first
+   * ({@link THREAD_LIST_ORDER}); {@link findPage} reads the same list a page
+   * at a time. The owner is not joined: `GET /api/threads` (every chat-page
+   * open) and the GraphQL `threads` query both read the list, and neither
+   * reads the owner off a thread — `Thread.user` is optional on the egress
+   * type for exactly that.
+   */
   async findAll(context: ServiceContext): Promise<Thread[]> {
-    const entities = await this.threadRepository.find({
-      where: {
-        ...(context.userId !== SYSTEM_USER && {
-          user: {
-            id: context.userId,
-          },
-        }),
-        isArchived: false,
-      },
-      order: {
-        updatedAt: 'DESC',
-      },
-      relations: ['user'],
+    let qb = this.listScope(this.threadRepository.createQueryBuilder('thread'), context);
+
+    THREAD_LIST_ORDER.forEach((key, i) => {
+      qb = i === 0 ? qb.orderBy(key.expr, key.order) : qb.addOrderBy(key.expr, key.order);
     });
 
+    const entities = await qb.getMany();
+
     return entities.map((entity) => ThreadEntity.toEgressType(entity));
+  }
+
+  /**
+   * One page of {@link findAll}'s list — the caller's live threads, most
+   * recently updated first — read with a `LIMIT` and a seek past the cursor
+   * row instead of every thread. The cursor is the row id; one that matches no
+   * row yields an empty page. The `COUNT(*)` behind `totalCount` runs only when
+   * `countTotal` is set. The owner is not joined: the GraphQL type never reads
+   * it (the REST list, which does, stays on {@link findAll}).
+   */
+  async findPage(
+    context: ServiceContext,
+    args: KeysetPageArgs,
+    options: { countTotal?: boolean } = {},
+  ): Promise<KeysetByPage<Thread>> {
+    const page = await keysetPaginateBy(this.threadRepository, args, {
+      alias: 'thread',
+      keys: THREAD_LIST_ORDER,
+      idExpr: 'thread.thread_id',
+      countTotal: options.countTotal,
+      scope: (qb) => this.listScope(qb, context),
+    });
+
+    return { ...page, entities: page.entities.map((entity) => ThreadEntity.toEgressType(entity)) };
+  }
+
+  /** The rows {@link findAll} and {@link findPage} list: unarchived threads of the caller, or of everyone for the system user. */
+  private listScope(
+    qb: SelectQueryBuilder<ThreadEntity>,
+    context: ServiceContext,
+  ): SelectQueryBuilder<ThreadEntity> {
+    qb = qb.where('thread.is_archived = false');
+
+    if (context.userId === SYSTEM_USER) {
+      return qb;
+    }
+
+    return qb.andWhere('thread.user_id = :userId', { userId: context.userId });
   }
 
   async findByIds(context: ServiceContext, ids: string[]): Promise<(Thread | null)[]> {
@@ -73,7 +129,7 @@ export class ThreadService {
         }),
         isArchived: false,
       },
-      relations: ['user'],
+      relations: { user: true },
     });
 
     const map = new Map(entities.map((entity) => [entity.id, ThreadEntity.toEgressType(entity)]));
@@ -92,7 +148,7 @@ export class ThreadService {
         }),
         isArchived: false,
       },
-      relations: ['user'],
+      relations: { user: true },
     });
 
     if (result == null) {
@@ -162,6 +218,39 @@ export class ThreadService {
     return this.findById(context, id);
   }
 
+  /**
+   * Give a thread a title, and ONLY if it still has none. Returns whether it wrote.
+   *
+   * One conditional UPDATE, not a read followed by a write: a stand-in title (the person's first words, written when
+   * the model could not name the thread) must never replace a real one, and a title job takes seconds — a later turn's
+   * job, or a rename, can land inside that gap. Here the row decides, atomically.
+   */
+  async nameIfUnnamed(context: ServiceContext, id: string, name: string): Promise<boolean> {
+    const query = this.threadRepository
+      .createQueryBuilder()
+      .update(ThreadEntity)
+      .set({ name })
+      .where('thread_id = :id', { id })
+      .andWhere('is_archived = false')
+      .andWhere("(title IS NULL OR btrim(title) = '')");
+
+    if (context.userId !== SYSTEM_USER) {
+      query.andWhere('user_id = :userId', { userId: context.userId });
+    }
+
+    const result = await query.execute();
+
+    if (!result.affected) {
+      return false;
+    }
+
+    await this.eventService.send(ThreadUpdatedEvent, {
+      threadId: id,
+    });
+
+    return true;
+  }
+
   async remove(context: ServiceContext, id: string): Promise<boolean> {
     const result = await this.threadRepository.delete({
       id,
@@ -186,7 +275,14 @@ export class ThreadService {
   }
 
   async softRemove(context: ServiceContext, id: string): Promise<boolean> {
-    // Update is_archived instead of using TypeORM's softDelete
+    // Update is_archived instead of using TypeORM's softDelete.
+    //
+    // `generation_status` goes back to idle in the same write. The turn this
+    // stops would set it itself, but through `update`, which no longer matches
+    // an archived thread, so a chat deleted mid-reply kept `running`. The model
+    // queues that yield to chat (`countPendingGenerations` and HBPE's labeler,
+    // which reads the same column) took that for someone waiting on the model
+    // and held background model work for every account until the row aged out.
     const result = await this.threadRepository.update(
       {
         id,
@@ -198,6 +294,7 @@ export class ThreadService {
       },
       {
         isArchived: true,
+        generationStatus: 'idle',
       },
     );
 

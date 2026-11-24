@@ -1,5 +1,6 @@
 import { UseGuards } from '@nestjs/common';
-import { Args, ID, Mutation, Parent, Query, Resolver, ResolveField } from '@nestjs/graphql';
+import { Args, ID, Info, Mutation, Parent, Query, Resolver, ResolveField } from '@nestjs/graphql';
+import type { GraphQLResolveInfo } from 'graphql';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
@@ -17,6 +18,7 @@ import { ContentFileLoader } from '../loaders/ContentFileLoader';
 import { ContentLoader } from '../loaders/ContentLoader';
 import { PersonLoader } from '../loaders/PersonLoader';
 import { TagLoader } from '../loaders/TagLoader';
+import { selectsField } from '../selectsField';
 import { CommunicationAttachmentType } from '../types/CommunicationAttachmentType';
 import { CommunicationConnection } from '../types/CommunicationConnection';
 import { CommunicationEdge } from '../types/CommunicationEdge';
@@ -26,6 +28,7 @@ import { DeleteByIdInput } from '../types/DeleteByIdInput';
 import { DeleteByIdPayload } from '../types/DeleteByIdPayload';
 import { EntityTagType } from '../types/EntityTagType';
 import { GlobalUID } from '../types/GlobalUID';
+import type { OptionalTotal } from '../types/OptionalTotal';
 import { PaginationArgs } from '../types/PaginationArgs';
 import { PersonConnection } from '../types/PersonConnection';
 import { PersonEdge } from '../types/PersonEdge';
@@ -49,7 +52,8 @@ export class CommunicationResolver {
   async communications(
     @Context() context: RequestContext,
     @Args() pagination: PaginationArgs,
-  ): Promise<CommunicationConnection> {
+    @Info() info?: GraphQLResolveInfo,
+  ): Promise<OptionalTotal<CommunicationConnection>> {
     const serviceContext = toServiceContext(context);
 
     const { entities, hasNextPage, hasPreviousPage, totalCount } = await this.communicationService.findPage(
@@ -60,6 +64,7 @@ export class CommunicationResolver {
         afterId: pagination.after ? GlobalUID.decode(pagination.after).id : null,
         beforeId: pagination.before ? GlobalUID.decode(pagination.before).id : null,
       },
+      { countTotal: selectsField(info, 'totalCount') },
     );
 
     const edges: CommunicationEdge[] = entities.map((entity) => {
@@ -81,7 +86,7 @@ export class CommunicationResolver {
     return {
       edges,
       pageInfo,
-      totalCount,
+      ...(totalCount != null ? { totalCount } : {}),
     };
   }
 
@@ -145,11 +150,11 @@ export class CommunicationResolver {
   }
 
   @Mutation(() => CommunicationType, { nullable: true })
-  // CommunicationService.update only patches fields that are truthy/defined on
-  // this row (subject/content here); `content: input.content ?? ''` cannot
-  // blank an existing value because the service guards with `if (data.content)`,
-  // which treats '' as "not provided". The row and the people on it are
-  // otherwise untouched.
+  // CommunicationService.update patches only the fields it is handed. An empty
+  // subject clears it (the label then falls back to the preview or content);
+  // `content: input.content ?? ''` cannot blank an existing body because the
+  // service guards with `if (data.content)`, which treats '' as "not provided".
+  // The row and the people on it are otherwise untouched.
   @GraphqlPrivacy({ destructive: false })
   async updateCommunication(
     @Context() context: RequestContext,

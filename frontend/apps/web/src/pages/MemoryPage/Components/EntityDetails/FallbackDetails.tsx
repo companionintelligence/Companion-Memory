@@ -1,3 +1,7 @@
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
+import { threadNodeLabel } from '@/pages/ChatPage/useRecentThreads';
+
 import type { EntityItem } from '../../useEntityService';
 
 import { EntityDetailScaffold, type MetaItem } from './EntityDetailScaffold';
@@ -25,13 +29,13 @@ function firstString(record: Record<string, unknown>, keys: string[]): string | 
   return null;
 }
 
-function firstDate(record: Record<string, unknown>, keys: string[]): string | null {
+function firstDate(record: Record<string, unknown>, keys: string[], fmt: DateTimeFormatter): string | null {
   for (const key of keys) {
     const value = record[key];
     if (typeof value === 'string' || typeof value === 'number' || value instanceof Date) {
       const date = new Date(value as string | number | Date);
       if (!isNaN(date.getTime())) {
-        return date.toLocaleString();
+        return fmt.dateTime(date);
       }
     }
   }
@@ -45,6 +49,7 @@ function firstDate(record: Record<string, unknown>, keys: string[]): string | nu
  * clicking any row/tile/marker always opens a populated drawer.
  */
 export function FallbackDetails({ entity }: Props) {
+  const fmt = useDateTimeFormat();
   // The fields exist on the result object at runtime (the grid fragments select
   // them); the union type just masks them, so read them off a record view.
   const record = entity as unknown as Record<string, unknown>;
@@ -54,8 +59,13 @@ export function FallbackDetails({ entity }: Props) {
     record.question && typeof record.question === 'object'
       ? firstString(record.question as Record<string, unknown>, ['text', 'question'])
       : null;
+  // An untitled chat gets the name Chat gives it, not the bare kind ("Thread").
   const title =
-    question ?? firstString(record, ['title', 'name', 'filename', 'label', 'subject', 'answer']) ?? kind;
+    entity.__typename === 'ThreadType'
+      ? threadNodeLabel({ id: String(record.id ?? ''), name: firstString(record, ['name']) }, fmt)
+      : (question ??
+        firstString(record, ['title', 'name', 'filename', 'label', 'subject', 'answer']) ??
+        kind);
   const body = firstString(record, [
     'answer',
     'description',
@@ -66,7 +76,7 @@ export function FallbackDetails({ entity }: Props) {
     'preview',
   ]);
   const url = firstString(record, ['url', 'sourceUrl', 'previewUrl']);
-  const when = firstDate(record, ['time', 'startTime', 'createdAt', 'updatedAt']);
+  const when = firstDate(record, ['time', 'startTime', 'createdAt', 'updatedAt'], fmt);
 
   const metaItems: MetaItem[] = [
     { label: 'Type', value: kind },

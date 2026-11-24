@@ -86,7 +86,10 @@ async function selectAlice() {
  * their own native month/year `<select>`s, which also carry role "combobox".
  */
 function openRelationshipType() {
-  fireEvent.pointerDown(screen.getByRole('combobox', { name: /relationship type/i }), { button: 0 });
+  fireEvent.pointerDown(screen.getByRole('combobox', { name: /relationship type/i }), {
+    button: 0,
+    pointerType: 'mouse',
+  });
 }
 
 describe('AddRelationshipModal — picking the related entity', () => {
@@ -154,17 +157,19 @@ describe('AddRelationshipModal — creating the edge', () => {
 
     const { onClose } = renderModal([
       {
-        request: { query: CREATE_RELATIONSHIP },
-        variableMatcher: (variables: { input: Record<string, unknown> }) => {
-          expect(variables.input).toMatchObject({
-            fromNodeId: 'event-1',
-            fromNodeType: 'event',
-            toNodeId: '42',
-            toNodeType: 'person',
-            type: 'BUSINESS_PARTNER',
-          });
+        request: {
+          query: CREATE_RELATIONSHIP,
+          variables: (variables: { input: Record<string, unknown> }) => {
+            expect(variables.input).toMatchObject({
+              fromNodeId: 'event-1',
+              fromNodeType: 'event',
+              toNodeId: '42',
+              toNodeType: 'person',
+              type: 'BUSINESS_PARTNER',
+            });
 
-          return true;
+            return true;
+          },
         },
         result: createHandler,
       } as unknown as MockedResponse,
@@ -188,8 +193,7 @@ describe('AddRelationshipModal — creating the edge', () => {
     // reset-then-fail bug would.
     const { onClose } = renderModal([
       {
-        request: { query: CREATE_RELATIONSHIP },
-        variableMatcher: () => true,
+        request: { query: CREATE_RELATIONSHIP, variables: () => true },
         error: new Error('network down'),
       } as unknown as MockedResponse,
     ]);

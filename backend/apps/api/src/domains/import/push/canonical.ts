@@ -28,7 +28,12 @@ import {
   type ObjectIdentifierNamespace,
 } from '@ci/domains/graph';
 
-import { mimeForFile, type MediaAttachment } from '../datasources/timeline';
+import {
+  IMPORTED_EVENT_STATUSES,
+  mimeForFile,
+  type ImportedEventStatus,
+  type MediaAttachment,
+} from '../datasources/timeline';
 import type { StagedItem } from '../entities/StagedItemEntity';
 
 import { readCommerceField } from './commerceKeys';
@@ -46,6 +51,22 @@ export type { RedditMediaRef } from './redditMedia';
 export const SOURCE_TYPE = 'ci-import-tools';
 
 export interface CanonicalRecord {
+  /**
+   * The platform this record's run was fetched from by a connection ('dropbox',
+   * 'google_drive'), when that says more than the importer's own name does —
+   * i.e. for what the catch-all importer produced. Absent otherwise. Set by
+   * the push stage from the run (see {@link withOrigin}), never by
+   * `toCanonical`: a staged row does not know where its run came from.
+   */
+  originPlatform?: string;
+  /**
+   * The connection that fetched this record's run, when one did. Unlike
+   * `originPlatform` it applies to EVERY record of the run, whichever importer
+   * read it: a Facebook export that Dropbox delivered is Facebook data that
+   * Dropbox delivered, and goes when Dropbox does (unless something else also
+   * delivered it — see DataDeletionService).
+   */
+  originConnectionId?: string;
   /** Producing integration. Always SOURCE_TYPE. */
   sourceType: string;
   /** Importer data source, e.g. "apple_photos", "gpx". From items.data_source. */
@@ -100,6 +121,14 @@ export interface CanonicalRecord {
    * Null when the source doesn't distinguish.
    */
   isRecurring: boolean | null;
+  /**
+   * What became of the event, as its source stated it (`metadata.eventStatus`,
+   * one of {@link IMPORTED_EVENT_STATUSES}). First-class for the same reason as
+   * isAllDay: events.status needs it, and a cancellation that sat in metadata
+   * reached no reader of the column. Null when the source states none, or a
+   * value outside that list, which leaves the column DEFAULT, 'confirmed'.
+   */
+  eventStatus: ImportedEventStatus | null;
   /** Media type. From items.media_type. */
   mediaType: string | null;
   /** Content hash, a secondary dedup signal. From items.content_hash. */
@@ -161,6 +190,35 @@ function basename(p: string): string {
   const parts = p.split(/[\\/]/);
 
   return parts[parts.length - 1] || p;
+}
+
+/**
+ * Attribute a record to the connection and platform its run was fetched by,
+ * when a connection did the fetching.
+ *
+ * The connection applies to every record of the run. The platform touches
+ * only the catch-all importer's records. `generic` reads any loose
+ * file and says nothing about where it lived; a photo a Dropbox sync
+ * downloaded is a Dropbox photo. A record a specific importer claimed — a
+ * Facebook export that happened to be stored in Dropbox — already names its
+ * platform, and that one is the truth.
+ */
+export function withOrigin(
+  record: CanonicalRecord,
+  origin: { platform?: string | null; connectionId?: string | null } | null | undefined,
+): CanonicalRecord {
+  const platform = origin?.platform && record.sourceSystem === 'generic' ? origin.platform : undefined;
+  const connectionId = origin?.connectionId ?? undefined;
+
+  if (!platform && !connectionId) {
+    return record;
+  }
+
+  return {
+    ...record,
+    ...(platform ? { originPlatform: platform } : {}),
+    ...(connectionId ? { originConnectionId: connectionId } : {}),
+  };
 }
 
 /** sourceSystem for a row: the importer data source. */
@@ -417,13 +475,7 @@ export function backfillEntityTypesFor(destinations: Iterable<Destination>): Bac
  * it does not recognise.
  */
 export type EdgeProjectionSource =
-  | 'communications'
-  | 'events'
-  | 'content'
-  | 'objects'
-  | 'positions'
-  | 'receipts'
-  | 'observations';
+  'communications' | 'events' | 'content' | 'objects' | 'positions' | 'receipts' | 'observations';
 
 /**
  * Map an import {@link Destination} to the edge-projection source its rows land
@@ -859,6 +911,14 @@ export function isSocialAffiliation(rec: CanonicalRecord): boolean {
 
   if (rec.sourceSystem === 'reddit') {
     return kind === 'moderated_subreddit' || kind === 'subscribed_subreddit';
+  }
+
+  // A liked Facebook PAGE: a dated fact about the person and an organisation,
+  // whose title says all of it. The connection's TransformFacebookLikes writes
+  // it as an event alone for the same reason. (A like of a POST is not this —
+  // it carries a link to the thing liked and keeps its content row.)
+  if (rec.sourceSystem === 'facebook') {
+    return kind === 'page_like';
   }
 
   return false;
@@ -1728,6 +1788,16 @@ export function identifiersFrom(metadata: Record<string, unknown> | undefined | 
   return out;
 }
 
+/**
+ * `metadata.eventStatus` when it is one of {@link IMPORTED_EVENT_STATUSES},
+ * otherwise null. Exact spelling only: the datasource maps its source's own
+ * vocabulary (`icsEventStatus`, the Takeout `canceled` flag), and a value that
+ * reached here unmapped must not reach `events_status_check`.
+ */
+function importedEventStatus(value: unknown): ImportedEventStatus | null {
+  return IMPORTED_EVENT_STATUSES.find((status) => status === value) ?? null;
+}
+
 export function toCanonical(row: StagedItem): CanonicalRecord {
   const metadata: Record<string, unknown> = { ...(row.metadata ?? {}) };
   if (row.filename) {
@@ -1780,6 +1850,7 @@ export function toCanonical(row: StagedItem): CanonicalRecord {
     locationName,
     isAllDay: typeof metadata.isAllDay === 'boolean' ? metadata.isAllDay : null,
     isRecurring: typeof metadata.isRecurring === 'boolean' ? metadata.isRecurring : null,
+    eventStatus: importedEventStatus(metadata.eventStatus),
     mediaType: row.mediaType,
     contentHash: row.contentHash,
     // Source file path for media items, so the push can upload + link the bytes.

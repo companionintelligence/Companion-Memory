@@ -6,9 +6,9 @@ import type { ExecutionContext } from '@nestjs/common';
 
 import { AdminOnlyGuard } from '../AdminOnlyGuard';
 
-function contextFor(user: unknown): ExecutionContext {
+function contextFor(user: unknown, extra: Record<string, unknown> = {}): ExecutionContext {
   return {
-    switchToHttp: () => ({ getRequest: () => ({ user }) }),
+    switchToHttp: () => ({ getRequest: () => ({ user, ...extra }) }),
   } as unknown as ExecutionContext;
 }
 
@@ -21,6 +21,16 @@ describe('AdminOnlyGuard', () => {
 
   it.each([['user'], ['readonly'], ['api_only']])('refuses role %s', (role) => {
     expect(() => guard.canActivate(contextFor({ id: 'u1', role }))).toThrow(ForbiddenException);
+  });
+
+  it("refuses the owner's role when it arrived on a Portal token that may not act as admin here", () => {
+    // A token not addressed to this appliance names the owner too, and carries their role.
+    const owner = { id: 'u1', role: 'admin' };
+
+    expect(() => guard.canActivate(contextFor(owner, { portalPrincipal: { admin: false } }))).toThrow(
+      ForbiddenException,
+    );
+    expect(guard.canActivate(contextFor(owner, { portalPrincipal: { admin: true } }))).toBe(true);
   });
 
   it('fails closed on a principal with no role at all', () => {
@@ -49,6 +59,22 @@ describe('AdminOnlyGuard', () => {
 describe('the preconditions for gating a route behind AdminOnlyGuard', () => {
   const src = (path: string) => readFileSync(resolve(__dirname, '..', '..', '..', path), 'utf8');
 
+  /**
+   * One method of a class, from its signature to the closing brace at
+   * class-member indentation, so a claim about `create()` cannot be satisfied by
+   * text that happens to sit in another method.
+   */
+  const methodSource = (source: string, name: string): string => {
+    const start = source.search(new RegExp(`^  (?:private |public )?(?:async )?${name}\\(`, 'm'));
+    const end = start < 0 ? -1 : source.indexOf('\n  }\n', start);
+
+    if (end < 0) {
+      throw new Error(`could not find ${name}() in the source this suite reads`);
+    }
+
+    return source.slice(start, end);
+  };
+
   it.each([['domains/auth/services/JwtStrategy.ts'], ['domains/auth/services/ApiKeyStrategy.ts']])(
     '%s resolves the full user record, so role reaches the request',
     (path) => {
@@ -63,9 +89,10 @@ describe('the preconditions for gating a route behind AdminOnlyGuard', () => {
     // The claim this pins is the one that was wrong. PortalTokenService has
     // always returned a whole `User`; the INTERFACE said `{ id: string }`,
     // which read as "portal principals cannot be admins".
-    expect(src('common/guards/PortalTokenVerifier.ts')).toMatch(
-      /verifyAndProvision\(token: string\): Promise<\{ id: string; role\?: string \} \| null>;/,
-    );
+    const verifier = src('common/guards/PortalTokenVerifier.ts');
+
+    expect(verifier).toMatch(/verifyAndProvision\(token: string\): Promise<PortalPrincipal \| null>;/);
+    expect(verifier).toMatch(/user: \{ id: string; role\?: string \};/);
   });
 
   it('has an admin to require, because application code promotes the first account', () => {
@@ -87,11 +114,22 @@ describe('the preconditions for gating a route behind AdminOnlyGuard', () => {
     expect(service).toMatch(/SET role = 'admin'/);
     expect(service).toMatch(/role = 'admin' AND deleted_at IS NULL/);
 
-    // Called from create(), which is the single chokepoint all five user-creation
-    // sites funnel through (local signup, portal JIT-provisioning, the Hub
-    // forward-auth bridge, and both OIDC paths). Promoting in any one caller
-    // would leave the others able to create the first account unpromoted.
-    expect(service).toMatch(/await this\.claimApplianceIfUnowned\(entity\.id\)/);
+    // Called from insertAccount(), the one method that writes an account, inside
+    // the transaction that does, under the lock every creation takes. Both public
+    // ways in go through it: create(), and createFirstAccount() for the doors that
+    // admit someone without an invitation. So every user-creation site (local
+    // signup, portal JIT-provisioning, the Hub forward-auth bridge, and both OIDC
+    // paths) is promoted. Promoting in any one caller would leave the others able
+    // to create the first account unpromoted.
+    expect(methodSource(service, 'insertAccount')).toMatch(
+      /await this\.claimApplianceIfUnowned\(manager, saved\.id\)/,
+    );
+    expect(methodSource(service, 'create')).toMatch(
+      /this\.insertAccount\(\s*data,\s*\{\s*onlyIfFirst:\s*false,\s*alongside\s*\}\s*\)/,
+    );
+    expect(methodSource(service, 'createFirstAccount')).toMatch(
+      /this\.insertAccount\(\s*data,\s*\{\s*onlyIfFirst:\s*true,\s*alongside\s*\}\s*\)/,
+    );
   });
 
   it('heals the fresh installs the original backfill could not reach', () => {

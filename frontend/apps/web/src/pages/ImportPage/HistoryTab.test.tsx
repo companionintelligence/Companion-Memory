@@ -12,7 +12,7 @@ const LIVE_RUN = {
   id: 'run-live',
   label: 'Takeout.zip',
   source: 'wizard',
-  dataSources: [],
+  dataSources: [] as string[],
   status: 'running',
   percent: 40,
   requestedStages: ['unpack', 'parse'],
@@ -139,6 +139,36 @@ describe('HistoryTab', () => {
 
     expect(await screen.findByText('Failed')).toBeInTheDocument();
     expect(screen.getAllByText('Imported').length).toBeGreaterThan(0);
+  });
+
+  it('names each service of an import once, not once per file it was found in', async () => {
+    // `data_sources` records one entry per recognized FILE, so a real Google
+    // Takeout came back as 47 entries of which 30 were `google_my_activity`, and
+    // the card read "Google Voice, Google My Activity, Google My Activity, +44".
+    listRuns.mockResolvedValueOnce([
+      {
+        ...FINISHED_RUN,
+        id: 'run-takeout',
+        label: 'google-takeout',
+        dataSources: [
+          'google_voice',
+          'google_my_activity',
+          'google_my_activity',
+          'google_my_activity',
+          'vcard',
+        ],
+      },
+    ]);
+
+    render(<HistoryTab />);
+
+    await screen.findByText('google-takeout');
+
+    // Three distinct services: all three fit, and nothing is left to count.
+    expect(screen.getAllByText('google my activity')).toHaveLength(1);
+    expect(screen.getByText('google voice')).toBeInTheDocument();
+    expect(screen.getByText('vcard')).toBeInTheDocument();
+    expect(screen.queryByText(/^\+\d+$/)).not.toBeInTheDocument();
   });
 
   it('reattaches to the run that is still going, and closing it keeps it reachable', async () => {

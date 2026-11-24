@@ -9,7 +9,11 @@ import type { ObjectIdentifierNamespace } from '@ci/domains/graph/utils/normaliz
 
 import type { ObjectObservation, ObservationResolutionMethod } from '../entities/ObjectObservationEntity';
 
-import { ObjectObservationService } from './ObjectObservationService';
+import {
+  isSentBackToReview,
+  ObjectObservationService,
+  touchObjectLastSeen,
+} from './ObjectObservationService';
 
 /**
  * Confidence declared by each rung of the ladder.
@@ -194,16 +198,28 @@ export class ObjectResolutionService {
       return null;
     }
 
-    if (observation.confirmedByUser) {
+    if (observation.confirmedByUser || observation.resolutionMethod === 'user') {
       // A human's answer is not a machine's to revise. Reported, not thrown, so
-      // a sweep skips it instead of aborting.
+      // a sweep skips it instead of aborting. Method `user` without the flag is
+      // a "no" (`rejectObservation`, which also clears the link), a sighting
+      // sent back to review from its thing's page (`sendBackToReview`, still
+      // waiting for the person to say which thing it is) or a retraction that
+      // kept its link (`confirm(id, false)`). All are answers.
+      const unlinked = observation.resolvedObjectId == null && observation.resolvedProductId == null;
+
       return {
         observationId,
         method: observation.resolutionMethod,
         confidence: observation.resolutionConfidence,
         objectId: observation.resolvedObjectId,
         productId: observation.resolvedProductId,
-        reason: 'user-confirmed; left untouched',
+        reason: observation.confirmedByUser
+          ? 'user-confirmed; left untouched'
+          : isSentBackToReview(observation)
+            ? 'user-sent-back; waiting in review'
+            : unlinked
+              ? 'user-rejected; left untouched'
+              : 'user-retracted; left untouched',
         applied: false,
         observation,
       };
@@ -226,8 +242,15 @@ export class ObjectResolutionService {
       resolutionConfidence: candidate.confidence,
     });
 
-    if (candidate.objectId != null) {
-      await this.touchLastSeen(context, candidate.objectId, observation);
+    // What the row says now, as in ObjectObservationService.confirm: `resolve`
+    // returns a sighting a person answered since the read above unchanged, and
+    // that answer, not this match, says which thing it is.
+    if (
+      candidate.objectId != null &&
+      updated?.resolvedObjectId === candidate.objectId &&
+      updated.resolutionMethod !== 'user'
+    ) {
+      await touchObjectLastSeen(this.dataSource, context.userId, candidate.objectId, updated);
     }
 
     return { ...candidate, applied: true, observation: updated };
@@ -243,7 +266,10 @@ export class ObjectResolutionService {
     context: UserServiceContext,
     options: ResolveOptions & { limit?: number } = {},
   ): Promise<ObjectResolutionOutcome[]> {
-    const pending = await this.observationService.findForReview(context, options.limit ?? 100);
+    // Not the sightings a person sent back: those are answered, so the ladder could only skip them.
+    const pending = await this.observationService.findForReview(context, options.limit ?? 100, 0, {
+      sentBack: false,
+    });
     const outcomes: ObjectResolutionOutcome[] = [];
 
     for (const observation of pending) {
@@ -599,31 +625,5 @@ export class ObjectResolutionService {
       productId: null,
       reason: `exactly one owned unit is named "${label}"`,
     };
-  }
-
-  /**
-   * Denormalize the sighting onto the unit it resolved to.
-   *
-   * `last_seen_at` / `last_seen_place_entity_id` exist so the things list can
-   * sort and filter without a per-row subquery over observations. Guarded on
-   * the timestamp so an out-of-order backfill of old photos cannot walk a
-   * unit's "last seen" backwards.
-   */
-  private async touchLastSeen(
-    context: UserServiceContext,
-    objectId: string,
-    observation: ObjectObservation,
-  ): Promise<void> {
-    await this.dataSource.query(
-      `UPDATE ci.objects
-          SET last_seen_at = $3,
-              last_seen_place_entity_id = COALESCE($4::uuid, last_seen_place_entity_id),
-              updated_at = now()
-        WHERE object_id = $2::uuid
-          AND user_id = $1::uuid
-          AND merged_into_object_id IS NULL
-          AND (last_seen_at IS NULL OR last_seen_at < $3)`,
-      [context.userId, objectId, observation.observedAt, observation.placeEntityId],
-    );
   }
 }

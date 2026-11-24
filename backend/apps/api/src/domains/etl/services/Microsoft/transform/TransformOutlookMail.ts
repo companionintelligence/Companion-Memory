@@ -14,7 +14,7 @@ import {
 } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
-import { PromoteService } from '../../PromoteService';
+import { type ParticipantGroup, PromoteService } from '../../PromoteService';
 
 interface OutlookEmailAddress {
   name?: string;
@@ -76,6 +76,20 @@ interface Participant {
   role: 'from' | 'to' | 'cc' | 'bcc';
 }
 
+/** The participant groups one message contributes to the page's PromoteService call: from, to, cc, bcc. */
+const GROUPS_PER_MESSAGE = 4;
+
+/** A message that passed the gates, with everything the page-level write needs from it. */
+interface PreparedMessage {
+  message: OutlookMessage;
+  date: Date;
+  fromParticipants: Participant[];
+  toParticipants: Participant[];
+  ccParticipants: Participant[];
+  bccParticipants: Participant[];
+  groups: ParticipantGroup[];
+}
+
 @Injectable()
 export class OutlookMailTransformService {
   constructor(
@@ -116,21 +130,13 @@ export class OutlookMailTransformService {
         messageCount: messages.length,
       });
 
-      await Promise.all(
-        messages.map(
-          async (message) =>
-            await this.processMessage({
-              message,
-              connectionId: connection.id,
-              userId,
-            }),
-        ),
-      );
+      const outcome = await this.processPage(messages, userId, connection.id);
 
       this.logger.log('Outlook Mail transformation completed', {
         userId,
         syncJobId,
         processedCount: messages.length,
+        ...outcome,
       });
     } catch (error: unknown) {
       this.logger.error('Error transforming Outlook Mail messages', {
@@ -171,15 +177,73 @@ export class OutlookMailTransformService {
     return [];
   }
 
-  private async processMessage({
-    message,
-    userId,
-    connectionId,
-  }: {
-    message: OutlookMessage;
-    userId: string;
-    connectionId: string;
-  }): Promise<void> {
+  /**
+   * One sync page in a fixed number of round trips — the same shape as
+   * GmailTransformService.processPage, for the same reason: per message this
+   * used to be four PromoteService calls and a create(), run for every message
+   * of the page in parallel. Gate each message on its own (a bad one is
+   * skipped and logged, not the page), resolve and link every participant of
+   * the page in one call, write the page once with `emitCreated` so the rows
+   * this sync inserted still raise CommunicationCreatedEvent for the search
+   * index and the people-linker.
+   */
+  private async processPage(
+    messages: OutlookMessage[],
+    userId: string,
+    connectionId: string,
+  ): Promise<{ written: number; inserted: number }> {
+    const context = { userId };
+    const prepared = messages
+      .map((message) => this.prepareMessage(message, userId, connectionId))
+      .filter((entry): entry is PreparedMessage => entry != null);
+
+    if (prepared.length === 0) {
+      return { written: 0, inserted: 0 };
+    }
+
+    const groupIds = await this.promoteService.promoteParticipantGroups(context, {
+      connectionId,
+      source: 'email',
+      groups: prepared.flatMap((entry) => entry.groups),
+    });
+
+    const dtos = await Promise.all(
+      prepared.map((entry, index) => {
+        const [fromEntityIds = [], toEntityIds = [], ccEntityIds = [], bccEntityIds = []] = groupIds.slice(
+          index * GROUPS_PER_MESSAGE,
+          (index + 1) * GROUPS_PER_MESSAGE,
+        );
+
+        return this.transformToCommunicationDto(
+          entry.message,
+          userId,
+          connectionId,
+          {
+            fromEntityIds,
+            toEntityIdsCombined: [...toEntityIds, ...ccEntityIds, ...bccEntityIds],
+            fromParticipants: entry.fromParticipants,
+            toParticipants: entry.toParticipants,
+            ccParticipants: entry.ccParticipants,
+            bccParticipants: entry.bccParticipants,
+          },
+          entry.date,
+        );
+      }),
+    );
+    const results = await this.communicationService.createManyDetailed(context, dtos, { emitCreated: true });
+
+    return { written: results.length, inserted: results.filter(({ inserted }) => inserted).length };
+  }
+
+  /**
+   * Gate one message. Null for a message the sync should not write (a drop, a
+   * blank) or could not read (logged, so one bad message never costs the page).
+   */
+  private prepareMessage(
+    message: OutlookMessage,
+    userId: string,
+    connectionId: string,
+  ): PreparedMessage | null {
     try {
       const messageId = message.id || 'unknown';
       const subject = message.subject || '(No Subject)';
@@ -207,7 +271,7 @@ export class OutlookMailTransformService {
           drop,
         });
 
-        return;
+        return null;
       }
 
       // Skip messages without subject, body, and from (like OutlookMailPromotionService)
@@ -223,7 +287,7 @@ export class OutlookMailTransformService {
           messageId,
         });
 
-        return;
+        return null;
       }
 
       this.logger.log('Processing Outlook Mail message', {
@@ -232,90 +296,31 @@ export class OutlookMailTransformService {
         hasAttachments: message.hasAttachments,
       });
 
-      // Extract participants
       const participants = this.extractParticipants(message);
-
-      // Process participants separately by type
-      const fromParticipants = participants.filter((p) => p.role === 'from');
-      const toParticipants = participants.filter((p) => p.role === 'to');
-      const ccParticipants = participants.filter((p) => p.role === 'cc');
-      const bccParticipants = participants.filter((p) => p.role === 'bcc');
+      const byRole = (role: Participant['role']) => participants.filter((p) => p.role === role);
+      const fromParticipants = byRole('from');
+      const toParticipants = byRole('to');
+      const ccParticipants = byRole('cc');
+      const bccParticipants = byRole('bcc');
 
       const timestamp = message.sentDateTime || message.receivedDateTime;
       const date = timestamp ? new Date(timestamp) : new Date();
 
-      const fromEntityIds = await this.promoteService.processParticipants(
-        fromParticipants,
-        userId,
-        connectionId,
-        'email',
-        'RECEIVED_EMAIL_FROM',
-        date,
-        undefined,
-      );
-
-      const toEntityIds = await this.promoteService.processParticipants(
-        toParticipants,
-        userId,
-        connectionId,
-        'email',
-        'EMAILED',
-        date,
-        undefined,
-      );
-
-      const ccEntityIds = await this.promoteService.processParticipants(
-        ccParticipants,
-        userId,
-        connectionId,
-        'email',
-        'EMAILED',
-        date,
-        undefined,
-      );
-
-      const bccEntityIds = await this.promoteService.processParticipants(
-        bccParticipants,
-        userId,
-        connectionId,
-        'email',
-        'EMAILED',
-        date,
-        undefined,
-      );
-
-      // Combine all to entity IDs
-      let toEntityIdsCombined = toEntityIds.length > 0 ? toEntityIds : [];
-      if (ccEntityIds.length > 0) {
-        toEntityIdsCombined = toEntityIdsCombined.concat(ccEntityIds);
-      }
-
-      if (bccEntityIds.length > 0) {
-        toEntityIdsCombined = toEntityIdsCombined.concat(bccEntityIds);
-      }
-
-      // Transform and save message
-      const communicationDto = await this.transformToCommunicationDto(
+      return {
         message,
-        userId,
-        connectionId,
-        {
-          fromEntityIds,
-          toEntityIdsCombined,
-          fromParticipants,
-          toParticipants,
-          ccParticipants,
-          bccParticipants,
-        },
         date,
-      );
-
-      await this.communicationService.create({ userId }, communicationDto);
-
-      this.logger.log('Outlook Mail message saved successfully', {
-        messageId,
-        subject,
-      });
+        fromParticipants,
+        toParticipants,
+        ccParticipants,
+        bccParticipants,
+        // In GROUPS_PER_MESSAGE order: from, to, cc, bcc.
+        groups: [
+          { participants: fromParticipants, relationshipType: 'RECEIVED_EMAIL_FROM', startDate: date },
+          { participants: toParticipants, relationshipType: 'EMAILED', startDate: date },
+          { participants: ccParticipants, relationshipType: 'EMAILED', startDate: date },
+          { participants: bccParticipants, relationshipType: 'EMAILED', startDate: date },
+        ],
+      };
     } catch (error) {
       this.logger.error('Error processing individual Outlook Mail message', {
         userId,
@@ -324,7 +329,8 @@ export class OutlookMailTransformService {
         subject: message.subject,
         error: error instanceof Error ? error.message : 'Unknown error',
       });
-      // Don't throw - continue processing other messages
+
+      return null;
     }
   }
 

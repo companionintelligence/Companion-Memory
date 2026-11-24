@@ -14,6 +14,7 @@
  * table, not a hand-picked six) are correct by construction instead of by
  * regex luck.
  */
+import { decodeHTML, decodeXML } from 'entities';
 import { Parser } from 'htmlparser2';
 
 const SKIP_TAGS = new Set(['script', 'style', 'head', 'title', 'noscript', 'template']);
@@ -62,6 +63,83 @@ const BLOCK_TAGS = new Set([
 const INVISIBLE = /[\u00AD\u200B-\u200D\u2060\uFEFF]/g;
 
 /**
+ * Decode character references in a string that is NOT a document: an attribute
+ * value, a date fragment, a link label a regex already pulled out of the page.
+ * Body text goes through {@link htmlToText}; this is for the pieces that stay
+ * markup-free but still carry `&amp;`, `&#39;`, `&#x27;`, `&eacute;`.
+ *
+ * Seven importers each kept a regex decoder with its own hand-picked subset
+ * (one knew `&nbsp;` but not `&#x27;`, one hex references but not `&eacute;`),
+ * and Google Voice carried a 40-entry entity table. This is the full HTML5
+ * table, through the same `entities` package htmlparser2 decodes with — or the
+ * XML five plus numeric references when `xml` is set, for SMS Backup & Restore's
+ * XML attributes, where `&copy;` is not an entity.
+ *
+ * Non-breaking and em spaces (`&nbsp;`, `&emsp;`) come back as plain spaces:
+ * every copy that handled them at all mapped them that way, and a fragment's
+ * whitespace is for display, not for layout.
+ */
+export function decodeEntities(s: string, { xml = false }: { xml?: boolean } = {}): string {
+  return (xml ? decodeXML(s) : decodeHTML(s)).replace(/[\u00a0\u2003]/g, ' ');
+}
+
+export interface HtmlToTextOptions {
+  /**
+   * Treat a newline inside a text run as a line break rather than collapsible
+   * whitespace. For sources that mix plain-text newlines with markup — Google
+   * Calendar writes an .ics DESCRIPTION as `<b>Booked by</b>\nName\nemail` —
+   * where HTML's whitespace rule would run every line into one. Newlines add
+   * to the ones markup produced, under the same cap of one blank line.
+   */
+  preserveNewlines?: boolean;
+  /**
+   * Keep a link's destination: `RSVP <a href="https://x">here</a>` becomes
+   * `RSVP here (https://x)`. Without it the target goes with the tag, and in
+   * an invitation the target is often the only useful part. Skipped when the
+   * visible text is itself an address (a tracker wrapping the URL it shows);
+   * http(s) and mailto only, with Google's `/url?q=` redirect unwrapped.
+   */
+  keepLinkUrls?: boolean;
+}
+
+/** Visible link text that already reads as a URL, bare domain or email address. */
+const ADDRESS_LIKE =
+  /^(?:(?:https?:\/\/|www\.)\S+|[\w.+-]+@[\w-]+(?:\.[\w-]+)+|[\w-]+(?:\.[\w-]+)*\.[a-z]{2,}(?:\/\S*)?)$/i;
+
+/** The destination worth printing for an `href`, or null for one that is not. */
+function linkTarget(href: string | undefined): string | null {
+  const raw = href?.trim();
+  if (!raw) {
+    return null;
+  }
+
+  if (/^mailto:/i.test(raw)) {
+    const address = raw.slice('mailto:'.length).split('?')[0];
+    try {
+      return decodeURIComponent(address) || null;
+    } catch {
+      return address || null;
+    }
+  }
+
+  if (!/^https?:\/\//i.test(raw)) {
+    return null;
+  }
+
+  try {
+    const url = new URL(raw);
+    const redirect = url.searchParams.get('q');
+    if (/^(?:www\.)?google\.[a-z.]+$/i.test(url.hostname) && url.pathname === '/url' && redirect) {
+      return /^https?:\/\//i.test(redirect) ? redirect : raw;
+    }
+  } catch {
+    // Not parseable as a URL — print it as written.
+  }
+
+  return raw;
+}
+
+/**
  * Flatten an HTML (or ENML, which is an XHTML subset) fragment to readable
  * plain text.
  *
@@ -73,12 +151,12 @@ const INVISIBLE = /[\u00AD\u200B-\u200D\u2060\uFEFF]/g;
  *   - Every other tag is dropped, entities are decoded in full, and runs of
  *     blank lines collapse.
  *
- * Not a DOM: no querying, no attribute access — output is a single string,
- * which is all every current caller needs. A caller that needs structure
- * (links, image counts, …) is a reason to extend this, not to hand-roll a
+ * Not a DOM: no querying, and the only attribute read is a link's `href`
+ * under {@link HtmlToTextOptions.keepLinkUrls}. A caller that needs more
+ * structure (image counts, …) is a reason to extend this, not to hand-roll a
  * parallel stripper.
  */
-export function htmlToText(html: string | undefined | null): string {
+export function htmlToText(html: string | undefined | null, options: HtmlToTextOptions = {}): string {
   if (!html) {
     return '';
   }
@@ -88,6 +166,9 @@ export function htmlToText(html: string | undefined | null): string {
   let pendingTab = false;
   let pendingSpace = false;
   let skipDepth = 0;
+  // The open `<a>` under keepLinkUrls: its destination, and where its text
+  // starts in `out`. Links do not nest in HTML, so one slot is enough.
+  let link: { target: string; start: number } | null = null;
 
   // htmlparser2 fires one `ontext` call per decoded entity (an entity-laden
   // run of "a &amp; b" arrives as five separate calls, not one), so a plain
@@ -115,9 +196,54 @@ export function htmlToText(html: string | undefined | null): string {
     pendingSpace = false;
   }
 
+  // One run of text, whitespace collapsed the HTML way.
+  function appendRun(data: string): void {
+    const collapsed = data.replace(INVISIBLE, '').replace(/\s+/g, ' ');
+    const trimmed = collapsed.trim();
+    if (!trimmed) {
+      // A whitespace-only chunk between two inline runs ("foo</span> <span>bar")
+      // still separates them once flushed.
+      if (collapsed) {
+        pendingSpace = true;
+      }
+
+      return;
+    }
+
+    if (collapsed.startsWith(' ')) {
+      pendingSpace = true;
+    }
+
+    flush();
+    out += trimmed;
+    if (collapsed.endsWith(' ')) {
+      pendingSpace = true;
+    }
+  }
+
+  // Print the destination of the link that just closed, unless its text
+  // already shows it. Appended straight onto `out`, NOT through flush(): a
+  // separator still pending from inside the link (its trailing space, a
+  // `<br>`) belongs after the destination, not between it and the text.
+  function closeLink({ target, start }: { target: string; start: number }): void {
+    const text = out.slice(start).trim();
+    if (!text) {
+      appendRun(` ${target} `);
+
+      return;
+    }
+
+    const bare = target.replace(/^https?:\/\//i, '').replace(/\/$/, '');
+    if (ADDRESS_LIKE.test(text) || text.includes(target) || text.includes(bare)) {
+      return;
+    }
+
+    out += ` (${target})`;
+  }
+
   const parser = new Parser(
     {
-      onopentag(name) {
+      onopentag(name, attribs) {
         if (SKIP_TAGS.has(name)) {
           skipDepth++;
 
@@ -125,6 +251,13 @@ export function htmlToText(html: string | undefined | null): string {
         }
 
         if (skipDepth > 0) {
+          return;
+        }
+
+        if (name === 'a' && options.keepLinkUrls) {
+          const target = linkTarget(attribs.href);
+          link = target ? { target, start: out.length } : null;
+
           return;
         }
 
@@ -150,6 +283,13 @@ export function htmlToText(html: string | undefined | null): string {
           return;
         }
 
+        if (name === 'a' && link) {
+          closeLink(link);
+          link = null;
+
+          return;
+        }
+
         if (name === 'td' || name === 'th') {
           pendingTab = true;
 
@@ -165,26 +305,17 @@ export function htmlToText(html: string | undefined | null): string {
           return;
         }
 
-        const collapsed = data.replace(INVISIBLE, '').replace(/\s+/g, ' ');
-        const trimmed = collapsed.trim();
-        if (!trimmed) {
-          // A whitespace-only chunk between two inline runs ("foo</span> <span>bar")
-          // still separates them once flushed.
-          if (collapsed) {
-            pendingSpace = true;
-          }
+        if (!options.preserveNewlines) {
+          appendRun(data);
 
           return;
         }
 
-        if (collapsed.startsWith(' ')) {
-          pendingSpace = true;
-        }
-
-        flush();
-        out += trimmed;
-        if (collapsed.endsWith(' ')) {
-          pendingSpace = true;
+        const [first, ...rest] = data.split(/\r\n|\r|\n/);
+        appendRun(first);
+        for (const line of rest) {
+          pendingNewlines = Math.min(pendingNewlines + 1, 2);
+          appendRun(line);
         }
       },
     },

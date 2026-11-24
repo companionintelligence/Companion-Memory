@@ -140,17 +140,36 @@ SELECT
        AND b.url IS NOT NULL)
      AS br_distinct_domains,
 
+  -- A thing's acquired date is a day when it sits exactly on a UTC midnight (a
+  -- picked day, or an importer that only knew the day) and counts on the day it
+  -- names, in every zone. Read as a moment, it would land on the day before
+  -- everywhere west of UTC. Any other value is a real moment (an order time) and
+  -- counts on the user's local day. Same split as the web app's lib/thingDate.ts.
   (SELECT count(*) FROM ci.objects i
-     WHERE i.user_id::uuid = $1::uuid AND i.acquired_at >= ($2::date::timestamp AT TIME ZONE $3::text)
-       AND i.acquired_at < (($2::date + 1)::timestamp AT TIME ZONE $3::text))
+     WHERE i.user_id::uuid = $1::uuid
+       AND ((i.acquired_at >= ($2::date::timestamp AT TIME ZONE $3::text)
+             AND i.acquired_at < (($2::date + 1)::timestamp AT TIME ZONE $3::text)
+             AND (i.acquired_at AT TIME ZONE 'UTC')::time <> time '00:00')
+            OR i.acquired_at = ($2::date::timestamp AT TIME ZONE 'UTC')))
      AS inv_rows,
+  -- Spend counts only prices in a currency: a thing priced in a unit with no ISO
+  -- code (an import keeps Roblox's "1200 Robux" as written) is not 1200 dollars.
+  -- It stays in inv_rows, so it shows as a thing with no usable price.
   (SELECT count(i.purchase_price) FROM ci.objects i
-     WHERE i.user_id::uuid = $1::uuid AND i.acquired_at >= ($2::date::timestamp AT TIME ZONE $3::text)
-       AND i.acquired_at < (($2::date + 1)::timestamp AT TIME ZONE $3::text))
+     WHERE i.user_id::uuid = $1::uuid
+       AND (i.currency IS NULL OR upper(btrim(i.currency)) ~ '^[A-Z]{3}$')
+       AND ((i.acquired_at >= ($2::date::timestamp AT TIME ZONE $3::text)
+             AND i.acquired_at < (($2::date + 1)::timestamp AT TIME ZONE $3::text)
+             AND (i.acquired_at AT TIME ZONE 'UTC')::time <> time '00:00')
+            OR i.acquired_at = ($2::date::timestamp AT TIME ZONE 'UTC')))
      AS inv_rows_with_price,
   (SELECT sum(i.purchase_price) FROM ci.objects i
-     WHERE i.user_id::uuid = $1::uuid AND i.acquired_at >= ($2::date::timestamp AT TIME ZONE $3::text)
-       AND i.acquired_at < (($2::date + 1)::timestamp AT TIME ZONE $3::text))
+     WHERE i.user_id::uuid = $1::uuid
+       AND (i.currency IS NULL OR upper(btrim(i.currency)) ~ '^[A-Z]{3}$')
+       AND ((i.acquired_at >= ($2::date::timestamp AT TIME ZONE $3::text)
+             AND i.acquired_at < (($2::date + 1)::timestamp AT TIME ZONE $3::text)
+             AND (i.acquired_at AT TIME ZONE 'UTC')::time <> time '00:00')
+            OR i.acquired_at = ($2::date::timestamp AT TIME ZONE 'UTC')))
      AS inv_price_sum,
 
   (SELECT count(*) FROM ci.events e
@@ -209,7 +228,8 @@ SELECT
  *  - communications / browser_activity: any row (both produce count metrics)
  *  - position: `location IS NOT NULL`, since a fix with no point yields no
  *    metric (`assembleDailyMetrics` gates n_places/km_traveled on posLoc > 0)
- *  - objects: `purchase_price IS NOT NULL`, which is what spend_total needs
+ *  - objects: `purchase_price IS NOT NULL` in a three-letter currency (or none),
+ *    which is what spend_total needs
  *  - events: the meeting whitelist or `'sleep'`, NOT any event. Dropping that
  *    filter is what made a naive MAX() anchor land on 2026-08-30 on the live
  *    corpus: the only rows there are reddit `moderated_subreddit` records with
@@ -241,10 +261,16 @@ WITH days AS (
        WHERE pos.user_id = $1::uuid
          AND pos.location IS NOT NULL
   UNION
-      SELECT DISTINCT (i.acquired_at AT TIME ZONE $2::text)::date AS day
+      -- A UTC-midnight acquired date is the day it names (see DAILY_AGGREGATE_SQL).
+      SELECT DISTINCT CASE
+               WHEN (i.acquired_at AT TIME ZONE 'UTC')::time = time '00:00'
+                 THEN (i.acquired_at AT TIME ZONE 'UTC')::date
+               ELSE (i.acquired_at AT TIME ZONE $2::text)::date
+             END AS day
         FROM ci.objects i
        WHERE i.user_id::uuid = $1::uuid
          AND i.purchase_price IS NOT NULL
+         AND (i.currency IS NULL OR upper(btrim(i.currency)) ~ '^[A-Z]{3}$')
   UNION
       SELECT DISTINCT (e.start_time AT TIME ZONE $2::text)::date AS day
         FROM ci.events e
@@ -257,7 +283,9 @@ WITH days AS (
               OR e.event_type = 'sleep'
              )
 )
-SELECT day
+-- As text: node-postgres turns a date into local midnight, which reads back as
+-- the day before in UTC on a host east of UTC.
+SELECT to_char(day, 'YYYY-MM-DD') AS day
   FROM days
  WHERE day IS NOT NULL
    AND day <= $3::date

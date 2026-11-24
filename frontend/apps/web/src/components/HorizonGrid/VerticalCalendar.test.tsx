@@ -3,10 +3,11 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { ForecastBucket } from '@/api/useForecastService';
 import type { RhythmDay, ScheduleEvent } from '@/api/useScheduleService';
+import { chipFill } from '@/lib/activityPalette';
 import { EVENT_DRAG_TYPE } from '@/lib/scheduleDrag';
 
 import { addDays, startOfLocalDay } from './nowNext';
-import { VerticalCalendar } from './VerticalCalendar';
+import { GRID_HEIGHT_PX, VerticalCalendar } from './VerticalCalendar';
 
 const MONDAY = startOfLocalDay(new Date(2026, 7, 3));
 
@@ -191,6 +192,67 @@ describe('VerticalCalendar', () => {
     expect(screen.queryByRole('button', { name: /^Show / })).not.toBeInTheDocument();
     expect(screen.getByRole('list', { name: /All day on / })).toBeInTheDocument();
     expect(screen.getByRole('listitem', { name: /August/ })).toBeInTheDocument();
+  });
+
+  it('does not lengthen the day when a bottom sheet covers the grid', () => {
+    render(<VerticalCalendar start={MONDAY} days={1} events={[]} rhythm={[]} liftSelectedHour />);
+
+    expect(screen.getByTestId('vertical-calendar-scroll').className).not.toContain('70vh');
+  });
+});
+
+describe('VerticalCalendar — keeping the scrolled time', () => {
+  it('does not jump back to the morning when the same day is handed in again', () => {
+    const { rerender } = render(<VerticalCalendar start={MONDAY} days={1} events={[]} rhythm={[]} />);
+    const scroller = screen.getByTestId('vertical-calendar-scroll');
+
+    scroller.scrollTop = 900;
+
+    rerender(<VerticalCalendar start={new Date(MONDAY.getTime())} days={1} events={[]} rhythm={[]} />);
+
+    expect(scroller.scrollTop).toBe(900);
+  });
+
+  it('leaves a selected time where it is when that hour is already on screen', () => {
+    const { rerender } = render(<VerticalCalendar start={MONDAY} days={1} events={[]} rhythm={[]} />);
+    const scroller = screen.getByTestId('vertical-calendar-scroll');
+    const sevenPm = (19 / 24) * GRID_HEIGHT_PX;
+
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 800 });
+    scroller.scrollTop = sevenPm - 100;
+
+    rerender(
+      <VerticalCalendar
+        start={MONDAY}
+        days={1}
+        events={[]}
+        rhythm={[]}
+        selectedSlot={{ instant: new Date(2026, 7, 3, 19, 0), allDay: false }}
+      />,
+    );
+
+    expect(scroller.scrollTop).toBe(sevenPm - 100);
+  });
+
+  it('brings a selected time on screen when it is below the pane', () => {
+    const { rerender } = render(<VerticalCalendar start={MONDAY} days={1} events={[]} rhythm={[]} />);
+    const scroller = screen.getByTestId('vertical-calendar-scroll');
+    const sevenPm = (19 / 24) * GRID_HEIGHT_PX;
+
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 200 });
+    scroller.scrollTop = 0;
+
+    rerender(
+      <VerticalCalendar
+        start={MONDAY}
+        days={1}
+        events={[]}
+        rhythm={[]}
+        selectedSlot={{ instant: new Date(2026, 7, 3, 19, 0), allDay: false }}
+      />,
+    );
+
+    expect(scroller.scrollTop).toBe(Math.max(0, sevenPm - 200 / 3));
   });
 });
 
@@ -681,6 +743,39 @@ describe('VerticalCalendar — moving an event without a drag', () => {
   });
 
   /**
+   * The count is all an overlap chip shows. It used to sit on the solid hue as
+   * `text-background mix-blend-difference`, which on the light theme's slate
+   * came out at 1.3:1.
+   */
+  it('draws the overlap count as plain text on the same tint as every other chip', () => {
+    const tick = (id: string, minute: number) =>
+      event({
+        id,
+        title: `Tab ${id}`,
+        sourceSystem: 'ci-browser-extension',
+        startTime: new Date(2026, 7, 3, 9, minute).toISOString(),
+        endTime: new Date(2026, 7, 3, 9, minute + 5).toISOString(),
+      });
+
+    render(
+      <VerticalCalendar
+        start={MONDAY}
+        days={1}
+        events={[tick('a', 0), tick('b', 2), tick('c', 4)]}
+        rhythm={[]}
+      />,
+    );
+
+    const chip = screen.getByRole('listitem', { name: '3 overlapping activities' });
+    const count = within(chip).getByText('3');
+
+    // The border is a color-mix too, so check the fill itself: the chip's own
+    // hue (its accent bar) mixed down with chipFill, as on every other chip.
+    expect(chip.style.backgroundColor).toBe(chipFill(chip.style.borderLeftColor));
+    expect(count.className).not.toMatch(/mix-blend|text-background/);
+  });
+
+  /**
    * A folded event has no chip of its own to grab or to tap, so on a busy day
    * the cluster was a dead end: read the list, and that was all.
    */
@@ -720,6 +815,173 @@ describe('VerticalCalendar — moving an event without a drag', () => {
     expect(at.getDate()).toBe(5);
     expect(at.getHours()).toBe(14);
     expect(at.getMinutes()).toBe(30);
+  });
+});
+
+/**
+ * ═══ A TAP IN THE DIALOG USED TO LAND ON THE CALENDAR BEHIND IT ═══
+ *
+ * The chip's peek dialog is a Radix portal — its DOM sits under `<body>` — but
+ * React bubbles a portal's synthetic events up the COMPONENT tree, and there it
+ * is a child of the day lane. The lane's `onClick` tells a chip tap from a slot
+ * tap by walking the DOM from `event.target` (`isScheduleChip`), and nothing in
+ * `<body>` has a lane or a chip for an ancestor, so every tap on the dialog's
+ * date field, time field, text, X or backdrop read as a tap on the empty slot
+ * under the finger. On the phone that closed the dialog and opened "Add to
+ * calendar" at whatever hour was beneath it (the Move button did both its move
+ * AND the add), so a placed event's time could never be edited.
+ *
+ * The other tests in this file render with no `onSelectSlot`, which is exactly
+ * why none of them could see it.
+ */
+describe('VerticalCalendar — a tap inside a chip dialog is not a tap on the slot behind it', () => {
+  const grid = (props: Partial<React.ComponentProps<typeof VerticalCalendar>>) => (
+    <VerticalCalendar
+      start={MONDAY}
+      days={1}
+      events={[event()]}
+      rhythm={[]}
+      onMoveEvent={() => {}}
+      {...props}
+    />
+  );
+
+  it('does not select a slot when the Move fields, text or X are tapped', () => {
+    const onSelectSlot = vi.fn();
+
+    render(grid({ onSelectSlot }));
+
+    fireEvent.click(screen.getByLabelText(/^Standup,/));
+
+    const dialog = screen.getByRole('dialog');
+
+    fireEvent.click(within(dialog).getByLabelText('Move to time'));
+    fireEvent.click(within(dialog).getByLabelText('Move to date'));
+    fireEvent.click(within(dialog).getByText('Standup'));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+
+    expect(onSelectSlot).not.toHaveBeenCalled();
+  });
+
+  // The backdrop is the dialog's sibling inside the same portal, not part of
+  // its content, so it is its own case: a guard on the content alone misses it.
+  it('does not select a slot when the backdrop is tapped', () => {
+    const onSelectSlot = vi.fn();
+
+    render(grid({ onSelectSlot }));
+
+    fireEvent.click(screen.getByLabelText(/^Standup,/));
+    fireEvent.click(document.querySelector('[data-slot="dialog-overlay"]') as Element);
+
+    expect(onSelectSlot).not.toHaveBeenCalled();
+  });
+
+  it('moves the event without also selecting a slot', () => {
+    const onSelectSlot = vi.fn();
+    const onMove = vi.fn();
+
+    render(grid({ onSelectSlot, onMoveEvent: onMove }));
+
+    fireEvent.click(screen.getByLabelText(/^Standup,/));
+
+    const dialog = screen.getByRole('dialog');
+
+    fireEvent.change(within(dialog).getByLabelText('Move to time'), { target: { value: '16:00' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Move' }));
+
+    expect(onMove).toHaveBeenCalledTimes(1);
+    expect(onMove.mock.calls[0][1].getHours()).toBe(16);
+    expect(onSelectSlot).not.toHaveBeenCalled();
+  });
+
+  it('keeps an all-day event’s dialog off the all-day row behind it', () => {
+    const onSelectSlot = vi.fn();
+
+    render(
+      grid({
+        onSelectSlot,
+        events: [
+          event({
+            id: 'all',
+            title: 'Offsite',
+            isAllDay: true,
+            startTime: MONDAY.toISOString(),
+            endTime: addDays(MONDAY, 1).toISOString(),
+          }),
+        ],
+      }),
+    );
+
+    fireEvent.click(screen.getByRole('listitem', { name: /^Offsite, all day/ }));
+
+    const dialog = screen.getByRole('dialog');
+
+    fireEvent.click(within(dialog).getByLabelText('Move to date'));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+
+    expect(onSelectSlot).not.toHaveBeenCalled();
+  });
+
+  // A folded cluster chip carries one Move form per member, in the same kind of
+  // portal dialog — and busy hours are exactly where a phone needs it most.
+  it('keeps a micro-cluster’s dialog off the slot behind it too', () => {
+    const onSelectSlot = vi.fn();
+    const onMove = vi.fn();
+    const tick = (id: string, title: string, minute: number) =>
+      event({
+        id,
+        title,
+        sourceSystem: 'ci-browser-extension',
+        startTime: new Date(2026, 7, 3, 9, minute).toISOString(),
+        endTime: new Date(2026, 7, 3, 9, minute + 5).toISOString(),
+      });
+
+    render(
+      grid({
+        onSelectSlot,
+        onMoveEvent: onMove,
+        events: [tick('m1', 'Tab one', 0), tick('m2', 'Tab two', 10)],
+      }),
+    );
+
+    fireEvent.click(screen.getByRole('listitem', { name: '2 overlapping activities' }));
+
+    const dialog = screen.getByRole('dialog');
+
+    fireEvent.click(within(dialog).getByLabelText('Move Tab two to time'));
+    fireEvent.change(within(dialog).getByLabelText('Move Tab two to time'), { target: { value: '14:30' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Move Tab two' }));
+
+    expect(onMove).toHaveBeenCalledTimes(1);
+    expect(onSelectSlot).not.toHaveBeenCalled();
+  });
+
+  it('still selects the slot when the empty grid itself is tapped', () => {
+    const onSelectSlot = vi.fn();
+
+    render(grid({ onSelectSlot }));
+
+    fireEvent.click(screen.getByTestId('vertical-day-lane'), { clientY: 0 });
+
+    expect(onSelectSlot).toHaveBeenCalledTimes(1);
+  });
+
+  // ═══ …AND THE PICKER USED TO OPEN BEFORE ANYONE TOUCHED ANYTHING ═══
+  //
+  // Radix focuses the first tabbable thing in a dialog when it opens, and here
+  // that is the date input. Focusing a date input is what raises iOS's picker,
+  // so it covered the screen the instant the dialog appeared. Focus now lands
+  // on the dialog itself — the fields are still one tap or one Tab away.
+  it('opens with focus on the dialog, not on the date field', () => {
+    render(grid({}));
+
+    fireEvent.click(screen.getByLabelText(/^Standup,/));
+
+    const dialog = screen.getByRole('dialog');
+
+    expect(within(dialog).getByLabelText('Move to date')).not.toHaveFocus();
+    expect(within(dialog).getByLabelText('Move to time')).not.toHaveFocus();
+    expect(dialog).toHaveFocus();
   });
 });
 

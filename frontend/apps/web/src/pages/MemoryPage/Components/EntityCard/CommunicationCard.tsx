@@ -6,16 +6,18 @@ import DOMPurify from 'dompurify';
 import parse from 'html-react-parser';
 
 import { gql, useFragment, type FragmentType } from '@/graphql';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 
 import { useEntityService } from '../../useEntityService';
 
+// No `hour12`: the hour cycle is the person's time-format preference, applied by the formatter.
+// en-US already writes 12-hour, so under 'auto' this reads exactly as the forced version did.
 const DATE_FORMAT_OPTIONS: Intl.DateTimeFormatOptions = {
   month: 'short',
   day: 'numeric',
   year: 'numeric',
   hour: 'numeric',
   minute: '2-digit',
-  hour12: true,
 };
 
 interface Props {
@@ -52,6 +54,7 @@ export const COMMUNICATION_FRAGMENT = gql(`
 export function CommunicationCard({ entity }: Props) {
   const [, { setActiveEntity }] = useEntityService();
   const data = useFragment(COMMUNICATION_FRAGMENT, entity);
+  const fmt = useDateTimeFormat();
   const communicationType = data.type as string | undefined;
   const direction = data.direction as string | undefined;
 
@@ -155,7 +158,7 @@ export function CommunicationCard({ entity }: Props) {
       <div className="flex items-center gap-2">
         <Clock className="h-4 w-4 text-muted-foreground flex-shrink-0" />
         <span className="text-sm text-card-foreground">
-          {new Date(data.time).toLocaleString('en-US', DATE_FORMAT_OPTIONS)}
+          {fmt.dateTime(data.time, DATE_FORMAT_OPTIONS, 'en-US')}
         </span>
       </div>
 

@@ -20,6 +20,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { ApplianceAdminGuard } from '@ci/common/guards';
 import { ImportModule } from '@ci/domains/import';
 import { UserModule } from '@ci/domains/user';
 
@@ -39,6 +40,9 @@ import { BlueBubblesSyncService } from './services/BlueBubblesSyncService';
     BlueBubblesClientService,
     BlueBubblesSyncService,
     BlueBubblesSyncCron,
+    // Registered so Nest resolves its DataSource here: the config GET asks it
+    // whether the caller is an administrator rather than being refused by it.
+    ApplianceAdminGuard,
   ],
   // BlueBubblesClientService: consumed by the `messaging.*` AI tools (ToolsModule).
   // BlueBubblesConfigService: consumed nowhere outside this module today, but exported for

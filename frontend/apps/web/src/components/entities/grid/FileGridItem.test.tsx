@@ -27,7 +27,9 @@ function makeFile(overrides: Record<string, unknown> = {}) {
 
 describe('FileGridItem', () => {
   it('renders a thumbnail (prefixed with /static) when a preview exists', () => {
-    const { container } = renderWithProviders(<FileGridItem file={makeFile({ previewUrl: '/p/thumb.jpg' })} />);
+    const { container } = renderWithProviders(
+      <FileGridItem file={makeFile({ previewUrl: '/p/thumb.jpg' })} />,
+    );
 
     expect(container.querySelector('img')).toHaveAttribute('src', '/static/p/thumb.jpg');
   });

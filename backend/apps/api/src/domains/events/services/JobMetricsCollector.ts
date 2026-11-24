@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { LoggerService } from '@ci/common/logging';
+import { countAffected } from '@ci/common/persistence';
 import { Cron } from '@ci/common/schedule';
 
 import { DEAD_LETTER_QUEUE } from '../constants';
@@ -180,8 +181,13 @@ export class JobMetricsCollector {
   async purge(now: Date = new Date()): Promise<void> {
     const cutoff = new Date(now.getTime() - RETENTION_DAYS * 24 * 60 * 60_000);
 
-    const result = await this.metricRepository.manager.query(
-      `DELETE FROM ci.job_metrics WHERE sampled_at < $1`,
+    // Counted through a CTE: a bare DELETE comes back from TypeORM as the pair
+    // `[rows, rowCount]`, so the `.length` this log used to report was 2 on
+    // every run, whatever was removed.
+    const purged = await countAffected(
+      this.metricRepository.manager,
+      `WITH purged AS (DELETE FROM ci.job_metrics WHERE sampled_at < $1 RETURNING 1)
+       SELECT count(*)::int AS count FROM purged`,
       [cutoff],
     );
 
@@ -194,9 +200,7 @@ export class JobMetricsCollector {
       ]);
     }
 
-    this.logger.debug(`Purged job metrics older than ${cutoff.toISOString()}`, {
-      rows: Array.isArray(result) ? result.length : undefined,
-    });
+    this.logger.debug(`Purged job metrics older than ${cutoff.toISOString()}`, { rows: purged });
   }
 
   /**
@@ -296,8 +300,6 @@ export class JobMetricsCollector {
       `
       WITH settled AS (
         SELECT name, state, started_on, completed_on FROM pgboss.job    WHERE completed_on >= $1
-        UNION ALL
-        SELECT name, state, started_on, completed_on FROM pgboss.archive WHERE completed_on >= $1
       )
       SELECT name AS queue,
              COUNT(*) FILTER (WHERE state = 'completed')::int AS completed,
@@ -491,9 +493,6 @@ export class JobMetricsCollector {
       `
       WITH recent AS (
         SELECT name, data, state, created_on, completed_on FROM pgboss.job
-         WHERE created_on >= $1 OR completed_on >= $1
-        UNION ALL
-        SELECT name, data, state, created_on, completed_on FROM pgboss.archive
          WHERE created_on >= $1 OR completed_on >= $1
       )
       SELECT data->>'name' AS event,

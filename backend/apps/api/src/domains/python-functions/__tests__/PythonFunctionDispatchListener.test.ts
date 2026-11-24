@@ -4,7 +4,8 @@ import type { Acknowledgement } from '@ci/domains/events';
 
 import { PythonFunctionDispatchListener } from '../listeners/PythonFunctionDispatchListener';
 import type { PythonFunctionTokenService } from '../services/PythonFunctionTokenService';
-import { PYTHON_FUNCTIONS } from '../types';
+import type { SummaryServiceYieldGate } from '../services/SummaryServiceYieldGate';
+import { PYTHON_FUNCTIONS, PYTHON_RUN_HEARTBEAT_SECONDS } from '../types';
 
 function makeLogger() {
   return {
@@ -25,6 +26,10 @@ const tokens = {
   ),
 } as unknown as PythonFunctionTokenService;
 
+const summaryGate = { handoverFailed: jest.fn() } as unknown as SummaryServiceYieldGate & {
+  handoverFailed: jest.Mock;
+};
+
 // No `jobId` here any more. It was never the domain's field — the event bus
 // used to merge pg-boss's id into every delivered payload, and this listener
 // was the one consumer that legitimately wanted it. It now rides the ack, where
@@ -40,12 +45,19 @@ function makeAck(): Acknowledgement {
   return { jobId: 'job-1', done: jest.fn(), fail: jest.fn(), defer: jest.fn() };
 }
 
-/** A json-capable stand-in for the catalog route, listing every allowlisted name. */
-function catalogResponse(target: 'summary' | 'hbpe' = 'summary') {
+/**
+ * A json-capable stand-in for the catalog route, listing every allowlisted name
+ * and, unless told otherwise, saying the runner sends heartbeats as it does now.
+ */
+function catalogResponse(target: 'summary' | 'hbpe' = 'summary', heartbeats = true) {
   return {
     ok: true,
     status: 200,
-    json: () => Promise.resolve({ functions: [...PYTHON_FUNCTIONS[target]] }),
+    json: () =>
+      Promise.resolve({
+        functions: [...PYTHON_FUNCTIONS[target]],
+        ...(heartbeats ? { heartbeats: true } : {}),
+      }),
   };
 }
 
@@ -71,7 +83,7 @@ describe('PythonFunctionDispatchListener', () => {
 
     global.fetch = fetchMock as unknown as typeof fetch;
 
-    const listener = new PythonFunctionDispatchListener(logger, tokens);
+    const listener = new PythonFunctionDispatchListener(logger, tokens, summaryGate);
     const ack = makeAck();
 
     await listener.dispatchSummary(payload, ack);
@@ -95,6 +107,36 @@ describe('PythonFunctionDispatchListener', () => {
     expect(ack.done).not.toHaveBeenCalled();
   });
 
+  // The hbpe queue fails a job whose heartbeat stops, so its runs must beat;
+  // summary declares no heartbeat window and its runner is not asked to.
+  it('asks the runner for heartbeats only on a queue that watches them', async () => {
+    const fetchMock = jest
+      .fn()
+      .mockImplementation((url: string) =>
+        Promise.resolve(
+          url.endsWith('/functions')
+            ? catalogResponse(url.includes('hbpe') ? 'hbpe' : 'summary')
+            : { ok: true },
+        ),
+      );
+
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const listener = new PythonFunctionDispatchListener(logger, tokens, summaryGate);
+
+    await listener.dispatchHbpe(
+      { target: 'hbpe', function: 'nightly', args: { user_id: 'user-1' }, userId: 'user-1' },
+      makeAck(),
+    );
+    await listener.dispatchSummary(payload, makeAck());
+
+    const [hbpe, summary] = runCalls(fetchMock).map(([, init]) => JSON.parse(String(init.body)));
+
+    expect(hbpe).toMatchObject({ queue: 'py-fn-hbpe', heartbeat_seconds: PYTHON_RUN_HEARTBEAT_SECONDS });
+    expect(summary.queue).toBe('py-fn-summary');
+    expect(summary).not.toHaveProperty('heartbeat_seconds');
+  });
+
   it('takes job_id from the ACK, not from anything the payload happens to carry', async () => {
     // The completion path depends on this exact id: the sidecar echoes it back
     // to PythonFunctionCallbackController, which calls
@@ -108,7 +150,7 @@ describe('PythonFunctionDispatchListener', () => {
     const ack = makeAck();
     ack.jobId = 'pgboss-job-2';
 
-    await new PythonFunctionDispatchListener(logger, tokens).dispatchSummary(
+    await new PythonFunctionDispatchListener(logger, tokens, summaryGate).dispatchSummary(
       { ...payload, jobId: 'a-domain-id-that-must-not-win' } as never,
       ack,
     );
@@ -131,7 +173,7 @@ describe('PythonFunctionDispatchListener', () => {
         ),
       ) as unknown as typeof fetch;
 
-    const listener = new PythonFunctionDispatchListener(logger, tokens);
+    const listener = new PythonFunctionDispatchListener(logger, tokens, summaryGate);
     const ack = makeAck();
 
     await listener.dispatchSummary(payload, ack);
@@ -143,13 +185,32 @@ describe('PythonFunctionDispatchListener', () => {
   it('fails the job when the runner is unreachable', async () => {
     global.fetch = jest.fn().mockRejectedValue(new Error('ECONNREFUSED')) as unknown as typeof fetch;
 
-    const listener = new PythonFunctionDispatchListener(logger, tokens);
+    const listener = new PythonFunctionDispatchListener(logger, tokens, summaryGate);
     const ack = makeAck();
 
     await listener.dispatchHbpe({ ...payload, target: 'hbpe', function: 'nightly' }, ack);
 
     expect(ack.fail).toHaveBeenCalledTimes(1);
     expect(ack.defer).not.toHaveBeenCalled();
+  });
+
+  it('closes the summary gate when a summary dispatch fails, so a backlog stops spending retries', async () => {
+    global.fetch = jest.fn().mockRejectedValue(new Error('ECONNREFUSED')) as unknown as typeof fetch;
+
+    await new PythonFunctionDispatchListener(logger, tokens, summaryGate).dispatchSummary(payload, makeAck());
+
+    expect(summaryGate.handoverFailed).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the summary gate alone when an HBPE dispatch fails', async () => {
+    global.fetch = jest.fn().mockRejectedValue(new Error('ECONNREFUSED')) as unknown as typeof fetch;
+
+    await new PythonFunctionDispatchListener(logger, tokens, summaryGate).dispatchHbpe(
+      { ...payload, target: 'hbpe', function: 'nightly' },
+      makeAck(),
+    );
+
+    expect(summaryGate.handoverFailed).not.toHaveBeenCalled();
   });
 
   describe('function-catalog preflight', () => {
@@ -167,7 +228,7 @@ describe('PythonFunctionDispatchListener', () => {
         return Promise.resolve({ ok: true });
       }) as unknown as typeof fetch;
 
-      const listener = new PythonFunctionDispatchListener(logger, tokens);
+      const listener = new PythonFunctionDispatchListener(logger, tokens, summaryGate);
       const ack = makeAck();
 
       await listener.dispatchHbpe({ ...payload, target: 'hbpe', function: 'nightly' }, ack);
@@ -204,7 +265,7 @@ describe('PythonFunctionDispatchListener', () => {
         return Promise.resolve({ ok: true });
       }) as unknown as typeof fetch;
 
-      const listener = new PythonFunctionDispatchListener(logger, tokens);
+      const listener = new PythonFunctionDispatchListener(logger, tokens, summaryGate);
 
       await listener.dispatchHbpe({ ...payload, target: 'hbpe', function: 'nightly' }, makeAck());
 
@@ -217,6 +278,50 @@ describe('PythonFunctionDispatchListener', () => {
       });
     });
 
+    // A runner older than heartbeats ignores `heartbeat_seconds`, so every hbpe
+    // job is failed a few minutes in and its retries queue more copies of the run.
+    it('logs an ERROR when the HBPE sidecar does not say it sends heartbeats', async () => {
+      global.fetch = jest.fn().mockImplementation((url: string) => {
+        if (url.endsWith('/functions')) {
+          return Promise.resolve(catalogResponse('hbpe', false));
+        }
+
+        if (url.endsWith('/health')) {
+          return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) });
+        }
+
+        return Promise.resolve({ ok: true });
+      }) as unknown as typeof fetch;
+
+      const listener = new PythonFunctionDispatchListener(logger, tokens, summaryGate);
+      const ack = makeAck();
+
+      await listener.dispatchHbpe({ ...payload, target: 'hbpe', function: 'nightly' }, ack);
+
+      expect(logger.error).toHaveBeenCalledTimes(1);
+
+      const [message, meta] = (logger.error as jest.Mock).mock.calls[0] as [string, Record<string, unknown>];
+
+      expect(message).toMatch(/does not send run heartbeats/);
+      expect(meta).toMatchObject({ target: 'hbpe', heartbeatSeconds: 300, version: 'not reported' });
+      expect(ack.defer).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not ask the summary sidecar about heartbeats, which its jobs do not use', async () => {
+      global.fetch = jest
+        .fn()
+        .mockImplementation((url: string) =>
+          Promise.resolve(url.endsWith('/functions') ? catalogResponse('summary', false) : { ok: true }),
+        ) as unknown as typeof fetch;
+
+      await new PythonFunctionDispatchListener(logger, tokens, summaryGate).dispatchSummary(
+        payload,
+        makeAck(),
+      );
+
+      expect(logger.error).not.toHaveBeenCalled();
+    });
+
     it('probes each target once per process, not once per dispatch', async () => {
       const fetchMock = jest
         .fn()
@@ -226,7 +331,7 @@ describe('PythonFunctionDispatchListener', () => {
 
       global.fetch = fetchMock as unknown as typeof fetch;
 
-      const listener = new PythonFunctionDispatchListener(logger, tokens);
+      const listener = new PythonFunctionDispatchListener(logger, tokens, summaryGate);
 
       await Promise.all([
         listener.dispatchSummary(payload, makeAck()),
@@ -252,7 +357,7 @@ describe('PythonFunctionDispatchListener', () => {
 
       global.fetch = fetchMock as unknown as typeof fetch;
 
-      const listener = new PythonFunctionDispatchListener(logger, tokens);
+      const listener = new PythonFunctionDispatchListener(logger, tokens, summaryGate);
       const ack = makeAck();
 
       await listener.dispatchSummary(payload, ack);
@@ -279,7 +384,7 @@ describe('PythonFunctionDispatchListener — what the sidecar is handed', () => 
       .mockResolvedValueOnce({ ok: true, status: 202, text: () => Promise.resolve('') });
     global.fetch = fetchMock as unknown as typeof fetch;
 
-    await new PythonFunctionDispatchListener(logger, tokens).dispatchSummary(payload, makeAck());
+    await new PythonFunctionDispatchListener(logger, tokens, summaryGate).dispatchSummary(payload, makeAck());
 
     // Every call to the sidecar — the catalog preflight included — carries the shared bearer, so
     // a sidecar that refuses unauthenticated requests still lets the dispatcher through.

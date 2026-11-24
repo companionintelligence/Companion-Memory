@@ -120,4 +120,120 @@ describe('GPX & KMLGX datasources', () => {
     expect(collected[0].item.location!.latitude).toBeCloseTo(20.0);
     expect(log).toHaveBeenCalledWith('warn', 'Track timestamp/coord count mismatch', expect.any(Object));
   });
+
+  describe('KMLGX: tracks outside Document > Placemark', () => {
+    // The prefixed, namespaced form real files use: `xmlns:gx` and `<gx:Track>`.
+    const track = (start: string, coords: string[]) =>
+      [
+        '<gx:Track>',
+        '<altitudeMode>absolute</altitudeMode>',
+        ...coords.map((_, i) => `<when>${new Date(Date.parse(start) + i * 30_000).toISOString()}</when>`),
+        ...coords.map((c) => `<gx:coord>${c}</gx:coord>`),
+        '</gx:Track>',
+      ].join('\n');
+    const kml = (body: string) =>
+      [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:gx="http://www.google.com/kml/ext/2.2">',
+        body,
+        '</kml>',
+      ].join('\n');
+
+    async function importKML(content: string): Promise<EmittedGraph[]> {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'test-kml-nested-'));
+      const kmlPath = path.join(tmp, 'tracks.kml');
+      try {
+        fs.writeFileSync(kmlPath, content, 'utf8');
+        const fileImporter = new KMLGXFileImporter();
+        expect((await fileImporter.recognize(undefined, { fullPath: kmlPath } as DirEntry)).confidence).toBe(
+          1,
+        );
+        const { params, collected } = makeParams();
+        await fileImporter.fileImport(undefined, { fullPath: kmlPath } as DirEntry, params);
+
+        return collected;
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    }
+
+    const times = (collected: EmittedGraph[]) => collected.map((g) => g.item.timestamp?.toISOString()).sort();
+
+    it('reads a gx:MultiTrack inside a Placemark inside a Folder', async () => {
+      const collected = await importKML(
+        kml(
+          [
+            '<Document>',
+            '<Placemark><name>Ride</name>',
+            track('2026-08-14T15:30:00Z', ['-122.4783 37.8199 67', '-122.479 37.823 70']),
+            '</Placemark>',
+            '<Folder><name>Ferry building</name>',
+            '<Placemark><name>Ferry walk</name>',
+            '<gx:MultiTrack><altitudeMode>clampToGround</altitudeMode><gx:interpolate>1</gx:interpolate>',
+            track('2026-08-15T18:05:00Z', ['-122.3937 37.7955 4', '-122.3941 37.7949 4']),
+            track('2026-08-15T18:10:00Z', ['-122.3946 37.7943 5']),
+            '</gx:MultiTrack>',
+            '</Placemark>',
+            '</Folder>',
+            '</Document>',
+          ].join('\n'),
+        ),
+      );
+
+      expect(times(collected)).toEqual([
+        '2026-08-14T15:30:00.000Z',
+        '2026-08-14T15:30:30.000Z',
+        '2026-08-15T18:05:00.000Z',
+        '2026-08-15T18:05:30.000Z',
+        '2026-08-15T18:10:00.000Z',
+      ]);
+      const ferry = collected.find((g) => g.item.timestamp?.toISOString() === '2026-08-15T18:05:30.000Z');
+      expect(ferry?.item.location?.latitude).toBeCloseTo(37.7949, 6);
+      expect(ferry?.item.metadata.Altitude).toBe(4);
+    });
+
+    it('reads tracks in nested Folders, a Placemark at the root and a MultiGeometry', async () => {
+      const collected = await importKML(
+        kml(
+          [
+            '<Document>',
+            '<Folder><Folder><Placemark>',
+            track('2026-08-16T08:00:00Z', ['-122.40 37.79 1']),
+            '</Placemark></Folder></Folder>',
+            '<Folder/>',
+            '<Placemark><MultiGeometry>',
+            track('2026-08-16T09:00:00Z', ['-122.41 37.78 2']),
+            '</MultiGeometry></Placemark>',
+            '</Document>',
+            '<Placemark>',
+            track('2026-08-16T10:00:00Z', ['-122.42 37.77 3']),
+            '</Placemark>',
+          ].join('\n'),
+        ),
+      );
+
+      expect(times(collected)).toEqual([
+        '2026-08-16T08:00:00.000Z',
+        '2026-08-16T09:00:00.000Z',
+        '2026-08-16T10:00:00.000Z',
+      ]);
+    });
+
+    it('reads a track under Folders nested deeper than the call stack goes', async () => {
+      const depth = 20_000;
+      const collected = await importKML(
+        kml(
+          [
+            '<Folder>'.repeat(depth),
+            '<Placemark>',
+            track('2026-08-17T07:00:00Z', ['-122.43 37.76 1', '-122.44 37.75 2']),
+            '</Placemark>',
+            '</Folder>'.repeat(depth),
+          ].join('\n'),
+        ),
+      );
+
+      expect(times(collected)).toEqual(['2026-08-17T07:00:00.000Z', '2026-08-17T07:00:30.000Z']);
+    });
+  });
 });

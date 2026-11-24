@@ -43,6 +43,8 @@ describe('McpToolService — a queued action keeps its identity', () => {
     const registry = {
       getAgentFacingTools: () => [nativeIntent],
       getOutboundCatalogTools: () => [nativeIntent],
+      getOutboundCatalogToolsForEveryOwner: () => [nativeIntent],
+      isToolVisibleTo: () => true,
       getRegisteredToolNames: () => [nativeIntent.name],
       executeTool: jest.fn().mockResolvedValue(executeResult),
       recordInvocation: jest.fn().mockResolvedValue(undefined),
@@ -54,6 +56,8 @@ describe('McpToolService — a queued action keeps its identity', () => {
       registry as never,
       {} as unknown as McpExecutorService,
       logger as never,
+      { evaluate: async () => ({ decision: 'execute', reason: 'allowed', explanation: 'open' }) } as never,
+      { register: () => undefined } as never,
     );
 
     service.onModuleInit();

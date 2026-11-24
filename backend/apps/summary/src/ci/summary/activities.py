@@ -18,7 +18,7 @@ import structlog
 nest_asyncio.apply()
 
 from .action_aggregator import action_aggregator
-from .config import settings
+from .config import resolve_output_mode, settings
 from .data_aggregator import aggregator
 from .database import db
 from .insight_aggregator import insight_aggregator
@@ -726,7 +726,7 @@ async def generate_insights_activity(
             "insights_generation_failed_nonfatal error=%s error_type=%s output_mode=%s",
             exc,
             type(exc).__name__,
-            settings.output_mode,
+            resolve_output_mode(),
             exc_info=True,
         )
         return {
@@ -771,7 +771,7 @@ async def generate_single_insight_activity(
             "single_insight_generation_failed_nonfatal error=%s error_type=%s output_mode=%s",
             exc,
             type(exc).__name__,
-            settings.output_mode,
+            resolve_output_mode(),
             exc_info=True,
         )
         return {
@@ -838,7 +838,7 @@ async def generate_actions_activity(
             "actions_generation_failed_nonfatal error=%s error_type=%s output_mode=%s",
             exc,
             type(exc).__name__,
-            settings.output_mode,
+            resolve_output_mode(),
             exc_info=True,
         )
         return {

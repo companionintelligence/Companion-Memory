@@ -10,6 +10,10 @@ import {
   type BulkInsertResult,
   bulkInsertIdempotent,
   computeChunkSize,
+  keysetSeek,
+  OWNED_TABLES,
+  type OwnedLink,
+  refuseForeignLinks,
 } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 import { ObjectIdentifierService } from '@ci/domains/graph/services/ObjectIdentifierService';
@@ -55,6 +59,34 @@ const RECEIPT_BROWSE_TIME = 'COALESCE(receipt.purchased_at, receipt.updated_at)'
 /** The `receipts_source_identity_uniq` arbiter. */
 const SOURCE_IDENTITY_CONFLICT_TARGET =
   '(owner_user_id, source_system, source_id) WHERE source_id IS NOT NULL';
+
+/** The header columns that name another row, as a create, an update or an extraction carries them. */
+interface ReceiptLinkFields {
+  merchantEntityId?: string | null;
+  placeEntityId?: string | null;
+  eventId?: string | null;
+  documentContentId?: string | null;
+  sourceFileId?: string | null;
+}
+
+/**
+ * What a receipt header links to, for {@link refuseForeignLinks}.
+ *
+ * The keys on `merchant_entity_id`, `place_entity_id` and `event_id` only ask
+ * that the row exists, and `document_content_id` and `source_file_id` have
+ * none, so `/v1/receipts` stored a receipt at another account's place when it
+ * was handed that id. These are the receipt links an import of the account's
+ * export checks (`UserDataPortabilityService.refuseLinksOutOfAccount`).
+ */
+function receiptLinks(rows: readonly ReceiptLinkFields[]): OwnedLink[] {
+  return [
+    { field: 'merchant_entity_id', ...OWNED_TABLES.entities, ids: rows.map((row) => row.merchantEntityId) },
+    { field: 'place_entity_id', ...OWNED_TABLES.entities, ids: rows.map((row) => row.placeEntityId) },
+    { field: 'event_id', ...OWNED_TABLES.events, ids: rows.map((row) => row.eventId) },
+    { field: 'document_content_id', ...OWNED_TABLES.content, ids: rows.map((row) => row.documentContentId) },
+    { field: 'source_file_id', ...OWNED_TABLES.files, ids: rows.map((row) => row.sourceFileId) },
+  ];
+}
 
 /**
  * Confidence written onto an identifier claim promoted off a receipt line, by
@@ -240,6 +272,8 @@ export class ReceiptService {
   }
 
   async create(context: UserServiceContext, dto: CreateReceiptDto): Promise<Receipt> {
+    await refuseForeignLinks(this.receiptRepository.manager, context.userId, receiptLinks([dto]), 'receipt');
+
     return this.receiptRepository.save(this.toEntity(context, dto));
   }
 
@@ -256,6 +290,8 @@ export class ReceiptService {
     if (dtos.length === 0) {
       return [];
     }
+
+    await refuseForeignLinks(this.receiptRepository.manager, context.userId, receiptLinks(dtos), 'receipt');
 
     return bulkInsertIdempotent({
       repository: this.receiptRepository,
@@ -365,9 +401,14 @@ export class ReceiptService {
       qb.andWhere('receipt.user_id = :userId', { userId: context.userId });
     }
 
-    if (filter.merchantName != null) {
-      qb.andWhere('lower(btrim(receipt.merchant_name)) = lower(btrim(:merchantName))', {
-        merchantName: filter.merchantName,
+    // A search box, not a lookup key: Receipts' "Search by merchant..." is the
+    // only caller, and "amaz" has to find Amazon. Case-insensitive substring,
+    // with the LIKE wildcards in what was typed matched literally.
+    const merchantQuery = filter.merchantName?.trim();
+
+    if (merchantQuery) {
+      qb.andWhere('receipt.merchant_name ILIKE :merchantPattern', {
+        merchantPattern: `%${merchantQuery.replace(/[\\%_]/g, (char) => `\\${char}`)}%`,
       });
     }
 
@@ -482,19 +523,17 @@ export class ReceiptService {
       query = query.andWhere(`${RECEIPT_BROWSE_TIME} <= :endTime`, { endTime: options.endTime });
     }
 
-    // Composite keyset: page strictly past (afterTime, afterId) in
-    // (browse time DESC, receipt_id DESC) — see ItemService.getEntitiesForItems.
+    // Composite keyset: page strictly past (afterTime, afterId) in (browse time, receipt_id), in
+    // `order` — see keysetSeek.
+    const order = options.order ?? 'DESC';
+
     if (options.afterTime && options.afterId) {
       query = query.andWhere(
-        `(${RECEIPT_BROWSE_TIME} < :afterTime
-          OR (${RECEIPT_BROWSE_TIME} = :afterTime AND receipt.receipt_id < :afterId))`,
-        { afterTime: options.afterTime, afterId: options.afterId },
+        ...keysetSeek(RECEIPT_BROWSE_TIME, 'receipt.receipt_id', order, options.afterTime, options.afterId),
       );
     }
 
-    query = query
-      .orderBy(RECEIPT_BROWSE_TIME, options.order ?? 'DESC')
-      .addOrderBy('receipt.receipt_id', 'DESC');
+    query = query.orderBy(RECEIPT_BROWSE_TIME, order).addOrderBy('receipt.receipt_id', order);
 
     if (options.limit) {
       query = query.limit(options.limit);
@@ -576,6 +615,8 @@ export class ReceiptService {
       return this.findById(context, id);
     }
 
+    await this.refuseForeignHeaderLinks(context, id, patch);
+
     // TypeORM's update builder types a jsonb `Record<string, unknown>` column as
     // a deep-partial it cannot accept; the same cast ItemService.update carries.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -586,6 +627,35 @@ export class ReceiptService {
     await this.eventService.send(ReceiptUpdatedEvent, { receiptId: id });
 
     return this.findById(context, id);
+  }
+
+  /**
+   * {@link refuseForeignLinks} for an update: the links have to belong to the receipt's
+   * account, `user_id`, the column {@link userScope} and the import scope receipts by. That is
+   * also how a system context, with no user of its own, is checked. `owner_user_id` can be
+   * NULL (an import keeps the archive's NULL), which would leave the links unchecked. A receipt
+   * the caller cannot see is left to the update, which answers null for it, so the refusal
+   * never answers for another account's receipt.
+   */
+  private async refuseForeignHeaderLinks(
+    context: ServiceContext,
+    id: string,
+    patch: ReceiptLinkFields,
+  ): Promise<void> {
+    const links = receiptLinks([patch]);
+
+    if (links.every(({ ids }) => ids.every((value) => value == null))) {
+      return;
+    }
+
+    const row = await this.receiptRepository.findOne({
+      select: { id: true, userId: true },
+      where: { id, ...this.userScope(context) },
+    });
+
+    if (row) {
+      await refuseForeignLinks(this.receiptRepository.manager, row.userId, links, 'receipt');
+    }
   }
 
   /**
@@ -617,6 +687,20 @@ export class ReceiptService {
     manager?: EntityManager,
   ): Promise<ReceiptLineItem[]> {
     const em = manager ?? this.lineRepository.manager;
+
+    // A line's key into ci.product_models only asks that the product exists.
+    await refuseForeignLinks(
+      em,
+      context.userId,
+      [
+        {
+          field: 'line_items.product_id',
+          ...OWNED_TABLES.productModels,
+          ids: lines.map((line) => line.productId),
+        },
+      ],
+      'receipt',
+    );
 
     // Collapse within-batch repeats before the statement runs: two rows sharing
     // a conflict target make Postgres abort the WHOLE chunk with "ON CONFLICT
@@ -981,6 +1065,8 @@ export class ReceiptService {
     em: EntityManager,
   ): Promise<ReceiptEntity> {
     const repository = em.withRepository(this.receiptRepository);
+
+    await refuseForeignLinks(em, context.userId, receiptLinks([extraction]), 'receipt');
 
     const existing =
       // Identity is (source_system, source_id) — source_type is provenance

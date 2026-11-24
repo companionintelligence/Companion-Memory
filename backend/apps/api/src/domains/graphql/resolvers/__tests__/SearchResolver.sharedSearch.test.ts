@@ -20,6 +20,7 @@ const EMPTY_CONNECTION: SearchResultConnection = {
   pageInfo: { hasNextPage: false, hasPreviousPage: false, startCursor: null, endCursor: null },
   totalCount: 0,
   matchingTags: [],
+  nameSortCutShort: false,
 };
 
 function makeResolver() {
@@ -156,6 +157,7 @@ describe('SearchResolver — shared search (runSharedSearch)', () => {
         semantic: true,
         sortBy: 'time',
         sortOrder: 'desc',
+        areas: [[165.5, -47.5, 179.5, -33.5]],
       },
     });
 
@@ -164,6 +166,7 @@ describe('SearchResolver — shared search (runSharedSearch)', () => {
     const [serviceContext, input] = execSpy.mock.calls[0];
     expect(serviceContext).toEqual({ userId: 'owner-9' });
     expect(input.eventTypes).toEqual(['visited']);
+    expect(input.areas).toEqual([[165.5, -47.5, 179.5, -33.5]]);
     expect(input.startTime).toBe('2024-01-01');
     expect(input.endTime).toBe('2024-12-31');
     expect(input.connectors).toEqual(['gmail']);
@@ -174,6 +177,21 @@ describe('SearchResolver — shared search (runSharedSearch)', () => {
     // Viewer didn't choose a sort, so the owner's saved sort applies.
     expect(input.sortBy).toBe('time');
     expect(input.sortOrder).toBe('desc');
+  });
+
+  it('reads a legacy single bbox as one area, so rows saved before the list keep their rectangle', async () => {
+    const { resolver, savedSearchService, execSpy } = makeResolver();
+    savedSearchService.findByShareToken.mockResolvedValue({
+      userId: 'owner-9',
+      query: null,
+      entityTypes: [],
+      tags: [],
+      filters: { bbox: [122.5, 24, 146.5, 46], view: 'map' },
+    });
+
+    await resolver.search(viewerCtx, { shareToken: 'tok', first: 10 } as SearchInput);
+
+    expect(execSpy.mock.calls[0][1].areas).toEqual([[122.5, 24, 146.5, 46]]);
   });
 
   it('lets a viewer override only sort over the saved sort, never the filters', async () => {
@@ -393,6 +411,35 @@ describe('SearchResolver — shared search (runSharedSearch)', () => {
     const [, input] = execSpy.mock.calls[0];
     expect(input.after).toBe('cur-2');
   });
+
+  it.each([
+    ['a redacted ceiling', 'redacted', false],
+    ['a full ceiling', 'full', true],
+    ['no ceiling', undefined, true],
+  ] as const)(
+    'says a name sort was cut short only to a reader who may page the whole list (%s)',
+    async (_label, ceiling, told) => {
+      const { resolver, savedSearchService, sharedSearchConsentService, execSpy } = makeResolver();
+      savedSearchService.findByShareToken.mockResolvedValue({
+        id: 'saved-7',
+        userId: 'owner-9',
+        query: null,
+        entityTypes: [],
+        tags: [],
+      });
+      sharedSearchConsentService.authorize.mockResolvedValue({ grantId: 'grant-1', ceiling });
+      execSpy.mockResolvedValue({
+        ...EMPTY_CONNECTION,
+        edges: [{ cursor: 'c1', node: { id: 'note-1' } }],
+        totalCount: 501,
+        nameSortCutShort: true,
+      } as unknown as SearchResultConnection);
+
+      const result = await resolver.search(viewerCtx, { shareToken: 'tok', sortBy: 'name' } as SearchInput);
+
+      expect(result.nameSortCutShort).toBe(told);
+    },
+  );
 
   it('audits what CROSSED separately from what the answer was computed over', async () => {
     const { resolver, savedSearchService, sharedSearchConsentService, execSpy } = makeResolver();

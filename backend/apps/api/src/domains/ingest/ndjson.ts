@@ -1,6 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import type { Request } from 'express';
-import type { z } from 'zod';
+import type { z } from 'zod/v3';
 
 /**
  * NDJSON streaming for the `/v1` bulk-ingest routes.

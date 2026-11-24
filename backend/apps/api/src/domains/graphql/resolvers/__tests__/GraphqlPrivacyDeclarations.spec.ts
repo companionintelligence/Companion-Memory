@@ -7,6 +7,7 @@ import type { GraphQLSchema } from 'graphql';
 
 import { GRAPHQL_PRIVACY_EXTENSION, type IntentPrivacy } from '@ci/domains/tools';
 
+import { JsonObjectScalar } from '../../scalars/JsonObjectScalar';
 import { PersonResolver } from '../PersonResolver';
 import { ScheduleCandidateResolver } from '../ScheduleCandidateResolver';
 import { TaskResolver } from '../TaskResolver';
@@ -99,7 +100,7 @@ describe('the three originally-flagged mutations, against the real resolvers', (
 
     schema = await app
       .get(GraphQLSchemaFactory)
-      .create([TaskResolver, ScheduleCandidateResolver, PersonResolver]);
+      .create([TaskResolver, ScheduleCandidateResolver, PersonResolver], [JsonObjectScalar]);
 
     await app.close();
   });

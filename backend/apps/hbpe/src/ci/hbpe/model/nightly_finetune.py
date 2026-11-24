@@ -17,16 +17,32 @@ from __future__ import annotations
 
 import datetime
 import logging
+import math
 
 import torch
 import torch.nn.functional as F
 from torch.optim import AdamW
 
 from ci.hbpe.model.calibration import _build_full_batch
-from ci.hbpe.model.checkpoints import user_ckpt_dir
+from ci.hbpe.model.checkpoints import (
+    HMT_CALIBRATED,
+    architecture_fingerprint,
+    l1_vocab_fingerprint,
+    user_ckpt_dir,
+)
 from ci.hbpe.model.dataset import TokenStreamDataset
 from ci.hbpe.model.evaluator import _load_calibrated
 from ci.hbpe.model.lora import apply_lora, load_adapter, save_adapter
+from ci.hbpe.model.train_io import (
+    AdapterMismatch,
+    adapter_meta,
+    archive_previous,
+    file_digest,
+    is_finite,
+    mean_step_loss,
+    resolve_device,
+    seed_everything,
+)
 from ci.hbpe.model.vocab import (
     EOD_IDX,
     PAD_IDX,
@@ -54,12 +70,9 @@ def fine_tune_nightly(
     Returns a report dict with keys:
       date, n_days, n_l0_tokens, n_l1_tokens, loss, adapter_path
     """
-    if device is None:
-        device = (
-            "cuda"
-            if torch.cuda.is_available()
-            else ("mps" if torch.backends.mps.is_available() else "cpu")
-        )
+    device = resolve_device(device)
+    # Same user, same day, same data gives the same adapter.
+    seed_everything(date.toordinal())
 
     l0_vocab = build_l0_vocab()
     l1_vocab = build_l1_vocab(user_id)
@@ -71,12 +84,29 @@ def fine_tune_nightly(
     apply_lora(model)
 
     # ── Load existing adapter if present ──────────────────────────────────────
-    adapter_path = user_ckpt_dir(user_id, create=True) / f"lora_{user_id}.pt"
+    ckpt_dir = user_ckpt_dir(user_id, create=True)
+    adapter_path = ckpt_dir / f"lora_{user_id}.pt"
+    # An adapter is only valid against the base it was trained on. A retrained
+    # base (bootstrap) or a grown model leaves the old adapter stale.
+    meta = adapter_meta(
+        architecture=architecture_fingerprint(),
+        l1_vocab_fingerprint=l1_vocab_fingerprint(l1_vocab),
+        base_digest=file_digest(ckpt_dir / HMT_CALIBRATED),
+    )
     if adapter_path.exists():
-        load_adapter(model, adapter_path)
-        log.info("Resumed adapter from %s", adapter_path)
+        try:
+            load_adapter(model, adapter_path, strict=True, expect=meta)
+            log.info("Resumed adapter from %s", adapter_path)
+        except AdapterMismatch as exc:
+            kept = archive_previous(adapter_path)
+            log.warning(
+                "Stale adapter for %s (%s); archived to %s, restarting from zero delta",
+                user_id,
+                exc,
+                kept,
+            )
     else:
-        log.info("No prior adapter found — starting from zero delta")
+        log.info("No prior adapter found, starting from zero delta")
 
     # ── Dataset: single day ────────────────────────────────────────────────────
     ds = TokenStreamDataset(user_id, [date])
@@ -100,6 +130,8 @@ def fine_tune_nightly(
     total_loss = 0.0
     n_l0_tokens = 0
     n_l1_tokens = 0
+    n_steps = 0
+    n_skipped = 0
 
     for day_tokens in ds:
         batch = _build_full_batch(day_tokens, l0_vocab, l1_vocab, device)
@@ -136,29 +168,46 @@ def fine_tune_nightly(
                 n_l1_tokens += int(valid1.sum())
 
         if loss.item() > 0:
+            if not torch.isfinite(loss):
+                n_skipped += 1
+                log.warning("Non-finite loss on %s, skipping step", date)
+                continue
             loss.backward()
             torch.nn.utils.clip_grad_norm_(adapter_params, max_norm=1.0)
             optimizer.step()
             total_loss += loss.item()
+            n_steps += 1
 
-    mean_loss = total_loss / max(n_l0_tokens + n_l1_tokens, 1)
+    mean_loss = mean_step_loss(total_loss, n_steps)
     log.info(
-        "Nightly fine-tune — date=%s  L0=%d  L1=%d  loss=%.4f",
+        "Nightly fine-tune, date=%s  L0=%d  L1=%d  steps=%d  loss=%s",
         date,
         n_l0_tokens,
         n_l1_tokens,
-        mean_loss,
+        n_steps,
+        f"{mean_loss:.4f}" if mean_loss is not None else "n/a",
     )
 
     # ── Save updated adapter ───────────────────────────────────────────────────
+    # Never replace a good adapter with one from a run that took no steps or
+    # produced a non-finite loss. Keep the previous version for rollback.
     model.eval()
-    save_adapter(model, adapter_path)
+    saved = False
+    if n_steps > 0 and is_finite(mean_loss) and math.isfinite(total_loss):
+        archive_previous(adapter_path)
+        save_adapter(model, adapter_path, meta=meta)
+        saved = True
+    else:
+        log.warning("Adapter for %s left unchanged (steps=%d)", user_id, n_steps)
 
     return {
         "date": str(date),
         "n_days": 1,
         "n_l0_tokens": n_l0_tokens,
         "n_l1_tokens": n_l1_tokens,
+        "steps": n_steps,
+        "skipped_nonfinite": n_skipped,
         "loss": mean_loss,
+        "saved": saved,
         "adapter_path": str(adapter_path),
     }

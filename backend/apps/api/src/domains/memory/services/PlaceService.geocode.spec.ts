@@ -37,8 +37,8 @@ function makeHarness(options: {
   readBackMisses?: boolean;
   /** place_id rows served AFTER the read-back miss (the race winner). */
   raceWinnerRows?: Array<{ entity_id: string }>;
-  /** Serve an existing unparented admin node for the adoption UPDATE. */
-  adoptedAdminId?: string | null;
+  /** An existing unparented admin node of this kind, served to the adoption UPDATE. */
+  adoptedAdmin?: { kind: string; id: string } | null;
   /** Same-name Location within the merge radius (step 1b). */
   nearbySameNameRows?: Array<{ entity_id: string }>;
 }): Harness {
@@ -64,7 +64,15 @@ function makeHarness(options: {
     }
 
     if (sql.includes('SET parent_place_id = $4') && sql.includes('parent_place_id IS NULL')) {
-      return options.adoptedAdminId ? [{ entity_id: options.adoptedAdminId }] : [];
+      const adopted =
+        options.adoptedAdmin && params?.[1] === options.adoptedAdmin.kind
+          ? [{ entity_id: options.adoptedAdmin.id }]
+          : [];
+
+      // As TypeORM's Postgres runner answers: rows for a SELECT (the CTE the
+      // service wraps the adoption in), the PAIR [rows, rowCount] for a bare
+      // UPDATE … RETURNING — whose `[0].entity_id` is undefined.
+      return /^\s*WITH\b/.test(sql) ? adopted : [adopted, adopted.length];
     }
 
     if (sql.includes('was_new')) {
@@ -304,7 +312,12 @@ describe('PlaceService.findOrCreateForGeocode (place_id + hierarchy)', () => {
     // A prior resolution created "Mountain View" with no parent (partial
     // address_components); this one knows the region, so the existing node must
     // be re-parented, not duplicated.
-    const harness = makeHarness({ wasNew: true, adoptedAdminId: 'admin:city:mountain view' });
+    // An id the admin read-back never echoes, so only a real adoption can put
+    // it under the venue.
+    const harness = makeHarness({
+      wasNew: true,
+      adoptedAdmin: { kind: 'city', id: 'adopted:mountain-view' },
+    });
 
     await harness.service.findOrCreateForGeocode(CONTEXT, {
       name: 'Googleplex',
@@ -315,9 +328,15 @@ describe('PlaceService.findOrCreateForGeocode (place_id + hierarchy)', () => {
 
     const adoptions = statementsMatching(harness, 'parent_place_id IS NULL');
     expect(adoptions.length).toBeGreaterThan(0);
+    // The city is adopted under the region, not minted again.
+    const cityAdoption = adoptions.find((statement) => statement.params?.[1] === 'city');
+    expect(cityAdoption?.params?.[3]).toBe('admin:region:california');
+    expect(
+      statementsMatching(harness, 'COALESCE(parent_place_id,').map((statement) => statement.params?.[1]),
+    ).toEqual(['country', 'region']);
     // The venue hangs under the adopted city node.
     const parentLink = statementsMatching(harness, 'SET parent_place_id = $3');
-    expect(parentLink[0].params?.[2]).toBe('admin:city:mountain view');
+    expect(parentLink[0].params?.[2]).toBe('adopted:mountain-view');
   });
 
   it('skips hierarchy quietly when no components are available', async () => {

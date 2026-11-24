@@ -120,6 +120,46 @@ describe('EntityMedia load failure', () => {
   });
 });
 
+describe('EntityMedia download', () => {
+  it('offers a download of a file held in our own store', () => {
+    render(<EntityMedia src={ORIGINAL} contentType="image/jpeg" alt="beach.jpg" />);
+
+    const link = screen.getByRole('link', { name: 'Download' });
+    expect(link).toHaveAttribute('href', ORIGINAL);
+    expect(link).toHaveAttribute('download', 'beach.jpg');
+  });
+
+  it('saves the original, not the playback rendition, for a video', () => {
+    render(
+      <EntityMedia
+        src="/static/companion/clip-h264.mp4"
+        contentType="video/mp4"
+        alt="clip"
+        fallbackHref="/static/companion/clip.mov"
+      />,
+    );
+
+    expect(screen.getByRole('link', { name: 'Download' })).toHaveAttribute(
+      'href',
+      '/static/companion/clip.mov',
+    );
+  });
+
+  // `download` is ignored cross-origin: the link would navigate, not save.
+  it('offers none for media served from somewhere else', () => {
+    render(
+      <EntityMedia
+        src="https://photos.google.com/photo/abc"
+        contentType="image/jpeg"
+        alt="photo"
+        fallbackHref="https://photos.google.com/photo/abc"
+      />,
+    );
+
+    expect(screen.queryByRole('link', { name: 'Download' })).not.toBeInTheDocument();
+  });
+});
+
 describe('EntityMedia video with a playback rendition', () => {
   // The drawer hands the element the server's H.264 rendition as `src` and the
   // original as `fallbackHref`, so what plays is the rendition and what the
@@ -134,6 +174,11 @@ describe('EntityMedia video with a playback rendition', () => {
         fallbackHref="/static/companion/clip.mov"
       />,
     );
+
+    expect(screen.getByRole('img', { name: 'clip' })).toHaveAttribute('src', '/static/companion/poster.jpg');
+    expect(container.querySelector('video')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Play' }));
 
     const video = container.querySelector('video');
     expect(video).toHaveAttribute('src', '/static/companion/clip-h264.mp4');
@@ -160,6 +205,9 @@ describe('EntityMedia video the browser cannot decode', () => {
         alt="clip"
       />,
     );
+
+    expect(screen.getByRole('img', { name: 'clip' })).toHaveAttribute('src', '/static/companion/poster.jpg');
+    fireEvent.click(screen.getByRole('button', { name: 'Play' }));
 
     const video = container.querySelector('video');
     expect(video).toHaveAttribute('poster', '/static/companion/poster.jpg');
@@ -189,6 +237,7 @@ describe('EntityMedia video the browser cannot decode', () => {
       />,
     );
 
+    fireEvent.click(screen.getByRole('button', { name: 'Play' }));
     failWith(container.querySelector('video')!, 2);
 
     expect(screen.getByRole('status')).toHaveTextContent("Media couldn't be loaded");
@@ -249,6 +298,7 @@ describe('EntityMedia decode failure', () => {
       </MediaRefreshProvider>,
     );
 
+    fireEvent.click(screen.getByRole('button', { name: 'Play' }));
     failWith(container.querySelector('video')!, 3);
     await act(async () => {});
 

@@ -1,6 +1,6 @@
 import { type ReactNode, useState } from 'react';
 
-import { useMutation, useQuery } from '@apollo/client';
+import { useMutation, useQuery } from '@apollo/client/react';
 import { GlobalUID, LoadingPage, usePageTitle, EmptyState } from '@ci/common';
 import { Card, Label } from '@ci/shadcn';
 import { useParams } from 'react-router-dom';
@@ -97,7 +97,7 @@ export function PlacePage() {
     }
   };
 
-  let content: ReactNode | null = null;
+  let content: ReactNode | null;
 
   if (loading) {
     content = <LoadingPage />;

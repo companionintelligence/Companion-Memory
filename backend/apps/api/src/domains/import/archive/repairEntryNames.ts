@@ -41,6 +41,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { stripListedSymlinks } from './containment';
 import type { ZipEntry } from './zipDirectory';
 import { canExtractZipEntry, extractZipEntry, readZipDirectory } from './zipDirectory';
 
@@ -249,9 +250,13 @@ export function repairEntryNames(
     }
 
     // Already correct — `ditto`, or an `unzip` with charset support, got here
-    // first. Nothing to do and nothing to sweep.
+    // first. Nothing to do and nothing to sweep. `lstat`, so a link at the true
+    // name is seen as a link: that is the extractor restoring one of the
+    // archive's link entries (removed below, before anything is written), and
+    // this pass never turns a link into a file.
     try {
-      if (fs.statSync(target).size === entry.uncompressedSize) {
+      const existing = fs.lstatSync(target);
+      if (existing.isSymbolicLink() || existing.size === entry.uncompressedSize) {
         continue;
       }
     } catch {
@@ -270,6 +275,17 @@ export function repairEntryNames(
     return { repaired: 0, unrepaired, removed: 0 };
   }
 
+  // The extractor restores the archive's link entries as real links, and the
+  // callers only remove them after this returns. Take them out first: one of
+  // them can sit on the way to a true name (`dé` a link, `dé/x.json` an entry),
+  // and the writes below would otherwise go wherever it points. A link this
+  // archive did not list is not ours to delete; extractZipEntry refuses to
+  // write through it instead.
+  stripListedSymlinks(
+    destDir,
+    entries.map((e) => e.nameBytes.toString('utf8')),
+  );
+
   let repaired = 0;
   let fd: number;
   try {
@@ -280,7 +296,7 @@ export function repairEntryNames(
 
   try {
     for (const { entry, target } of pending) {
-      if (extractZipEntry(fd, entry, target)) {
+      if (extractZipEntry(fd, entry, target, destDir)) {
         repaired += 1;
       } else {
         unrepaired += 1;

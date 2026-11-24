@@ -6,6 +6,7 @@ import { v7 as uuidv7 } from 'uuid';
 
 import { LoggerService } from '@ci/common/logging';
 import {
+  importRootsCallerFor,
   ImportRunService,
   PathOutsideImportRootsError,
   resolveWithinImportRoots,
@@ -55,15 +56,18 @@ export class ImportPathTool extends BaseTool<ImportPathInput, unknown> {
     description:
       'Start importing an archive the appliance can see on disk. Returns a run id immediately — ' +
       'the import continues in the background across three stages. Use import.run_status to follow ' +
-      'it. Re-importing the same archive is safe and creates no duplicates. Only paths under the ' +
-      'configured import roots or your own import-inbox folder may be imported.',
+      'it. Re-importing the same archive is safe and creates no duplicates. Only paths in your own ' +
+      'import-inbox folder may be imported, plus the configured import roots when you are the ' +
+      'appliance administrator.',
     category: 'database',
     parameters: {
       type: 'object',
       properties: {
         path: {
           type: 'string',
-          description: 'Absolute path to the archive, within a configured import root.',
+          description:
+            'Absolute path to the archive, within your import-inbox folder or (administrator only) a ' +
+            'configured import root.',
         },
         label: {
           type: 'string',
@@ -93,13 +97,14 @@ export class ImportPathTool extends BaseTool<ImportPathInput, unknown> {
       throw new Error('path is required');
     }
 
-    // The caller's email scopes which inbox subtree they may read — their own.
+    // The caller's account scopes which inbox subtree they may read — their
+    // own — and only the administrator reaches the configured roots.
     const user = await this.users.findById({ userId: context.userId }, context.userId);
 
     let resolved: string;
 
     try {
-      resolved = await resolveWithinImportRoots(input.path, user?.email ?? null);
+      resolved = await resolveWithinImportRoots(input.path, importRootsCallerFor(user));
     } catch (err) {
       if (err instanceof PathOutsideImportRootsError) {
         return { started: false, reason: err.message };

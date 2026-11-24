@@ -1,5 +1,9 @@
 import { ThreadIcon } from '@/components/icons';
 import { gql, useFragment, type FragmentType } from '@/graphql';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+import { threadNodeLabel } from '@/pages/ChatPage/useRecentThreads';
+
+import { SearchResultRow } from './SearchResultRow';
 
 export const THREAD_FRAGMENT = gql(`
   fragment SearchResultThreadData on ThreadType {
@@ -15,14 +19,7 @@ interface Props {
 
 export function ThreadResult({ thread }: Props) {
   const data = useFragment(THREAD_FRAGMENT, thread);
+  const fmt = useDateTimeFormat();
 
-  return (
-    <div className="flex items-center justify-between gap-2">
-      <div className="flex items-center gap-2">
-        <ThreadIcon />
-        <div className="font-medium truncate">{data.name}</div>
-      </div>
-      <div className="text-muted-foreground">Thread</div>
-    </div>
-  );
+  return <SearchResultRow icon={<ThreadIcon />} title={threadNodeLabel(data, fmt)} kind="Thread" />;
 }

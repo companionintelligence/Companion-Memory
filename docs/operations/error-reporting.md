@@ -58,9 +58,11 @@ by every Python service) implement the same rules:
 - Home directories (`/Users/<name>`, `/home/<name>`, `C:\Users\<name>`) → `~`,
   since they leak the account name
 - Object and header keys matching
-  `password|secret|token|authorization|cookie|jwt|api[-_ ]?key|dsn|pepper|private[-_]?key|signature`
+  `password|secret|token|authorization|cookie|jwt|api[-_ ]?key|dsn|pepper|private[-_]?key|signature|assertion`
   → `[Filtered]`. The hyphenated form matters: `x-api-key` is the API's own
   key header, and the SDK ships request headers even with PII disabled.
+  `assertion` covers `x-ci-hub-user-assertion`, the signed Hub identity Traefik
+  adds to every request once the Hub has given Memory its own key.
 - Request cookies and bodies dropped; **query strings removed from
   `request.query_string`, from `request.url`, and from the `referer` header** —
   the SDK builds `request.url` from `req.url`, which on a Node server is

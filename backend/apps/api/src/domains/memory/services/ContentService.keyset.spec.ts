@@ -1,4 +1,5 @@
 import type { UserServiceContext } from '@ci/common/context';
+import { keysetSeek } from '@ci/common/persistence';
 
 import { ContentService } from './ContentService';
 
@@ -66,21 +67,28 @@ describe('ContentService.getEntitiesForContents keyset paging', () => {
   const afterTime = new Date('2026-08-16T07:56:56.949Z');
   const afterId = '018f0000-0000-7000-8000-00000000abcd';
 
+  // What the seek MEANS is keysetSeek's (and, against Postgres, the timed-browse integration spec's).
+  // What this service owes is the right columns and the right direction.
+  const seek = (order: 'ASC' | 'DESC') =>
+    keysetSeek('content.updated_at', 'content.id', order, afterTime, afterId);
+
   it('pages strictly past (afterTime, afterId) when both are supplied', async () => {
     const { service, recorded } = makeService();
 
     await service.getEntitiesForContents(CONTEXT, { limit: 20, afterTime, afterId });
 
-    const keyset = recorded.wheres.find((where) => where.sql.includes(':afterTime'));
+    const keyset = recorded.wheres.find((where) => where.sql.includes(':afterTime AND'));
 
     expect(keyset).toBeDefined();
-    expect(keyset!.sql).toBe(
-      '(content.updated_at < :afterTime OR (content.updated_at = :afterTime AND content.id < :afterId))',
-    );
-    expect(keyset!.params).toEqual({ afterTime, afterId });
+    expect([keyset!.sql, keyset!.params]).toEqual(seek('DESC'));
+    expect(keyset!.params).toEqual({
+      afterTime,
+      afterTimeEnd: new Date('2026-08-16T07:56:56.950Z'),
+      afterId,
+    });
   });
 
-  it('orders by updated_at then id so same-timestamp rows page deterministically', async () => {
+  it('pages newest first when no order is given, as it always has', async () => {
     const { service, recorded } = makeService();
 
     await service.getEntitiesForContents(CONTEXT, { limit: 20, afterTime, afterId });
@@ -89,6 +97,32 @@ describe('ContentService.getEntitiesForContents keyset paging', () => {
       ['content.updated_at', 'DESC'],
       ['content.id', 'DESC'],
     ]);
+  });
+
+  it('orders by updated_at then id so same-timestamp rows page deterministically', async () => {
+    const { service, recorded } = makeService();
+
+    await service.getEntitiesForContents(CONTEXT, { limit: 20, afterTime, afterId, order: 'DESC' });
+
+    expect(recorded.orderBy).toEqual([
+      ['content.updated_at', 'DESC'],
+      ['content.id', 'DESC'],
+    ]);
+  });
+
+  it('pages oldest first: the order, the id tiebreak and the seek all run upwards', async () => {
+    const { service, recorded } = makeService();
+
+    await service.getEntitiesForContents(CONTEXT, { limit: 20, afterTime, afterId, order: 'ASC' });
+
+    expect(recorded.orderBy).toEqual([
+      ['content.updated_at', 'ASC'],
+      ['content.id', 'ASC'],
+    ]);
+
+    const keyset = recorded.wheres.find((where) => where.sql.includes(':afterTime AND'));
+
+    expect([keyset!.sql, keyset!.params]).toEqual(seek('ASC'));
   });
 
   it('omits the keyset predicate when only one half of the cursor is present', async () => {
@@ -114,7 +148,7 @@ describe('ContentService.getEntitiesForContents keyset paging', () => {
       '(content.event_id IS NULL OR content_event.is_deleted = false)',
       'content.updated_at >= :startTime',
       'content.updated_at <= :endTime',
-      '(content.updated_at < :afterTime OR (content.updated_at = :afterTime AND content.id < :afterId))',
+      seek('DESC')[0],
     ]);
   });
 });

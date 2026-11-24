@@ -6,7 +6,9 @@ import {
   startOfLocalDay,
   TIMELINE_AXIS_PAD_DAYS,
 } from '@/components/TimelineJs/dates';
+import { plainSlideText } from '@/components/TimelineJs/escapeHtml';
 import type { TimelineEra, TimelineJsData, TimelineSlide } from '@/components/TimelineJs/types';
+import { HOUR_MINUTE, type DateTimeFormatter } from '@/lib/dateTimeFormat';
 import { detectBrowserTimeZone } from '@/lib/timezone';
 
 import { isBrowserCapture } from './scheduleClusters';
@@ -76,11 +78,11 @@ function durationMs(event: ScheduleEvent): number {
   return Math.max(0, new Date(event.endTime).getTime() - new Date(event.startTime).getTime());
 }
 
-function toSlide(event: ScheduleEvent): TimelineSlide {
+function toSlide(event: ScheduleEvent, fmt: DateTimeFormatter): TimelineSlide {
   const start = new Date(event.startTime);
   const end = event.endTime ? new Date(event.endTime) : null;
   const url = eventUrl(event);
-  const when = start.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const when = fmt.time(start, HOUR_MINUTE);
   const bodyBits = [
     when,
     event.isAllDay ? 'All day' : null,
@@ -91,10 +93,7 @@ function toSlide(event: ScheduleEvent): TimelineSlide {
 
   const slide: TimelineSlide = {
     start_date: partsOf(start),
-    text: {
-      headline: event.title || 'Untitled',
-      text: bodyBits.join(' · '),
-    },
+    text: plainSlideText(event.title || 'Untitled', bodyBits.join(' · ')),
     unique_id: event.id,
     autolink: false,
   };
@@ -214,13 +213,18 @@ export function selectTodayStoryEvents(events: readonly ScheduleEvent[], day: Da
   return selectStoryEvents(events, day).events.filter((event) => eventFallsOnDay(event, day));
 }
 
-export function buildTodayTimelineData(events: readonly ScheduleEvent[], day: Date): TimelineJsData {
-  return buildTimelineData(events, day).data;
+export function buildTodayTimelineData(
+  events: readonly ScheduleEvent[],
+  day: Date,
+  fmt: DateTimeFormatter,
+): TimelineJsData {
+  return buildTimelineData(events, day, fmt).data;
 }
 
 export function buildTimelineData(
   events: readonly ScheduleEvent[],
   day: Date,
+  fmt: DateTimeFormatter,
 ): { data: TimelineJsData; startAtSlide: number } {
   const selected = selectStoryEvents(events, day);
   const label = day.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
@@ -232,12 +236,9 @@ export function buildTimelineData(
       title: {
         unique_id: 'focus-title',
         start_date: partsOf(day),
-        text: {
-          headline: label,
-          text: 'Use the timeline to move forward or back through your schedule.',
-        },
+        text: plainSlideText(label, 'Use the timeline to move forward or back through your schedule.'),
       },
-      events: selected.events.map(toSlide),
+      events: selected.events.map((event) => toSlide(event, fmt)),
       eras: [axisPadEra(selected.events, day)],
     },
   };

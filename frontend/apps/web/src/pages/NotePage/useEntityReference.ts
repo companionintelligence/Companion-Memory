@@ -1,6 +1,6 @@
 import { useCallback, useMemo } from 'react';
 
-import { useApolloClient } from '@apollo/client';
+import { useApolloClient } from '@apollo/client/react';
 import { GlobalUID } from '@ci/common';
 import type { EntityReferenceConfig, EntityReferenceItem } from '@ci/editor';
 import { useNavigate } from 'react-router-dom';
@@ -40,7 +40,7 @@ const MAX_RESULTS = 8;
 
 const REFERENCE_SEARCH = gql(`
   query NoteReferenceSearch($query: String!, $includeTypes: [String!]) {
-    search(input: { query: $query, includeTypes: $includeTypes }) {
+    search(input: { query: $query, includeTypes: $includeTypes, prefix: true }) {
       edges {
         node {
           __typename

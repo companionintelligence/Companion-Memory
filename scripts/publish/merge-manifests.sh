@@ -16,25 +16,61 @@ set -euo pipefail
 #   VERSION              Version tag to merge                    (required)
 #   ARCHES               Space-separated arch suffixes           (default: "amd64 arm64")
 #   PUSH_LATEST          Also point :latest at this version      (default: false)
+#   DIGESTS_DIR          Directory of <arch>.txt files from publish.sh's
+#                        DIGEST_FILE ("<remote repo> <sha256 digest>" per line).
+#                        When set, each image is merged from those digests, and
+#                        a missing or malformed one stops the run before
+#                        anything is written. When unset, the per-arch tags
+#                        are used as before.
 #   REGISTRY_USERNAME    Registry login username                 (required, unless GITHUB_TOKEN is set)
 #   REGISTRY_PASSWORD    Registry login password                 (required, unless GITHUB_TOKEN is set)
 #   GITHUB_TOKEN         Token used as registry password fallback (e.g. inside GitHub Actions)
 #   GITHUB_ACTOR         Username paired with GITHUB_TOKEN        (default: github-actions)
+#   REGISTRY_ATTEMPTS    Tries per manifest write and inspect     (default: 3)
+#   REGISTRY_RETRY_DELAY Seconds before retry n, times n          (default: 60)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # shellcheck source=scripts/publish/images.sh
 source "${SCRIPT_DIR}/images.sh"
+# shellcheck source=scripts/publish/registry-retry.sh
+source "${SCRIPT_DIR}/registry-retry.sh"
 
 REGISTRY="${REGISTRY:?REGISTRY is required}"
 VERSION="${VERSION:?VERSION is required}"
 ARCHES="${ARCHES:-amd64 arm64}"
 PUSH_LATEST="${PUSH_LATEST:-false}"
+DIGESTS_DIR="${DIGESTS_DIR:-}"
 
 fail() {
   echo "  ✗ $*" >&2
   exit 1
 }
+
+# The digest publish.sh recorded for <repo> on <arch>, or nothing. publish.sh
+# appends, so if it ran twice against one file the last line wins.
+recorded_digest() {
+  local file="${DIGESTS_DIR}/$2.txt"
+  [[ -f "${file}" ]] || return 0
+  awk -v repo="$1" '$1 == repo { digest = $2 } END { if (digest != "") print digest }' "${file}"
+}
+
+# With digests, every image needs one for every arch before anything is
+# written, so a leg that pushed nothing cannot leave a half-merged release.
+if [[ -n "${DIGESTS_DIR}" ]]; then
+  [[ -d "${DIGESTS_DIR}" ]] || fail "DIGESTS_DIR=${DIGESTS_DIR} is not a directory"
+
+  MISSING=0
+  for REPO in "${IMAGE_REMOTE[@]}"; do
+    for ARCH in ${ARCHES}; do
+      if [[ ! "$(recorded_digest "${REPO}" "${ARCH}")" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+        echo "  ✗ no recorded linux/${ARCH} digest for ${REPO} in ${DIGESTS_DIR}/${ARCH}.txt" >&2
+        MISSING=$((MISSING + 1))
+      fi
+    done
+  done
+  [[ ${MISSING} -eq 0 ]] || fail "${MISSING} digest(s) missing, nothing was merged"
+fi
 
 # ── Registry login (same credential fallback as publish.sh) ────────────
 if [[ -n "${REGISTRY_USERNAME:-}" && -n "${REGISTRY_PASSWORD:-}" ]]; then
@@ -59,9 +95,18 @@ FAILED=0
 for REPO in "${IMAGE_REMOTE[@]}"; do
   TARGET="${REGISTRY}/${REPO}:${VERSION}"
 
+  echo ""
+  echo "➤ ${TARGET}"
+
+  # By digest when the push job recorded them: a tag can be moved by anyone
+  # holding a write token between the push and this merge, a digest cannot.
   SOURCES=()
   for ARCH in ${ARCHES}; do
-    SOURCES+=("${TARGET}-${ARCH}")
+    if [[ -n "${DIGESTS_DIR}" ]]; then
+      SOURCES+=("${REGISTRY}/${REPO}@$(recorded_digest "${REPO}" "${ARCH}")")
+    else
+      SOURCES+=("${TARGET}-${ARCH}")
+    fi
   done
 
   # Alias tags share the version's sources, so one imagetools call writes them
@@ -75,9 +120,11 @@ for REPO in "${IMAGE_REMOTE[@]}"; do
     VERIFY+=("${REGISTRY}/${REPO}:latest")
   fi
 
-  echo ""
-  echo "➤ ${TARGET}"
-  if ! docker buildx imagetools create "${TAGS[@]}" "${SOURCES[@]}"; then
+  if registry_retry "manifest ${TARGET}" docker buildx imagetools create "${TAGS[@]}" "${SOURCES[@]}"; then
+    if [[ -n "${REGISTRY_OUTPUT}" ]]; then printf '%s\n' "${REGISTRY_OUTPUT}"; fi
+    if [[ -n "${REGISTRY_ERRORS}" ]]; then printf '%s\n' "${REGISTRY_ERRORS}" >&2; fi
+  else
+    registry_report
     echo "  ✗ manifest create failed" >&2
     FAILED=$((FAILED + 1))
     continue
@@ -92,12 +139,16 @@ for REPO in "${IMAGE_REMOTE[@]}"; do
     # problem. Aborting here instead would skip the remaining images and hide
     # how much is broken.
     #
-    # The `|| MANIFEST=''` is what makes that true, and is load-bearing under
-    # `set -e`: a bare assignment takes its command substitution's exit status,
-    # so a failed inspect would kill the script mid-loop — no ✗ line, no
-    # summary, remaining images unchecked. docker's own error still reaches the
-    # log because stderr is not captured.
-    MANIFEST=$(docker buildx imagetools inspect --raw "${TAG}") || MANIFEST=''
+    # The if/else is what makes that true under `set -e`: a bare assignment
+    # takes its command substitution's exit status, so a failed inspect would
+    # kill the script mid-loop, with no ✗ line, no summary and the remaining
+    # images unchecked. docker's own error is printed from REGISTRY_ERRORS.
+    if registry_retry "inspect ${TAG}" docker buildx imagetools inspect --raw "${TAG}"; then
+      MANIFEST="${REGISTRY_OUTPUT}"
+    else
+      MANIFEST=''
+      registry_report
+    fi
     for ARCH in ${ARCHES}; do
       if ! echo "${MANIFEST}" | jq -e --arg arch "${ARCH}" \
         '.manifests[]? | select(.platform.os == "linux" and .platform.architecture == $arch)' >/dev/null; then

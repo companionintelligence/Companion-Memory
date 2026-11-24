@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { GlobalUID } from '@ci/common';
-import { Tooltip } from '@ci/shadcn';
+import { GlobalUID, useDeviceLayout } from '@ci/common';
+import { Tooltip, cn } from '@ci/shadcn';
 import { Clock, FilterX, Search, SearchX, X } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
@@ -14,14 +14,15 @@ import {
 import { DropdownProvider } from '@/components/SearchBox/useDropdown';
 import { useRecentSearches } from '@/hooks';
 import { useKeyboardShortcut } from '@/hooks/useKeyboardShortcut';
-import { chatThreadPath } from '@/pages/ChatPage/chatPaths';
 import { SearchPanelFilters } from '@/pages/MemoryPage/Components/ExplorerToolbar/ExplorerToolbar';
 import {
   FILTER_PARAMS,
   addEntityFilter,
   countActiveFilters,
 } from '@/pages/MemoryPage/Components/ExplorerToolbar/filterParams';
+import { MobileSearchPanelFilters } from '@/pages/MemoryPage/Components/ExplorerToolbar/MobileSearchPanelFilters';
 
+import { routeForEntity, savedRecordRoute } from './entityRoute';
 import type { FilterDragPayload } from './filterDrag';
 import { CommunicationResult } from './results/CommunicationResult';
 import { ConceptResult } from './results/ConceptResult';
@@ -69,6 +70,7 @@ export function GlobalSearchBox() {
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
+  const { isMobile } = useDeviceLayout();
 
   const onMemoryExplorer = isMemoryExplorerPath(location.pathname);
   const onMemoryHub = isMemoryHubPath(location.pathname);
@@ -116,7 +118,7 @@ export function GlobalSearchBox() {
   const excludeTypes =
     userExcludedTypes.length > 0 ? [...userExcludedTypes, 'answer', 'browser-activity'] : undefined;
 
-  const { data, tags, loading, error } = useSearchService({
+  const { data, tags, loading, error, source } = useSearchService({
     searchQuery: query ?? '',
     semantic,
     includeTypes,
@@ -157,6 +159,11 @@ export function GlobalSearchBox() {
         // which then deletes `search` right back out of the URL. Leaving the
         // input alone means there's nothing to resync — it already shows
         // exactly what was just committed.
+        //
+        // An Enter inside the debounce cancels the auto-submit, so the
+        // suggestions would stay on the last debounced prefix; follow the
+        // committed text instead.
+        setQuery(trimmed);
         setSearchParams((params) => {
           params.set('search', trimmed);
 
@@ -184,6 +191,21 @@ export function GlobalSearchBox() {
       clearInput();
     },
     [addRecentSearch, clearInput, navigate, onLiveSearchPage, searchParams, setSearchParams],
+  );
+
+  // A saved search picked from the panel's footer: Load search on desktop, the
+  // Saved searches sheet on a phone. That footer only shows off the explorer,
+  // so the search opens there, and the box remounts the way it
+  // does after committing a query from a launcher page: a fresh, unfocused box
+  // picks the query up from `?search=`, where the old one (still counted as
+  // focused while the sheet was open) would have auto-submitted its empty input
+  // and cleared the search straight back out of the URL.
+  const openSavedSearch = useCallback(
+    (params: URLSearchParams) => {
+      navigate(`/memory?${params.toString()}`);
+      clearInput();
+    },
+    [clearInput, navigate],
   );
 
   // The query only — the counterpart to `clearFilters`. Remounting SearchBox
@@ -254,57 +276,64 @@ export function GlobalSearchBox() {
     );
   }, [setSearchParams]);
 
-  const suggestions = useMemo<SearchResultItem[]>(
-    () =>
-      data.map((item) => {
-        switch (item.__typename) {
-          case 'CommunicationType':
-            return { id: item.id, content: <CommunicationResult communication={item} /> };
+  const suggestions = useMemo<SearchResultItem[]>(() => {
+    const rows = data.map((item): SearchResultItem => {
+      switch (item.__typename) {
+        case 'CommunicationType':
+          return { id: item.id, content: <CommunicationResult communication={item} /> };
 
-          case 'ConceptType':
-            return { id: item.id, content: <ConceptResult concept={item} /> };
+        case 'ConceptType':
+          return { id: item.id, content: <ConceptResult concept={item} /> };
 
-          case 'ContentType':
-            return { id: item.id, content: <ContentResult content={item} /> };
+        case 'ContentType':
+          return { id: item.id, content: <ContentResult content={item} /> };
 
-          case 'EventType':
-            return { id: item.id, content: <EventResult event={item} /> };
+        case 'EventType':
+          return { id: item.id, content: <EventResult event={item} /> };
 
-          case 'FileType':
-            return { id: item.id, content: <FileResult file={item} /> };
+        case 'FileType':
+          return { id: item.id, content: <FileResult file={item} /> };
 
-          case 'ItemType':
-            return { id: item.id, content: <ItemResult item={item} /> };
+        case 'ItemType':
+          return { id: item.id, content: <ItemResult item={item} /> };
 
-          case 'NoteType':
-            return { id: item.id, content: <NoteResult note={item} /> };
+        case 'NoteType':
+          return { id: item.id, content: <NoteResult note={item} /> };
 
-          // Person/place rows carry their drag payload (`filterName` is the
-          // query-level unmasked name) so the right arrow can add them as
-          // who/where filters without a drag.
-          case 'PersonType':
-            return {
-              id: item.id,
-              content: <PersonResult person={item} />,
-              filter: item.filterName ? { kind: 'person', name: item.filterName } : undefined,
-            };
+        // Person/place rows carry their drag payload (`filterName` is the
+        // query-level unmasked name) so the right arrow can add them as
+        // who/where filters without a drag.
+        case 'PersonType':
+          return {
+            id: item.id,
+            content: <PersonResult person={item} />,
+            filter: item.filterName ? { kind: 'person', name: item.filterName } : undefined,
+          };
 
-          case 'PlaceType':
-            return {
-              id: item.id,
-              content: <PlaceResult place={item} />,
-              filter: item.filterName ? { kind: 'place', name: item.filterName } : undefined,
-            };
+        case 'PlaceType':
+          return {
+            id: item.id,
+            content: <PlaceResult place={item} />,
+            filter: item.filterName ? { kind: 'place', name: item.filterName } : undefined,
+          };
 
-          case 'ThreadType':
-            return { id: item.id, content: <ThreadResult thread={item} /> };
+        case 'ThreadType':
+          return { id: item.id, content: <ThreadResult thread={item} /> };
 
-          default:
-            return { id: item.id, content: null };
-        }
-      }),
-    [data],
-  );
+        default:
+          return { id: item.id, content: null };
+      }
+    });
+
+    // Answered from this phone's synced index because the Memory server did
+    // not answer. Said once, over the first row: a stale local answer must
+    // never pass for the server's.
+    if (source === 'device' && rows.length > 0) {
+      rows[0] = { ...rows[0], heading: t('SEARCH_FROM_THIS_PHONE_HEADING') };
+    }
+
+    return rows;
+  }, [data, source, t]);
 
   const results = useMemo<SearchResultItem[]>(() => {
     const trimmed = (query ?? '').trim();
@@ -315,9 +344,9 @@ export function GlobalSearchBox() {
             {
               id: CLEAR_FILTERS_ACTION_ID,
               content: (
-                <div className="flex items-center gap-2">
-                  <FilterX className="h-6 w-6 text-muted-foreground" strokeWidth={1.5} />
-                  <span className="text-muted-foreground">Clear search filters</span>
+                <div className="flex min-w-0 items-center gap-2">
+                  <FilterX className="h-6 w-6 shrink-0 text-muted-foreground" strokeWidth={1.5} />
+                  <span className="min-w-0 text-muted-foreground">Clear search filters</span>
                 </div>
               ),
             },
@@ -330,9 +359,9 @@ export function GlobalSearchBox() {
         {
           id: CLEAR_QUERY_ACTION_ID,
           content: (
-            <div className="flex items-center gap-2">
-              <SearchX className="h-6 w-6 text-muted-foreground" strokeWidth={1.5} />
-              <span className="text-muted-foreground">Clear search query</span>
+            <div className="flex min-w-0 items-center gap-2">
+              <SearchX className="h-6 w-6 shrink-0 text-muted-foreground" strokeWidth={1.5} />
+              <span className="min-w-0 text-muted-foreground">Clear search query</span>
             </div>
           ),
         },
@@ -340,12 +369,12 @@ export function GlobalSearchBox() {
         {
           id: SEARCH_ACTION_ID,
           content: (
-            <div className="flex items-center gap-2">
-              <Search className="h-6 w-6 text-muted-foreground" strokeWidth={1.5} />
+            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+              <Search className="h-6 w-6 shrink-0 text-muted-foreground" strokeWidth={1.5} />
               <span className="text-muted-foreground">
                 {onMemoryExplorer ? 'Search Memory for' : 'Search all of Memory for'}
               </span>
-              <span className="font-medium">“{trimmed}”</span>
+              <span className="max-w-full min-w-0 truncate font-medium">“{trimmed}”</span>
             </div>
           ),
         },
@@ -361,19 +390,27 @@ export function GlobalSearchBox() {
     // Empty + focused → clear-filters (when active), then recent searches.
     return [
       ...clearFiltersRows,
-      ...recentSearches.map((recent) => ({
+      ...recentSearches.map((recent, index) => ({
         id: `${RECENT_PREFIX}${recent}`,
+        // On a phone the recents sit above the Filters / Saved searches rows,
+        // so they get a caption to tell the two apart.
+        heading: isMobile && index === 0 ? t('SEARCH_RECENT_HEADING') : undefined,
         content: (
-          <div className="flex items-center gap-2">
-            <Clock className="h-6 w-6 text-muted-foreground" strokeWidth={1.5} />
-            <span className="flex-1 truncate">{recent}</span>
+          <div className="flex min-w-0 items-center gap-2">
+            <Clock className="h-6 w-6 shrink-0 text-muted-foreground" strokeWidth={1.5} />
+            <span className="min-w-0 flex-1 truncate">{recent}</span>
             <Tooltip delayDuration={600}>
               <Tooltip.Content>{t('SEARCH_RECENT_REMOVE', { query: recent })}</Tooltip.Content>
               <Tooltip.Trigger asChild>
                 <button
                   type="button"
                   aria-label={t('SEARCH_RECENT_REMOVE', { query: recent })}
-                  className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                  className={cn(
+                    'rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground',
+                    // A thumb-sized target on a phone; the negative margins keep
+                    // it from making the row any taller.
+                    isMobile && '-my-1 -mr-2 grid size-11 place-items-center p-0',
+                  )}
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={(e) => {
                     e.stopPropagation();
@@ -388,7 +425,22 @@ export function GlobalSearchBox() {
         ),
       })),
     ];
-  }, [activeFilterCount, onMemoryExplorer, query, recentSearches, removeRecentSearch, suggestions, t, tags]);
+  }, [
+    activeFilterCount,
+    isMobile,
+    onMemoryExplorer,
+    query,
+    recentSearches,
+    removeRecentSearch,
+    suggestions,
+    t,
+    tags,
+  ]);
+
+  // The rows above always lead with Clear and Search-for once there is a query,
+  // so SearchBox is told outright when the search came back empty.
+  const noMatches =
+    Boolean(query?.trim()) && !loading && !error && tags.length === 0 && suggestions.length === 0;
 
   // Live, debounced. Drives the suggestion query everywhere, and on a live-search
   // page also writes `?search` so the page filters as you type (replace: keep
@@ -414,7 +466,7 @@ export function GlobalSearchBox() {
         );
       }
     },
-    [onMemoryExplorer, setSearchParams],
+    [onLiveSearchPage, setSearchParams],
   );
 
   // The X on the explorer is a full reset: the query, every explorer filter
@@ -496,11 +548,30 @@ export function GlobalSearchBox() {
       if (id === SEARCH_ACTION_ID) {
         commitSearch(query ?? '');
 
+        // On a list page the query was already mirrored into the page as it was
+        // typed, so the commit itself changes nothing on screen; tapping the row
+        // has to be seen to do something. Let go of the input: the panel closes
+        // (and a phone's keyboard with it), the way Enter dismisses the panel,
+        // and the input keeps showing the query it committed. Off a list page
+        // the commit navigates and remounts the box, which closes it anyway.
+        if (onLiveSearchPage) {
+          inputRef.current?.blur();
+        }
+
         return;
       }
 
       if (id.startsWith(RECENT_PREFIX)) {
         commitSearch(id.slice(RECENT_PREFIX.length));
+
+        // On a list page the commit filters the page in place and leaves the
+        // input alone — right for a typed query, which the input already shows.
+        // A recent search starts from an empty input, so let go of focus: the
+        // panel closes (and a phone's keyboard with it) and the input picks the
+        // query up from `?search=`, so the tap visibly does something.
+        if (onLiveSearchPage) {
+          inputRef.current?.blur();
+        }
 
         return;
       }
@@ -522,48 +593,36 @@ export function GlobalSearchBox() {
 
       const { type, id: decodedId } = GlobalUID.decode(id);
 
-      switch (type) {
-        case 'communication':
-          navigate(`/communications/${decodedId}`);
-          break;
+      // An answer from this phone opens the record this phone holds: the
+      // per-type pages need the appliance, which did not answer.
+      if (source === 'device') {
+        navigate(savedRecordRoute(type, decodedId));
 
-        case 'concept':
-          navigate(`/concepts/${decodedId}`);
-          break;
+        return;
+      }
 
-        case 'content':
-          navigate(`/content/${decodedId}`);
-          break;
+      // A file has no page of its own; its route is the gallery searched for
+      // its name (see routeForEntity). The name is on the node when the
+      // fragment is not masked, and the typed query is the next best search.
+      const node = data.find((item) => item.id === id) as { filename?: string | null } | undefined;
+      const route = routeForEntity(type, decodedId, { title: node?.filename ?? query ?? undefined });
 
-        case 'event':
-          navigate(`/events/${decodedId}`);
-          break;
-
-        case 'item':
-          navigate(`/items/${decodedId}`);
-          break;
-
-        case 'note':
-          navigate(`/notes/${decodedId}`);
-          break;
-
-        case 'person':
-          navigate(`/people/${decodedId}`);
-          break;
-
-        case 'place':
-          navigate(`/places/${decodedId}`);
-          break;
-
-        case 'thread':
-          navigate(chatThreadPath(decodedId));
-          break;
-
-        default:
-          break;
+      if (route) {
+        navigate(route);
       }
     },
-    [addRecentSearch, clearFilters, clearInput, clearQuery, commitSearch, navigate, query],
+    [
+      addRecentSearch,
+      clearFilters,
+      clearInput,
+      clearQuery,
+      commitSearch,
+      data,
+      navigate,
+      onLiveSearchPage,
+      query,
+      source,
+    ],
   );
 
   // Expand + focus. The focus call only lands when already expanded (a hidden
@@ -588,18 +647,37 @@ export function GlobalSearchBox() {
           onFilterAdd={onMemoryExplorer ? handleFilterAdd : undefined}
           variant="compact"
           placeholder="Search memory…"
+          fullWidthOnPhone
           autoSubmit
-          autoSubmitEmpty={onLiveSearchPage}
+          // Everywhere, not just on list pages: `query` has to empty with the
+          // input, or a launcher page keeps the last query's rows (and its "No
+          // results found.") under an empty box instead of the recent searches.
+          // handleSearch only writes `?search` on a list page.
+          autoSubmitEmpty
           displayResults
           openOnFocus
           loading={loading}
           error={error}
           results={results}
+          noMatches={noMatches}
+          // A miss in this phone's synced index is not the server's answer.
+          noMatchesHeading={source === 'device' ? t('SEARCH_FROM_THIS_PHONE_HEADING') : undefined}
           showClear={activeFilterCount > 0 || Boolean(onLiveSearchPage ? urlSearch : query?.trim())}
           panelFooter={
             explorerFiltersApply && !onMemoryExplorer ? (
               <DropdownProvider args={[{ changeSearchParams: true }]}>
-                <SearchPanelFilters modal={false} />
+                {/* A phone has no room for the row of controls: it gets a
+                    Filters row and a Saved searches row that open sheets. */}
+                {isMobile ? (
+                  <MobileSearchPanelFilters
+                    filterCount={activeFilterCount}
+                    showSavedSearches={!(query ?? '').trim()}
+                    onClearFilters={clearFilters}
+                    onOpenSavedSearch={openSavedSearch}
+                  />
+                ) : (
+                  <SearchPanelFilters modal={false} onOpenSavedSearch={openSavedSearch} />
+                )}
               </DropdownProvider>
             ) : undefined
           }

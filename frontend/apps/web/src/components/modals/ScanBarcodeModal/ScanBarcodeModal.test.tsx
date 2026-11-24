@@ -22,6 +22,7 @@ const lookupMock = (
   payload: {
     matched: boolean;
     item?: { id: string; name: string } | null;
+    ownedItem?: { id: string; name: string } | null;
     product?: { id: string; title: string } | null;
   },
 ) =>
@@ -47,6 +48,9 @@ const lookupMock = (
             brand: 'Makita',
             model: 'XPH',
           }
+        : null,
+      ownedItem: payload.ownedItem
+        ? { __typename: 'ItemType' as const, id: payload.ownedItem.id, name: payload.ownedItem.name }
         : null,
       product: payload.product
         ? {
@@ -145,6 +149,34 @@ describe('ScanBarcodeModal', () => {
       await screen.findByText(/That code identifies "Makita XPH drill", a product model/),
     ).toBeInTheDocument();
     expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('opens the unit you own when the code names its product model', async () => {
+    // An Amazon import claims the ASIN for the catalog model and leaves it in
+    // the bought thing's own codes, so the lookup answers with the model and
+    // the unit you own of it.
+    navigate.mockClear();
+    const onClose = vi.fn();
+
+    renderWithProviders(<ScanBarcodeModal open onClose={onClose} />, {
+      mocks: [
+        lookupMock(
+          { namespace: 'GTIN', value: '012345678905' },
+          {
+            matched: true,
+            ownedItem: { id: ITEM_ID, name: 'Cordless drill' },
+            product: { id: btoa('product:p1'), title: 'Makita XPH drill' },
+          },
+        ),
+      ],
+    });
+
+    type('012345678905');
+    fireEvent.click(screen.getByRole('button', { name: 'Look up' }));
+
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith('/items/drill-1'));
+    expect(onClose).toHaveBeenCalled();
+    expect(screen.queryByText(/a product model/)).not.toBeInTheDocument();
   });
 
   it('reports a code that matches nothing rather than minting a row for it', async () => {

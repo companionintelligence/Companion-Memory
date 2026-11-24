@@ -6,6 +6,7 @@ import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { isGeocodingConfigured } from '@ci/configuration';
 import { DailyMetricsService } from '@ci/domains/daily-metrics';
 import { type KnownPlaceKind, KnownPlacesService, type KnownPlaceSource } from '@ci/domains/memory';
+import { TagService } from '@ci/domains/search-next';
 
 import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { KnownPlaceCandidateType } from '../types/KnownPlaceCandidateType';
@@ -27,6 +28,7 @@ export class KnownPlacesResolver {
   constructor(
     private readonly knownPlacesService: KnownPlacesService,
     private readonly dailyMetricsService: DailyMetricsService,
+    private readonly tagService: TagService,
   ) {}
 
   /** The user's confirmed known places (LIVES_IN/WORKS_AT/VISITED), optionally filtered by kind. */
@@ -40,9 +42,16 @@ export class KnownPlacesResolver {
     const kindFilter =
       kind && (KNOWN_PLACE_KINDS as readonly string[]).includes(kind) ? (kind as KnownPlaceKind) : undefined;
 
-    const labels = await this.knownPlacesService.getKnownPlaces(serviceContext, kindFilter);
+    const places = await this.knownPlacesService.getKnownPlaces(serviceContext, kindFilter);
+    const refs = places.map((place) => ({ type: 'place' as const, id: place.locationId }));
+    const tagsByPlace = await this.tagService.getTagsForEntities(serviceContext, refs);
 
-    return labels.map((label) => KnownPlaceType.toType(label));
+    return places.map((place, index) =>
+      KnownPlaceType.toType(
+        place,
+        (tagsByPlace.get(refs[index]) ?? []).map((tag) => tag.label),
+      ),
+    );
   }
 
   /**
@@ -86,7 +95,8 @@ export class KnownPlacesResolver {
         : 'manual';
 
     const kind = parseKind(input.kind, 'other');
-    const label = await this.knownPlacesService.updateKnownPlace(serviceContext, {
+    const place = await this.knownPlacesService.updateKnownPlace(serviceContext, {
+      knownPlaceId: input.knownPlaceId,
       label: input.label,
       kind,
       locationId: input.locationId ?? null,
@@ -98,10 +108,26 @@ export class KnownPlacesResolver {
       source,
     });
 
+    if (input.tags !== undefined) {
+      await this.tagService.replaceEntityTags(
+        serviceContext,
+        { type: 'place', id: place.locationId },
+        input.tags,
+      );
+    }
+
     if (kind === 'home') {
       void this.dailyMetricsService.refreshForUser(serviceContext).catch(() => undefined);
     }
 
-    return KnownPlaceType.toType(label);
+    const tags = await this.tagService.getTagsForEntity(serviceContext, {
+      type: 'place',
+      id: place.locationId,
+    });
+
+    return KnownPlaceType.toType(
+      place,
+      tags.map((tag) => tag.label),
+    );
   }
 }

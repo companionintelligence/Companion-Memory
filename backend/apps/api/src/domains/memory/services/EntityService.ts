@@ -79,6 +79,10 @@ export abstract class EntityService<E extends ObjectLiteral, T> {
   }
 
   async findByIds(context: ServiceContext, ids: string[]): Promise<(T | null)[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+
     const pk = this.primaryKey;
 
     const where: Record<string, unknown> = {

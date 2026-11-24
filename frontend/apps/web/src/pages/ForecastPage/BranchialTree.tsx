@@ -97,7 +97,7 @@ function StepColumn({
     >
       <div className="px-1">
         <div className="text-sm font-medium">{step.label}</div>
-        <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+        <div className="text-[10px] text-muted-foreground">
           {step.branches.length} {step.branches.length === 1 ? 'future' : 'futures'}
         </div>
       </div>
@@ -113,9 +113,7 @@ function StepColumn({
       </div>
       {selected && selected.permutations.some((row) => isDisplayableLabel(row.title)) && (
         <div className="border-t pt-2">
-          <div className="mb-1 px-1 text-[10px] uppercase tracking-wide text-muted-foreground">
-            With {stretchTitle(selected)}
-          </div>
+          <div className="mb-1 px-1 text-[10px] text-muted-foreground">With {stretchTitle(selected)}</div>
           <div className="flex flex-col gap-1">
             {selected.permutations
               .filter((row) => isDisplayableLabel(row.title))

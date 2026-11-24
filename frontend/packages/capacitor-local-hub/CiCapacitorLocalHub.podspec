@@ -16,10 +16,9 @@ Pod::Spec.new do |s|
   s.summary = package['description']
   # This pod is private and never published to a spec repo -- it's consumed only via the
   # generated `:path =>` entry in ../../apps/ios/ios/App/Podfile (see capacitor_pods
-  # there). license/homepage/author are filler for CocoaPods' benefit, not derived from
-  # package.json (which has neither field), matching this repo's "Private &
-  # Confidential" status.
-  s.license = 'UNLICENSED'
+  # there). The license is the repo's PolyForm Noncommercial 1.0.0 (see LICENSE.md);
+  # homepage and author are filler for CocoaPods' benefit, not derived from package.json.
+  s.license = { :type => 'PolyForm-Noncommercial-1.0.0' }
   s.homepage = 'https://github.com/companionintelligence/CI-Server'
   s.author = 'Lifescope Inc.'
   s.source = { :git => 'https://github.com/companionintelligence/CI-Server.git' }
@@ -28,7 +27,7 @@ Pod::Spec.new do |s|
   s.dependency 'Capacitor'
   # Sign-in sheet (`ASWebAuthenticationSession`). A system framework, so this only
   # tells CocoaPods to link it into the pod — it is not a third-party dependency.
-  s.framework = 'AuthenticationServices'
+  s.frameworks = 'AuthenticationServices', 'BackgroundTasks'
   # swisspol/GCDWebServer -- embedded HTTP server. Only the default 'Core' subspec is
   # needed (plain routing + JSON responses); we don't use the WebDAV/WebUploader
   # subspecs. Pinned to the 3.5.x line (latest tagged release at the time of writing is
@@ -50,5 +49,11 @@ Pod::Spec.new do |s|
   # artifacts version independently and do not need to match). Re-verify at build time:
   # this environment has no Mac and cannot run `pod install`.
   s.dependency 'SQLCipher', '~> 4.9'
+  # PowerSync's core, for the background replica sync (ReplicaBackgroundSync.swift), which
+  # registers it with SQLCipher itself (CiPowerSyncCore.c) because a background launch runs no
+  # JavaScript. Same pod and range as @powersync/capacitor, so CocoaPods resolves one copy.
+  # @powersync/capacitor 0.9.4 (the version the shells pin) requires ~> 0.5.3, the same core
+  # the Android plugin links, so this follows it. The old ~> 0.4.12 range predates that bump.
+  s.dependency 'powersync-sqlite-core', '~> 0.5.3'
   s.swift_version = '5.1'
 end

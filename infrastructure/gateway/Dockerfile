@@ -1,4 +1,4 @@
-FROM nginx:1.28.0-bookworm
+FROM nginx:1.29.1-bookworm
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends tini && \

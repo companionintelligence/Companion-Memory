@@ -10,8 +10,15 @@ function contextFor(user: unknown): ExecutionContext {
   } as unknown as ExecutionContext;
 }
 
-/** A DataSource whose only job is to answer the "is there an admin?" probe. */
-function dataSourceAnswering(present: boolean | Error): {
+/**
+ * A DataSource whose only job is to answer the probe: is there a live admin, and is there any
+ * live account? `present` is the admin half; `accounts` defaults to true, because a request that
+ * reaches this guard was made by a live account.
+ */
+function dataSourceAnswering(
+  present: boolean | Error,
+  accounts = true,
+): {
   dataSource: DataSource;
   queries: string[];
 } {
@@ -25,7 +32,7 @@ function dataSourceAnswering(present: boolean | Error): {
         return Promise.reject(present);
       }
 
-      return Promise.resolve([{ present }]);
+      return Promise.resolve([{ admin: present, accounts }]);
     },
   } as unknown as DataSource;
 
@@ -72,21 +79,60 @@ describe('ApplianceAdminGuard', () => {
     await expect(guard.canActivate(contextFor(undefined))).rejects.toBeInstanceOf(ForbiddenException);
   });
 
-  it('admits a non-admin on an appliance that has NO admin', async () => {
-    // The deliberate, documented degradation. This was once the steady state on
-    // every fresh appliance, because nothing in application code wrote
-    // `role = 'admin'`; now `UserService.claimApplianceIfUnowned` promotes the
-    // first account, so the branch is transitional — it fires only before anyone
-    // can authenticate at all, or after an owner deletes their account and
-    // before the next one claims the box. Still pinned, because it is the
-    // behaviour that distinguishes this guard from AdminOnlyGuard: an
-    // appliance-wide control plane degrades open, arbitrary local command
-    // execution degrades closed.
-    const { dataSource } = dataSourceAnswering(false);
+  it('refuses a non-admin when live accounts exist but no live admin does', async () => {
+    // What an owner leaves behind by deleting their account while members keep theirs. This
+    // used to admit every member, and `POST /signup-codes` sits behind this guard, so a member
+    // could mint the invitation that created the next admin.
+    const { dataSource } = dataSourceAnswering(false, true);
+
+    await expect(
+      new ApplianceAdminGuard(dataSource).canActivate(contextFor({ role: 'user' })),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('admits on an appliance with no live account at all', async () => {
+    // Unclaimed: nobody can hold the admin role yet, so requiring it would gate the control
+    // plane on a role nobody can have. Still distinguishes this guard from AdminOnlyGuard.
+    const { dataSource } = dataSourceAnswering(false, false);
 
     await expect(new ApplianceAdminGuard(dataSource).canActivate(contextFor({ role: 'user' }))).resolves.toBe(
       true,
     );
+  });
+
+  it('reads a probe that returned no row as "accounts exist", and refuses', async () => {
+    const dataSource = { query: () => Promise.resolve([]) } as unknown as DataSource;
+
+    await expect(
+      new ApplianceAdminGuard(dataSource).canActivate(contextFor({ role: 'user' })),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it("refuses a Portal bearer without admin authority here, whatever the owner's role", async () => {
+    // An owner's Portal token from a Portal that predates addressing keeps everything else, but
+    // not the appliance's control plane, the same rule AdminOnlyGuard applies.
+    const { dataSource, queries } = dataSourceAnswering(true);
+    const request = { user: { role: 'admin' }, portalPrincipal: { admin: false } };
+    const context = {
+      switchToHttp: () => ({ getRequest: () => request }),
+    } as unknown as ExecutionContext;
+
+    await expect(new ApplianceAdminGuard(dataSource).canActivate(context)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+    expect(queries).toEqual([]);
+
+    request.portalPrincipal.admin = true;
+    await expect(new ApplianceAdminGuard(dataSource).canActivate(context)).resolves.toBe(true);
+  });
+
+  it('answers admits() as canActivate decides for that Portal bearer, so no page offers what the route refuses', async () => {
+    const { dataSource, queries } = dataSourceAnswering(false);
+    const guard = new ApplianceAdminGuard(dataSource);
+
+    await expect(guard.admits({ role: 'admin' }, { portalPrincipal: { admin: false } })).resolves.toBe(false);
+    expect(queries).toEqual([]);
+    await expect(guard.admits({ role: 'admin' }, { portalPrincipal: { admin: true } })).resolves.toBe(true);
   });
 
   it('fails CLOSED when the probe cannot answer', async () => {
@@ -108,7 +154,7 @@ describe('ApplianceAdminGuard', () => {
     ).rejects.toBeInstanceOf(ForbiddenException);
 
     expect(queries).toHaveLength(1);
-    expect(queries[0]).toMatch(/role = 'admin'/);
-    expect(queries[0]).toMatch(/deleted_at IS NULL/);
+    expect(queries[0]).toMatch(/role = 'admin' AND deleted_at IS NULL/);
+    expect(queries[0]).toMatch(/FROM ci\.users WHERE deleted_at IS NULL\s*\)\s*AS accounts/);
   });
 });

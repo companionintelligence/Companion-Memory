@@ -1,6 +1,5 @@
 # Correlation, anomaly, and suggestion engines
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
 >
 > Status: **implemented and merged to `main`** — the `feat/derivation-engines` work
 > (PR #2029) reached `main` on 2026-08-17 inside

@@ -1,3 +1,4 @@
+import { WIZARD_BUNDLES } from '../../sources/bundles';
 import { WIZARD_SOURCES } from '../../sources/guides';
 import { DataSourceCatalogService } from '../DataSourceCatalogService';
 
@@ -56,5 +57,33 @@ describe('DataSourceCatalogService.catalog', () => {
       expect(entry).not.toHaveProperty('provenance');
       expect(entry).not.toHaveProperty('alsoImporters');
     }
+  });
+});
+
+/**
+ * The bundle projection carries everything the export card renders. The two
+ * optional sections are the easy ones to drop: a bundle whose `stepsTitle` or
+ * `altPath` went missing here would still render, just with the default
+ * heading and no second path, and nothing would say so.
+ */
+describe('DataSourceCatalogService.bundles', () => {
+  const service = new DataSourceCatalogService();
+  const entries = service.bundles();
+
+  it('serves every authored bundle in order, with its members', () => {
+    expect(entries.map((entry) => entry.id)).toEqual(WIZARD_BUNDLES.map((bundle) => bundle.id));
+    expect(entries.map((entry) => entry.members)).toEqual(WIZARD_BUNDLES.map((bundle) => bundle.members));
+  });
+
+  it('carries the steps heading and the alternative path through unchanged', () => {
+    for (const bundle of WIZARD_BUNDLES) {
+      const entry = entries.find((candidate) => candidate.id === bundle.id);
+
+      expect(entry?.stepsTitle).toBe(bundle.stepsTitle);
+      expect(entry?.altPath).toEqual(bundle.altPath);
+    }
+
+    // At least one authored bundle exercises the heading, so this is not vacuous.
+    expect(WIZARD_BUNDLES.some((bundle) => bundle.stepsTitle != null)).toBe(true);
   });
 });

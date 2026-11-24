@@ -1,4 +1,6 @@
 import { Injectable } from '@nestjs/common';
+import { InjectDataSource } from '@nestjs/typeorm';
+import { DataSource } from 'typeorm';
 
 import { FeatureService } from '@ci/common/feature';
 import { LoggerService } from '@ci/common/logging';
@@ -14,6 +16,7 @@ import {
   PlanningTodoScanEvent,
   PlanningVerifyDoneEvent,
 } from '../events';
+import { listUsersWithDueReminders } from '../services/ReminderDispatchService';
 
 /** Daily morning scan — owner-local wall clock is approximate for fan-out. */
 const TODO_SCAN_CRON = '0 6 * * *';
@@ -47,6 +50,7 @@ export class PlanningJobsCron {
     private readonly userService: UserService,
     private readonly featureService: FeatureService,
     private readonly logger: LoggerService,
+    @InjectDataSource() private readonly dataSource: DataSource,
   ) {
     this.logger.setContext(PlanningJobsCron.name);
   }
@@ -76,9 +80,19 @@ export class PlanningJobsCron {
     await this.fanOut(PlanningVerifyDoneEvent, 'verify_done');
   }
 
+  /**
+   * Every minute, but only for users who have a reminder due RIGHT NOW. The
+   * other five schedules fan out to every onboarded user because each job has
+   * work to do for anyone; a reminder tick for a user with nothing pending is
+   * a pg-boss insert plus an UPDATE that matches nothing, 1,440 times a day per
+   * account. `listUsersWithDueReminders` is the same onboarded, not-deleted
+   * population intersected with "has a due reminder".
+   */
   @Cron(FIRE_REMINDERS_CRON, { name: 'PlanningJobsCron.fireReminders' })
   async enqueueFireReminders() {
-    await this.fanOut(PlanningFireRemindersEvent, 'fire_reminders');
+    await this.fanOut(PlanningFireRemindersEvent, 'fire_reminders', () =>
+      listUsersWithDueReminders(this.dataSource, new Date()),
+    );
   }
 
   private async fanOut(
@@ -90,20 +104,18 @@ export class PlanningJobsCron {
       | typeof PlanningVerifyDoneEvent
       | typeof PlanningFireRemindersEvent,
     label: string,
+    audience: () => Promise<string[]> = async () =>
+      (await this.userService.findAllOnboarded()).map((user) => user.id),
   ) {
     if (!(await this.featureService.isFeatureEnabled('planning.enabled'))) {
       return;
     }
 
-    const users = await this.userService.findAllOnboarded();
+    const userIds = await audience();
     let enqueued = 0;
 
-    for (const user of users) {
-      await this.eventService.send(
-        event,
-        { userId: user.id },
-        { singletonKey: `planning:${label}:${user.id}` },
-      );
+    for (const userId of userIds) {
+      await this.eventService.send(event, { userId }, { singletonKey: `planning:${label}:${userId}` });
       enqueued += 1;
     }
 

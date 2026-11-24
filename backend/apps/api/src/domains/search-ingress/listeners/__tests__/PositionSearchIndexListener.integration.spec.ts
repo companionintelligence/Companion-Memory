@@ -4,6 +4,7 @@ import { v7 as uuidv7 } from 'uuid';
 import { SYSTEM_USER } from '@ci/common/context';
 
 import { databaseAvailability, resolveConnection } from '../../../__tests__/support/databaseConnection';
+import { createPositionChunks } from '../../../__tests__/support/positionChunks';
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
 import { PositionSearchIndexListener } from '../PositionSearchIndexListener';
 
@@ -73,6 +74,9 @@ describeWithDatabase(`PositionSearchIndexListener — against real Postgres (${a
          ON CONFLICT (id) DO NOTHING`,
       [userId, `position.${userId}@example.test`],
     );
+    // The chunk every ping below goes into, created up front: see
+    // positionChunks.ts.
+    await createPositionChunks(dataSource, userId, '2026-08-10T00:00:00Z', '2026-08-10T23:59:00Z');
   });
 
   afterAll(async () => {
@@ -88,7 +92,17 @@ describeWithDatabase(`PositionSearchIndexListener — against real Postgres (${a
   function makeListener() {
     const positionService = { findById: jest.fn() };
     const embeddingGenerationService = { generateEmbedding: jest.fn().mockResolvedValue([0.1, 0.2]) };
-    const embeddingService = { upsert: jest.fn().mockResolvedValue(null), remove: jest.fn() };
+    const embeddingService = {
+      upsertDocument: jest.fn(
+        async (_ctx: unknown, data: { text: string }, generate: (text: string) => Promise<number[]>) => {
+          await generate(data.text);
+
+          return 'embedded';
+        },
+      ),
+      upsert: jest.fn().mockResolvedValue(null),
+      remove: jest.fn(),
+    };
     const indexSkipService = {
       recordSkip: jest.fn().mockResolvedValue(undefined),
       clearSkip: jest.fn().mockResolvedValue(true),
@@ -166,9 +180,10 @@ describeWithDatabase(`PositionSearchIndexListener — against real Postgres (${a
       await listener.indexPosition({ positionId: ping.id } as never);
 
       if (ping.id === early.id) {
-        expect(embeddingService.upsert).toHaveBeenCalledWith(
+        expect(embeddingService.upsertDocument).toHaveBeenCalledWith(
           { userId },
           expect.objectContaining({ entityType: 'position', entityId: early.id }),
+          expect.any(Function),
         );
         expect(indexSkipService.clearSkip).toHaveBeenCalledWith({
           entityType: 'position',
@@ -178,7 +193,7 @@ describeWithDatabase(`PositionSearchIndexListener — against real Postgres (${a
           expect.objectContaining({ reason: 'downsampled' }),
         );
       } else {
-        expect(embeddingService.upsert).not.toHaveBeenCalled();
+        expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
         expect(indexSkipService.recordSkip).toHaveBeenCalledWith({
           entityType: 'position',
           entityId: ping.id,
@@ -198,9 +213,10 @@ describeWithDatabase(`PositionSearchIndexListener — against real Postgres (${a
 
       await listener.indexPosition({ positionId: ping.id } as never);
 
-      expect(embeddingService.upsert).toHaveBeenCalledWith(
+      expect(embeddingService.upsertDocument).toHaveBeenCalledWith(
         { userId },
         expect.objectContaining({ entityType: 'position', entityId: ping.id }),
+        expect.any(Function),
       );
     }
   });
@@ -215,9 +231,10 @@ describeWithDatabase(`PositionSearchIndexListener — against real Postgres (${a
 
       await listener.indexPosition({ positionId: ping.id } as never);
 
-      expect(embeddingService.upsert).toHaveBeenCalledWith(
+      expect(embeddingService.upsertDocument).toHaveBeenCalledWith(
         { userId },
         expect.objectContaining({ entityType: 'position', entityId: ping.id }),
+        expect.any(Function),
       );
     }
   });

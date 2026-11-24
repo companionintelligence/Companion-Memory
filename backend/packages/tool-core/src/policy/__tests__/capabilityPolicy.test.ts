@@ -1,6 +1,12 @@
 import type { ToolCapability } from '../../capability';
 import type { IntentPrivacy } from '../../core/types';
-import { capabilityAllows, capabilityRequiredFor, removesData } from '../capabilityPolicy';
+import {
+  capabilityAllows,
+  capabilityRequiredFor,
+  reachesThirdParty,
+  removesData,
+  stricterPrivacy,
+} from '../capabilityPolicy';
 
 function privacy(overrides: Partial<IntentPrivacy> = {}): IntentPrivacy {
   return { access: 'read', sensitivity: 'personal', destructive: false, external: false, ...overrides };
@@ -111,5 +117,55 @@ describe('capabilityRequiredFor', () => {
         expect(capabilityAllows(label, capability)).toBe(rank[capability] >= rank[required]);
       }
     }
+  });
+});
+
+describe('stricterPrivacy', () => {
+  it('keeps the declared label when the call has nothing to add', () => {
+    const declared = privacy({ access: 'write' });
+
+    expect(stricterPrivacy(declared, undefined)).toBe(declared);
+  });
+
+  it('takes the wider access, the higher sensitivity, and either flag', () => {
+    expect(
+      stricterPrivacy(
+        privacy({ access: 'write', sensitivity: 'sensitive', external: true }),
+        privacy({ access: 'delete', sensitivity: 'low', destructive: true }),
+      ),
+    ).toStrictEqual({ access: 'delete', sensitivity: 'sensitive', destructive: true, external: true });
+  });
+
+  it('never lets a per-call label loosen the declared one', () => {
+    expect(
+      stricterPrivacy(
+        privacy({ access: 'delete', sensitivity: 'sensitive', destructive: true, external: true }),
+        privacy({ access: 'read', sensitivity: 'low' }),
+      ),
+    ).toStrictEqual({ access: 'delete', sensitivity: 'sensitive', destructive: true, external: true });
+  });
+
+  // Own-server is a loosening (a read after a lookup stops asking), so it holds only when every
+  // external label that applies says so.
+  it('marks the result own-server only when every external label says so', () => {
+    const own = privacy({ external: true, ownServer: true });
+    const thirdParty = privacy({ external: true });
+    const local = privacy();
+
+    expect(stricterPrivacy(own, local)).toStrictEqual(own);
+    expect(stricterPrivacy(own, own)).toStrictEqual(own);
+    expect(stricterPrivacy(own, thirdParty)).toStrictEqual(thirdParty);
+    expect(stricterPrivacy(thirdParty, own)).toStrictEqual(thirdParty);
+    expect(stricterPrivacy(local, own)).toStrictEqual(own);
+    expect(stricterPrivacy(local, privacy({ ownServer: true }))).toStrictEqual(local);
+  });
+});
+
+describe('reachesThirdParty', () => {
+  it('is any external label not marked own-server', () => {
+    expect(reachesThirdParty(privacy({ external: true }))).toBe(true);
+    expect(reachesThirdParty(privacy({ external: true, ownServer: false }))).toBe(true);
+    expect(reachesThirdParty(privacy({ external: true, ownServer: true }))).toBe(false);
+    expect(reachesThirdParty(privacy())).toBe(false);
   });
 });

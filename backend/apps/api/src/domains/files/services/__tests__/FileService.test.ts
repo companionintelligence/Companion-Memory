@@ -1,5 +1,6 @@
 import { createHash } from 'crypto';
 
+import { CreateMultipartUploadCommand, UploadPartCommand } from '@aws-sdk/client-s3';
 import { NotFoundException } from '@nestjs/common';
 
 import { SYSTEM_USER, type UserServiceContext } from '@ci/common/context';
@@ -198,6 +199,53 @@ describe('FileService.create — hash dedup', () => {
   });
 });
 
+// An upload's direct eventId pinned the file to any existing event, another account's included.
+describe("FileService.create — a direct eventId must be one of the caller's own events", () => {
+  const EVENT_ID = '0190f1e2-3c4d-7e5f-8a9b-0c1d2e3f4a5b';
+
+  function withEvents(owned: boolean) {
+    const repo = {
+      ...makeRepo(),
+      manager: { query: jest.fn().mockResolvedValue(owned ? [{ '?column?': 1 }] : []) },
+    };
+    repo.findOne.mockResolvedValue(null);
+    const { service, s3Send } = makeService(repo);
+
+    return { service, repo, s3Send };
+  }
+
+  it("stores the link to an event of the caller's, after asking ci.events for that owner", async () => {
+    const { service, repo } = withEvents(true);
+
+    await service.create(ownerCtx, { buffer: Buffer.from('bytes'), filename: 'a.png', eventId: EVENT_ID });
+
+    expect(repo.manager.query).toHaveBeenCalledWith(expect.stringContaining('FROM ci.events'), [
+      EVENT_ID,
+      'owner-1',
+    ]);
+    expect((repo.save.mock.calls[0][0] as Record<string, unknown>).eventId).toBe(EVENT_ID);
+  });
+
+  it("refuses another account's event, or one that does not exist, and stores nothing", async () => {
+    const { service, repo, s3Send } = withEvents(false);
+
+    await expect(
+      service.create(ownerCtx, { buffer: Buffer.from('bytes'), eventId: EVENT_ID }),
+    ).rejects.toThrow('eventId names no event of yours');
+    expect(repo.save).not.toHaveBeenCalled();
+    expect(s3Send).not.toHaveBeenCalled();
+  });
+
+  it('refuses a value that is not an event id with a 400, not a database error', async () => {
+    const { service, repo } = withEvents(true);
+
+    await expect(
+      service.create(ownerCtx, { buffer: Buffer.from('bytes'), eventId: 'not-a-uuid' }),
+    ).rejects.toThrow('eventId must be an event id');
+    expect(repo.manager.query).not.toHaveBeenCalled();
+  });
+});
+
 describe('FileService.create — a write a unique index refuses', () => {
   // At most one live PLAYBACK per original (files_one_playback_per_parent_uniq).
   // The bytes are PUT before the row, so a refused insert strands them unless
@@ -332,6 +380,30 @@ describe('FileService.uploadWithDedupInfo', () => {
     });
   });
 
+  it('still notifies on a dedup hit when memoryCapture is set, carrying the flag', async () => {
+    const repo = makeRepo();
+    const existing = { id: 'existing-id', userId: 'owner-1', hash: 'dupe-hash', bucket: null, key: null };
+    repo.findOne.mockResolvedValue(existing);
+    const { service, eventService } = makeService(repo);
+
+    await service.uploadWithDedupInfo(ownerCtx, {
+      buffer: Buffer.from('duplicate bytes'),
+      filename: 'dup.jpg',
+      memoryCapture: true,
+      capturedAt: new Date('2026-10-14T22:46:00Z'),
+    });
+
+    expect(eventService.send).toHaveBeenCalledWith(FileUploadedEvent, {
+      fileId: 'existing-id',
+      userId: 'owner-1',
+      thingCapture: false,
+      skipDescription: false,
+      model: undefined,
+      memoryCapture: true,
+      capturedAt: '2026-10-14T22:46:00.000Z',
+    });
+  });
+
   it('creates a new ORIGINAL file and fires FileUploadedEvent with deduped:false semantics when there is no match', async () => {
     const repo = makeRepo();
     repo.findOne.mockResolvedValue(null);
@@ -452,5 +524,365 @@ describe('FileService by-key readers — getFileContent / getFileStream', () => 
 
     expect(Buffer.concat(chunks).toString('utf8')).toBe('x');
     expect(repo.findOne).not.toHaveBeenCalled();
+  });
+});
+
+describe('FileService signed links — what the browser is told to do with the bytes', () => {
+  const KEY = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+
+  async function signedQuery(row: { contentType: string; filename?: string | null }) {
+    const repo = makeRepo();
+    repo.findOne.mockResolvedValue({
+      id: 'file-1',
+      userId: 'owner-1',
+      bucket: 'ci',
+      key: KEY,
+      filename: null,
+      ...row,
+    });
+    const { service } = makeService(repo);
+
+    const signed = await service.findById(ownerCtx, 'file-1');
+
+    expect(signed?.url).toMatch(new RegExp(`^/[^?]*${KEY}\\?`));
+
+    return new URLSearchParams(signed!.url!.split('?')[1]);
+  }
+
+  it('downloads a stored HTML file instead of rendering it on the app origin', async () => {
+    const query = await signedQuery({ contentType: 'text/html', filename: 'invoice.html' });
+
+    expect(query.get('response-content-type')).toBe('application/octet-stream');
+    expect(query.get('response-content-disposition')).toBe(
+      `attachment; filename="invoice.html"; filename*=UTF-8''invoice.html`,
+    );
+  });
+
+  it('downloads an SVG but keeps its type, so an <img> of it still draws', async () => {
+    const query = await signedQuery({ contentType: 'image/svg+xml', filename: 'logo.svg' });
+
+    expect(query.get('response-content-type')).toBe('image/svg+xml');
+    expect(query.get('response-content-disposition')).toMatch(/^attachment;/);
+  });
+
+  it('still opens photos, video and PDFs inline', async () => {
+    for (const contentType of ['image/jpeg', 'video/mp4', 'audio/mpeg', 'application/pdf']) {
+      const query = await signedQuery({ contentType, filename: 'x' });
+
+      expect(query.get('response-content-type')).toBe(contentType);
+      expect(query.has('response-content-disposition')).toBe(false);
+    }
+  });
+
+  it('signs a PDF with the bare type the gateway matches on to skip its sandbox', async () => {
+    const repo = makeRepo();
+    repo.findOne.mockResolvedValue({
+      id: 'f',
+      userId: 'owner-1',
+      bucket: 'ci',
+      key: KEY,
+      contentType: 'application/pdf',
+    });
+    const { service } = makeService(repo);
+
+    const signed = await service.findById(ownerCtx, 'f');
+
+    // infrastructure/gateway/nginx.conf, the /static/ location for signed links, matches this exact text.
+    expect(signed?.url).toMatch(/[?&]response-content-type=application%2Fpdf(&|$)/);
+  });
+});
+
+describe('FileService.resignLinks — a fresh link for one that expired', () => {
+  const KEY = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const OTHER = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+  const row = {
+    id: 'file-1',
+    userId: 'owner-1',
+    bucket: 'ci',
+    key: KEY,
+    contentType: 'image/jpeg',
+    filename: null,
+  };
+
+  function serviceWith(rows: Array<Record<string, unknown>>) {
+    const repo = { ...makeRepo(), find: jest.fn().mockResolvedValue(rows) };
+    const { service } = makeService(repo);
+
+    return { service, repo };
+  }
+
+  it('re-signs the same object, whatever form the app holds the old link in', async () => {
+    const { service, repo } = serviceWith([row]);
+    const old = `/ci/${KEY}?X-Amz-Expires=300&X-Amz-Signature=old`;
+
+    const fresh = await service.resignLinks(ownerCtx, [
+      `https://memory.example/static${old}`,
+      `/static${old}`,
+      old,
+    ]);
+
+    for (const link of fresh) {
+      expect(link).toMatch(new RegExp(`^/ci/${KEY}\\?`));
+      expect(link).toContain('X-Amz-Signature=');
+      expect(link).not.toContain('X-Amz-Signature=old');
+    }
+
+    // One lookup, scoped to the caller's own rows.
+    expect(repo.find).toHaveBeenCalledTimes(1);
+    expect(repo.find.mock.calls[0][0].where.userId).toBe('owner-1');
+  });
+
+  it('answers null for a link to someone else’s file, or to nothing of ours', async () => {
+    // The repository only returns the caller's rows; OTHER is not among them.
+    const { service } = serviceWith([row]);
+
+    const fresh = await service.resignLinks(ownerCtx, [
+      `/static/ci/${OTHER}?X-Amz-Signature=x`,
+      'https://elsewhere.example/picture.jpg',
+      `/static/ci/not-a-uuid?X-Amz-Signature=x`,
+      `/static/ci/${KEY}/extra?X-Amz-Signature=x`,
+      `/static/ci/${KEY}?X-Amz-Signature=x`,
+    ]);
+
+    expect(fresh.slice(0, 4)).toEqual([null, null, null, null]);
+    expect(fresh[4]).toMatch(new RegExp(`^/ci/${KEY}\\?`));
+  });
+
+  it('does not query at all when no link could name a file', async () => {
+    const { service, repo } = serviceWith([]);
+
+    await expect(service.resignLinks(ownerCtx, ['https://elsewhere.example/a.jpg', ''])).resolves.toEqual([
+      null,
+      null,
+    ]);
+    expect(repo.find).not.toHaveBeenCalled();
+  });
+
+  it('returns null for a link with malformed path encoding', async () => {
+    const { service, repo } = serviceWith([row]);
+
+    await expect(service.resignLinks(ownerCtx, ['/static/ci/%E0%A4%A'])).resolves.toEqual([null]);
+    expect(repo.find).not.toHaveBeenCalled();
+  });
+
+  it('a row in another bucket is not the object the link named', async () => {
+    const { service } = serviceWith([{ ...row, bucket: 'other-bucket' }]);
+
+    await expect(service.resignLinks(ownerCtx, [`/static/ci/${KEY}?X-Amz-Signature=x`])).resolves.toEqual([
+      null,
+    ]);
+  });
+});
+
+describe('FileService.openObjectWriter writes an object a piece at a time', () => {
+  const MiB = 1024 * 1024;
+  const ctx = { userId: SYSTEM_USER } as unknown as UserServiceContext;
+
+  /** The commands the writer sent, by name, with their input. */
+  function storeAnswering(s3Send: jest.Mock) {
+    const sent: Array<{ name: string; input: Record<string, unknown> }> = [];
+
+    s3Send.mockImplementation(
+      async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        sent.push({ name: command.constructor.name, input: command.input });
+
+        if (command instanceof CreateMultipartUploadCommand) {
+          return { UploadId: 'upload-1' };
+        }
+
+        if (command instanceof UploadPartCommand) {
+          return { ETag: `"etag-${String(command.input.PartNumber)}"` };
+        }
+
+        return {};
+      },
+    );
+
+    return sent;
+  }
+
+  const bodySize = (input: Record<string, unknown>) => (input.Body as Buffer).length;
+
+  it('stores an object smaller than one part with a single PutObject', async () => {
+    const { service, s3Send } = makeService(makeRepo());
+    const sent = storeAnswering(s3Send);
+    const writer = service.openObjectWriter(ctx, 'bucket', 'key-1');
+
+    await writer.write(Buffer.from('hello '));
+    await writer.write(Buffer.from('world'));
+    await writer.finish();
+
+    expect(sent.map((command) => command.name)).toEqual(['PutObjectCommand']);
+    expect((sent[0].input.Body as Buffer).toString('utf8')).toBe('hello world');
+  });
+
+  it('hands a lone piece to the store as it is, without a copy', async () => {
+    const { service, s3Send } = makeService(makeRepo());
+    const sent = storeAnswering(s3Send);
+    const writer = service.openObjectWriter(ctx, 'bucket', 'key-1');
+    const piece = Buffer.from('one chunk');
+
+    await writer.write(piece);
+    await writer.finish();
+
+    expect(sent[0].input.Body).toBe(piece);
+  });
+
+  it('stores an empty object', async () => {
+    const { service, s3Send } = makeService(makeRepo());
+    const sent = storeAnswering(s3Send);
+    const writer = service.openObjectWriter(ctx, 'bucket', 'key-1');
+
+    await writer.write(Buffer.alloc(0));
+    await writer.finish();
+
+    expect(sent.map((command) => command.name)).toEqual(['PutObjectCommand']);
+    expect(bodySize(sent[0].input)).toBe(0);
+  });
+
+  it('sends a larger object in parts as it fills them, holding no more than one', async () => {
+    const { service, s3Send } = makeService(makeRepo());
+    const sent = storeAnswering(s3Send);
+    const writer = service.openObjectWriter(ctx, 'bucket', 'key-1', 10 * MiB);
+
+    await writer.write(Buffer.alloc(3 * MiB, 1));
+    expect(sent).toHaveLength(0);
+
+    // Past the 5 MiB minimum: the first part goes out before the next piece.
+    await writer.write(Buffer.alloc(3 * MiB, 2));
+    expect(sent.map((command) => command.name)).toEqual([
+      'CreateMultipartUploadCommand',
+      'UploadPartCommand',
+    ]);
+
+    await writer.write(Buffer.alloc(3 * MiB, 3));
+    await writer.write(Buffer.alloc(1 * MiB, 4));
+    await writer.finish();
+
+    expect(sent.map((command) => command.name)).toEqual([
+      'CreateMultipartUploadCommand',
+      'UploadPartCommand',
+      'UploadPartCommand',
+      'CompleteMultipartUploadCommand',
+    ]);
+    expect(
+      sent.filter((command) => command.name === 'UploadPartCommand').map((c) => bodySize(c.input)),
+    ).toEqual([6 * MiB, 4 * MiB]);
+    expect(sent[3].input).toEqual({
+      Bucket: 'bucket',
+      Key: 'key-1',
+      UploadId: 'upload-1',
+      MultipartUpload: {
+        Parts: [
+          { ETag: '"etag-1"', PartNumber: 1 },
+          { ETag: '"etag-2"', PartNumber: 2 },
+        ],
+      },
+    });
+  });
+
+  it('aborts an upload it has started, so none of its parts stay in the store', async () => {
+    const { service, s3Send } = makeService(makeRepo());
+    const sent = storeAnswering(s3Send);
+    const writer = service.openObjectWriter(ctx, 'bucket', 'key-1');
+
+    await writer.write(Buffer.alloc(6 * MiB));
+    await writer.abort();
+    await writer.abort();
+
+    expect(sent.map((command) => command.name)).toEqual([
+      'CreateMultipartUploadCommand',
+      'UploadPartCommand',
+      'AbortMultipartUploadCommand',
+    ]);
+    expect(sent[2].input).toEqual({ Bucket: 'bucket', Key: 'key-1', UploadId: 'upload-1' });
+  });
+
+  it('has nothing to abort before the first part and stores nothing', async () => {
+    const { service, s3Send } = makeService(makeRepo());
+    const sent = storeAnswering(s3Send);
+    const writer = service.openObjectWriter(ctx, 'bucket', 'key-1');
+
+    await writer.write(Buffer.from('partial'));
+    await writer.abort();
+
+    expect(sent).toHaveLength(0);
+  });
+
+  it('refuses a second finish, which would store an empty object over the first', async () => {
+    const { service, s3Send } = makeService(makeRepo());
+    const sent = storeAnswering(s3Send);
+    const writer = service.openObjectWriter(ctx, 'bucket', 'key-1');
+
+    await writer.write(Buffer.alloc(6 * MiB));
+    await writer.finish();
+
+    await expect(writer.finish()).rejects.toThrow('is closed');
+    await expect(writer.write(Buffer.from('more'))).rejects.toThrow('is closed');
+    expect(sent.map((command) => command.name)).toEqual([
+      'CreateMultipartUploadCommand',
+      'UploadPartCommand',
+      'CompleteMultipartUploadCommand',
+    ]);
+  });
+
+  it('closes after a part fails to go out, so a finish cannot store the object without it', async () => {
+    const { service, s3Send } = makeService(makeRepo());
+    const sent = storeAnswering(s3Send);
+    const writer = service.openObjectWriter(ctx, 'bucket', 'key-1');
+
+    await writer.write(Buffer.alloc(6 * MiB, 1));
+    await writer.write(Buffer.alloc(3 * MiB, 2));
+    // The second part: its 6 MiB are dropped from memory before the request.
+    s3Send.mockRejectedValueOnce(new Error('store down'));
+    await expect(writer.write(Buffer.alloc(3 * MiB, 3))).rejects.toThrow('store down');
+
+    await expect(writer.finish()).rejects.toThrow('is closed');
+    await expect(writer.write(Buffer.alloc(1))).rejects.toThrow('is closed');
+    await writer.abort();
+
+    expect(sent.map((command) => command.name)).toEqual([
+      'CreateMultipartUploadCommand',
+      'UploadPartCommand',
+      'AbortMultipartUploadCommand',
+    ]);
+  });
+
+  it('aborts an upload whose finish failed', async () => {
+    const { service, s3Send } = makeService(makeRepo());
+    const sent = storeAnswering(s3Send);
+    const writer = service.openObjectWriter(ctx, 'bucket', 'key-1');
+
+    await writer.write(Buffer.alloc(6 * MiB));
+    s3Send.mockRejectedValueOnce(new Error('store down'));
+
+    await expect(writer.finish()).rejects.toThrow('store down');
+    await writer.abort();
+
+    expect(sent.map((command) => command.name)).toEqual([
+      'CreateMultipartUploadCommand',
+      'UploadPartCommand',
+      'AbortMultipartUploadCommand',
+    ]);
+  });
+
+  it.each([
+    ['a 100 GiB object', 100 * 1024 * MiB, Math.ceil((100 * 1024 * MiB) / 10_000)],
+    ['a 10 TiB object, capped at 64 MiB', 10 * 1024 * 1024 * MiB, 64 * MiB],
+  ])('sizes the parts of %s to stay within the part count', async (_, expected, partBytes) => {
+    const { service, s3Send } = makeService(makeRepo());
+    const sent = storeAnswering(s3Send);
+    const writer = service.openObjectWriter(ctx, 'bucket', 'key-1', expected);
+
+    await writer.write(Buffer.alloc(partBytes - 1));
+    expect(sent).toHaveLength(0);
+
+    await writer.write(Buffer.alloc(1));
+    expect(sent.map((command) => command.name)).toEqual([
+      'CreateMultipartUploadCommand',
+      'UploadPartCommand',
+    ]);
+
+    await writer.abort();
   });
 });

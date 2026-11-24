@@ -3,7 +3,10 @@ import os from 'os';
 import path from 'path';
 
 import type { StagedEntity } from '../../entities/StagedEntityEntity';
+import type { StagedItem } from '../../entities/StagedItemEntity';
+import { toCanonical } from '../../push/canonical';
 import { entityTypeFor } from '../../push/entities';
+import { toCommunicationInput } from '../../push/inputs';
 import { hashItem, resolveEntityType } from '../../staging/identity';
 import { GoogleVoiceFileImporter, stripCopyIndex, threadKeyFor } from '../googlevoice';
 import type { Entity, ImportParams, Relationship } from '../timeline';
@@ -215,8 +218,7 @@ describe('Google Voice datasource', () => {
     const attachment = pipeline.find((p) => p.item?.metadata?.Attachment === 'image');
     expect(attachment).toBeDefined();
     const mediaAttachments = attachment!.item.metadata?.MediaAttachments as
-      | Array<{ path: string; filename: string; type: string; mimetype: string }>
-      | undefined;
+      Array<{ path: string; filename: string; type: string; mimetype: string }> | undefined;
     expect(mediaAttachments).toHaveLength(1);
     expect(mediaAttachments![0].type).toBe('image');
     expect(mediaAttachments![0].mimetype).toBe('image/jpeg');
@@ -708,6 +710,313 @@ describe('Google Voice participants', () => {
     expect(attachment.item.metadata.Direction).toBeUndefined();
     expect(attachment.item.metadata.To).toBeUndefined();
     expect(participantEdges(attachment)).toHaveLength(0);
+  });
+});
+
+/*
+ * Regression: a Google Voice GROUP conversation names its members ONCE, in a
+ * `<div class="participants">` header, and every message block names only its
+ * SENDER. An outbound message's sender is the owner token, so for the owner's
+ * own side of a group chat that header is the only place the recipients are
+ * written — and the parser never read it. It took the recipient from whoever had
+ * spoken EARLIER in the file instead, which is nobody for a message sent before
+ * the first reply. On the reference export 446 of the 4,096 outbound group texts
+ * therefore reached ci.communications with no recipient at all (and, on an
+ * account with no self person yet, no sender either: the "message from nobody to
+ * nobody" the `comms-missing-participants` doctor check counts), while the other
+ * 3,650 named a single member — the last to speak — as if the whole group were
+ * that one person.
+ *
+ * The same defect shape twitter.ts fixed for group DMs ("a group messageCreate
+ * has no recipientId, so without this a group DM imports with no recipients at
+ * all"), repaired the way imessage.ts records a group: the members as
+ * `Recipients`, and one outbound `participant` edge each, which is what
+ * `PushStage.resolveCorrespondents` reads as "everyone else" on an outbound
+ * message.
+ *
+ * The markup below is the shape a real export ships (the header and the message
+ * blocks inside `hChatLog`), with invented people. A fixture written to match the
+ * parser could never falsify the parser's assumption, so the header is spelled
+ * the way the exporter spells it.
+ */
+describe('Google Voice group conversations name their members', () => {
+  const GROUP_FILE = 'Group Conversation - 2025-03-01T10_00_00Z.html';
+  const OWNER =
+    '<cite class="sender vcard"><a class="tel" href="tel:+15551234567">' +
+    '<abbr class="fn" title="">Me</abbr></a></cite>';
+  const member = (name: string, phone: string): string =>
+    `<cite class="sender vcard"><a class="tel" href="tel:${phone}"><span class="fn">${name}</span></a></cite>`;
+  const ADA = member('Ada Example', '+15550001111');
+  const BEN = member('Ben Example', '+15550002222');
+
+  const message = (iso: string, from: string, text: string): string =>
+    `<div class="message"><abbr class="dt" title="${iso}">Mar 1</abbr>:\n${from}:\n<q>${text}<br></q></div>`;
+
+  const groupHtml = (header: string[] | null, messages: string[]): string =>
+    '<html><body><div class="hChatLog hfeed">' +
+    (header === null
+      ? ''
+      : `<div class="participants">Group conversation with:\n${header.join(', ')}</div>\n`) +
+    `${messages.join('\n')}</div></body></html>`;
+
+  const importDir = async (dir: string): Promise<EmittedGraph[]> => {
+    const pipeline: EmittedGraph[] = [];
+    await new GoogleVoiceFileImporter().fileImport({}, { filename: path.basename(dir), fullPath: dir }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    return pipeline;
+  };
+
+  const newExport = (): string => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gv-group-'));
+    fs.mkdirSync(path.join(dir, 'Calls'));
+    fs.writeFileSync(
+      path.join(dir, 'Phones.vcf'),
+      'BEGIN:VCARD\nVERSION:3.0\nFN:My Phone\nTEL:+15551234567\nEND:VCARD\n',
+    );
+
+    return dir;
+  };
+
+  const importFile = async (
+    filename: string,
+    html: string,
+    attachments: string[] = [],
+  ): Promise<EmittedGraph[]> => {
+    const dir = newExport();
+    fs.writeFileSync(path.join(dir, 'Calls', filename), html);
+    for (const a of attachments) {
+      fs.writeFileSync(path.join(dir, 'Calls', a), 'jpeg-bytes');
+    }
+
+    return importDir(dir);
+  };
+
+  const byText = (pipeline: EmittedGraph[], text: string): EmittedGraph =>
+    pipeline.find((p) => p.item?.metadata?.Text === text)!;
+
+  const participantEdges = (g: EmittedGraph): Relationship[] =>
+    (g.edges ?? []).filter((e) => e.relation === 'participant');
+
+  it('names the whole group on an outbound message sent before anyone else spoke', async () => {
+    const pipeline = await importFile(
+      GROUP_FILE,
+      groupHtml([ADA, BEN], [message('2025-03-01T10:00:00.000Z', OWNER, 'anyone up?')]),
+    );
+
+    const sent = byText(pipeline, 'anyone up?');
+    // Guard against the vacuous pass: the message must exist and be the owner's.
+    expect(sent).toBeDefined();
+    expect(sent.item.metadata.Direction).toBe('outgoing');
+
+    expect(sent.item.metadata.Recipients).toEqual(['Ada Example', 'Ben Example']);
+
+    const edges = participantEdges(sent);
+    expect(edges.map((e) => e.to.entity?.name)).toEqual(['Ada Example', 'Ben Example']);
+    expect(edges.every((e) => e.metadata?.direction === 'outgoing')).toBe(true);
+    // Identity attribute, or the member can never be joined to the same number
+    // arriving from a vCard (see imessage.ts contactEntity).
+    expect(edges.map((e) => e.to.entity?.attributes)).toEqual([
+      [{ name: 'phone', value: '+15550001111', identity: true }],
+      [{ name: 'phone', value: '+15550002222', identity: true }],
+    ]);
+  });
+
+  it('reaches the column the linking legs read: a recipient list, and no sender', async () => {
+    // `Recipients` is only worth emitting if the push turns it into
+    // `participants_metadata.to` — the raw strings enrich.person_link and the
+    // `link_communications` backfill resolve into `to_entity_ids`. Staged
+    // metadata round-trips through JSON, so the item goes through it here too.
+    const pipeline = await importFile(
+      GROUP_FILE,
+      groupHtml([ADA, BEN], [message('2025-03-01T10:00:00.000Z', OWNER, 'anyone up?')]),
+    );
+    const sent = byText(pipeline, 'anyone up?').item;
+
+    const input = toCommunicationInput(
+      toCanonical({
+        dataSource: 'google_voice',
+        contentHash: 'staged-hash',
+        classification: 'message',
+        occurredAt: sent.timestamp!,
+        timespanEnd: null,
+        createdAt: new Date('2025-03-02T00:00:00Z'),
+        metadata: JSON.parse(JSON.stringify(sent.metadata)),
+        filename: sent.content.filename ?? null,
+        mediaType: null,
+        latitude: null,
+        longitude: null,
+        originalLocation: null,
+        intermediateLocation: null,
+      } as StagedItem),
+    );
+
+    expect(input.direction).toBe('outbound');
+    expect(input.participants_metadata).toEqual({ to: ['Ada Example', 'Ben Example'] });
+  });
+
+  it('names the whole group once someone has replied, not just the last to speak', async () => {
+    const pipeline = await importFile(
+      GROUP_FILE,
+      groupHtml(
+        [ADA, BEN],
+        [
+          message('2025-03-01T10:00:00.000Z', ADA, 'morning'),
+          message('2025-03-01T10:01:00.000Z', OWNER, 'morning all'),
+        ],
+      ),
+    );
+
+    const sent = byText(pipeline, 'morning all');
+    expect(sent).toBeDefined();
+    expect(sent.item.metadata.Recipients).toEqual(['Ada Example', 'Ben Example']);
+    expect(participantEdges(sent).map((e) => e.to.entity?.name)).toEqual(['Ada Example', 'Ben Example']);
+  });
+
+  it('names the whole group on an outbound MMS too', async () => {
+    const stub = 'Group Conversation - 2025-03-01T10_00_00Z-1-1';
+    const pipeline = await importFile(
+      GROUP_FILE,
+      groupHtml(
+        [ADA, BEN],
+        [
+          `<div class="message"><abbr class="dt" title="2025-03-01T10:00:00.000Z">Mar 1</abbr>:\n${OWNER}:\n` +
+            `<q></q><div><img src="${stub}" /></div></div>`,
+        ],
+      ),
+      [`${stub}.jpg`],
+    );
+
+    const attachment = pipeline.find((p) => p.item?.metadata?.Attachment === 'image')!;
+    expect(attachment).toBeDefined();
+    expect(attachment.item.metadata.Direction).toBe('outgoing');
+    expect(attachment.item.metadata.Recipients).toEqual(['Ada Example', 'Ben Example']);
+    expect(participantEdges(attachment).map((e) => e.to.entity?.name)).toEqual([
+      'Ada Example',
+      'Ben Example',
+    ]);
+  });
+
+  it('leaves an inbound group message as it was: the sender is the first edge, the owner the recipient', async () => {
+    const pipeline = await importFile(
+      GROUP_FILE,
+      groupHtml([ADA, BEN], [message('2025-03-01T10:00:00.000Z', ADA, 'morning')]),
+    );
+
+    const received = byText(pipeline, 'morning');
+    expect(received).toBeDefined();
+    expect(received.item.metadata.Sender).toBe('Ada Example');
+    expect(received.item.metadata.To).toBe('My Phone');
+    expect(received.item.metadata.Recipients).toBeUndefined();
+    expect(participantEdges(received).map((e) => e.to.entity?.name)).toEqual(['Ada Example']);
+    expect(participantEdges(received)[0].metadata?.direction).toBe('incoming');
+  });
+
+  it('leaves a one-to-one conversation alone: it has no header and reads its counterpart as before', async () => {
+    const dana = member('Dana Wu', '+15558887777');
+    const pipeline = await importFile(
+      'Dana Wu - Text - 2025-03-01T10_00_00Z.html',
+      groupHtml(null, [
+        message('2025-03-01T10:00:00.000Z', dana, 'hi'),
+        message('2025-03-01T10:01:00.000Z', OWNER, 'hello'),
+      ]),
+    );
+
+    const sent = byText(pipeline, 'hello');
+    expect(sent).toBeDefined();
+    expect(sent.item.metadata.To).toBe('Dana Wu');
+    expect(sent.item.metadata.Recipients).toBeUndefined();
+    expect(participantEdges(sent).map((e) => e.to.entity?.name)).toEqual(['Dana Wu']);
+  });
+
+  it('falls back to the last speaker when the header names nobody', async () => {
+    const pipeline = await importFile(
+      GROUP_FILE,
+      groupHtml(
+        [],
+        [
+          message('2025-03-01T10:00:00.000Z', ADA, 'morning'),
+          message('2025-03-01T10:01:00.000Z', OWNER, 'morning all'),
+        ],
+      ),
+    );
+
+    const sent = byText(pipeline, 'morning all');
+    expect(sent).toBeDefined();
+    expect(sent.item.metadata.To).toBe('Ada Example');
+    expect(sent.item.metadata.Recipients).toBeUndefined();
+    expect(participantEdges(sent).map((e) => e.to.entity?.name)).toEqual(['Ada Example']);
+  });
+
+  it('reads a member the export gives no name by their number, names each once, and never lists the owner', async () => {
+    const pipeline = await importFile(
+      GROUP_FILE,
+      groupHtml(
+        // The same member twice, the owner token in the header, and a member
+        // with a number and no name.
+        [ADA, member('', '+15550003333'), ADA, OWNER],
+        [message('2025-03-01T10:00:00.000Z', OWNER, 'anyone up?')],
+      ),
+    );
+
+    const sent = byText(pipeline, 'anyone up?');
+    expect(sent).toBeDefined();
+    expect(sent.item.metadata.Recipients).toEqual(['Ada Example', '+15550003333']);
+
+    const edges = participantEdges(sent);
+    expect(edges.map((e) => e.to.entity?.name)).toEqual(['Ada Example', '+15550003333']);
+    // "Me" must not become a Person (see 'the owner is not a contact').
+    expect(edges.map((e) => e.to.entity?.name)).not.toContain('Me');
+  });
+
+  it('does not change what identifies a message, so a re-import still lands on the rows already stored', async () => {
+    // `hashItem` is the staging key and, through it, the provenance triple that
+    // makes a re-import a no-op: the same message must hash the same whether or
+    // not the header was read. The same file is imported twice from one
+    // directory — before the header is there, then with it — so the path, which
+    // an undated message's identity falls back to, is the same too.
+    const dir = newExport();
+    const messages = [
+      message('2025-03-01T10:00:00.000Z', OWNER, 'anyone up?'),
+      message('2025-03-01T10:01:00.000Z', ADA, 'morning'),
+      message('2025-03-01T10:02:00.000Z', OWNER, 'morning all'),
+      // Undated: its identity rests on the fallback discriminator, which is the
+      // most exposed to a change in what the item carries.
+      message('not a date', OWNER, 'no clock'),
+    ];
+    const file = path.join(dir, 'Calls', GROUP_FILE);
+
+    fs.writeFileSync(file, groupHtml(null, messages));
+    const before = await importDir(dir);
+    fs.writeFileSync(file, groupHtml([ADA, BEN], messages));
+    const after = await importDir(dir);
+
+    const items = (pipeline: EmittedGraph[]): EmittedGraph['item'][] =>
+      pipeline.filter((p) => p.item).map((p) => p.item);
+    const hashes = (pipeline: EmittedGraph[]): string[] =>
+      items(pipeline).map((item) => hashItem(item, 'google_voice', 'fixed-content-digest'));
+
+    expect(items(before)).toHaveLength(4);
+    expect(hashes(after)).toEqual(hashes(before));
+
+    for (const [i, item] of items(after).entries()) {
+      const was = items(before)[i];
+      expect(item.id).toBeUndefined();
+      expect(item.classification).toBe(was.classification);
+      expect(item.content.filename).toBe(was.content.filename);
+      expect(item.timestamp).toEqual(was.timestamp);
+      expect(item.intermediateLocation).toBe(was.intermediateLocation);
+      // The thread key is the file, and stays the file: see threadKeyFor.
+      expect(item.metadata.ThreadId).toBe('googlevoice:file:Group Conversation - 2025-03-01T10_00_00Z');
+      expect(item.metadata.Conversation).toBeUndefined();
+    }
+
+    // Guard against the vacuous pass: the second import really did read the header.
+    expect(byText(before, 'anyone up?').item.metadata.Recipients).toBeUndefined();
+    expect(byText(after, 'anyone up?').item.metadata.Recipients).toEqual(['Ada Example', 'Ben Example']);
   });
 });
 

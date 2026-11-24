@@ -16,6 +16,10 @@ export class KnownPlaceCoordinatesInput {
  */
 @InputType()
 export class UpdateKnownPlaceInput {
+  /** Existing known-place relationship id when recategorizing a saved place. */
+  @Field(() => String, { nullable: true })
+  knownPlaceId?: string | null;
+
   @Field(() => String)
   label!: string;
 
@@ -47,4 +51,8 @@ export class UpdateKnownPlaceInput {
   /** manual | inferred | geocoded; defaults to manual on confirm. */
   @Field(() => String, { nullable: true })
   source?: string;
+
+  /** Complete tag set for the underlying Place entity. Omit to leave tags unchanged. */
+  @Field(() => [String], { nullable: true })
+  tags?: string[];
 }

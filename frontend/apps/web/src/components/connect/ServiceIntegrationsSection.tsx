@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
 
-import { useQuery, gql } from '@apollo/client';
-import { GlobalUID } from '@ci/common';
+import { gql } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
+import { GlobalUID, getWebOrigin } from '@ci/common';
 import { cn, Dialog, Button } from '@ci/shadcn';
 import {
   Activity,
@@ -34,7 +35,27 @@ import { useNavigate } from 'react-router-dom';
 
 import { SourceCard, type TrackedObject } from '@/components/connect/SourceCard';
 import { useBlueBubblesStatus } from '@/components/connect/useBlueBubblesStatus';
-import { GET_PROVIDERS, GET_OAUTH_CALLBACK_URL } from '@/queries';
+import {
+  GET_OAUTH_CALLBACK_URL,
+  GET_PROVIDERS,
+  type OAuthCallbackUrlQueryData,
+  type ProvidersQueryData,
+} from '@/queries';
+
+interface ConnectionsQueryData {
+  connections: {
+    edges: Array<{
+      node: {
+        id: string;
+        name: string | null;
+        active: boolean;
+        needsReauth: boolean;
+        providerId: string;
+        syncState: unknown;
+      };
+    }>;
+  };
+}
 
 const GET_CONNECTIONS = gql`
   query GetConnectionsForOnboarding {
@@ -131,7 +152,6 @@ export const SERVICE_PROVIDERS: ServiceProviderConfig[] = [
       { icon: MessageSquare, label: 'Posts' },
       { icon: Image, label: 'Photos' },
       { icon: Video, label: 'Videos' },
-      { icon: Users, label: 'Friends' },
     ],
   },
   {
@@ -189,6 +209,15 @@ export const SERVICE_PROVIDERS: ServiceProviderConfig[] = [
     tracks: [
       { icon: MessageSquare, label: 'Posts & comments' },
       { icon: Bookmark, label: 'Saved' },
+    ],
+  },
+  {
+    rawId: '01a10dc2-7dc5-7d4c-b3ab-7d3caaf7ebd3',
+    logo: '/branding/dropbox/logo.svg',
+    name: 'Dropbox',
+    tracks: [
+      { icon: Files, label: 'Files' },
+      { icon: FileText, label: 'Documents' },
     ],
   },
   {
@@ -264,16 +293,6 @@ export const SERVICE_PROVIDERS: ServiceProviderConfig[] = [
     ],
     disabled: true,
   },
-  {
-    rawId: 'dropbox',
-    logo: '/branding/dropbox/logo.svg',
-    name: 'Dropbox',
-    tracks: [
-      { icon: Files, label: 'Files' },
-      { icon: Folder, label: 'Shared folders' },
-    ],
-    disabled: true,
-  },
 ];
 
 /**
@@ -302,16 +321,16 @@ export function ServiceIntegrationsSection({
   onProviderSelect,
 }: ServiceIntegrationsSectionProps) {
   const navigate = useNavigate();
-  const { data: providersData } = useQuery(GET_PROVIDERS, {
+  const { data: providersData } = useQuery<ProvidersQueryData>(GET_PROVIDERS, {
     fetchPolicy: 'cache-and-network',
   });
-  const { data: connectionsData } = useQuery(GET_CONNECTIONS, {
+  const { data: connectionsData } = useQuery<ConnectionsQueryData>(GET_CONNECTIONS, {
     fetchPolicy: 'cache-and-network',
   });
-  const { data: oauthData } = useQuery(GET_OAUTH_CALLBACK_URL);
+  const { data: oauthData } = useQuery<OAuthCallbackUrlQueryData>(GET_OAUTH_CALLBACK_URL);
   const blueBubbles = useBlueBubblesStatus();
 
-  const callbackUrl = oauthData?.oAuthCallbackUrl ?? `${window.location.origin}/oauth/callback`;
+  const callbackUrl = oauthData?.oAuthCallbackUrl ?? `${getWebOrigin()}/oauth/callback`;
 
   const [setupProvider, setSetupProvider] = useState<SetupProviderState | null>(null);
 
@@ -345,7 +364,8 @@ export function ServiceIntegrationsSection({
       (edge: {
         node: {
           id: string;
-          name: string;
+          name: string | null;
+          authType: string | null;
           localOnly: boolean;
           providerKeys: unknown;
           appSetupUrl: string | null;
@@ -365,9 +385,16 @@ export function ServiceIntegrationsSection({
 
   function handleProviderClick(rawId: string) {
     const provider = providerMap[rawId];
-    const isLocalOnlyWithoutKeys = provider?.localOnly && !provider?.providerKeys;
+    // The setup dialog is for an OAuth app, so it is for OAuth providers only.
+    // `localOnly` alone is not that signal: the server forces it true for every
+    // oauth2 provider while there are no CI Portal credentials, but Signal is
+    // seeded `local_only` for its own reason (signal-cli runs on the appliance's
+    // network, there is no cloud proxy) and signs in with an API key that its
+    // provider page asks for — an "OAuth Setup" dialog for it described an app
+    // that does not exist.
+    const needsOwnOAuthApp = provider?.authType === 'oauth2' && provider.localOnly && !provider.providerKeys;
 
-    if (isLocalOnlyWithoutKeys) {
+    if (needsOwnOAuthApp) {
       setSetupProvider({
         name: provider.name ?? 'Provider',
         appSetupUrl: provider.appSetupUrl ?? null,
@@ -483,7 +510,7 @@ export function ServiceIntegrationsSection({
             <li>
               With the OAuth app&apos;s ID/Client ID and Secret in hand, go to{' '}
               <a href="/settings/oauth" className="underline text-blue-600 hover:text-blue-800">
-                Settings → OAuth Credentials
+                Settings → OAuth credentials
               </a>{' '}
               in this app, and copy the app&apos;s ID/Client ID to the &apos;Client ID&apos; field for that
               provider, and the app&apos;s secret to &apos;Client Secret&apos; field. Make sure to save. Then

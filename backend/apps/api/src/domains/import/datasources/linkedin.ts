@@ -8,7 +8,7 @@ import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import { readHead } from './sniff';
 import type { ImportParams } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 // Message/note cells keep their whitespace verbatim; callers trim where needed.
 const NO_TRIM = { trimValues: false } as const;
@@ -387,11 +387,7 @@ export class LinkedInFileImporter implements FileImporter {
           id: 'linkedin_conn_' + (row.URL || name),
           classification: 'social',
           timestamp: ts,
-          content: {
-            filename: 'connection.txt',
-            mediaType: 'text/plain',
-            data: async () => Buffer.from(name),
-          },
+          content: textContent('connection.txt', name),
           metadata: {
             Title: `Connected with ${name}`,
             Name: name,
@@ -439,11 +435,7 @@ export class LinkedInFileImporter implements FileImporter {
         item: {
           classification: 'message',
           timestamp: ts,
-          content: {
-            filename: 'message.txt',
-            mediaType: 'text/plain',
-            data: async () => Buffer.from(content),
-          },
+          content: textContent('message.txt', content),
           metadata: {
             Sender: row.FROM || undefined,
             To: row.TO || undefined,

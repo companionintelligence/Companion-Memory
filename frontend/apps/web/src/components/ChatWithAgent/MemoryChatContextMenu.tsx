@@ -12,6 +12,7 @@ import { useDeviceLayout } from '@ci/common';
 import { ContextMenu, Sheet, cn } from '@ci/shadcn';
 import { useTranslation } from 'react-i18next';
 
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 import type { AgentChatContext } from '@/lib/agentChat';
 import { entityToAgentChatContext } from '@/lib/entityToAgentChatContext';
 import type { MemoryEntity } from '@/pages/MemoryPage/useEntityService';
@@ -65,7 +66,8 @@ export function ChatAbout({ context, children, className }: ChatAboutProps) {
 
 /** Memory explorer items: convert the entity, then reuse {@link ChatAbout}. */
 export function MemoryChatAbout({ entity, children, className }: MemoryChatAboutProps) {
-  const context = useMemo(() => entityToAgentChatContext(entity), [entity]);
+  const fmt = useDateTimeFormat();
+  const context = useMemo(() => entityToAgentChatContext(entity, fmt), [entity, fmt]);
 
   return (
     <ChatAbout context={context} className={className}>

@@ -50,6 +50,7 @@ describe('ContentService — ContentCreatedEvent emission contract', () => {
     find: jest.Mock;
     metadata: { columns: unknown[] };
     createQueryBuilder: jest.Mock;
+    query: jest.Mock;
   };
   let eventRepo: { createQueryBuilder: jest.Mock };
   let signalling: { send: jest.Mock };
@@ -71,6 +72,8 @@ describe('ContentService — ContentCreatedEvent emission contract', () => {
       find: jest.fn(async () => []),
       metadata: { columns: Array.from({ length: 10 }) },
       createQueryBuilder: jest.fn(() => makeInsertBuilder(baseInsert)),
+      // insertBaseRows' ownership check: no base row held by another owner.
+      query: jest.fn(async () => []),
     };
     repo = {
       create: jest.fn((x: { id?: string }) => x),

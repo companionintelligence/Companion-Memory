@@ -1,5 +1,6 @@
 import { Badge, Button, Card } from '@ci/shadcn';
 
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 import { appLabel } from '@/lib/appLabel';
 
 import type { ApprovalReason, PendingApproval } from './useApprovals';
@@ -21,6 +22,10 @@ const REASON_COPY: Record<ApprovalReason, string> = {
   'destructive-requires-confirmation': 'This removes data. It cannot be undone from here.',
   'external-leaves-appliance': 'This sends data to a third party, off your appliance.',
   'confirmation-required': 'This is irreversible, and an installed app asked for it.',
+  'write-after-lookup':
+    'Chat wants to make this change right after looking something up, so it waits for your OK.',
+  'read-after-lookup':
+    'Chat wants to send this question to a third-party service right after looking something up, so it waits for your OK. The answer shows here once you approve.',
   'not-local-capable': 'This needs the appliance, and cannot be answered on-device.',
   'capability-insufficient': 'This caller is not permitted to run it.',
   allowed: 'This is waiting for you.',
@@ -37,6 +42,7 @@ interface Props {
 }
 
 export function ApprovalCard({ action, onAnswer, busy = false }: Props) {
+  const fmt = useDateTimeFormat();
   const expires = action.expiresAt ? new Date(action.expiresAt) : null;
 
   return (
@@ -71,7 +77,7 @@ export function ApprovalCard({ action, onAnswer, busy = false }: Props) {
 
       <div className="flex items-center justify-between gap-3">
         <span className="text-xs text-muted-foreground">
-          {expires ? `Expires ${expires.toLocaleString()}` : 'No expiry'}
+          {expires ? `Expires ${fmt.dateTime(expires)}` : 'No expiry'}
         </span>
         <div className="flex gap-2">
           {/* Decline first, and not styled as the destructive action: the

@@ -1,11 +1,26 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 
 import { type UserServiceContext } from '@ci/common/context';
-import { PersonService, UserContextService } from '@ci/domains/memory';
+import { PersonService, UserContextService, ensureSelfEntityId } from '@ci/domains/memory';
 
 const CACHE_TTL_MS = 60_000;
 
-interface ChatModelPreferences {
+export interface MemoryGovernancePreferences {
+  /** Whether automatic fact supersession & conflict tracking (`knowl` pattern) is enabled. Defaults true. */
+  memoryGovernanceEnabled: boolean;
+  /** Whether exponential temporal recency decay in hybrid recall is enabled. Defaults true. */
+  memoryRecencyDecayEnabled: boolean;
+}
+
+export interface DecisionEnginePreferences {
+  /** Whether the Contrastive ("System 1", `CLM` pattern) fast decision layer is enabled. Defaults true. */
+  contrastiveDecisionEnabled: boolean;
+  /** Whether the Generative ("System 2") LLM decision / fallback layer is enabled. Defaults true. */
+  generativeDecisionEnabled: boolean;
+}
+
+interface ChatModelPreferences extends MemoryGovernancePreferences, DecisionEnginePreferences {
   /** The user's override, or `null` when they have never set one. */
   chatModel: string | null;
   /** Whether tool calling is enabled for this user's chat turns. Defaults true. */
@@ -42,6 +57,13 @@ export class ChatModelPreferenceService {
   constructor(
     private readonly personService: PersonService,
     private readonly userContextService: UserContextService,
+    /**
+     * For `SELF_ENTITY_PROVISIONER`, resolved lazily by `ensureSelfEntityId` —
+     * see its doc for why it cannot be injected. Optional so a hand-built service
+     * (the unit tests) still constructs; without it a user who has no self entity
+     * gets the old error rather than a new one.
+     */
+    @Optional() private readonly moduleRef?: ModuleRef,
   ) {}
 
   invalidate(userId: string): void {
@@ -58,6 +80,24 @@ export class ChatModelPreferenceService {
 
   async getThinkingEnabled(userId: string): Promise<boolean> {
     return (await this.getPreferences(userId)).thinkingEnabled;
+  }
+
+  async getMemoryGovernancePreferences(userId: string): Promise<MemoryGovernancePreferences> {
+    const prefs = await this.getPreferences(userId);
+
+    return {
+      memoryGovernanceEnabled: prefs.memoryGovernanceEnabled,
+      memoryRecencyDecayEnabled: prefs.memoryRecencyDecayEnabled,
+    };
+  }
+
+  async getDecisionEnginePreferences(userId: string): Promise<DecisionEnginePreferences> {
+    const prefs = await this.getPreferences(userId);
+
+    return {
+      contrastiveDecisionEnabled: prefs.contrastiveDecisionEnabled,
+      generativeDecisionEnabled: prefs.generativeDecisionEnabled,
+    };
   }
 
   async setChatModel(context: UserServiceContext, model: string | null): Promise<string | null> {
@@ -80,23 +120,52 @@ export class ChatModelPreferenceService {
     return enabled;
   }
 
+  async setMemoryGovernanceEnabled(context: UserServiceContext, enabled: boolean): Promise<boolean> {
+    await this.writeLeaf(context, 'memory_governance_enabled', enabled);
+
+    return enabled;
+  }
+
+  async setMemoryRecencyDecayEnabled(context: UserServiceContext, enabled: boolean): Promise<boolean> {
+    await this.writeLeaf(context, 'memory_recency_decay_enabled', enabled);
+
+    return enabled;
+  }
+
+  async setContrastiveDecisionEnabled(context: UserServiceContext, enabled: boolean): Promise<boolean> {
+    await this.writeLeaf(context, 'contrastive_decision_enabled', enabled);
+
+    return enabled;
+  }
+
+  async setGenerativeDecisionEnabled(context: UserServiceContext, enabled: boolean): Promise<boolean> {
+    await this.writeLeaf(context, 'generative_decision_enabled', enabled);
+
+    return enabled;
+  }
+
   private async writeLeaf(
     context: UserServiceContext,
-    leaf: 'chat_model' | 'tools_enabled' | 'thinking_enabled',
+    leaf:
+      | 'chat_model'
+      | 'tools_enabled'
+      | 'thinking_enabled'
+      | 'memory_governance_enabled'
+      | 'memory_recency_decay_enabled'
+      | 'contrastive_decision_enabled'
+      | 'generative_decision_enabled',
     value: string | boolean | null,
   ): Promise<void> {
     const userId = context.userId!;
-    const selfIdentity = await this.userContextService.getSelfIdentity(userId);
-
-    if (!selfIdentity) {
-      throw new Error('Self entity not found');
-    }
+    // Provisioned when the user has none: an imported account has no self entity
+    // to store the preference on, and picking a model answered 500 for it.
+    const selfEntityId = await ensureSelfEntityId(context, this.userContextService, this.moduleRef);
 
     // A single-leaf write, like ImageDescriptionPreferenceService — never a
     // rebuilt `planner` object, which would clobber trust_mode or the other
     // two preferences this service itself owns if a concurrent write lands
     // between our read and our write.
-    await this.personService.patchPropertyLeaves(context, selfIdentity.entityId, [
+    await this.personService.patchPropertyLeaves(context, selfEntityId, [
       { path: ['planner', leaf], value },
       { path: ['planner', 'source'], value: 'settings' },
     ]);
@@ -122,7 +191,15 @@ export class ChatModelPreferenceService {
     const selfIdentity = await this.userContextService.getSelfIdentity(userId);
 
     if (!selfIdentity) {
-      return { chatModel: null, toolsEnabled: true, thinkingEnabled: true };
+      return {
+        chatModel: null,
+        toolsEnabled: true,
+        thinkingEnabled: true,
+        memoryGovernanceEnabled: true,
+        memoryRecencyDecayEnabled: true,
+        contrastiveDecisionEnabled: true,
+        generativeDecisionEnabled: true,
+      };
     }
 
     const context = { userId } as UserServiceContext;
@@ -135,6 +212,10 @@ export class ChatModelPreferenceService {
       chatModel,
       toolsEnabled: planner.tools_enabled !== false,
       thinkingEnabled: planner.thinking_enabled !== false,
+      memoryGovernanceEnabled: planner.memory_governance_enabled !== false,
+      memoryRecencyDecayEnabled: planner.memory_recency_decay_enabled !== false,
+      contrastiveDecisionEnabled: planner.contrastive_decision_enabled !== false,
+      generativeDecisionEnabled: planner.generative_decision_enabled !== false,
     };
   }
 }

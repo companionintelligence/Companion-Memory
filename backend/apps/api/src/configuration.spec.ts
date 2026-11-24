@@ -1,7 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import config, { isGeocodingConfigured, resolveGeocodingPortalBaseUrl } from './configuration';
+import config, {
+  acceptsUnsignedPeerAsks,
+  ConfigSchema,
+  isGeocodingConfigured,
+  resolveGeocodingPortalBaseUrl,
+} from './configuration';
 
 /**
  * Covers the geocoding portalBaseUrl fallback (previously an inline `if` at
@@ -149,5 +154,118 @@ describe('media.videoPlayback.maxEdge', () => {
       __name: 'CI_MEDIA_VIDEO_PLAYBACK_MAX_EDGE',
       __format: 'json',
     });
+  });
+});
+
+/**
+ * `peers.localPubEnabled` decides whether this box opens connections to a host somebody typed, so
+ * its three moving parts are pinned together: the shipped default is OFF, the env var that sets it
+ * is the documented one, and the schema reads the STRING an env var carries correctly. The last is
+ * why it is a `booleanStringSchema` and not `z.coerce.boolean()`, which reads the string "false" as
+ * true; every other test of the lookup sets the flag by hand on a mocked config and would not notice.
+ */
+describe('peers.localPubEnabled', () => {
+  function peersIn(file: string): Record<string, unknown> {
+    const contents = JSON.parse(readFileSync(join(__dirname, '..', 'config', file), 'utf8')) as {
+      peers?: Record<string, unknown>;
+    };
+
+    return contents.peers ?? {};
+  }
+
+  const field = ConfigSchema.shape.peers.shape.localPubEnabled;
+
+  it('ships off, and the real parsed configuration is off unless the environment says otherwise', () => {
+    expect(peersIn('default.json').localPubEnabled).toBe(false);
+    if (process.env.CI_PEER_LOCAL_PUB_ENABLED === undefined) {
+      expect(config.peers.localPubEnabled).toBe(false);
+    }
+  });
+
+  it('is set through CI_PEER_LOCAL_PUB_ENABLED', () => {
+    expect(peersIn('custom-environment-variables.json').localPubEnabled).toBe('CI_PEER_LOCAL_PUB_ENABLED');
+  });
+
+  it('reads the strings an environment variable carries', () => {
+    expect(field.parse(undefined)).toBe(false);
+    expect(field.parse('true')).toBe(true);
+    expect(field.parse('false')).toBe(false);
+    expect(field.parse(true)).toBe(true);
+    expect(field.parse(false)).toBe(false);
+  });
+
+  it('refuses anything else rather than guessing, so a typo cannot switch it on', () => {
+    for (const value of ['yes', '1', 'TRUE', 'on', '', ' true']) {
+      expect(field.safeParse(value).success).toBe(false);
+    }
+  });
+});
+
+/**
+ * `auth.hubForwardAuth.requireAudience` decides whether an unbound forward-auth triple (no audience,
+ * no nonce, replayable by any sibling app behind the Hub) can sign anyone in. The schema default,
+ * the shipped default and the env var are pinned together, so none of them drifts back to `auto`.
+ */
+describe('auth.hubForwardAuth.requireAudience', () => {
+  const field = ConfigSchema.shape.auth.shape.hubForwardAuth.shape.requireAudience;
+
+  function hubForwardAuthIn(file: string): Record<string, unknown> {
+    const contents = JSON.parse(readFileSync(join(__dirname, '..', 'config', file), 'utf8')) as {
+      auth?: { hubForwardAuth?: Record<string, unknown> };
+    };
+
+    return contents.auth?.hubForwardAuth ?? {};
+  }
+
+  it('defaults to "true" in the schema when nothing sets it', () => {
+    expect(field.parse(undefined)).toBe('true');
+  });
+
+  it('ships "true" and is set through CI_HUB_FORWARD_AUTH_REQUIRE_AUDIENCE', () => {
+    expect(hubForwardAuthIn('default.json').requireAudience).toBe('true');
+    expect(hubForwardAuthIn('custom-environment-variables.json').requireAudience).toBe(
+      'CI_HUB_FORWARD_AUTH_REQUIRE_AUDIENCE',
+    );
+  });
+
+  it('still parses the legacy values, and nothing else', () => {
+    for (const value of ['auto', 'true', 'false']) {
+      expect(field.parse(value)).toBe(value);
+    }
+
+    for (const value of ['TRUE', 'yes', '', 'off']) {
+      expect(field.safeParse(value).success).toBe(false);
+    }
+  });
+});
+
+/**
+ * The boot-time warning for token-only peer asks. With an audience bound and the signature
+ * requirement turned off (it ships on), `PeerAskController` serves a Portal-token ask that carries
+ * no signature from a peer whose link records no key, so the token alone authenticates it. The
+ * warning is what tells the operator who turned it off.
+ */
+describe('acceptsUnsignedPeerAsks', () => {
+  it('ships with the signature requirement on', () => {
+    const contents = JSON.parse(readFileSync(join(__dirname, '..', 'config', 'default.json'), 'utf8')) as {
+      peers: { requireHttpSignature: unknown };
+    };
+
+    expect(contents.peers.requireHttpSignature).toBe(true);
+  });
+
+  it('is true once an audience is bound and signatures are not required', () => {
+    expect(acceptsUnsignedPeerAsks({ audience: 'ci-server-box-a', requireHttpSignature: false })).toBe(true);
+    expect(acceptsUnsignedPeerAsks({ audience: 'ci-server-box-a' })).toBe(true);
+  });
+
+  it('is false when signatures are required', () => {
+    expect(acceptsUnsignedPeerAsks({ audience: 'ci-server-box-a', requireHttpSignature: true })).toBe(false);
+  });
+
+  it('is false with no audience, where the controller refuses every Portal-token ask anyway', () => {
+    expect(acceptsUnsignedPeerAsks({ requireHttpSignature: false })).toBe(false);
+    expect(acceptsUnsignedPeerAsks({ audience: '', requireHttpSignature: false })).toBe(false);
+    expect(acceptsUnsignedPeerAsks({ audience: '   ', requireHttpSignature: false })).toBe(false);
   });
 });

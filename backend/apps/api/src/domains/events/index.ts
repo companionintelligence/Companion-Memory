@@ -29,7 +29,6 @@ import { CronRunEntity } from './entities/CronRunEntity';
 import { JobCategoryMetricEntity } from './entities/JobCategoryMetricEntity';
 import { JobMetricEntity } from './entities/JobMetricEntity';
 import { JobSettingEntity } from './entities/JobSettingEntity';
-import { PgBossArchiveEntity } from './entities/PgBossArchiveEntity';
 import { PgBossJobEntity } from './entities/PgBossJobEntity';
 import { PgBossQueueEntity } from './entities/PgBossQueueEntity';
 import { PgBossScheduleEntity } from './entities/PgBossScheduleEntity';
@@ -50,7 +49,6 @@ import { PGBossEventService } from './services/PGBossEventService';
   imports: [
     TypeOrmModule.forFeature([
       PgBossJobEntity,
-      PgBossArchiveEntity,
       PgBossScheduleEntity,
       PgBossQueueEntity,
       JobMetricEntity,
@@ -88,7 +86,7 @@ export { EventService, LocalEventService, PGBossEventService };
 export { OnEvent } from './decorators/OnEvent';
 export { Events, type EventPayloads } from './event-registry';
 export type { EventRegistry } from './registry';
-export type { Acknowledgement, EventSendOptions, QueueOptions } from './types';
+export type { Acknowledgement, EventSendOptions, QueuedJob, QueuedJobState, QueueOptions } from './types';
 // The priority tiers are part of the events domain's public surface: any domain
 // that enqueues work has to be able to say whether it is interactive or a
 // backfill. Exporting them here keeps callers off `events/constants` directly,

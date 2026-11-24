@@ -93,15 +93,15 @@ describe('DropdownContent — tags', () => {
     fireEvent.change(input, { target: { value: 'family' } });
     fireEvent.submit(input.closest('form') as HTMLFormElement);
 
-    await waitFor(() => expect(params().get('tags')).toBe('vacation,family'));
+    await waitFor(() => expect(params().getAll('tags')).toEqual(['vacation', 'family']));
   });
 
   it('removes a tag from the URL when its chip is dismissed', async () => {
-    renderContent({}, '/memory?tags=vacation,work');
+    renderContent({}, '/memory?tags=vacation&tags=work');
 
     fireEvent.click(screen.getByRole('button', { name: /remove tag.*vacation/i }));
 
-    await waitFor(() => expect(params().get('tags')).toBe('work'));
+    await waitFor(() => expect(params().getAll('tags')).toEqual(['work']));
     expect(screen.queryByText('vacation')).not.toBeInTheDocument();
     // The other tag is untouched.
     expect(screen.getByText('work')).toBeInTheDocument();

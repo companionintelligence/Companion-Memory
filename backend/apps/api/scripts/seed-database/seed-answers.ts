@@ -3,9 +3,13 @@ import { type MultiBar } from 'cli-progress';
 
 import { AnswerService } from '@ci/domains/intelligence';
 
+import { SEED_USER_ID } from './data/users';
 import { readCsv } from './utils';
 
 export async function seedAnswers(module: TestingModule, multibar: MultiBar, filePath: string) {
+  // Every row's user_id column is the hardcoded John Smith id, so this seeder
+  // is the one that would not follow SEED_USER_ID. Ignore the column and use
+  // the resolved seed user, keeping answers with the rest of the dataset.
   type CsvRecord = {
     id: string;
     user_id: string;
@@ -22,7 +26,7 @@ export async function seedAnswers(module: TestingModule, multibar: MultiBar, fil
   for (const record of records) {
     const existingAnswer = await answerService.findById(
       {
-        userId: record.user_id,
+        userId: SEED_USER_ID,
       },
       record.id,
     );
@@ -30,7 +34,7 @@ export async function seedAnswers(module: TestingModule, multibar: MultiBar, fil
     if (existingAnswer == null) {
       await answerService.create(
         {
-          userId: record.user_id,
+          userId: SEED_USER_ID,
         },
         {
           id: record.id,

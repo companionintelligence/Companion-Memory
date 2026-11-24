@@ -10,7 +10,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
  */
 const config: CapacitorConfig = {
   appId: 'com.ci.memory',
-  appName: 'Memory',
+  appName: 'Companion Memory',
   webDir: '../web/dist',
   server: {
     androidScheme: 'https',
@@ -18,10 +18,17 @@ const config: CapacitorConfig = {
   },
   android: {
     allowMixedContent: true,
-    // Required by @capacitor-community/background-geolocation: without it, location
-    // updates delivered through the legacy Capacitor bridge stop after ~5 minutes in
-    // the background. See https://github.com/capacitor-community/background-geolocation/issues/89.
-    useLegacyBridge: true,
+    // Pinch-zoom. It defaults to false, and then Bridge.java calls
+    // WebSettings.setBuiltInZoomControls(false), which turns the pinch gesture off whatever the
+    // page's viewport meta says. It is the only in-app way to enlarge the app (one input to
+    // WCAG 1.4.4, not all of it). scripts/check-viewport-zoom.mjs fails if this goes away.
+    zoomEnabled: true,
+    // Deliberately NOT `adjustMarginsForEdgeToEdge: 'auto'` (Capacitor 7; Capacitor 8 replaced it
+    // with the SystemBars plugin below). Android 15+ lays the window out edge-to-edge and the
+    // WebView needs insetting from the system bars (three-button navigation otherwise covers the
+    // bottom ~48 dp of every page), but Capacitor's version consumes the keyboard inset without
+    // applying it, which left the chat composer behind the keyboard. MainActivity attaches
+    // WebViewInsets instead: bars AND keyboard.
   },
   plugins: {
     SplashScreen: {
@@ -31,6 +38,14 @@ const config: CapacitorConfig = {
       androidSplashResourceName: 'splash',
       splashFullScreen: true,
       splashImmersive: false,
+      // 0 = register no exit-animation listener for the Android 12+ launch splash. With one (the
+      // default, 200 ms) androidx.core.splashscreen re-applies the theme's system-bar appearance
+      // when it hands the splash over (SplashScreen$Impl31.applyAppSystemUiTheme), and this plugin
+      // holds the first frame until the web app calls SplashScreen.hide(), so that hand-over always
+      // lands AFTER the web layer's one status-bar sync. The theme has no windowLightStatusBar, so
+      // the status and navigation bar icons were reset to white, unreadable on a light page, until
+      // the next theme change. SystemBarsInsetsOwnershipTest pins this value.
+      launchFadeOutDuration: 0,
     },
     StatusBar: {
       style: 'DARK',
@@ -38,10 +53,25 @@ const config: CapacitorConfig = {
       overlaysWebView: false,
     },
     CapacitorSQLite: {
-      androidIsEncryption: false,
+      // The PowerSync replica (frontend/apps/web/src/api/powersync/nativeDatabase.ts)
+      // opens its file with SQLCipher through this plugin. Off, every encrypted
+      // call fails with "No Encryption set in capacitor.config". The key lives in
+      // the plugin's EncryptedSharedPreferences, wrapped by an AndroidKeyStore key.
+      androidIsEncryption: true,
     },
     PushNotifications: {
       presentationOptions: ['badge', 'sound', 'alert'],
+    },
+    // Capacitor 8's core SystemBars plugin shares its id with this app's SystemBarsPlugin, which
+    // replaces its handle but not the instance: building it already installed a window-insets
+    // listener on the decor view that pads the whole window by the system bars AND the keyboard,
+    // while WebViewInsets margins the WebView by the same amounts. The keyboard was applied twice
+    // (the WebView was about 570 px tall on a 1080x2400 screen with the keyboard up, with a blank
+    // band above the keyboard), and SystemBarsPlugin.paint() resetting the decor padding left the
+    // window un-inset until the next insets pass. WebViewInsets is the only thing that insets the
+    // WebView. SystemBarsInsetsOwnershipTest pins this value.
+    SystemBars: {
+      insetsHandling: 'disable',
     },
   },
 };

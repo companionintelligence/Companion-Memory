@@ -180,7 +180,8 @@ describe('AskResolver — enabled', () => {
 
     const result = await resolver.runAsk(CTX, GlobalUID.encode('ask', 'ask-1'));
 
-    expect(executorService.execute).toHaveBeenCalledWith(ownAsk);
+    // With the asker's tier, which decides whether a photo's place may match.
+    expect(executorService.execute).toHaveBeenCalledWith(ownAsk, { tier: expect.any(String) });
     // a 'photos' query is retrieval-form → the one match is disclosed as a reference
     expect(answerService.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -244,5 +245,43 @@ describe('AskResolver — enabled', () => {
 
     await expect(resolver.runAsk(CTX, GlobalUID.encode('ask', 'ask-1'))).rejects.toThrow();
     expect(executorService.execute).not.toHaveBeenCalled();
+  });
+
+  it('SECURITY (G5a): clamps a revoked peer link to the `stranger` tier (boolean ceiling, no item references) when answering an inbox ask', async () => {
+    const { resolver, askService, peerLinkService, answerService } = makeResolver(true);
+    const peerAsk = {
+      ...fakeAsk(),
+      askerUserId: null,
+      peerLinkId: 'link-revoked',
+      direction: 'inbound',
+      responderUserId: 'user-1',
+      status: 'answering',
+      query: { queryType: 'content', dataClass: 'photos', prompt: 'beach photos?' },
+    } as Ask;
+    askService.findById = jest.fn().mockResolvedValue(peerAsk);
+    askService.complete = jest.fn().mockResolvedValue({ ...peerAsk, status: 'answered' });
+    // The link used to be 'family' (full disclosure of item references) but has been revoked.
+    peerLinkService.findById = jest.fn().mockResolvedValue({
+      id: 'link-revoked',
+      peerHandle: 'devon',
+      trustTier: 'family',
+      status: 'revoked',
+      revokedAt: new Date('2026-07-10T00:00:00Z'),
+    });
+
+    await resolver.runAsk(CTX, GlobalUID.encode('ask', 'ask-1'));
+
+    // Stranger ceiling for photos is 'boolean' -> item references stripped (items: []), summary clamped to 'Yes.',
+    // and disclosedEntityIds is empty despite 'family' pre-revocation tier.
+    expect(answerService.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        answer: expect.objectContaining({ items: [], summary: 'Yes.', withheldCount: 0 }),
+      }),
+    );
+    expect(askService.completeWithAnswer).toHaveBeenCalledWith(
+      { userId: 'user-1' },
+      'ask-1',
+      expect.objectContaining({ disclosedEntityIds: [], backingEntityIds: ['e1'] }),
+    );
   });
 });

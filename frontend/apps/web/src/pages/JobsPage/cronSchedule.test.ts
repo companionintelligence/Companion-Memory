@@ -1,13 +1,18 @@
 import { describe, expect, it } from 'vitest';
 
+import { createDateTimeFormatter, DEVICE_DATE_TIME_FORMATTER, type TimeFormat } from '@/lib/dateTimeFormat';
+
 import { describeCronExpression } from './cronSchedule';
 
 /** Terser assertion: "frequency | when". */
-const read = (expression: string) => {
-  const s = describeCronExpression(expression);
+const read = (expression: string, fmt = DEVICE_DATE_TIME_FORMATTER) => {
+  const s = describeCronExpression(expression, fmt);
 
   return s.when ? `${s.frequency} | ${s.when}` : s.frequency;
 };
+
+const cycle = (timeFormat: TimeFormat) =>
+  createDateTimeFormatter({ timeFormat, timeZone: 'Pacific/Auckland' });
 
 describe('describeCronExpression', () => {
   it('reads the expressions this appliance actually registers', () => {
@@ -71,10 +76,24 @@ describe('describeCronExpression', () => {
   it('degrades gracefully rather than throwing on nonsense', () => {
     expect(read('')).toBe('—');
     expect(read('not a cron')).toBe('—');
-    expect(describeCronExpression(null).frequency).toBe('—');
+    expect(describeCronExpression(null, DEVICE_DATE_TIME_FORMATTER).frequency).toBe('—');
   });
 
   it('always carries the raw expression through', () => {
-    expect(describeCronExpression('0 */15 * * * *').raw).toBe('0 */15 * * * *');
+    expect(describeCronExpression('0 */15 * * * *', DEVICE_DATE_TIME_FORMATTER).raw).toBe('0 */15 * * * *');
+  });
+
+  it("writes a fixed time in the chosen hour cycle, on the cron's own clock", () => {
+    // 'auto' keeps the cron-style reading every row has always had.
+    expect(read('0 25 16 * * *', cycle('auto'))).toBe('Daily | at 16:25');
+    // A forced cycle applies here like everywhere else — and the profile zone does not, since
+    // this is a wall-clock field of the expression rather than an instant.
+    expect(read('0 25 16 * * *', cycle('h12'))).toMatch(/^Daily \| at 4:25\sPM$/i);
+    expect(read('0 25 4 * * *', cycle('h23'))).toMatch(/^Daily \| at 0?4:25$/);
+    expect(read('0 15 0 * * 1', cycle('h12'))).toMatch(/^Weekly \| Mon at 12:15\sAM$/i);
+    // Minute-only readings have no hour to cycle.
+    expect(read('0 10 * * * *', cycle('h12'))).toBe('Hourly | at :10');
+    // A list has no single time to write.
+    expect(read('0 0 0,12 * * *', cycle('h12'))).toBe('Daily | at 0,12:00');
   });
 });

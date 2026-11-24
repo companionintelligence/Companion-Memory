@@ -1,18 +1,20 @@
-/* MyFitnessPal — nutrition export (Nutrition-Summary-*.csv).
-   The export is a MyFitnessPal Premium feature. One 'observation' event is
-   emitted per logged row; columns may vary slightly between exports, so we
-   recognize by sniffing the header for "Calories", "Protein (g)" and a "Date"
+/* MyFitnessPal — the Premium "download your data" export.
+   Three CSVs: Nutrition-Summary-*.csv (one 'observation' per logged meal),
+   Exercise-Summary-*.csv (one 'workout' per exercise) and
+   Measurement-Summary-*.csv (one 'observation' per day of measurements).
+   Nutrition columns may vary slightly between exports, so an unnamed CSV is
+   recognized by sniffing its header for "Calories", "Protein (g)" and a "Date"
    column rather than matching an exact filename.
 */
 import fs from 'node:fs';
-import { open, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { parseCSV } from './csv';
-import type { FileImporter, Recognition, DirEntry } from './registry';
+import { CsvExportImporter, type CsvExportSpec } from './csvImporter';
 import { registerDataSource } from './registry';
+import { readHead } from './sniff';
 import type { ImportParams } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 // A MyFitnessPal Nutrition-Summary header carries a Date column plus the core
 // macro columns. Match these rather than the exact filename so slightly varying
@@ -27,18 +29,9 @@ function headerHasNutritionCols(text: string): boolean {
 
 // Read only the first ~4KB to inspect the CSV header row.
 async function headerMatches(fpath: string): Promise<boolean> {
-  let handle: Awaited<ReturnType<typeof open>> | undefined;
-  try {
-    handle = await open(fpath, 'r');
-    const buf = Buffer.alloc(4096);
-    const { bytesRead } = await handle.read(buf, 0, 4096, 0);
+  const head = await readHead(fpath);
 
-    return headerHasNutritionCols(buf.toString('utf8', 0, bytesRead));
-  } catch {
-    return false;
-  } finally {
-    await handle?.close().catch(() => undefined);
-  }
+  return head != null && headerHasNutritionCols(head);
 }
 
 function looksLikeNutritionName(name: string): boolean {
@@ -46,6 +39,58 @@ function looksLikeNutritionName(name: string): boolean {
 
   return b.endsWith('.csv') && b.includes('nutrition-summary');
 }
+
+type SummaryKind = 'nutrition' | 'exercise' | 'measurement';
+
+/** Which of the export's three files a name is, by its `<Kind>-Summary` prefix. */
+function summaryKind(name: string): SummaryKind | undefined {
+  const b = name.toLowerCase();
+  if (!b.endsWith('.csv')) {
+    return undefined;
+  }
+
+  if (b.includes('exercise-summary')) {
+    return 'exercise';
+  }
+
+  if (b.includes('measurement-summary')) {
+    return 'measurement';
+  }
+
+  return looksLikeNutritionName(b) ? 'nutrition' : undefined;
+}
+
+function headerCols(text: string): string[] {
+  const nl = text.indexOf('\n');
+
+  return (nl === -1 ? text : text.slice(0, nl))
+    .replace(/^\uFEFF/, '')
+    .split(',')
+    .map((h) => h.trim().replace(/^"|"$/g, ''));
+}
+
+// A known file name must also carry its own columns before it is read.
+async function namedHeaderMatches(fpath: string): Promise<boolean> {
+  const head = await readHead(fpath);
+  if (head == null) {
+    return false;
+  }
+
+  const cols = headerCols(head);
+  switch (summaryKind(path.basename(fpath))) {
+    case 'exercise':
+      return cols.includes('Date') && cols.includes('Exercise');
+    case 'measurement':
+      return cols[0] === 'Date' && cols.length > 1;
+    default:
+      return headerHasNutritionCols(head);
+  }
+}
+
+// Exercise rows a linked tracker or phone writes to settle the day's calorie
+// burn ("MFP iOS calorie adjustment", "Fitbit calorie adjustment"). They are a
+// day's step and calorie total, not a workout.
+const CALORIE_ADJUSTMENT = /calorie adjustment/i;
 
 function toNumber(v: string | undefined): number | undefined {
   if (v == null || v === '') {
@@ -57,116 +102,18 @@ function toNumber(v: string | undefined): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
-export class MyfitnesspalFileImporter implements FileImporter {
-  async recognize(_ctx: unknown, entry: DirEntry): Promise<Recognition> {
-    const root = entry.fullPath || entry.fsRoot || entry.filename;
-    if (!root) {
-      return { confidence: 0 };
-    }
+export class MyfitnesspalFileImporter extends CsvExportImporter {
+  protected readonly spec: CsvExportSpec = {
+    isNamed: (name) => summaryKind(name) !== undefined,
+    headerMatches: (fpath) => headerMatches(fpath),
+    namedHeaderMatches: (fpath) => namedHeaderMatches(fpath),
+    namedNeedsHeader: true,
+    confidence: { named: 0.95, sniffed: 0.85 },
+    // Every file of the export, not just the first known one.
+    importInDir: 'all-matches',
+  };
 
-    let st: fs.Stats;
-    try {
-      st = await stat(root);
-    } catch {
-      return { confidence: 0 };
-    }
-
-    if (st.isFile()) {
-      const base = path.basename(root);
-      if (path.extname(base).toLowerCase() !== '.csv') {
-        return { confidence: 0 };
-      }
-
-      if (!(await headerMatches(root))) {
-        return { confidence: 0 };
-      }
-
-      return { confidence: looksLikeNutritionName(base) ? 0.95 : 0.85 };
-    }
-
-    if (st.isDirectory()) {
-      try {
-        const names = await readdir(root);
-        // Prefer an obviously named Nutrition-Summary csv whose header also matches.
-        for (const name of names) {
-          if (!looksLikeNutritionName(name)) {
-            continue;
-          }
-
-          if (await headerMatches(path.join(root, name))) {
-            return { confidence: 0.95 };
-          }
-        }
-
-        // Otherwise accept any csv whose header carries the nutrition columns.
-        for (const name of names) {
-          if (path.extname(name).toLowerCase() !== '.csv') {
-            continue;
-          }
-
-          if (await headerMatches(path.join(root, name))) {
-            return { confidence: 0.85 };
-          }
-        }
-      } catch {
-        /* ignore */
-      }
-
-      return { confidence: 0, dir_threshold: 0.7 };
-    }
-
-    return { confidence: 0 };
-  }
-
-  async fileImport(_ctx: unknown, entry: DirEntry, params: ImportParams): Promise<void> {
-    const root = entry.fullPath || entry.fsRoot || entry.filename;
-    if (!root) {
-      return;
-    }
-
-    let stat: fs.Stats;
-    try {
-      stat = fs.statSync(root);
-    } catch {
-      return;
-    }
-
-    if (stat.isFile()) {
-      await this.processFile(root, params);
-    } else if (stat.isDirectory()) {
-      let names: string[];
-      try {
-        names = fs.readdirSync(root);
-      } catch {
-        return;
-      }
-
-      let named: string | undefined;
-      for (const n of names) {
-        if (looksLikeNutritionName(n) && (await headerMatches(path.join(root, n)))) {
-          named = n;
-          break;
-        }
-      }
-
-      if (named) {
-        await this.processFile(path.join(root, named), params);
-      } else {
-        for (const name of names) {
-          if (path.extname(name).toLowerCase() !== '.csv') {
-            continue;
-          }
-
-          const fpath = path.join(root, name);
-          if (await headerMatches(fpath)) {
-            await this.processFile(fpath, params);
-          }
-        }
-      }
-    }
-  }
-
-  private async processFile(fpath: string, params: ImportParams): Promise<void> {
+  protected async processFile(fpath: string, params: ImportParams): Promise<void> {
     const base = path.basename(fpath);
     let raw: string;
     try {
@@ -194,9 +141,16 @@ export class MyfitnesspalFileImporter implements FileImporter {
     // Per-(date,meal) sequence so two entries logged under the same meal on the
     // same date stay distinct (and re-import deterministically) — see id below.
     const seen = new Map<string, number>();
+    const kind = summaryKind(base);
     for (const row of rows) {
       try {
-        this.pushRow(row, seen, params);
+        if (kind === 'exercise') {
+          this.pushExercise(row, seen, params);
+        } else if (kind === 'measurement') {
+          this.pushMeasurement(row, seen, params);
+        } else {
+          this.pushRow(row, seen, params);
+        }
       } catch (e) {
         params.log?.('error', `Failed to import row in ${base}`, { error: (e as Error).message });
       }
@@ -247,11 +201,7 @@ export class MyfitnesspalFileImporter implements FileImporter {
         id,
         classification: 'observation',
         timestamp: ts,
-        content: {
-          filename: 'nutrition.txt',
-          mediaType: 'text/plain',
-          data: async () => Buffer.from(summary),
-        },
+        content: textContent('nutrition.txt', summary),
         metadata: {
           Title: `${dateStr} ${meal ?? 'Meal'}${calories != null ? ` — ${calories} kcal` : ''}`,
           Meal: meal,
@@ -264,12 +214,120 @@ export class MyfitnesspalFileImporter implements FileImporter {
       },
     });
   }
+
+  /** The row's date (bare 'YYYY-MM-DD', read as midnight UTC like the meals), or undefined to skip it. */
+  private rowDate(row: Record<string, string>, params: ImportParams): Date | undefined {
+    const ts = row['Date'] ? new Date(row['Date']) : undefined;
+    if (!ts || isNaN(ts.getTime()) || !timeframeContains(params.timeframe, ts)) {
+      return undefined;
+    }
+
+    return ts;
+  }
+
+  /** A per-key sequence, so repeated rows on one day keep distinct, stable ids. */
+  private nextId(prefix: string, key: string, seen: Map<string, number>): string {
+    const n = seen.get(key) ?? 0;
+    seen.set(key, n + 1);
+
+    return n > 0 ? `${prefix}:${key}:${n}` : `${prefix}:${key}`;
+  }
+
+  private pushExercise(row: Record<string, string>, seen: Map<string, number>, params: ImportParams): void {
+    const ts = this.rowDate(row, params);
+    const name = (row['Exercise'] ?? '').trim();
+    if (!ts || !name) {
+      return;
+    }
+
+    const date = row['Date'];
+    const calories = toNumber(row['Exercise Calories']);
+    const steps = toNumber(row['Steps']);
+    const id = this.nextId('myfitnesspal:exercise', `${date}:${name}`, seen);
+
+    if (CALORIE_ADJUSTMENT.test(name)) {
+      const title = `${name} on ${date}`;
+      params.pipeline.push({
+        item: {
+          id,
+          classification: 'observation',
+          timestamp: ts,
+          content: textContent('observation.txt', title),
+          metadata: { Title: title, Steps: steps, Calories: calories, Source: 'MyFitnessPal' },
+        },
+      });
+
+      return;
+    }
+
+    // The weight column is named for the account's unit.
+    const lifted = toNumber(row['Kilograms']) ?? toNumber(row['Pounds']);
+    const liftedKey = row['Kilograms'] ? 'Weight Lifted (kg)' : 'Weight Lifted (lb)';
+
+    params.pipeline.push({
+      item: {
+        id,
+        classification: 'workout',
+        timestamp: ts,
+        content: textContent('workout.txt', name),
+        metadata: {
+          Title: name,
+          'Activity Type': row['Type'] || undefined,
+          Calories: calories,
+          'Duration (min)': toNumber(row['Exercise Minutes']),
+          Sets: toNumber(row['Sets']),
+          'Reps Per Set': toNumber(row['Reps Per Set']),
+          [liftedKey]: lifted,
+          Steps: steps,
+          Note: row['Note'] || undefined,
+          Source: 'MyFitnessPal',
+        },
+      },
+    });
+  }
+
+  /** One observation per day, carrying every measurement logged that day. */
+  private pushMeasurement(
+    row: Record<string, string>,
+    seen: Map<string, number>,
+    params: ImportParams,
+  ): void {
+    const ts = this.rowDate(row, params);
+    if (!ts) {
+      return;
+    }
+
+    const date = row['Date'];
+    const values: Record<string, number | string> = {};
+    for (const [key, raw] of Object.entries(row)) {
+      if (key !== 'Date' && raw !== '') {
+        values[key] = toNumber(raw) ?? raw;
+      }
+    }
+
+    const keys = Object.keys(values);
+    if (!keys.length) {
+      return;
+    }
+
+    // MyFitnessPal does not write the unit; the number is stored as given.
+    const title = keys.length === 1 ? `${keys[0]} on ${date}: ${values[keys[0]]}` : `Measurements on ${date}`;
+    params.pipeline.push({
+      item: {
+        id: this.nextId('myfitnesspal:measurement', date, seen),
+        classification: 'observation',
+        timestamp: ts,
+        content: textContent('observation.txt', title),
+        metadata: { Title: title, ...values, Source: 'MyFitnessPal' },
+      },
+    });
+  }
 }
 
 registerDataSource({
   name: 'myfitnesspal',
   title: 'MyFitnessPal',
   icon: '',
-  description: 'Nutrition logs from a MyFitnessPal export (Nutrition-Summary CSV).',
+  description: 'Meals, exercise and measurements from a MyFitnessPal export (the Summary CSVs).',
   newFileImporter: () => new MyfitnesspalFileImporter(),
 });

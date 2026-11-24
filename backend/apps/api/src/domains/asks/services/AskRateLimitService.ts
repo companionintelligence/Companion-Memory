@@ -8,6 +8,14 @@ const WINDOW_MS = 60_000;
 const MAX_PER_WINDOW = 20;
 
 /**
+ * Cumulative per-(owner, asker) rolling 24h disclosure ceiling so a slow-rate
+ * automated caller cannot extract an owner's corpus by staying just under the
+ * 20/min burst window all day.
+ */
+export const DISCLOSURE_WINDOW_MS = 24 * 60 * 60 * 1_000;
+export const MAX_DISCLOSURES_PER_DAY = 100;
+
+/**
  * Per-asker sliding-window rate limit on the ask path — a first abuse control so
  * a single asker cannot flood a responder's review inbox.
  *
@@ -47,6 +55,39 @@ export class AskRateLimitService {
         {
           statusCode: HttpStatus.TOO_MANY_REQUESTS,
           message: 'Too many asks — please wait before sending another.',
+          retryAfterMs: decision.retryAfterMs,
+        },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+  }
+
+  /**
+   * Enforces a cumulative rolling 24-hour disclosure ceiling per `(ownerUserId, askerUserId)`
+   * pair in the durable {@link ConsumptionStore}.
+   */
+  async consumeDisclosureBudget(
+    ownerUserId: string,
+    askerUserId: string,
+    options: { now?: number; maxPerDay?: number; windowMs?: number } = {},
+  ): Promise<void> {
+    const now = options.now ?? Date.now();
+    const windowMs = options.windowMs ?? DISCLOSURE_WINDOW_MS;
+    const max = options.maxPerDay ?? MAX_DISCLOSURES_PER_DAY;
+
+    const decision = await this.store.takeWindow({
+      key: `ask-disclosure:${ownerUserId}:${askerUserId}`,
+      now,
+      windowMs,
+      max,
+    });
+
+    if (!decision.allowed) {
+      throw new HttpException(
+        {
+          statusCode: HttpStatus.TOO_MANY_REQUESTS,
+          code: 'DISCLOSURE_BUDGET_EXCEEDED',
+          message: 'Daily disclosure budget exceeded for this recipient.',
           retryAfterMs: decision.retryAfterMs,
         },
         HttpStatus.TOO_MANY_REQUESTS,

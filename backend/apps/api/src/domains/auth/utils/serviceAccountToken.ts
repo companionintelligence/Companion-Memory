@@ -24,7 +24,7 @@ import type { JWTPayload } from 'jose';
  *     "aud": "ci-server",
  *     "sub": "<CI-Server user id the service acts on behalf of>",
  *     "client_id": "hbpe-sidecar",         // or "azp"
- *     "scope": "memory:read memory:write", // space-delimited, optional here
+ *     "scope": "memory capture",           // space-delimited api-key scope names
  *     "act": { "sub": "hbpe-sidecar" }     // RFC 8693 actor claim, optional
  *   }
  *

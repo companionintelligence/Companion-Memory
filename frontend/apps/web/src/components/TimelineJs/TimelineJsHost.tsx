@@ -1,10 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { cn } from '@ci/shadcn';
+// The package is unplugged (root package.json) so the build can read this stylesheet; see .yarnrc.yml.
 import timelineCssUrl from '@knight-lab/timelinejs/dist/css/timeline.css?url';
 import timelineLocaleUrl from '@knight-lab/timelinejs/dist/js/locale/en.json?url';
 import timelineJsUrl from '@knight-lab/timelinejs/dist/js/timeline.js?url';
 
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+import type { TimeFormat } from '@/lib/dateTimeFormat';
+
+import timelineLocaleH23Url from './locale/en-h23.json?url';
 import {
   TIMELINE_HEIGHT_PX,
   inertTimeline,
@@ -80,9 +85,23 @@ function syncTimelineEvents(instance: TimelineInstance, events: readonly Timelin
 
 type Rgb = { r: number; g: number; b: number };
 
+/**
+ * The locale TimelineJS writes its own slide dates and axis ticks in.
+ *
+ * Those labels never pass through `useDateTimeFormat()`: the library formats them from the
+ * `dateformats` of a locale file, and its English one is 12-hour ("3:43 PM", "3 PM"). So 24-hour
+ * loads `locale/en-h23.json` — the same patterns with the clock written 24-hour ("15:43",
+ * "15:00") and everything else inherited from the built-in English. 'auto' and 12-hour keep the
+ * library's own file, which is what every timeline showed before the preference existed.
+ */
+function timelineLocaleFor(timeFormat: TimeFormat): string {
+  return timeFormat === 'h23' ? timelineLocaleH23Url : timelineLocaleUrl;
+}
+
 let timelineLoad: Promise<TimelineCtor> | null = null;
 
 function ensureTimelineCss(): Promise<void> {
+  // A failed link removes itself (below), so one still here without a sheet is in flight.
   const existing = document.querySelector<HTMLLinkElement>('link[data-timelinejs-css]');
   if (existing) {
     return existing.sheet
@@ -99,7 +118,13 @@ function ensureTimelineCss(): Promise<void> {
     link.href = timelineCssUrl;
     link.dataset.timelinejsCss = '1';
     link.onload = () => resolve();
-    link.onerror = () => resolve();
+    link.onerror = () => {
+      // Like a script, a link fires load or error once and never again. Left in place, the
+      // next mount would wait on it for good, so drop it and let that mount fetch afresh.
+      link.remove();
+      resolve();
+    };
+
     document.head.appendChild(link);
   });
 }
@@ -122,7 +147,13 @@ function loadTimelineCtor(): Promise<TimelineCtor> {
   }
 
   if (!timelineLoad) {
-    timelineLoad = Promise.all([ensureTimelineCss(), loadTimelineScript()]).then(([, Timeline]) => Timeline);
+    // Held only while a load is in flight: once `window.TL` exists the branch above serves every
+    // call, and a failure clears it so the next mount starts over.
+    timelineLoad = Promise.all([ensureTimelineCss(), loadTimelineScript()]).then(([, Timeline]) => {
+      timelineLoad = null;
+
+      return Timeline;
+    });
   }
 
   return timelineLoad;
@@ -130,34 +161,31 @@ function loadTimelineCtor(): Promise<TimelineCtor> {
 
 function loadTimelineScript(): Promise<TimelineCtor> {
   return new Promise<TimelineCtor>((resolve, reject) => {
-    const existing = document.querySelector<HTMLScriptElement>('script[data-timelinejs]');
-    if (existing && window.TL?.Timeline) {
-      resolve(window.TL.Timeline);
-
-      return;
-    }
-
-    const script = existing ?? document.createElement('script');
+    const script = document.createElement('script');
     script.dataset.timelinejs = '1';
     script.src = timelineJsUrl;
     script.async = true;
+
+    // A script element fetches once, when it is inserted, and setting the same `src` again does
+    // nothing, so reusing a failed tag left Try again on "Loading timeline…" for good. Drop it
+    // here; the next attempt inserts a fresh tag, which fetches again.
+    const fail = (message: string) => {
+      script.remove();
+      timelineLoad = null;
+      reject(new Error(message));
+    };
+
     script.onload = () => {
       if (window.TL?.Timeline) {
         resolve(window.TL.Timeline);
       } else {
-        timelineLoad = null;
-        reject(new Error('TimelineJS loaded without window.TL.Timeline'));
+        fail('TimelineJS loaded without window.TL.Timeline');
       }
     };
 
-    script.onerror = () => {
-      timelineLoad = null;
-      reject(new Error('Failed to load TimelineJS script'));
-    };
+    script.onerror = () => fail('Failed to load TimelineJS script');
 
-    if (!existing) {
-      document.head.appendChild(script);
-    }
+    document.head.appendChild(script);
   });
 }
 
@@ -214,15 +242,23 @@ export function TimelineJsHost({
   onSlideOpenRef.current = onSlideOpen;
   const deckKey = timelineDeckKey(data, startAtSlide);
   const [generation, setGeneration] = useState(0);
-  const mountKey = `${sessionKey ?? deckKey}:${generation}`;
-  const payloadRef = useRef({ data, startAtSlide, fallbackHeightPx });
-  payloadRef.current = { data, startAtSlide, fallbackHeightPx };
+  const { timeFormat } = useDateTimeFormat();
+  // TimelineJS reads its locale once, at construction, so a new time format means a new instance.
+  const languageUrl = timelineLocaleFor(timeFormat);
+  const mountKey = `${sessionKey ?? deckKey}:${languageUrl}:${generation}`;
+  const payloadRef = useRef({ data, startAtSlide, fallbackHeightPx, languageUrl });
+  payloadRef.current = { data, startAtSlide, fallbackHeightPx, languageUrl };
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
     const host = hostRef.current;
-    const { data: deck, startAtSlide: landing, fallbackHeightPx: minHeight } = payloadRef.current;
+    const {
+      data: deck,
+      startAtSlide: landing,
+      fallbackHeightPx: minHeight,
+      languageUrl: language,
+    } = payloadRef.current;
     if (!host || deck.events.length === 0) {
       return;
     }
@@ -277,7 +313,7 @@ export function TimelineJsHost({
                 height,
                 startAtSlide: landing,
                 bg: timelineBgFromTheme(),
-                languageUrl: timelineLocaleUrl,
+                languageUrl: language,
               }),
             );
             instanceRef.current = instance;

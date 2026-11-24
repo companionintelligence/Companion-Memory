@@ -52,6 +52,9 @@ final class LocalHubServer {
     private static let outboxPathRegex = "^/api/outbox(/.*)?$"
     private static let attemptSegment = "attempt"
     private static let retrySegment = "retry"
+    private static let ownerSegment = "owner"
+    /// More earlier stamps than one phone could plausibly have held is a malformed request.
+    private static let maxReassignFrom = 64
     private static let statusQueryKey = "status"
     private static let statusFilterAll = "all"
     private static let authHeaderName = "Authorization"
@@ -113,7 +116,7 @@ final class LocalHubServer {
             if let existing = outbox {
                 return existing
             }
-            let store = try OutboxStore(databaseURL: OutboxStore.defaultDatabaseURL())
+            let store = try OutboxStore.shared()
             outbox = store
             return store
         }
@@ -154,7 +157,7 @@ final class LocalHubServer {
             if let existing = outbox {
                 store = existing
             } else {
-                store = try OutboxStore(databaseURL: OutboxStore.defaultDatabaseURL())
+                store = try OutboxStore.shared()
                 outbox = store
             }
 
@@ -327,6 +330,12 @@ final class LocalHubServer {
                 return try handleEnqueue(request, store: store)
             case ("GET", 0):
                 return try handleList(request, store: store)
+            case ("DELETE", 0):
+                // Sign-out's clear: every row goes, and the count says how many.
+                let deleted = try store.deleteAll()
+                return Self.jsonResponse(["deleted": deleted], statusCode: 200)
+            case ("POST", 1) where segments[0] == Self.ownerSegment:
+                return try handleReassignOwner(request, store: store)
             case ("GET", 1):
                 return try handleGetOne(id: segments[0], store: store)
             case ("DELETE", 1):
@@ -371,12 +380,24 @@ final class LocalHubServer {
         guard let idempotencyKey = Self.nonEmptyString(body["idempotencyKey"]) else {
             return Self.badRequest("\"idempotencyKey\" must be a non-empty string.")
         }
+        // Optional and opaque: the account and server the capture belongs to, which the
+        // flusher checks before sending it anywhere. Absent or null is fine (an older client);
+        // present but not a non-empty string is a malformed request.
+        let owner: String?
+        if body["owner"] == nil || body["owner"] is NSNull {
+            owner = nil
+        } else if let stamped = Self.nonEmptyString(body["owner"]) {
+            owner = stamped
+        } else {
+            return Self.badRequest("\"owner\" must be a non-empty string when present.")
+        }
 
         let outcome = try store.enqueue(
             kind: kind,
             payloadJSON: payloadJSON,
             capturedAt: capturedAt,
-            idempotencyKey: idempotencyKey
+            idempotencyKey: idempotencyKey,
+            owner: owner
         )
 
         switch outcome {
@@ -451,6 +472,32 @@ final class LocalHubServer {
         return Self.jsonResponse(Self.itemDictionary(item, includePayload: true), statusCode: 200)
     }
 
+    /// `POST /api/outbox/owner` `{"from": [stamps], "to": stamp}`: re-stamp the rows queued
+    /// under an earlier key of the same account, so they send under the current one. Answers
+    /// `{"updated": n}`. Mirrors Android's `handleReassignOwner`.
+    private func handleReassignOwner(_ request: GCDWebServerRequest, store: OutboxStore) throws -> GCDWebServerResponse {
+        guard let body = Self.jsonBody(request) else {
+            return Self.badRequest("Request body must be a JSON object.")
+        }
+        guard let to = Self.nonEmptyString(body["to"]) else {
+            return Self.badRequest("\"to\" must be a non-empty string.")
+        }
+        guard let rawFrom = body["from"] as? [Any], !rawFrom.isEmpty, rawFrom.count <= Self.maxReassignFrom else {
+            return Self.badRequest("\"from\" must be a non-empty array of at most \(Self.maxReassignFrom) stamps.")
+        }
+        var from: [String] = []
+        for value in rawFrom {
+            guard let stamp = Self.nonEmptyString(value) else {
+                return Self.badRequest("\"from\" must hold only non-empty strings.")
+            }
+            if stamp != to && !from.contains(stamp) {
+                from.append(stamp)
+            }
+        }
+        let updated = try store.reassignOwner(from: from, to: to)
+        return Self.jsonResponse(["updated": updated], statusCode: 200)
+    }
+
     private func handleAttempt(
         _ request: GCDWebServerRequest,
         id: String,
@@ -513,7 +560,9 @@ final class LocalHubServer {
             "attempts": item.attempts,
             // The contract says lastError is `string | null` -- always present. NSNull is
             // what JSONSerialization turns into a JSON null.
-            "lastError": item.lastError ?? NSNull()
+            "lastError": item.lastError ?? NSNull(),
+            // Same rule as lastError: always present, null on rows queued before stamping.
+            "owner": item.owner ?? NSNull()
         ]
         if includePayload {
             // Re-parsed rather than string-spliced so the payload nests as real JSON. It

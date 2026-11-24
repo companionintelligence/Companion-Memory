@@ -12,8 +12,10 @@
    no id linking the two; noteTweetTexts joins them on snowflake proximity so
    the post imports with its full body.
 
-   Grok conversation history also ships in this archive; it imports here as well
-   as from the standalone Grok card (_x_archive.ts, grok.ts).
+   Grok conversation history also ships in this archive. The grok importer reads
+   it (grok.ts, _x_archive.ts): it claims every archive that holds those chats,
+   and every importer that claims an upload runs, so reading them here as well
+   imported each Grok message twice.
 
    Media rides on its message as an attachment descriptor (metadata
    .MediaAttachments). The push uploads the bytes as a file, creates a content
@@ -30,11 +32,12 @@ import fs from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import { readStore, readManifest, importGrokChats } from './_x_archive';
+import { readStore, readManifest } from './_x_archive';
+import { parseFlexibleDate } from './dates';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams, Graph, Item, MediaAttachment } from './timeline';
-import { timeframeContains, mimeForFile } from './timeline';
+import { mimeForFile, textContent, timeframeContains } from './timeline';
 
 interface TwitterOptions {
   includeRetweets?: boolean;
@@ -378,17 +381,6 @@ function clientName(source: string | undefined): string | undefined {
   return text || undefined;
 }
 
-/** A parsed date, or undefined when the archive's value isn't one. */
-function parseDate(raw: string | undefined): Date | undefined {
-  if (!raw) {
-    return undefined;
-  }
-
-  const d = new Date(raw);
-
-  return isNaN(d.getTime()) ? undefined : d;
-}
-
 // A retweet's text is the shared post verbatim behind an `RT @author:` marker;
 // the archive stores no separate record of the original.
 const RETWEET_PREFIX = /^RT @([A-Za-z0-9_]{1,15}):\s*/;
@@ -579,7 +571,7 @@ function dmEventTime(e: DmEvent): number {
     e.joinConversation?.createdAt ??
     e.participantsJoin?.createdAt ??
     e.participantsLeave?.createdAt;
-  const d = parseDate(raw);
+  const d = parseFlexibleDate(raw);
 
   return d ? d.getTime() : 0;
 }
@@ -849,9 +841,6 @@ export class TwitterFileImporter implements FileImporter {
 
     this.importTweets(tweets, dataDir, owner, opts, params);
     this.importDirectMessages(dataDir, owner, handles, params);
-    // Grok ships inside the X archive, so the Twitter card imports it too —
-    // those rows keep `Source: 'Grok'` (see _x_archive.ts importGrokChats).
-    importGrokChats(root, params);
   }
 
   /* ---------------------------------------------------------------------- *
@@ -889,7 +878,7 @@ export class TwitterFileImporter implements FileImporter {
         continue;
       }
 
-      const created = parseDate(t.created_at);
+      const created = parseFlexibleDate(t.created_at);
       if (!timeframeContains(params.timeframe, created)) {
         params.pipeline.drop?.('outside_timeframe');
 
@@ -943,11 +932,7 @@ export class TwitterFileImporter implements FileImporter {
         classification: 'message',
         timestamp: created,
         location: coords,
-        content: {
-          filename: `${id}.txt`,
-          mediaType: 'text/plain',
-          data: async () => Buffer.from(text),
-        },
+        content: textContent(`${id}.txt`, text),
         metadata: {
           Text: text,
           CommunicationType: 'post',
@@ -1022,11 +1007,7 @@ export class TwitterFileImporter implements FileImporter {
         classification: 'social',
         timestamp: created,
         location: tweetCoordinates(t),
-        content: {
-          filename: `${id}.txt`,
-          mediaType: 'text/plain',
-          data: async () => Buffer.from(full),
-        },
+        content: textContent(`${id}.txt`, full),
         metadata: {
           Title: title,
           Text: full,
@@ -1146,7 +1127,7 @@ export class TwitterFileImporter implements FileImporter {
             continue;
           }
 
-          const created = parseDate(dm.createdAt);
+          const created = parseFlexibleDate(dm.createdAt);
           if (!timeframeContains(params.timeframe, created)) {
             params.pipeline.drop?.('outside_timeframe');
 
@@ -1181,11 +1162,7 @@ export class TwitterFileImporter implements FileImporter {
             id: `twitter:dm:${dm.id}`,
             classification: 'message',
             timestamp: created,
-            content: {
-              filename: `${dm.id}.txt`,
-              mediaType: 'text/plain',
-              data: async () => Buffer.from(text),
-            },
+            content: textContent(`${dm.id}.txt`, text),
             metadata: {
               Text: text,
               CommunicationType: 'chat',

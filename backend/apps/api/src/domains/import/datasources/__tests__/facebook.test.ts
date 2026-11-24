@@ -17,6 +17,41 @@ describe('Facebook datasource', () => {
     expect(rec.confidence).toBeGreaterThan(0.8);
   });
 
+  // Instagram's export keeps its DMs in your_instagram_activity/messages/inbox/,
+  // in Messenger's own file layout. Claiming that folder imported every
+  // Instagram DM a second time, labelled Facebook Messenger.
+  it("does not claim an Instagram export's your_instagram_activity folder", async () => {
+    const fi = new FacebookFileImporter();
+    for (const fixture of ['instagram-export', 'instagram-html-export']) {
+      const activity = path.join(FIXTURES_DIR, fixture, 'your_instagram_activity');
+      expect(fs.existsSync(path.join(activity, 'messages'))).toBe(true);
+      const rec = await fi.recognize({}, { filename: 'your_instagram_activity', fullPath: activity });
+      expect({ fixture, confidence: rec.confidence }).toEqual({ fixture, confidence: 0 });
+    }
+  });
+
+  it('still claims a Facebook export that holds only its messages folder', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-messages-only-'));
+    try {
+      const thread = path.join(dir, 'messages', 'inbox', 'alice_12345');
+      fs.mkdirSync(thread, { recursive: true });
+      fs.writeFileSync(
+        path.join(thread, 'message_1.json'),
+        JSON.stringify({
+          participants: [{ name: 'Alice' }, { name: 'Me' }],
+          messages: [{ sender_name: 'Alice', timestamp_ms: 1700000000000, content: 'hi' }],
+        }),
+      );
+      const rec = await new FacebookFileImporter().recognize(
+        {},
+        { filename: path.basename(dir), fullPath: dir },
+      );
+      expect(rec.confidence).toBeGreaterThan(0);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('imports messages and posts', async () => {
     const root = path.join(FIXTURES_DIR, 'facebook-export');
     const fi = new FacebookFileImporter();
@@ -191,6 +226,164 @@ describe('Facebook datasource — HTML (Download Your Information) format', () =
     expect(messages[0].item.metadata.To).toBe('Test User');
     expect(messages[1].item.metadata.Sender).toBe('Test User');
     expect(messages[1].item.metadata.To).toBe('Alice Smith');
+  });
+});
+
+describe("Facebook datasource: which messages are the owner's", () => {
+  const roots: string[] = [];
+
+  afterAll(() => {
+    for (const root of roots) {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // Meta writes non-ASCII as one \u00XX escape per UTF-8 byte; "ë" is c3 ab.
+  const ZOE_META = 'ZoÃ« Quillfeather';
+
+  function writeThread(root: string, dir: string, thread: object): void {
+    const threadDir = path.join(root, 'your_facebook_activity', 'messages', 'inbox', dir);
+    fs.mkdirSync(threadDir, { recursive: true });
+    fs.writeFileSync(path.join(threadDir, 'message_1.json'), JSON.stringify(thread));
+  }
+
+  function buildExport(withProfile: boolean): string {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-owner-'));
+    roots.push(root);
+    if (withProfile) {
+      const profileDir = path.join(root, 'personal_information', 'profile_information');
+      fs.mkdirSync(profileDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(profileDir, 'profile_information.json'),
+        JSON.stringify({ profile_v2: { name: { full_name: ZOE_META, first_name: 'ZoÃ«' } } }),
+      );
+    }
+
+    writeThread(root, 'ottilie_101', {
+      participants: [{ name: 'Ottilie Brightwater' }, { name: ZOE_META }],
+      title: 'Ottilie Brightwater',
+      messages: [
+        { sender_name: ZOE_META, timestamp_ms: 1757876740000, content: 'See you at the trailhead at 7 then' },
+        { sender_name: 'Ottilie Brightwater', timestamp_ms: 1757876282000, content: 'Here is the ridge' },
+      ],
+    });
+    writeThread(root, 'lanternhikers_202', {
+      participants: [{ name: 'Casimir Thornwhistle' }, { name: 'Dagny Velloreaux' }, { name: ZOE_META }],
+      title: 'Lantern Hikers',
+      messages: [
+        { sender_name: 'Dagny Velloreaux', timestamp_ms: 1759439649000, content: 'I can bring the stove' },
+        { sender_name: ZOE_META, timestamp_ms: 1759439451000, content: 'Who is in for the loop?' },
+      ],
+    });
+    // Two people, but renamed: the title names neither of them.
+    writeThread(root, 'renamed_303', {
+      participants: [{ name: 'Ivo Brackenridge' }, { name: ZOE_META }],
+      title: 'Ferry plans',
+      messages: [{ sender_name: ZOE_META, timestamp_ms: 1759000000000, content: 'Boat at 9' }],
+    });
+
+    return root;
+  }
+
+  async function fromMe(root: string): Promise<Record<string, unknown>> {
+    const fi = new FacebookFileImporter();
+    const pipeline: EmittedGraph[] = [];
+    await fi.fileImport({}, { filename: path.basename(root), fullPath: root }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    return Object.fromEntries(
+      pipeline
+        .filter((p) => p.item.classification === 'message')
+        .map((p) => [p.item.metadata.Text as string, p.item.metadata['From Me']]),
+    );
+  }
+
+  it("marks the profile owner's messages, in one-to-one and group threads alike", async () => {
+    expect(await fromMe(buildExport(true))).toEqual({
+      'See you at the trailhead at 7 then': true,
+      'Here is the ridge': false,
+      'I can bring the stove': false,
+      'Who is in for the loop?': true,
+      'Boat at 9': true,
+    });
+  });
+
+  it('without a profile, still tells in a one-to-one thread and leaves the rest to the push', async () => {
+    expect(await fromMe(buildExport(false))).toEqual({
+      'See you at the trailhead at 7 then': true,
+      'Here is the ridge': false,
+      'I can bring the stove': undefined,
+      'Who is in for the loop?': undefined,
+      'Boat at 9': undefined,
+    });
+  });
+
+  it('reads the owner from the profile key exports used before profile_v2', async () => {
+    const root = buildExport(false);
+    fs.mkdirSync(path.join(root, 'profile_information'));
+    fs.writeFileSync(
+      path.join(root, 'profile_information', 'profile_information.json'),
+      JSON.stringify({ profile: { name: { full_name: ZOE_META } } }),
+    );
+
+    expect((await fromMe(root))['Who is in for the loop?']).toBe(true);
+  });
+
+  it('ignores a profile name nobody in the thread goes by', async () => {
+    const root = buildExport(false);
+    const profileDir = path.join(root, 'personal_information', 'profile_information');
+    fs.mkdirSync(profileDir, { recursive: true });
+    // Renamed since: the threads still carry the name the messages were sent under.
+    fs.writeFileSync(
+      path.join(profileDir, 'profile_information.json'),
+      JSON.stringify({ profile_v2: { name: { full_name: 'Zoe Ashcombe' } } }),
+    );
+
+    // The one-to-one thread still tells; the rest is left to the push.
+    expect(await fromMe(root)).toEqual({
+      'See you at the trailhead at 7 then': true,
+      'Here is the ridge': false,
+      'I can bring the stove': undefined,
+      'Who is in for the loop?': undefined,
+      'Boat at 9': undefined,
+    });
+  });
+
+  it("leaves a sender who is not on the thread's roster to the push", async () => {
+    const root = buildExport(false);
+    // A one-to-one thread with a message under a name neither participant has now.
+    writeThread(root, 'casimir_404', {
+      participants: [{ name: 'Casimir Thornwhistle' }, { name: ZOE_META }],
+      title: 'Casimir Thornwhistle',
+      messages: [
+        { sender_name: 'Zoe Ashcombe', timestamp_ms: 1758000000000, content: 'Sent under my old name' },
+        { sender_name: 'Casimir Thornwhistle', timestamp_ms: 1758000100000, content: 'Got it' },
+      ],
+    });
+
+    const marks = await fromMe(root);
+    expect(marks['Sent under my old name']).toBeUndefined();
+    expect(marks['Got it']).toBe(false);
+  });
+
+  it('works out the owner of a one-to-one HTML thread from its folder name', async () => {
+    const root = path.join(FIXTURES_DIR, 'facebook-html-export');
+    const fi = new FacebookFileImporter();
+    const pipeline: EmittedGraph[] = [];
+    await fi.fileImport({}, { filename: 'facebook-html-export', fullPath: root }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    const messages = pipeline.filter((p) => p.item.classification === 'message');
+    expect(messages.map((p) => [p.item.metadata.Sender, p.item.metadata['From Me']])).toEqual([
+      ['Alice Smith', false],
+      ['Test User', true],
+    ]);
   });
 });
 
@@ -899,5 +1092,480 @@ describe('Facebook datasource — thread lanes beyond messages/inbox', () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('Facebook datasource — likes/reactions and events (JSON)', () => {
+  let root: string;
+
+  const write = (rel: string, body: unknown): void => {
+    const fpath = path.join(root, rel);
+    fs.mkdirSync(path.dirname(fpath), { recursive: true });
+    fs.writeFileSync(fpath, JSON.stringify(body));
+  };
+
+  const run = async (dir = root): Promise<{ pipeline: EmittedGraph[]; drops: string[] }> => {
+    const pipeline: EmittedGraph[] = [];
+    const drops: string[] = [];
+    (pipeline as unknown as { drop: (reason: string) => void }).drop = (reason) => drops.push(reason);
+    await new FacebookFileImporter().fileImport({}, { filename: 'facebook', fullPath: dir }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    return { pipeline, drops };
+  };
+
+  // The newer shape: link + liked-object id, no sentence.
+  const linkedLike = (timestamp: number, name: string, fbid: string) => ({
+    timestamp,
+    media: [],
+    label_values: [
+      { label: 'Reaction', value: 'Like' },
+      { label: 'URL', value: `https://www.facebook.com/x/posts/${fbid}`, href: 'ignored' },
+      { label: 'Name', value: name },
+    ],
+    fbid,
+  });
+  // The older shape: Meta's sentence, no link.
+  const sentenceLike = (timestamp: number, title: string, reaction = 'LIKE') => ({
+    timestamp,
+    data: [{ reaction: { reaction, actor: 'Test User' } }],
+    title,
+  });
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-activity-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('imports each like once when both file shapes describe it', async () => {
+    const dir = 'your_facebook_activity/comments_and_reactions';
+    write(`${dir}/likes_and_reactions.json`, [linkedLike(1518135105, 'Alice Smith', '111')]);
+    write(`${dir}/likes_and_reactions_1.json`, [
+      sentenceLike(1518135105, "Test User liked Alice Smith's photo."),
+      sentenceLike(1433006988, 'Test User reacted to a comment.', 'HAHA'),
+    ]);
+
+    const { pipeline } = await run();
+    const likes = pipeline.filter((p) => p.item.classification === 'like');
+    expect(likes.map((l) => l.item.id).sort()).toEqual([
+      'facebook:reaction:1433006988',
+      'facebook:reaction:1518135105',
+    ]);
+
+    const joined = likes.find((l) => l.item.id === 'facebook:reaction:1518135105')!.item;
+    // Sentence from the older shape, link and id from the newer one.
+    expect(joined.metadata.Title).toBe("Test User liked Alice Smith's photo");
+    expect(joined.metadata.URL).toBe('https://www.facebook.com/x/posts/111');
+    expect(joined.metadata.Author).toBe('Alice Smith');
+    expect(joined.metadata.FacebookId).toBe('111');
+    expect(joined.metadata.Reaction).toBe('Like');
+    expect(joined.timestamp).toEqual(new Date(1518135105 * 1000));
+
+    const unlinked = likes.find((l) => l.item.id === 'facebook:reaction:1433006988')!.item;
+    expect(unlinked.metadata.Reaction).toBe('Haha');
+    expect(unlinked.metadata.URL).toBeUndefined();
+  });
+
+  it('gives a like the same id whichever file shape an export carries', async () => {
+    const dir = 'your_facebook_activity/comments_and_reactions';
+    write(`${dir}/likes_and_reactions.json`, [linkedLike(1518135105, 'Alice Smith', '111')]);
+    const newer = await run();
+    expect(newer.pipeline[0].item.metadata.Title).toBe("Liked Alice Smith's post");
+
+    fs.rmSync(path.join(root, dir), { recursive: true });
+    write(`${dir}/likes_and_reactions_1.json`, [
+      sentenceLike(1518135105, "Test User liked Alice Smith's post."),
+    ]);
+    const older = await run();
+
+    expect(older.pipeline.map((p) => p.item.id)).toEqual(newer.pipeline.map((p) => p.item.id));
+  });
+
+  it('merges an event across files, keeping the strongest RSVP and the richest copy', async () => {
+    const dir = 'your_facebook_activity/events';
+    const place = {
+      name: 'Town Hall',
+      coordinate: { latitude: 34.1, longitude: -118.3 },
+      address: '1 Main St',
+    };
+    write(`${dir}/your_event_responses.json`, {
+      event_responses_v2: {
+        events_joined: [
+          { name: 'Game Night', start_timestamp: 1774825200, end_timestamp: 0, response_time: 1774637062 },
+          { name: 'Launch Party', start_timestamp: 1520730000, end_timestamp: 1520740800 },
+        ],
+        events_interested: [{ name: 'Street Fair', start_timestamp: 1559957400, end_timestamp: 1559968200 }],
+        events_declined: [{ name: 'Timeshare Pitch', start_timestamp: 1541208600, end_timestamp: 0 }],
+      },
+    });
+    write(`${dir}/your_events.json`, {
+      your_events_v2: [
+        {
+          name: 'Launch Party',
+          start_timestamp: 1520730000,
+          end_timestamp: 1520740800,
+          place,
+          description: 'Bring snacks.',
+        },
+      ],
+    });
+    write(`${dir}/event_invitations.json`, {
+      events_invited_v2: [
+        { name: 'Game Night', start_timestamp: 1774825200, end_timestamp: 0 },
+        { name: 'Timeshare Pitch', start_timestamp: 1541208600, end_timestamp: 0 },
+        { name: 'Unanswered', start_timestamp: 1667181600, end_timestamp: 1667192400 },
+      ],
+    });
+
+    const { pipeline, drops } = await run();
+    const events = pipeline.filter((p) => p.item.classification === 'event').map((p) => p.item);
+    const byTitle = (title: string) => events.find((e) => e.metadata.Title === title)!;
+
+    // Declined stays out even though the invitation file lists it too, and so
+    // does the invitation nobody answered.
+    expect(events.map((e) => e.metadata.Title).sort()).toEqual(['Game Night', 'Launch Party', 'Street Fair']);
+    expect(drops.sort()).toEqual(['declined_event', 'unanswered_invitation']);
+
+    const game = byTitle('Game Night');
+    expect(game.timestamp).toEqual(new Date(1774825200 * 1000));
+    expect(game.timespanEnd).toBeUndefined(); // 0 means "no end"
+    expect(game.metadata.Rsvp).toBe('joined');
+    expect(game.metadata.eventStatus).toBe('confirmed');
+    expect(game.metadata.RespondedAt).toEqual(new Date(1774637062 * 1000));
+
+    const launch = byTitle('Launch Party');
+    expect(launch.metadata.Rsvp).toBe('joined');
+    expect(launch.timespanEnd).toEqual(new Date(1520740800 * 1000));
+    expect(launch.metadata.Description).toBe('Bring snacks.');
+    expect(launch.metadata.Location).toBe('Town Hall');
+    expect(launch.metadata.Address).toBe('1 Main St');
+    expect(launch.location).toEqual({ latitude: 34.1, longitude: -118.3 });
+
+    expect(byTitle('Street Fair').metadata.eventStatus).toBe('tentative');
+  });
+
+  it('imports liked Pages keyed on the Page id from the link', async () => {
+    write("your_facebook_activity/pages/pages_you've_liked.json", {
+      page_likes_v2: [
+        { name: 'Acme', timestamp: 1662665368, url: 'https://www.facebook.com/107389101575669' },
+        { name: 'No Link Page', timestamp: 1669892370 },
+      ],
+    });
+
+    const { pipeline } = await run();
+    const [acme, noLink] = pipeline.map((p) => p.item);
+
+    expect(pipeline).toHaveLength(2);
+    // The same id the Facebook connection mints for this Page.
+    expect(acme.id).toBe('like:107389101575669');
+    expect(acme.classification).toBe('like');
+    expect(acme.timestamp).toEqual(new Date(1662665368 * 1000));
+    expect(acme.metadata.Title).toBe('Liked Facebook page Acme');
+    expect(acme.metadata.Kind).toBe('page_like');
+    expect(acme.metadata.facebook_page_id).toBe('107389101575669');
+    expect(acme.metadata.URL).toBe('https://www.facebook.com/107389101575669');
+
+    expect(noLink.id).toMatch(/^facebook:pagelike:[0-9a-f]{40}$/);
+    expect(noLink.metadata.Title).toBe('Liked Facebook page No Link Page');
+  });
+
+  it('keeps like and event ids stable when the export is re-uploaded to a new dir', async () => {
+    write('your_facebook_activity/comments_and_reactions/likes_and_reactions.json', [
+      linkedLike(1518135105, 'Alice Smith', '111'),
+    ]);
+    write('your_facebook_activity/events/your_events.json', {
+      your_events_v2: [{ name: 'Launch Party', start_timestamp: 1520730000, end_timestamp: 0 }],
+    });
+    const first = await run();
+
+    const copy = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-activity-copy-'));
+    try {
+      fs.cpSync(root, copy, { recursive: true });
+      const second = await run(copy);
+
+      expect(first.pipeline).toHaveLength(2);
+      expect(second.pipeline.map((p) => p.item.id)).toEqual(first.pipeline.map((p) => p.item.id));
+    } finally {
+      fs.rmSync(copy, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('Facebook datasource — comments, group posts and Marketplace listings (JSON)', () => {
+  let root: string;
+
+  const write = (rel: string, body: unknown): void => {
+    const fpath = path.join(root, rel);
+    fs.mkdirSync(path.dirname(fpath), { recursive: true });
+    fs.writeFileSync(fpath, typeof body === 'string' ? body : JSON.stringify(body));
+  };
+
+  const run = async (): Promise<{ pipeline: EmittedGraph[]; drops: string[] }> => {
+    const pipeline: EmittedGraph[] = [];
+    const drops: string[] = [];
+    (pipeline as unknown as { drop: (reason: string) => void }).drop = (reason) => drops.push(reason);
+    await new FacebookFileImporter().fileImport({}, { filename: 'facebook', fullPath: root }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    return { pipeline, drops };
+  };
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-activity2-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('imports comments on posts and in groups, with text, author and group', async () => {
+    write('your_facebook_activity/comments_and_reactions/comments.json', {
+      comments_v2: [
+        {
+          timestamp: 1791220047,
+          data: [{ comment: { timestamp: 1791220047, comment: 'So here it is. 😅', author: 'Test User' } }],
+          title: "Test User commented on Alice Smith's post.",
+        },
+      ],
+    });
+    write('your_facebook_activity/groups/your_comments_in_groups.json', {
+      group_comments_v2: [
+        {
+          timestamp: 1791222699,
+          data: [
+            {
+              comment: {
+                timestamp: 1791222699,
+                comment: 'Hello Bob',
+                author: 'Test User',
+                group: 'Test group',
+              },
+            },
+          ],
+          title: 'Test User commented on his own post.',
+        },
+      ],
+    });
+
+    const { pipeline } = await run();
+    const comments = pipeline.filter((p) => p.item.classification === 'comment').map((p) => p.item);
+
+    expect(comments).toHaveLength(2);
+    expect(comments[0].id).toMatch(/^facebook:comment:1791220047:[0-9a-f]{16}$/);
+    expect(comments[0].timestamp).toEqual(new Date(1791220047 * 1000));
+    expect(comments[0].metadata.Title).toBe("Test User commented on Alice Smith's post");
+    expect(comments[0].metadata.Text).toBe('So here it is. 😅');
+    expect(comments[0].metadata.Author).toBe('Test User');
+    expect(comments[1].metadata.Group).toBe('Test group');
+    expect(comments[1].metadata.Text).toBe('Hello Bob');
+  });
+
+  it('imports posts in groups with their media, and skips group housekeeping entries', async () => {
+    write('your_facebook_activity/posts/media/your_posts/photo.jpg', 'jpeg');
+    write('your_facebook_activity/groups/group_posts_and_comments.json', {
+      group_posts_v2: [
+        { timestamp: 1791222682, data: [], title: 'Test User created the group Test group.' },
+        {
+          timestamp: 1791222719,
+          attachments: [
+            {
+              data: [
+                {
+                  media: {
+                    uri: 'your_facebook_activity/posts/media/your_posts/photo.jpg',
+                    creation_timestamp: 1791222718,
+                  },
+                },
+              ],
+            },
+          ],
+          data: [{ post: 'Non-anonymous post' }],
+          title: 'Test User posted in Test group.',
+        },
+      ],
+    });
+
+    const { pipeline, drops } = await run();
+    const posts = pipeline.filter((p) => p.item.classification === 'social').map((p) => p.item);
+    const media = pipeline.filter((p) => p.item.classification === 'media').map((p) => p.item);
+
+    expect(drops).toEqual(['empty_after_parse']);
+    expect(posts).toHaveLength(1);
+    expect(posts[0].metadata.Text).toBe('Non-anonymous post');
+    expect(posts[0].metadata.Group).toBe('Test group');
+    expect(posts[0].timestamp).toEqual(new Date(1791222719 * 1000));
+    expect(media).toHaveLength(1);
+    expect(media[0].id).toBe('facebook:media:your_facebook_activity/posts/media/your_posts/photo.jpg');
+    expect(media[0].metadata.Group).toBe('Test group');
+    // The photo also rides ON the post, so the post shows it.
+    expect(posts[0].metadata.MediaFilePaths).toEqual([
+      path.join(root, 'your_facebook_activity/posts/media/your_posts/photo.jpg'),
+    ]);
+    expect(posts[0].metadata.AttachmentContent).toBe(true);
+  });
+
+  it("attaches a timeline post's photos to the post, leaving out media the export did not include", async () => {
+    write('your_facebook_activity/posts/media/your_posts/here.jpg', 'jpeg');
+    write('your_facebook_activity/posts/your_posts_1.json', [
+      {
+        timestamp: 1791222719,
+        data: [{ post: 'Two photos, one of them in another zip' }],
+        attachments: [
+          {
+            data: [
+              {
+                media: {
+                  uri: 'your_facebook_activity/posts/media/your_posts/here.jpg',
+                  creation_timestamp: 1791222718,
+                },
+              },
+              {
+                media: {
+                  uri: 'your_facebook_activity/posts/media/your_posts/elsewhere.jpg',
+                  creation_timestamp: 1791222718,
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+
+    const { pipeline } = await run();
+    const [post] = pipeline.filter((p) => p.item.classification === 'social').map((p) => p.item);
+
+    expect(post.metadata.MediaFilePaths).toEqual([
+      path.join(root, 'your_facebook_activity/posts/media/your_posts/here.jpg'),
+    ]);
+    expect(post.metadata.AttachmentContent).toBe(true);
+    expect(pipeline.filter((p) => p.item.classification === 'media')).toHaveLength(1);
+  });
+
+  it('imports a Marketplace listing with its real id, price, category and location', async () => {
+    write('your_facebook_activity/facebook_marketplace/items_sold.json', {
+      items_selling_v2: [
+        {
+          title: 'Fallen City of Karez',
+          price: '$50',
+          seller: 'Test User',
+          created_timestamp: 1791220991,
+          category: 'Toys & Games',
+          marketplace: 'United States Marketplace',
+          location: { coordinate: { latitude: 33.686828613281, longitude: -117.78991699219 } },
+          description: 'One copy, played once.',
+        },
+        { title: 'No details twin', price: '$5', created_timestamp: 1791230000 },
+      ],
+    });
+    // A single object, as Meta writes it when there is one listing.
+    write('your_facebook_activity/facebook_marketplace/your_marketplace_items.json', {
+      timestamp: 1791221002,
+      media: [],
+      label_values: [
+        { label: 'Title', value: 'fallen city of karez' },
+        { label: 'Creation time', timestamp_value: 1791220991 },
+      ],
+      fbid: '1505220154752693',
+    });
+
+    const { pipeline } = await run();
+    const listings = pipeline.filter((p) => p.item.classification === 'sale').map((p) => p.item);
+
+    expect(listings).toHaveLength(2);
+    expect(listings[0].id).toBe('facebook:listing:1505220154752693');
+    expect(listings[0].timestamp).toEqual(new Date(1791220991 * 1000));
+    expect(listings[0].location).toEqual({ latitude: 33.686828613281, longitude: -117.78991699219 });
+    expect(listings[0].metadata).toMatchObject({
+      Title: 'Listed on Marketplace: Fallen City of Karez — $50',
+      Product: 'Fallen City of Karez',
+      Price: '$50',
+      Category: 'Toys & Games',
+      Description: 'One copy, played once.',
+      FacebookId: '1505220154752693',
+    });
+    // No twin in the details file: keyed on creation time and title instead.
+    expect(listings[1].id).toMatch(/^facebook:listing:1791230000:[0-9a-f]{16}$/);
+  });
+});
+
+describe('Facebook datasource — friends (JSON)', () => {
+  let root: string;
+
+  const write = (rel: string, body: unknown): void => {
+    const fpath = path.join(root, rel);
+    fs.mkdirSync(path.dirname(fpath), { recursive: true });
+    fs.writeFileSync(fpath, typeof body === 'string' ? body : JSON.stringify(body));
+  };
+
+  const run = async (): Promise<{ pipeline: EmittedGraph[]; drops: string[] }> => {
+    const pipeline: EmittedGraph[] = [];
+    const drops: string[] = [];
+    (pipeline as unknown as { drop: (reason: string) => void }).drop = (reason) => drops.push(reason);
+    await new FacebookFileImporter().fileImport({}, { filename: 'facebook', fullPath: root }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    return { pipeline, drops };
+  };
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-friends-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('imports each friend as a contact with the day the friendship started', async () => {
+    // Meta escapes every UTF-8 byte of an accented name as its own \u00XX.
+    write(
+      'connections/friends/your_friends.json',
+      '{"friends_v2": [{"name": "Ottilie Br\\u00c3\\u00a6ndgaard", "timestamp": 1770818400},' +
+        ' {"name": "Casimir Thornwhistle", "timestamp": 1772357400}, {"name": "", "timestamp": 1772357401}]}',
+    );
+
+    const { pipeline, drops } = await run();
+    const contacts = pipeline.filter((p) => p.entity).map((p) => p.entity!);
+    const friendships = pipeline.filter((p) => p.item?.metadata.Kind === 'friend').map((p) => p.item!);
+
+    expect(contacts.map((c) => [c.type, c.name])).toEqual([
+      ['contact', 'Ottilie Brændgaard'],
+      ['contact', 'Casimir Thornwhistle'],
+    ]);
+    expect(friendships.map((i) => i.metadata.Title)).toEqual([
+      'Became friends with Ottilie Brændgaard',
+      'Became friends with Casimir Thornwhistle',
+    ]);
+    expect(friendships[0].classification).toBe('social');
+    expect(friendships[0].timestamp).toEqual(new Date(1770818400 * 1000));
+    expect(friendships[0].metadata.Person).toBe('Ottilie Brændgaard');
+    expect(drops).toEqual(['unnamed_connection']);
+
+    // Stable across a re-import.
+    const again = (await run()).pipeline.filter((p) => p.item).map((p) => p.item!.id);
+    expect(again).toEqual(friendships.map((i) => i.id));
+  });
+
+  it('reads the older friends_and_followers layout', async () => {
+    write('friends_and_followers/friends.json', {
+      friends_v2: [{ name: 'Dagny Velloreaux', timestamp: 1773600300 }],
+    });
+
+    const { pipeline } = await run();
+    expect(pipeline.filter((p) => p.entity).map((p) => p.entity!.name)).toEqual(['Dagny Velloreaux']);
+    expect(pipeline.filter((p) => p.item).map((p) => p.item!.metadata.Title)).toEqual([
+      'Became friends with Dagny Velloreaux',
+    ]);
   });
 });

@@ -1,16 +1,20 @@
 import { Injectable } from '@nestjs/common';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
-import { toServiceContext } from '@ci/common/context';
+import { type RequestContext, toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { TaskService, type Task } from '@ci/domains/planning/task.module';
+import { PlanningTimeService, TaskService, type Task } from '@ci/domains/planning/task.module';
 
 import { BaseTool } from '../core/BaseTool';
-import type { IntentDefinition, ToolExecutionContext } from '../core/types';
+import type { IntentDefinition, IntentPrivacy, ToolExecutionContext } from '../core/types';
 
-function isValidIsoInstant(value: string): boolean {
-  return !Number.isNaN(Date.parse(value));
-}
+import {
+  LOCAL_TIME_FORM,
+  localTime,
+  resolveLocalTime,
+  timeZoneInput,
+  timeZoneParameter,
+} from './ownerLocalTime';
 
 const PlanningUpdateTaskInputSchema = z
   .object({
@@ -21,7 +25,7 @@ const PlanningUpdateTaskInputSchema = z
     // Mirrors ci.tasks' `tasks_priority_check` (see TaskResolver.assertTaskFields).
     priority: z.number().int().min(0).max(5).optional(),
     parentId: z.string().uuid().optional(),
-    dueAt: z.string().refine(isValidIsoInstant, 'dueAt must be a valid ISO 8601 date/time').optional(),
+    dueAt: localTime('dueAt').optional(),
     // Owner-local `YYYY-MM-DD` — an input to PlanningTimeService, never its output.
     scheduledFor: z
       .string()
@@ -39,6 +43,10 @@ const PlanningUpdateTaskInputSchema = z
       .optional(),
     estimatedMinutes: z.number().int().min(1).optional(),
     actualMinutes: z.number().int().min(0).optional(),
+    timeZone: timeZoneInput,
+  })
+  .refine((data) => !(data.timeZone && !data.dueAt), {
+    message: 'timeZone only applies with dueAt',
   })
   .refine((data) => Object.keys(data).length > 1, {
     message: 'At least one field to update must be provided',
@@ -61,19 +69,41 @@ export type PlanningUpdateTaskInput = z.infer<typeof PlanningUpdateTaskInputSche
  * (only setting a new value): the DTO allows `| null` on several fields, but a curated agent
  * surface only needs "set" today, and adding "clear" is a decision for whoever needs it first.
  *
- * Not destructive: every field here is freely re-editable by another call to this same tool (or
- * undoable by setting the old value back), unlike `planning.completeTask`'s one-way status flip.
+ * Declared not destructive: most fields here are short and freely re-editable by another call to
+ * this same tool, unlike `planning.completeTask`'s one-way status flip. The exception is replacing
+ * a description or notes that already hold text. Nothing keeps the old text, so "set the old value
+ * back" is not available to anyone, and {@link PlanningUpdateTaskTool.privacyFor} labels that call
+ * destructive.
  */
 @Injectable()
 export class PlanningUpdateTaskTool extends BaseTool<PlanningUpdateTaskInput, Task> {
   readonly schema: IntentDefinition = {
     name: 'planning.updateTask',
+    local: {
+      description:
+        'Change fields on a task; only the given fields change. Not for marking done. dueAt is an ISO 8601 instant; dates are YYYY-MM-DD.',
+      parameters: {
+        type: 'object',
+        properties: {
+          taskId: { type: 'string', format: 'uuid' },
+          title: { type: 'string', minLength: 1, maxLength: 500 },
+          dueAt: { type: 'string' },
+          scheduledFor: { type: 'string' },
+          deferUntil: { type: 'string', description: 'YYYY-MM-DD to push it out to.' },
+          priority: { type: 'integer', minimum: 0, maximum: 5, description: '0 highest, 5 lowest.' },
+          notes: { type: 'string', maxLength: 10000 },
+        },
+        required: ['taskId'],
+        additionalProperties: false,
+      },
+    },
     domain: 'planning',
     title: 'Update a task',
     description:
       'Update fields on an existing task in the personal to-do list. Only the fields provided ' +
-      'are changed. Does not accept status — use planning.completeTask to mark a task done. ' +
-      'dueAt is an instant (ISO 8601); scheduledFor/deferUntil are owner-local calendar dates ' +
+      'are changed. Does not accept status — use planning.acceptProposedTask or ' +
+      'planning.declineProposedTask to review a proposed task, and planning.completeTask to mark a task done. ' +
+      'dueAt is a local date and time (YYYY-MM-DDTHH:MM, no offset); scheduledFor/deferUntil are owner-local calendar dates ' +
       '(YYYY-MM-DD); taskTime is a zoneless wall-clock time (HH:MM).',
     privacy: { access: 'write', sensitivity: 'personal', destructive: false, external: false },
     // Every field here is the user's own data, freely re-editable by another call — the same
@@ -90,7 +120,7 @@ export class PlanningUpdateTaskTool extends BaseTool<PlanningUpdateTaskInput, Ta
         notes: { type: 'string', description: 'Freeform notes.', maxLength: 10000 },
         priority: { type: 'integer', minimum: 0, maximum: 5, description: '0 (highest) to 5 (lowest).' },
         parentId: { type: 'string', format: 'uuid', description: 'New parent task id, to nest this task.' },
-        dueAt: { type: 'string', description: 'ISO 8601 instant this task is due by.' },
+        dueAt: { type: 'string', description: `When this task is due by: ${LOCAL_TIME_FORM}.` },
         scheduledFor: {
           type: 'string',
           description: 'Owner-local calendar date (YYYY-MM-DD) to work on this.',
@@ -102,13 +132,18 @@ export class PlanningUpdateTaskTool extends BaseTool<PlanningUpdateTaskInput, Ta
         },
         estimatedMinutes: { type: 'integer', minimum: 1, description: 'Estimated effort in minutes.' },
         actualMinutes: { type: 'integer', minimum: 0, description: 'Actual time spent, in minutes.' },
+        timeZone: timeZoneParameter('dueAt'),
       },
       required: ['taskId'],
       additionalProperties: false,
     },
     examples: [
       {
-        input: { taskId: '11111111-1111-1111-1111-111111111111', priority: 0, dueAt: '2026-09-25T17:00:00.000Z' },
+        input: {
+          taskId: '11111111-1111-1111-1111-111111111111',
+          priority: 0,
+          dueAt: '2026-09-25T17:00',
+        },
         output: { id: '11111111-1111-1111-1111-111111111111', priority: 0 },
         description: 'Raise a task to top priority and push its due date',
       },
@@ -117,6 +152,7 @@ export class PlanningUpdateTaskTool extends BaseTool<PlanningUpdateTaskInput, Ta
 
   constructor(
     private readonly taskService: TaskService,
+    private readonly planningTime: PlanningTimeService,
     protected readonly logger: LoggerService,
   ) {
     super();
@@ -127,13 +163,54 @@ export class PlanningUpdateTaskTool extends BaseTool<PlanningUpdateTaskInput, Ta
     return PlanningUpdateTaskInputSchema.parse(input);
   }
 
-  protected async executeInternal(context: ToolExecutionContext, input: PlanningUpdateTaskInput): Promise<Task> {
+  /**
+   * Destructive when the call replaces a task's non-empty description or notes with different
+   * text: the stored text is gone afterwards, so a write key is refused the call and the autonomy
+   * dial asks before it runs (see `ToolHandle.privacyFor`). Filling in an empty field, or sending
+   * the text that is already there, stays a plain write.
+   */
+  async privacyFor(context: RequestContext, input: unknown): Promise<IntentPrivacy | undefined> {
+    let parsed: PlanningUpdateTaskInput;
+
+    try {
+      parsed = this.validateInput(input);
+    } catch {
+      // `execute` refuses the same input before it touches anything.
+      return undefined;
+    }
+
+    if ((parsed.description === undefined && parsed.notes === undefined) || !context.userId) {
+      return undefined;
+    }
+
+    const task = await this.taskService.findById(toServiceContext(context), parsed.taskId);
+
+    if (task == null) {
+      return undefined;
+    }
+
+    // Compared trimmed, as `memory.remember` compares a description: resending the stored text
+    // with a trailing newline loses nothing.
+    const replaces = (stored: string | null, next: string | undefined) =>
+      next !== undefined && (stored ?? '').trim() !== '' && next.trim() !== (stored ?? '').trim();
+
+    return replaces(task.description, parsed.description) || replaces(task.notes, parsed.notes)
+      ? { ...this.schema.privacy, destructive: true }
+      : undefined;
+  }
+
+  protected async executeInternal(
+    context: ToolExecutionContext,
+    input: PlanningUpdateTaskInput,
+  ): Promise<Task> {
     const serviceContext = toServiceContext(context);
-    const { taskId, dueAt, ...rest } = input;
+    const { taskId, dueAt, timeZone, ...rest } = input;
 
     const task = await this.taskService.update(serviceContext, taskId, {
       ...rest,
-      ...(dueAt !== undefined ? { dueAt: new Date(dueAt) } : {}),
+      ...(dueAt !== undefined
+        ? { dueAt: await resolveLocalTime(this.planningTime, serviceContext, dueAt, timeZone) }
+        : {}),
     });
 
     if (task == null) {

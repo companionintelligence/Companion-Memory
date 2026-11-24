@@ -21,7 +21,7 @@
     "session": {
       "fieldPepper": "AUTH_SESSION_PEPPER",
       "duration": "7d",
-      "refreshGracePeriod": "30s"
+      "refreshGracePeriod": "2m"
     },
     "csrf": {
       "secret": "AUTH_CSRF_TOKEN_SECRET"
@@ -60,6 +60,9 @@
       },
       "slack": {
         "id": "019e3c66-b5d2-7f03-c9e5-1a4f6b9d0c08"
+      },
+      "dropbox": {
+        "id": "01a10dc2-7dc5-7d4c-b3ab-7d3caaf7ebd3"
       }
     },
     "oauth": {
@@ -75,7 +78,7 @@
     },
     "connect": {
       "hubOrigins": "",
-      "hubInternalUrl": "http://ci-os-hub:3000",
+      "hubInternalUrl": "",
       "devDirectWakeUrl": "",
       "devDirectWakeToken": ""
     },
@@ -83,14 +86,19 @@
       "enabled": true,
       "issuer": "https://hub.ci.computer",
       "jwksUri": "https://hub.ci.computer/api/auth/jwks",
-      "audience": "ci-server,ci-hub,ci-import-tools,ci-browser-extension,ci-even,ci-applet",
+      "audience": "ci-server,ci-browser-extension,ci-even,ci-applet,companion-atlas,ci-meta",
       "pushRelayUrl": "",
-      "serviceClients": "hbpe-sidecar,summary-sidecar"
+      "serviceClients": "",
+      "applianceAudience": "",
+      "captureClients": "ci-browser-extension,ci-even,ci-applet,companion-atlas,ci-meta"
     },
     "hubForwardAuth": {
       "enabled": false,
       "secret": "",
-      "maxSkewMs": 300000
+      "identitySecret": "",
+      "audience": "",
+      "requireAudience": "true",
+      "maxSkewMs": 30000
     },
     "loginThrottle": {
       "enabled": true,
@@ -114,7 +122,7 @@
     "bucket": "companion",
     "auth": {
       "signatureUrl": "http://object-store:9000",
-      "signatureTTL": 3600,
+      "signatureTTL": 300,
       "accessKeyId": "OBJECT_STORE_USERNAME",
       "secretAccessKey": "OBJECT_STORE_PASSWORD"
     }
@@ -150,6 +158,7 @@
   "embedding": {
     "model": "nomic-embed-text",
     "batchSize": 32,
+    "maxInputChars": 8000,
     "concurrency": 4,
     "coalesceWindowMs": 15,
     "minTextLength": 3,
@@ -262,10 +271,16 @@
     "actions": true,
     "smart.rotation": false,
     "ask": true,
+    "trust.tasks": false,
     "grounded.prompts": true,
     "derivation.engines": true,
     "ingest.selfHeal": true,
     "solid.protocol": false,
+    "mcp.prm": false,
+    "pws.storage": false,
+    "auth.identikey": false,
+    "vtc.credentials": false,
+    "didcomm.messaging": false,
     "tools.pendingActions": true,
     "graphql.ide": true
   },
@@ -299,9 +314,10 @@
     "handle": "",
     "audience": "",
     "timeoutMs": 10000,
-    "requireHttpSignature": false,
+    "requireHttpSignature": true,
     "signingKeyJwk": "",
-    "allowCgnatEndpoints": false
+    "allowCgnatEndpoints": false,
+    "localPubEnabled": false
   },
   "push": {
     "vapid": {

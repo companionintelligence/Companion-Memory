@@ -1,4 +1,6 @@
-import { ESTIMATED_CONFIDENCE, LocationEstimateService } from '../LocationEstimateService';
+import { LIVE_EVENT_SQL } from '@ci/domains/memory';
+
+import { ESTIMATED_CONFIDENCE, eventHappenedSql, LocationEstimateService } from '../LocationEstimateService';
 
 function makeLogger() {
   return { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
@@ -28,7 +30,9 @@ describe('LocationEstimateService.countCandidates', () => {
     const [sql, params] = dataSource.query.mock.calls[0] as [string, unknown[]];
     expect(sql).toContain('location_coordinates IS NULL');
     expect(sql).toContain('source_system = ANY($2)');
-    expect(sql).toContain('is_deleted = false');
+    // Candidate and donor alike must be events that happened.
+    expect(sql).toContain(`AND ${eventHappenedSql('e')}`);
+    expect(sql).toContain(`AND ${eventHappenedSql('n')}`);
     expect(sql).toContain("<> 'estimated'");
     // Blocker guard: never count/estimate a predicted event (CHECK constraint).
     expect(sql).toContain('COALESCE(e.is_predicted, false) = false');
@@ -42,6 +46,21 @@ describe('LocationEstimateService.countCandidates', () => {
     expect(sql).toContain("metadata->>'location_source' = 'estimated'");
   });
 
+  it('never counts an event that names its own location — forced or not', async () => {
+    // Its coordinate is the geocoder's to resolve. A neighbour's fix pinned a
+    // calendar flight "Bangkok BKK" to the user's home (enrich.estimate_location
+    // v2 records the same rows as `skipped: has_location_name`). The clause sits
+    // OUTSIDE the forced-aware OR, so `forced` cannot re-admit them either.
+    const { service, dataSource } = makeService(async () => [{ count: '0' }]);
+
+    await service.countCandidates(USER, ['calendar'], 86400, true);
+
+    const [sql] = dataSource.query.mock.calls[0] as [string, unknown[]];
+    expect(sql).toMatch(
+      /\)\s*AND \(e\.location_name IS NULL OR btrim\(e\.location_name\) = ''\)\s*AND COALESCE\(e\.is_deleted, false\) = false/,
+    );
+  });
+
   it('with forced=true, widens the candidate predicate to include prior estimates', async () => {
     const { service, dataSource } = makeService(async () => [{ count: '7' }]);
 
@@ -50,6 +69,38 @@ describe('LocationEstimateService.countCandidates', () => {
     expect(n).toBe(7);
     const [, params] = dataSource.query.mock.calls[0] as [string, unknown[]];
     expect(params[3]).toBe(true);
+  });
+});
+
+describe('LocationEstimateService — an event that did not happen neither lends nor receives', () => {
+  // Proven against Postgres, case by case, in
+  // LocationEstimateDidNotHappen.integration.spec.ts. These pin the text.
+
+  it('states the rule in the text enrich.estimate_location states it in', () => {
+    // EstimateLocationStage.spec.ts pins the pipeline's copy to this same
+    // text. The status half is the calendar's LIVE_EVENT_SQL, re-aliased.
+    expect(eventHappenedSql('n')).toBe(
+      'COALESCE(n.is_deleted, false) = false ' +
+        'AND COALESCE(n.is_predicted, false) = false ' +
+        `AND ${LIVE_EVENT_SQL.replace('event.status', 'n.status')} ` +
+        "AND COALESCE(n.metadata->>'Canceled', '') <> 'true'",
+    );
+  });
+
+  it('refuses a donor that did not happen in the LATERAL that picks it, not only in the count', async () => {
+    let call = 0;
+    const { service, dataSource } = makeService(async () =>
+      ++call === 1 ? [{ count: '1' }] : [{ count: 0 }],
+    );
+
+    await service.estimateBatch(USER, { limit: 10, maxGapHours: 24, sourceSystems: ['calendar'] });
+
+    const sql = dataSource.query.mock.calls[1][0] as string;
+
+    // Twice for donors (the candidate CTE's EXISTS and the LATERAL), once for
+    // the candidate itself.
+    expect(sql.split(eventHappenedSql('n')).length - 1).toBe(2);
+    expect(sql.split(eventHappenedSql('e')).length - 1).toBe(1);
   });
 });
 
@@ -75,7 +126,10 @@ describe('LocationEstimateService.estimateBatch', () => {
         return [{ count: '5' }];
       } // countCandidates
 
-      return [{ event_id: 'a' }, { event_id: 'b' }]; // UPDATE ... RETURNING
+      // The UPDATE's counting CTE, answered the way the driver answers a
+      // SELECT. Not 2: that is the constant `.length` of TypeORM's
+      // `[rows, rowCount]` pair, which is what a bare UPDATE used to report.
+      return [{ count: 3 }];
     });
 
     const res = await service.estimateBatch(USER, {
@@ -84,9 +138,13 @@ describe('LocationEstimateService.estimateBatch', () => {
       sourceSystems: ['calendar', 'uber'],
     });
 
-    expect(res).toEqual({ candidates: 5, estimated: 2 });
+    expect(res).toEqual({ candidates: 5, estimated: 3 });
 
     const [sql, params] = dataSource.query.mock.calls[1] as [string, unknown[]];
+    // The UPDATE sits inside a CTE and the OUTER command is the SELECT that
+    // counts it; with the UPDATE outermost the count reads TypeORM's pair.
+    expect(sql).toMatch(/estimated AS \(\s*UPDATE ci\.events tgt/);
+    expect(sql).toMatch(/RETURNING 1\s*\)\s*SELECT count\(\*\)::int AS count FROM estimated$/);
     // params: [userId, sourceSystems, limit, maxGapSeconds, ESTIMATED_CONFIDENCE, maxGapHours, forced]
     expect(params[0]).toBe(USER);
     expect(params[1]).toEqual(['calendar', 'uber']);
@@ -98,6 +156,7 @@ describe('LocationEstimateService.estimateBatch', () => {
 
     // Safety invariants encoded in the SQL.
     expect(sql).toContain('location_coordinates IS NULL'); // candidate predicate (NULL coords admitted)
+    expect(sql).toContain("(e.location_name IS NULL OR btrim(e.location_name) = '')"); // named rows are the geocoder's
     expect(sql).toContain("|| jsonb_build_object('location_source', 'estimated')");
     expect(sql).toContain('is_inferred = true');
     expect(sql).toContain('COALESCE(e.is_predicted, false) = false'); // never abort batch on a predicted row
@@ -118,7 +177,7 @@ describe('LocationEstimateService.estimateBatch', () => {
         return [{ count: '3' }];
       }
 
-      return [{ event_id: 'x' }];
+      return [{ count: 1 }];
     });
 
     const res = await service.estimateBatch(USER, {
@@ -141,7 +200,9 @@ describe('LocationEstimateService.estimateBatch', () => {
 
   it('converts a fractional maxGapHours to whole seconds', async () => {
     let call = 0;
-    const { service, dataSource } = makeService(async () => (++call === 1 ? [{ count: '1' }] : []));
+    const { service, dataSource } = makeService(async () =>
+      ++call === 1 ? [{ count: '1' }] : [{ count: 0 }],
+    );
 
     await service.estimateBatch(USER, { limit: 10, maxGapHours: 1.5, sourceSystems: ['calendar'] });
 

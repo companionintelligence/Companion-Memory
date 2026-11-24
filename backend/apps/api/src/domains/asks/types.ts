@@ -9,13 +9,7 @@
 
 /** Lifecycle states of an Ask. See ARCHITECTURE.md §6 (ask lifecycle). */
 export type AskStatus =
-  | 'sent'
-  | 'delivered'
-  | 'under_review'
-  | 'answering'
-  | 'answered'
-  | 'declined'
-  | 'expired';
+  'sent' | 'delivered' | 'under_review' | 'answering' | 'answered' | 'declined' | 'expired';
 
 /** Terminal outcome recorded in the per-ask audit log. */
 export type AskAuditOutcome = 'answered' | 'auto_answered' | 'declined' | 'expired';
@@ -122,6 +116,16 @@ export interface AskQuery {
   dataClass?: string;
   /** The natural-language question as composed by the asker (shown back to both sides). */
   prompt: string;
+  /**
+   * True when characters that render as nothing (zero-width spaces, bidi
+   * controls, soft hyphens) were stripped from the asker's prompt before it was
+   * stored. The stored prompt no longer holds them, so this is the only record
+   * the owner's review card has of that removal. Absent means none were
+   * removed. It does NOT cover the other rewrites `normalizeText` makes: the
+   * NFKC fold (fullwidth letters, ligatures, superscripts) and the whitespace
+   * collapse also change the stored text and leave this unset.
+   */
+  promptHiddenCharactersRemoved?: boolean;
   /**
    * What is making this ask, when the asker declares it.
    *

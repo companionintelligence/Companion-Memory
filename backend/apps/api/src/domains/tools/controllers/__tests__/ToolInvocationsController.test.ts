@@ -121,7 +121,10 @@ describe('parseInvocationQuery', () => {
   });
 
   it('round-trips a real cursor and 400s a forged one', () => {
-    const cursor = { occurredAt: new Date('2026-08-20T10:00:00.000Z'), id: 'aaaaaaaa-0000-7000-8000-000000000001' };
+    const cursor = {
+      occurredAt: new Date('2026-08-20T10:00:00.000Z'),
+      id: 'aaaaaaaa-0000-7000-8000-000000000001',
+    };
 
     expect(parseInvocationQuery({ cursor: encodeCursor(cursor) })).toStrictEqual({ cursor });
     // Never a silent first page: a client looping over page one would keep reporting the newest

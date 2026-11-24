@@ -1,18 +1,10 @@
-import {
-  type ExecutionContext,
-  Inject,
-  Injectable,
-  InternalServerErrorException,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { type ExecutionContext, Inject, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { GqlExecutionContext } from '@nestjs/graphql';
 import { AuthGuard } from '@nestjs/passport';
 
-import { ContextService } from '@ci/common/context';
-
-import { enforceApiKeyCapability, enforceApiKeyScopes } from './apiKeyScopeEnforcement';
-import { extractBearerToken } from './bearerToken';
+import { enforceApiKeyAuthority } from './apiKeyScopeEnforcement';
+import { requestFromContext, userOrUnauthorized } from './guardRequest';
+import { acceptPortalBearer, bindPortalPrincipal } from './portalBearer';
 import { PORTAL_TOKEN_VERIFIER, type PortalTokenVerifier } from './PortalTokenVerifier';
 
 @Injectable()
@@ -25,24 +17,25 @@ export class JwtOrApiKeyAuthGuard extends AuthGuard(['jwt', 'api-key']) {
   }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
+    const request = this.getRequest(context);
     // Portal-brokered OIDC token path — runs alongside the legacy JWT/api-key
     // strategies during migration (gated by auth.portal.enabled).
-    if (this.portalTokenVerifier.enabled) {
-      const request = this.getRequest(context);
-      const token = extractBearerToken(request?.headers?.authorization);
+    const principal = await acceptPortalBearer(this.portalTokenVerifier, request);
 
-      if (token) {
-        const user = await this.portalTokenVerifier.verifyAndProvision(token);
+    if (principal) {
+      bindPortalPrincipal(request, principal);
 
-        if (user) {
-          ContextService.set({ userId: user.id });
-          request.user = user;
-
-          // Portal principal carries full user authority and no api-key scopes,
-          // so scope enforcement does not apply to this path.
-          return true;
-        }
+      // A Portal bearer that is not the user's full authority (a capture client, or a
+      // token not addressed to this appliance) is confined exactly like an api key
+      // with the same scopes and capability, by the same enforcement.
+      if (principal.limits) {
+        // A copy: the verifier hands every capture principal the same constant array.
+        request.apiKeyScopes = [...principal.limits.scopes];
+        request.apiKeyCapability = principal.limits.capability;
+        enforceApiKeyAuthority(this.reflector, context, request);
       }
+
+      return true;
     }
 
     const ok = (await super.canActivate(context)) as boolean;
@@ -51,42 +44,17 @@ export class JwtOrApiKeyAuthGuard extends AuthGuard(['jwt', 'api-key']) {
     // `req.apiKeyScopes`. A scope-limited key is confined to routes that grant
     // one of its scopes; empty-scope/legacy keys and JWT principals are unaffected.
     if (ok) {
-      const request = this.getRequest(context);
-
-      enforceApiKeyScopes(this.reflector, context, request);
-      // Second axis: scopes got the key to this route, capability decides whether it may act here.
-      enforceApiKeyCapability(this.reflector, context, request);
+      enforceApiKeyAuthority(this.reflector, context, request);
     }
 
     return ok;
   }
 
   getRequest(context: ExecutionContext) {
-    if (context.getType<string>() === 'graphql') {
-      const ctx = GqlExecutionContext.create(context);
-      const { req } = ctx.getContext();
-
-      if (req == null) {
-        throw new InternalServerErrorException('Request object not found in GraphQL context');
-      }
-
-      return req;
-    }
-
-    if (context.getType<string>() === 'http') {
-      return context.switchToHttp().getRequest();
-    }
-
-    throw new InternalServerErrorException(
-      `${JwtOrApiKeyAuthGuard.name} does not support context type: ${context.getType()}`,
-    );
+    return requestFromContext(context, JwtOrApiKeyAuthGuard.name);
   }
 
   handleRequest<TUser = unknown>(err: unknown, user: TUser): TUser {
-    if (err || !user) {
-      throw new UnauthorizedException();
-    }
-
-    return user;
+    return userOrUnauthorized(err, user);
   }
 }

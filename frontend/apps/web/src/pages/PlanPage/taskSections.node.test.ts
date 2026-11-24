@@ -65,6 +65,18 @@ describe('sectionFor', () => {
     }
   });
 
+  it('keeps finished work under done even when a suggestion is still open against it', () => {
+    // A `schedule` suggestion that outlived its task used to win here, which
+    // put a done task on the calendar drawer's rail where placing it was
+    // refused with `skipped`.
+    for (const status of ['done', 'skipped', 'archived']) {
+      expect(sectionFor(task({ status, hasPendingChange: true }), TODAY, 'UTC')).toEqual({
+        column: 'done',
+        lane: 'inbox',
+      });
+    }
+  });
+
   it('files proposed tasks under proposed inbox before date buckets', () => {
     expect(sectionFor(task({ status: 'proposed', dueAt: '2026-01-14T12:00:00Z' }), TODAY, 'UTC')).toEqual({
       column: 'proposed',
@@ -412,6 +424,7 @@ describe('openCount', () => {
         task({ status: 'proposed' }),
         task({ status: 'open', hasPendingChange: true }),
         task({ status: 'done' }),
+        task({ status: 'done', hasPendingChange: true }),
         task({ status: 'skipped' }),
         task({ status: 'archived' }),
       ]),

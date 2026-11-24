@@ -21,7 +21,7 @@ vi.mock('@ci/common', async (importOriginal) => {
   return { ...original, fetchJson: (...args: unknown[]) => fetchJson(...args) };
 });
 
-vi.mock('@apollo/client', () => ({
+vi.mock('@apollo/client/react', () => ({
   useApolloClient: () => ({ query }),
 }));
 

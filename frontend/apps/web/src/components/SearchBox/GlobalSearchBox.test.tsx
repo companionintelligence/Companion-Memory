@@ -9,7 +9,7 @@
 import { GlobalUID } from '@ci/common';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { useLocation } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '@/test/renderWithProviders';
 
@@ -21,6 +21,13 @@ const h = vi.hoisted(() => ({
     tags: [] as { id: string; label: string }[],
     loading: false,
     error: undefined as unknown,
+  } as {
+    data: unknown[];
+    tags: { id: string; label: string }[];
+    loading: boolean;
+    error: unknown;
+    /** Where the results came from; the box opens device answers at the saved record page. */
+    source?: string;
   },
 }));
 
@@ -37,8 +44,52 @@ vi.mock('./useSearchService', () => ({
 // useAuth/useMutation context this test doesn't provide. GlobalSearchBox only
 // composes it in; assert that composition without dragging its internals in.
 vi.mock('@/pages/MemoryPage/Components/ExplorerToolbar/ExplorerToolbar', () => ({
-  SearchPanelFilters: () => <div>advanced filters</div>,
+  // Load search stands in as one button that hands over a picked search.
+  SearchPanelFilters: ({ onOpenSavedSearch }: { onOpenSavedSearch?: (params: URLSearchParams) => void }) => (
+    <>
+      <div>advanced filters</div>
+      <button
+        type="button"
+        onClick={() => onOpenSavedSearch?.(new URLSearchParams('search=paris&tags=vacation'))}
+      >
+        Load a saved search
+      </button>
+    </>
+  ),
 }));
+
+// The phone footer (its sheets have their own suite); here, only what the box
+// hands it.
+vi.mock('@/pages/MemoryPage/Components/ExplorerToolbar/MobileSearchPanelFilters', () => ({
+  MobileSearchPanelFilters: ({
+    filterCount,
+    showSavedSearches,
+  }: {
+    filterCount: number;
+    showSavedSearches: boolean;
+  }) => (
+    <div>
+      phone filters: {filterCount}
+      {showSavedSearches && ', saved searches'}
+    </div>
+  ),
+}));
+
+const desktopMatchMedia = window.matchMedia;
+
+/** A phone-width viewport, as useDeviceLayout reads it (`max-width` queries match). */
+function asPhone() {
+  window.matchMedia = ((query: string) => ({
+    matches: query.includes('max-width'),
+    media: query,
+    onchange: null,
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })) as unknown as typeof window.matchMedia;
+}
 
 function LocationProbe() {
   const location = useLocation();
@@ -79,6 +130,10 @@ function engage(input: HTMLElement) {
 beforeEach(() => {
   localStorage.clear();
   h.search = { data: [], tags: [], loading: false, error: undefined };
+});
+
+afterEach(() => {
+  window.matchMedia = desktopMatchMedia;
 });
 
 describe('GlobalSearchBox on /memory/events', () => {
@@ -158,6 +213,28 @@ describe('GlobalSearchBox on /memory/events', () => {
 
     await waitFor(() => expect(params().get('search')).toBe('latte'));
   });
+
+  it('tapping "Search Memory for …" on a list page lets go of the box, so the panel closes and the query stays', async () => {
+    renderAt('/memory/events');
+
+    // jsdom reports the document as never focused, which the box reads as the
+    // window losing focus (and so keeps its panel); a real focused tab says yes.
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+
+    const input = screen.getByRole('textbox');
+    input.focus();
+    engage(input);
+    fireEvent.change(input, { target: { value: 'latte' } });
+
+    // Typing already ran the search; the tap must still visibly do something.
+    const row = await screen.findByText('Search Memory for');
+    fireEvent.click(row);
+
+    await waitFor(() => expect(params().get('search')).toBe('latte'));
+    expect(document.activeElement).not.toBe(input);
+    await waitFor(() => expect(screen.queryByText('Search Memory for')).not.toBeInTheDocument());
+    expect(input).toHaveValue('latte');
+  });
 });
 
 describe('GlobalSearchBox on a hub list page (people / places / things / tags / content)', () => {
@@ -214,6 +291,19 @@ describe('GlobalSearchBox off the memory lists (jump-to launcher)', () => {
     expect(screen.getByText('advanced filters')).toBeInTheDocument();
   });
 
+  it('opens a saved search picked in the panel in the explorer, with its query in the box', async () => {
+    renderAt('/plan/tasks?view=board');
+
+    engage(screen.getByRole('textbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Load a saved search' }));
+
+    await waitFor(() => expect(path()).toBe('/memory'));
+    expect(params().get('search')).toBe('paris');
+    expect(params().get('tags')).toBe('vacation');
+    expect(params().has('view')).toBe(false);
+    await waitFor(() => expect(screen.getByRole('textbox')).toHaveValue('paris'));
+  });
+
   it('does not write the current route while typing — only the "jump to" suggestions react', async () => {
     renderAt('/dashboard');
 
@@ -262,6 +352,49 @@ describe('GlobalSearchBox suggestions', () => {
     expect(params().get('search')).toBe('latte');
   });
 
+  it("on a person's page, a recent search opens the search across Memory — the page has no list to filter", () => {
+    localStorage.setItem('memoryRecentSearches', JSON.stringify(['latte']));
+    renderAt('/people/42');
+
+    engage(screen.getByRole('textbox'));
+    fireEvent.click(screen.getByText('latte'));
+
+    expect(path()).toBe('/memory');
+    expect(params().get('search')).toBe('latte');
+  });
+
+  it('on a person\'s page, "Search all of Memory for …" opens the search across Memory', async () => {
+    renderAt('/people/42');
+
+    const input = screen.getByRole('textbox');
+    engage(input);
+    fireEvent.change(input, { target: { value: 'latte' } });
+
+    fireEvent.click(await screen.findByText('Search all of Memory for'));
+
+    expect(path()).toBe('/memory');
+    expect(params().get('search')).toBe('latte');
+  });
+
+  it('on a list page, a recent search filters the page in place and lets go of the box, closing the panel', async () => {
+    localStorage.setItem('memoryRecentSearches', JSON.stringify(['latte']));
+    renderAt('/memory/people');
+
+    // jsdom reports the document as never focused, which the box reads as the
+    // window losing focus (and so keeps its panel); a real focused tab says yes.
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+
+    const input = screen.getByRole('textbox');
+    input.focus();
+    engage(input);
+    fireEvent.click(screen.getByText('latte'));
+
+    expect(path()).toBe('/memory/people');
+    expect(params().get('search')).toBe('latte');
+    expect(document.activeElement).not.toBe(input);
+    await waitFor(() => expect(input).toHaveValue('latte'));
+  });
+
   it('removing a recent search does not commit it', () => {
     localStorage.setItem('memoryRecentSearches', JSON.stringify(['latte']));
     renderAt('/memory/events');
@@ -288,6 +421,78 @@ describe('GlobalSearchBox suggestions', () => {
     expect(params().has('search')).toBe(false);
   });
 
+  it('says "No results found." under the Clear and Search-for rows when nothing matched', async () => {
+    renderAt('/dashboard');
+
+    const input = screen.getByRole('textbox');
+    engage(input);
+    fireEvent.change(input, { target: { value: 'zzqqxx' } });
+
+    expect(await screen.findByText('No results found.')).toBeInTheDocument();
+    expect(screen.getByText('Clear search query')).toBeInTheDocument();
+    expect(screen.getByText('Search all of Memory for')).toBeInTheDocument();
+  });
+
+  it('drops the notice and the last query rows once the input is emptied, back to the recent searches', async () => {
+    localStorage.setItem('memoryRecentSearches', JSON.stringify(['latte']));
+    renderAt('/dashboard');
+
+    const input = screen.getByRole('textbox');
+    engage(input);
+    fireEvent.change(input, { target: { value: 'zzqqxx' } });
+    await screen.findByText('No results found.');
+
+    fireEvent.change(input, { target: { value: '' } });
+
+    expect(screen.queryByText('No results found.')).not.toBeInTheDocument();
+    expect(await screen.findByText('latte')).toBeInTheDocument();
+    expect(screen.queryByText('Search all of Memory for')).not.toBeInTheDocument();
+  });
+
+  it('says where an empty answer came from when this phone answered it', async () => {
+    h.search = { data: [], tags: [], loading: false, error: undefined, source: 'device' };
+    renderAt('/dashboard');
+
+    const input = screen.getByRole('textbox');
+    engage(input);
+    fireEvent.change(input, { target: { value: 'zzqqxx' } });
+
+    const notice = await screen.findByText('No results found.');
+
+    expect(
+      screen.getByText('From this phone').compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('after an Enter inside the debounce, the rows follow the committed text, not the last prefix', async () => {
+    renderAt('/memory/events');
+
+    const input = screen.getByRole('textbox');
+    engage(input);
+    fireEvent.change(input, { target: { value: 'zzq' } });
+    await screen.findByText('“zzq”');
+
+    fireEvent.change(input, { target: { value: 'zzqqxx' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(params().get('search')).toBe('zzqqxx'));
+
+    fireEvent.focus(input);
+
+    expect(await screen.findByText('“zzqqxx”')).toBeInTheDocument();
+  });
+
+  it('does not say "No results found." once something matched', async () => {
+    h.search = { data: [], tags: [{ id: 't1', label: 'vacation' }], loading: false, error: undefined };
+    renderAt('/dashboard');
+
+    const input = screen.getByRole('textbox');
+    engage(input);
+    fireEvent.change(input, { target: { value: 'vac' } });
+
+    await screen.findByText('#vacation');
+    expect(screen.queryByText('No results found.')).not.toBeInTheDocument();
+  });
+
   it('selecting a person suggestion decodes its GlobalUID and opens the detail route', async () => {
     h.search = {
       data: [
@@ -311,5 +516,142 @@ describe('GlobalSearchBox suggestions', () => {
     fireEvent.click(await screen.findByText('Alice'));
 
     expect(path()).toBe('/people/42');
+  });
+
+  it('a suggestion answered from this phone opens the record this phone holds, whatever its type', async () => {
+    h.search = {
+      data: [
+        {
+          __typename: 'FileType',
+          id: GlobalUID.encode('file', 'f1'),
+          filename: 'scan.pdf',
+          previewUrl: null,
+        },
+      ],
+      tags: [],
+      loading: false,
+      error: undefined,
+      source: 'device',
+    };
+    renderAt('/dashboard');
+
+    const input = screen.getByRole('textbox');
+    engage(input);
+    fireEvent.change(input, { target: { value: 'scan' } });
+
+    fireEvent.click(await screen.findByText('scan.pdf'));
+
+    expect(path()).toBe('/memory/saved/file/f1');
+  });
+
+  // Files have no detail page; this tap used to do nothing at all, online or off.
+  it('selecting a file suggestion opens the gallery searched for its name', async () => {
+    h.search = {
+      data: [
+        {
+          __typename: 'FileType',
+          id: GlobalUID.encode('file', 'f1'),
+          filename: 'scan 2026.pdf',
+          previewUrl: null,
+        },
+      ],
+      tags: [],
+      loading: false,
+      error: undefined,
+    };
+    renderAt('/dashboard');
+
+    const input = screen.getByRole('textbox');
+    engage(input);
+    fireEvent.change(input, { target: { value: 'scan' } });
+
+    fireEvent.click(await screen.findByText('scan 2026.pdf'));
+
+    expect(`${path()}?${params().toString()}`).toBe('/memory?view=gallery&search=scan+2026.pdf');
+  });
+});
+
+describe('GlobalSearchBox on a phone', () => {
+  it('swaps the row of filter controls for the Filters and Saved searches rows', () => {
+    asPhone();
+    renderAt('/dashboard?tags=vacation');
+
+    engage(screen.getByRole('textbox'));
+
+    expect(screen.getByText('phone filters: 1, saved searches')).toBeInTheDocument();
+    expect(screen.queryByText('advanced filters')).not.toBeInTheDocument();
+  });
+
+  it('keeps the Filters row alone under the suggestions once a query is typed', async () => {
+    asPhone();
+    renderAt('/dashboard');
+
+    const input = screen.getByRole('textbox');
+    engage(input);
+    fireEvent.change(input, { target: { value: 'latte' } });
+
+    await screen.findByText('Search all of Memory for');
+    expect(screen.getByText('phone filters: 0')).toBeInTheDocument();
+  });
+
+  it('shows no explorer filters on a list page, as at desktop widths', () => {
+    asPhone();
+    renderAt('/memory/people');
+
+    engage(screen.getByRole('textbox'));
+
+    expect(screen.queryByText(/phone filters/)).not.toBeInTheDocument();
+  });
+
+  it('captions the recent searches, which only a phone needs', () => {
+    localStorage.setItem('memoryRecentSearches', JSON.stringify(['latte', 'flat white']));
+    asPhone();
+    const { unmount } = renderAt('/dashboard');
+
+    engage(screen.getByRole('textbox'));
+
+    expect(screen.getAllByText('Recent')).toHaveLength(1);
+    expect(
+      screen.getByText('Recent').compareDocumentPosition(screen.getByText('latte')) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    unmount();
+
+    window.matchMedia = desktopMatchMedia;
+    renderAt('/dashboard');
+    engage(screen.getByRole('textbox'));
+
+    expect(screen.getByText('latte')).toBeInTheDocument();
+    expect(screen.queryByText('Recent')).not.toBeInTheDocument();
+  });
+
+  /**
+   * QA MEM-05 re-test, P3: after "Open full page" on an entity sheet, the search box
+   * showed its Filters / Saved searches panel over the new page's Back bar. The sheet's
+   * icon and the page's search field share a spot on the screen, so the suspects were
+   * focus handed back by the closing sheet, or a tap landing through onto the field.
+   *
+   * Neither is what happens. On an iOS 27 Simulator (real touch, WebKit) one tap on the
+   * icon left the box shut 9 times in 9; a SECOND tap at that spot (a retried or
+   * repeated tap) opened it all 3 times, which is simply a tap on the field. These two
+   * hold that split in place so the gating cannot loosen unnoticed: a pointer gesture
+   * opens the panel, bare focus never does.
+   */
+  it('stays shut when focus lands on it without a tap, as when a closing sheet hands focus back', () => {
+    asPhone();
+    renderAt('/events/42');
+
+    fireEvent.focus(screen.getByRole('textbox'));
+
+    expect(screen.queryByText(/phone filters/)).not.toBeInTheDocument();
+  });
+
+  it("opens on a tap on the field, which is all a second tap at the sheet icon's spot amounts to", () => {
+    asPhone();
+    renderAt('/events/42');
+
+    engage(screen.getByRole('textbox'));
+
+    expect(screen.getByText('phone filters: 0, saved searches')).toBeInTheDocument();
   });
 });

@@ -1,7 +1,5 @@
 # Jobs system review — August 2026
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 A review of the pg-boss jobs system and the Jobs dashboard, and the changes that
 came out of it. Every claim here was verified against either the pg-boss 10.3.2
 source in `.yarn/cache` or the live appliance database (`companion@localhost:5432`,

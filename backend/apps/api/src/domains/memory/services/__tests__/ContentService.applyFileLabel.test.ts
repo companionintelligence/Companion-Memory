@@ -61,7 +61,7 @@ describe('ContentService.applyFileLabel', () => {
     await service.applyFileLabel(ctx, FILE_ID, label);
 
     expect(repo.find).toHaveBeenCalledWith({
-      select: ['id', 'externalId'],
+      select: { id: true, externalId: true },
       where: [
         { userId: 'user-1', externalId: In([FILE_ID]), externalIdKind: 'file' },
         { userId: 'user-1', externalId: In([FILE_ID]), externalIdKind: IsNull() },

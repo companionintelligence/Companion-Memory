@@ -13,6 +13,12 @@ const h = vi.hoisted(() => ({
     loading: false,
     error: null,
   },
+  toastError: vi.fn(),
+}));
+
+vi.mock('@ci/shadcn', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@ci/shadcn')>()),
+  useToast: () => ({ toast: { error: h.toastError } }),
 }));
 
 vi.mock('./useAuth', () => ({
@@ -44,6 +50,8 @@ const MODELS = [
 /** Preference server state this mock serves and records writes into. */
 interface ServerState {
   chatModel: string | null;
+  /** The appliance default the server reports beside the override; absent on older servers. */
+  defaultChatModel?: string | null;
   toolsEnabled: boolean;
   thinkingEnabled: boolean;
 }
@@ -80,7 +88,11 @@ function setFetch(opts: { models?: unknown; modelsOk?: boolean; state?: ServerSt
         state.chatModel = (JSON.parse(String(init?.body)) as { chatModel: string | null }).chatModel;
       }
 
-      return respond({ chatModel: state.chatModel });
+      return respond(
+        'defaultChatModel' in state
+          ? { chatModel: state.chatModel, defaultChatModel: state.defaultChatModel }
+          : { chatModel: state.chatModel },
+      );
     }
 
     if (url.includes('/api/personalization/tools')) {
@@ -128,6 +140,48 @@ describe('useModel', () => {
     await waitFor(() => expect(result.current[0].loading).toBe(false));
     expect(result.current[0].activeModels).toHaveLength(2);
     expect(result.current[0].selectedModel).toBe('llama3');
+  });
+
+  // The page sends its selection with every turn, so picking the first listed
+  // model (gemma3:270m, the most recently pulled) overrode the Hub's default
+  // (qwen3.5:9b) for every user who had never chosen one.
+  it('selects the appliance default, not the first listed model, when the user has no preference', async () => {
+    setFetch({ state: { ...defaultServerState(), defaultChatModel: 'qwen-vl' } });
+
+    const { result } = renderHook(() => useModel(), { wrapper });
+
+    await waitFor(() => expect(result.current[0].loading).toBe(false));
+    expect(result.current[0].selectedModel).toBe('qwen-vl');
+  });
+
+  it('falls back to the first listed model when the appliance default is not served', async () => {
+    setFetch({ state: { ...defaultServerState(), defaultChatModel: 'gemma4:e4b' } });
+
+    const { result } = renderHook(() => useModel(), { wrapper });
+
+    await waitFor(() => expect(result.current[0].loading).toBe(false));
+    expect(result.current[0].selectedModel).toBe('llama3');
+  });
+
+  it("keeps the user's own choice over the appliance default", async () => {
+    setFetch({ state: { ...defaultServerState(), chatModel: 'llama3', defaultChatModel: 'qwen-vl' } });
+
+    const { result } = renderHook(() => useModel(), { wrapper });
+
+    await waitFor(() => expect(result.current[0].loading).toBe(false));
+    expect(result.current[0].selectedModel).toBe('llama3');
+  });
+
+  it('moves to the appliance default when the stored choice is no longer served', async () => {
+    const { state } = setFetch({
+      state: { ...defaultServerState(), chatModel: 'removed:27b', defaultChatModel: 'qwen-vl' },
+    });
+
+    const { result } = renderHook(() => useModel(), { wrapper });
+
+    await waitFor(() => expect(result.current[0].loading).toBe(false));
+    expect(result.current[0].selectedModel).toBe('qwen-vl');
+    await waitFor(() => expect(state.chatModel).toBeNull());
   });
 
   it('restores the server-side chat-model preference when still available', async () => {
@@ -195,6 +249,55 @@ describe('useModel', () => {
     );
   });
 
+  // Describe images is a per-model setting that Settings > Model reloads on this
+  // revision; reloading on the optimistic selection raced the save and showed
+  // the old model's value.
+  it('bumps chatModelRevision once the server has recorded a switch, and not when it refuses', async () => {
+    const { fetchMock } = setFetch();
+    const { result } = renderHook(() => useModel(), { wrapper });
+    await waitFor(() => expect(result.current[0].loading).toBe(false));
+    expect(result.current[0].chatModelRevision).toBe(0);
+
+    act(() => result.current[1].selectModel('qwen-vl'));
+    await waitFor(() => expect(result.current[0].chatModelRevision).toBe(1));
+
+    fetchMock.mockImplementationOnce(() =>
+      Promise.resolve({ ok: false, status: 500, text: async () => '{}' } as Response),
+    );
+    act(() => result.current[1].selectModel('llama3'));
+    await waitFor(() => expect(result.current[0].selectedModel).toBe('qwen-vl'));
+    expect(result.current[0].chatModelRevision).toBe(1);
+  });
+
+  it('reports a chat-model switch as saving until the server answers', async () => {
+    const { fetchMock } = setFetch();
+    const { result } = renderHook(() => useModel(), { wrapper });
+    await waitFor(() => expect(result.current[0].loading).toBe(false));
+    expect(result.current[0].chatModelSaving).toBe(false);
+
+    let answer: () => void = () => undefined;
+    fetchMock.mockImplementationOnce(
+      () =>
+        new Promise<Response>((resolve) => {
+          answer = () => resolve({ ok: true, status: 200, text: async () => '{}' } as Response);
+        }),
+    );
+    act(() => result.current[1].selectModel('qwen-vl'));
+    expect(result.current[0].chatModelSaving).toBe(true);
+
+    act(() => answer());
+    await waitFor(() => expect(result.current[0].chatModelSaving).toBe(false));
+    expect(result.current[0].chatModelRevision).toBe(1);
+  });
+
+  it('bumps chatModelRevision when it clears a chat model the backend no longer serves', async () => {
+    const { state } = setFetch({ state: { ...defaultServerState(), chatModel: 'gone:latest' } });
+    const { result } = renderHook(() => useModel(), { wrapper });
+
+    await waitFor(() => expect(result.current[0].chatModelRevision).toBe(1));
+    expect(state.chatModel).toBeNull();
+  });
+
   it('reverts the selection if the server rejects the write', async () => {
     const { fetchMock } = setFetch();
     const { result } = renderHook(() => useModel(), { wrapper });
@@ -208,6 +311,66 @@ describe('useModel', () => {
     expect(result.current[0].selectedModel).toBe('qwen-vl');
 
     await waitFor(() => expect(result.current[0].selectedModel).toBe('llama3'));
+  });
+
+  // The revert alone read as "the tap did nothing": an iOS QA run tapped a model
+  // six times, the server answered 500 six times (an account with no self entity
+  // to store the preference on), and the label snapped back to the default each
+  // time with no word about why.
+  it('says so when the server rejects the write, instead of reverting in silence', async () => {
+    const { fetchMock } = setFetch();
+    const { result } = renderHook(() => useModel(), { wrapper });
+    await waitFor(() => expect(result.current[0].loading).toBe(false));
+
+    fetchMock.mockImplementationOnce(() =>
+      Promise.resolve({ ok: false, status: 500, text: async () => '{}' } as Response),
+    );
+
+    act(() => result.current[1].selectModel('qwen-vl'));
+
+    await waitFor(() => expect(h.toastError).toHaveBeenCalledTimes(1));
+    expect(h.toastError).toHaveBeenCalledWith(expect.stringMatching(/wasn't saved/));
+    expect(result.current[0].selectedModel).toBe('llama3');
+  });
+
+  it('stays quiet when the write succeeds', async () => {
+    const { fetchMock } = setFetch();
+    const { result } = renderHook(() => useModel(), { wrapper });
+    await waitFor(() => expect(result.current[0].loading).toBe(false));
+
+    act(() => result.current[1].selectModel('qwen-vl'));
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/personalization/chat-model',
+        expect.objectContaining({ method: 'POST' }),
+      ),
+    );
+    expect(h.toastError).not.toHaveBeenCalled();
+  });
+
+  it('says so when the Tools or Thinking setting cannot be saved, and puts the toggle back', async () => {
+    const { fetchMock } = setFetch();
+    const { result } = renderHook(() => useModel(), { wrapper });
+    await waitFor(() => expect(result.current[0].loading).toBe(false));
+    act(() => result.current[1].selectModel('qwen-vl'));
+    await waitFor(() => expect(result.current[0].selectedModel).toBe('qwen-vl'));
+
+    fetchMock.mockImplementationOnce(() =>
+      Promise.resolve({ ok: false, status: 500, text: async () => '{}' } as Response),
+    );
+    act(() => result.current[1].toggleTools());
+
+    await waitFor(() => expect(h.toastError).toHaveBeenCalledWith(expect.stringMatching(/Tools setting/)));
+    await waitFor(() => expect(result.current[0].toolsEnabled).toBe(true));
+
+    fetchMock.mockImplementationOnce(() =>
+      Promise.resolve({ ok: false, status: 500, text: async () => '{}' } as Response),
+    );
+    act(() => result.current[1].toggleThinking());
+
+    await waitFor(() => expect(h.toastError).toHaveBeenCalledWith(expect.stringMatching(/Thinking setting/)));
+    await waitFor(() => expect(result.current[0].thinkingEnabled).toBe(true));
   });
 
   it('derives thinking/tools support from the selected model, and persists the toggle server-side', async () => {

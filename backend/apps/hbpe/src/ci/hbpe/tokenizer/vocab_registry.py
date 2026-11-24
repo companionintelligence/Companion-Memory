@@ -292,15 +292,34 @@ def write_event_label(
     l0_class: str,
     l1_cluster_id: str,
 ) -> None:
-    """
-    Assign an L1 cluster to an event.
+    """Assign an L1 cluster to one event; see :func:`write_event_labels`."""
+    write_event_labels([(event_id, l1_cluster_id)])
 
-    Upserts ci.l1_event_cluster (similarity=1.0 for LLM labels) and
-    bumps the cluster's member_count + last_active_at.
+
+def write_event_labels(assignments: list[tuple[str, str]]) -> None:
     """
+    Assign L1 clusters to many events: ``(event_id, l1_cluster_id)`` pairs.
+
+    Two statements for the batch where there used to be two per event — the
+    labeler hands over a whole LLM batch at once: one multi-row upsert of
+    ``hbpe.l1_event_cluster`` (similarity=1.0 for LLM labels), then one
+    ``UPDATE ... FROM unnest`` that bumps each cluster's ``member_count`` by
+    how many events it was given and moves ``last_active_at``.
+
+    An event named twice keeps its LAST assignment (an upsert cannot touch one
+    row twice in a statement), and is counted once.
+    """
+    latest = {str(event_id): str(cluster_id) for event_id, cluster_id in assignments}
+    if not latest:
+        return
+
+    bumps: dict[str, int] = {}
+    for cluster_id in latest.values():
+        bumps[cluster_id] = bumps.get(cluster_id, 0) + 1
+
     sql_upsert = """
         INSERT INTO hbpe.l1_event_cluster (event_id, cluster_id, similarity, assigned_at)
-        VALUES (%s::uuid, %s::uuid, 1.0, NOW())
+        VALUES %s
         ON CONFLICT (event_id)
         DO UPDATE SET
             cluster_id  = EXCLUDED.cluster_id,
@@ -308,16 +327,22 @@ def write_event_label(
             assigned_at = EXCLUDED.assigned_at
     """
     sql_bump = """
-        UPDATE hbpe.l1_clusters
-        SET member_count   = member_count + 1,
+        UPDATE hbpe.l1_clusters c
+        SET member_count   = c.member_count + b.n,
             last_active_at = NOW(),
             updated_at     = NOW()
-        WHERE cluster_id = %s::uuid
+        FROM unnest(%s::uuid[], %s::int[]) AS b(cluster_id, n)
+        WHERE c.cluster_id = b.cluster_id
     """
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql_upsert, (str(event_id), str(l1_cluster_id)))
-            cur.execute(sql_bump, (str(l1_cluster_id),))
+            psycopg2.extras.execute_values(
+                cur,
+                sql_upsert,
+                list(latest.items()),
+                template="(%s::uuid, %s::uuid, 1.0, NOW())",
+            )
+            cur.execute(sql_bump, (list(bumps.keys()), list(bumps.values())))
 
 
 def write_content_label(
@@ -327,15 +352,43 @@ def write_content_label(
     l1_cluster_id: str,
     l2_cluster_id: str,
 ) -> None:
-    """
-    Assign L2 cluster + context to a content item.
+    """Assign L2 cluster + context to one content item; see :func:`write_content_labels`."""
+    write_content_labels(
+        [(content_id, user_id, l0_class, l1_cluster_id, l2_cluster_id)]
+    )
 
-    Upserts ci.l2_content_cluster and ci.content_context, then bumps
-    the L2 cluster's member_count.
+
+def write_content_labels(
+    assignments: list[tuple[str, str, str, str, str]],
+) -> None:
     """
+    Assign L2 clusters and context to many content items:
+    ``(content_id, user_id, l0_class, l1_cluster_id, l2_cluster_id)`` tuples.
+
+    Three statements for the batch where there used to be three per item: one
+    multi-row upsert of ``hbpe.l2_content_cluster``, one of
+    ``hbpe.content_context``, then one ``UPDATE ... FROM unnest`` bumping each
+    L2 cluster's ``member_count`` by how many items it was given. An item
+    named twice keeps its last assignment and is counted once.
+    """
+    latest: dict[str, tuple[str, str, str, str]] = {}
+    for content_id, user_id, l0_class, l1_cluster_id, l2_cluster_id in assignments:
+        latest[str(content_id)] = (
+            str(user_id),
+            l0_class,
+            str(l1_cluster_id),
+            str(l2_cluster_id),
+        )
+    if not latest:
+        return
+
+    bumps: dict[str, int] = {}
+    for _, _, _, l2_cluster_id in latest.values():
+        bumps[l2_cluster_id] = bumps.get(l2_cluster_id, 0) + 1
+
     sql_l2 = """
         INSERT INTO hbpe.l2_content_cluster (content_id, cluster_id, similarity, assigned_at)
-        VALUES (%s::uuid, %s::uuid, 1.0, NOW())
+        VALUES %s
         ON CONFLICT (content_id)
         DO UPDATE SET
             cluster_id  = EXCLUDED.cluster_id,
@@ -344,7 +397,7 @@ def write_content_label(
     """
     sql_ctx = """
         INSERT INTO hbpe.content_context (content_id, user_id, l0_class, l1_cluster_id, assigned_at)
-        VALUES (%s::uuid, %s::uuid, %s, %s::uuid, NOW())
+        VALUES %s
         ON CONFLICT (content_id)
         DO UPDATE SET
             l0_class      = EXCLUDED.l0_class,
@@ -352,16 +405,28 @@ def write_content_label(
             user_id       = EXCLUDED.user_id
     """
     sql_bump = """
-        UPDATE hbpe.l2_clusters
-        SET member_count   = member_count + 1,
+        UPDATE hbpe.l2_clusters c
+        SET member_count   = c.member_count + b.n,
             last_active_at = NOW(),
             updated_at     = NOW()
-        WHERE cluster_id = %s::uuid
+        FROM unnest(%s::uuid[], %s::int[]) AS b(cluster_id, n)
+        WHERE c.cluster_id = b.cluster_id
     """
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql_l2, (str(content_id), str(l2_cluster_id)))
-            cur.execute(
-                sql_ctx, (str(content_id), str(user_id), l0_class, str(l1_cluster_id))
+            psycopg2.extras.execute_values(
+                cur,
+                sql_l2,
+                [(content_id, l2) for content_id, (_, _, _, l2) in latest.items()],
+                template="(%s::uuid, %s::uuid, 1.0, NOW())",
             )
-            cur.execute(sql_bump, (str(l2_cluster_id),))
+            psycopg2.extras.execute_values(
+                cur,
+                sql_ctx,
+                [
+                    (content_id, user_id, l0, l1)
+                    for content_id, (user_id, l0, l1, _) in latest.items()
+                ],
+                template="(%s::uuid, %s::uuid, %s, %s::uuid, NOW())",
+            )
+            cur.execute(sql_bump, (list(bumps.keys()), list(bumps.values())))

@@ -6,6 +6,13 @@ function makeListener(answer: Record<string, unknown> | null = null) {
   const answerService = { findById: jest.fn().mockResolvedValue(answer) };
   const embeddingGenerationService = { generateEmbedding: jest.fn().mockResolvedValue([0.1, 0.2]) };
   const embeddingService = {
+    upsertDocument: jest.fn(
+      async (_ctx: unknown, data: { text: string }, generate: (text: string) => Promise<number[]>) => {
+        await generate(data.text);
+
+        return 'embedded';
+      },
+    ),
     upsert: jest.fn().mockResolvedValue(null),
     remove: jest.fn().mockResolvedValue(true),
   };
@@ -49,7 +56,7 @@ describe('AnswerSearchIndexListener.indexAnswer / updateAnswer', () => {
 
     await listener.indexAnswer({ answerId: 'ghost' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalled();
   });
 
@@ -62,7 +69,7 @@ describe('AnswerSearchIndexListener.indexAnswer / updateAnswer', () => {
 
     await listener.indexAnswer({ answerId: 'answer-1' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
   });
 
   it("embeds and vectorizes an answer's text alongside its question, scoped to its user", async () => {
@@ -75,9 +82,10 @@ describe('AnswerSearchIndexListener.indexAnswer / updateAnswer', () => {
 
     await listener.updateAnswer({ answerId: 'answer-1' } as never);
 
-    expect(embeddingService.upsert).toHaveBeenCalledWith(
+    expect(embeddingService.upsertDocument).toHaveBeenCalledWith(
       { userId: 'user-1' },
-      { entityType: 'answer', entityId: 'answer-1', embedding: [0.1, 0.2] },
+      { entityType: 'answer', entityId: 'answer-1', text: expect.any(String) },
+      expect.any(Function),
     );
     expect(vectorService.upsert).toHaveBeenCalledWith(
       { userId: 'user-1' },
@@ -102,7 +110,7 @@ describe('AnswerSearchIndexListener.indexAnswer / updateAnswer', () => {
 
     await listener.indexAnswer({ answerId: 'answer-2' } as never);
 
-    expect(embeddingService.upsert).toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).toHaveBeenCalled();
   });
 
   it('skips both embedding and vectorization when there is no answer text and no question text', async () => {
@@ -115,7 +123,7 @@ describe('AnswerSearchIndexListener.indexAnswer / updateAnswer', () => {
 
     await listener.indexAnswer({ answerId: 'answer-3' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(vectorService.upsert).not.toHaveBeenCalled();
   });
 });

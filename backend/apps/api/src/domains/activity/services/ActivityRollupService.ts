@@ -4,6 +4,7 @@ import { DataSource } from 'typeorm';
 
 import type { UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import type { HourlyActivityOptions } from '@ci/common/persistence';
 import { MessageService } from '@ci/domains/conversations';
 import { FileService } from '@ci/domains/files';
 import { AnswerService } from '@ci/domains/intelligence';
@@ -38,8 +39,11 @@ export interface ActivityBucketRow {
 interface ActivitySourceProvider {
   /** Stable key stored in ci.activity_rollup.source and accepted as a query filter. */
   source: string;
-  aggregate: () => Promise<ActivityBucketRow[]>;
+  aggregate: (options: HourlyActivityOptions) => Promise<ActivityBucketRow[]>;
 }
+
+/** What a refresh covers; see {@link ActivityRollupService.refreshAll}. */
+export type ActivityRefreshOptions = HourlyActivityOptions;
 
 const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -88,14 +92,17 @@ export class ActivityRollupService {
     this.logger.setContext(ActivityRollupService.name);
 
     this.providers = [
-      { source: 'communications', aggregate: () => communicationService.aggregateHourlyActivity() },
-      { source: 'events', aggregate: () => eventService.aggregateHourlyActivity() },
-      { source: 'messages', aggregate: () => messageService.aggregateHourlyActivity() },
-      { source: 'notes', aggregate: () => noteService.aggregateHourlyActivity() },
-      { source: 'content', aggregate: () => contentService.aggregateHourlyActivity() },
-      { source: 'files', aggregate: () => fileService.aggregateHourlyActivity() },
-      { source: 'answers', aggregate: () => answerService.aggregateHourlyActivity() },
-      { source: 'entities', aggregate: () => graphUtilityService.aggregateHourlyActivity() },
+      {
+        source: 'communications',
+        aggregate: (options) => communicationService.aggregateHourlyActivity(options),
+      },
+      { source: 'events', aggregate: (options) => eventService.aggregateHourlyActivity(options) },
+      { source: 'messages', aggregate: (options) => messageService.aggregateHourlyActivity(options) },
+      { source: 'notes', aggregate: (options) => noteService.aggregateHourlyActivity(options) },
+      { source: 'content', aggregate: (options) => contentService.aggregateHourlyActivity(options) },
+      { source: 'files', aggregate: (options) => fileService.aggregateHourlyActivity(options) },
+      { source: 'answers', aggregate: (options) => answerService.aggregateHourlyActivity(options) },
+      { source: 'entities', aggregate: (options) => graphUtilityService.aggregateHourlyActivity(options) },
     ];
   }
 
@@ -107,19 +114,27 @@ export class ActivityRollupService {
    * Recomputes the rollup for every source. Sources are isolated: one failing
    * aggregate (or a write rejected by the user FK for orphaned source rows) is
    * logged and skipped so the remaining sources still refresh.
+   *
+   * With `changedSince`, an INCREMENTAL pass: each source reports only the
+   * buckets holding a row changed since then, counted in full (a 0 for one
+   * whose rows all stopped counting), and only those buckets are written or
+   * pruned. What that cannot see is a row that vanished outright — a hard
+   * delete leaves nothing to find — so the cron still runs a full pass daily.
+   * A source with no row timestamp (communications) answers in full either way.
    */
-  async refreshAll(): Promise<void> {
+  async refreshAll(options: ActivityRefreshOptions = {}): Promise<void> {
     for (const provider of this.providers) {
       const startedAt = Date.now();
 
       try {
-        const rows = await provider.aggregate();
+        const rows = await provider.aggregate(options);
 
-        await this.writeSource(provider.source, rows);
+        await this.writeSource(provider.source, rows, options);
 
         this.logger.log('Refreshed activity rollup source', {
           source: provider.source,
           buckets: rows.length,
+          incremental: options.changedSince != null,
           durationMs: Date.now() - startedAt,
         });
       } catch (err) {
@@ -136,11 +151,46 @@ export class ActivityRollupService {
    * single transactional statement: delete buckets that vanished, upsert
    * buckets whose count changed, leave unchanged rows untouched to keep WAL
    * churn minimal. An empty aggregate prunes every row for the source.
+   *
+   * Incrementally (`changedSince`), the aggregate is the touched buckets only:
+   * a 0 count prunes that bucket, the rest are upserted, and every other row
+   * of the source is left as it is — an empty aggregate then means nothing
+   * changed, not nothing exists.
    */
-  private async writeSource(source: string, rows: ActivityBucketRow[]): Promise<void> {
+  private async writeSource(
+    source: string,
+    rows: ActivityBucketRow[],
+    options: ActivityRefreshOptions = {},
+  ): Promise<void> {
     const userIds = rows.map((row) => row.userId);
     const bucketStarts = rows.map((row) => row.bucketStart);
     const counts = rows.map((row) => row.count);
+
+    if (options.changedSince) {
+      if (rows.length === 0) {
+        return;
+      }
+
+      await this.dataSource.query(
+        `WITH agg AS (
+           SELECT user_id, bucket_start, count
+           FROM unnest($2::uuid[], $3::timestamptz[], $4::int[]) AS t(user_id, bucket_start, count)
+         ),
+         pruned AS (
+           DELETE FROM ci.activity_rollup r
+           USING agg a
+           WHERE r.source = $1 AND r.user_id = a.user_id AND r.bucket_start = a.bucket_start AND a.count = 0
+         )
+         INSERT INTO ci.activity_rollup (user_id, source, bucket_start, count)
+         SELECT user_id, $1, bucket_start, count FROM agg WHERE count > 0
+         ON CONFLICT (user_id, source, bucket_start)
+         DO UPDATE SET count = EXCLUDED.count, refreshed_at = NOW()
+         WHERE activity_rollup.count IS DISTINCT FROM EXCLUDED.count`,
+        [source, userIds, bucketStarts, counts],
+      );
+
+      return;
+    }
 
     await this.dataSource.query(
       `WITH agg AS (

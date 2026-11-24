@@ -14,7 +14,7 @@ import {
   Query,
 } from '@nestjs/common';
 import type { Response } from 'express';
-import type { z } from 'zod';
+import type { z } from 'zod/v3';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';

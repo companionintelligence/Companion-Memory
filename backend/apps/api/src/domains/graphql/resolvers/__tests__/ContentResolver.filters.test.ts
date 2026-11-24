@@ -50,6 +50,7 @@ describe('ContentResolver.contents filters', () => {
       expect.objectContaining({ userId: 'user-1' }),
       expect.objectContaining({ first: 50 }),
       { query: 'shells', types: ['image'], mimetypes: ['image/png'], sourceSystems: ['reddit'] },
+      { countTotal: true },
     );
   });
 
@@ -58,7 +59,7 @@ describe('ContentResolver.contents filters', () => {
 
     await resolver.contents(ctx, { first: 50 } as PaginationArgs, '  ', undefined, [], undefined);
 
-    expect(findPage).toHaveBeenCalledWith(expect.anything(), expect.anything(), {});
+    expect(findPage).toHaveBeenCalledWith(expect.anything(), expect.anything(), {}, { countTotal: true });
   });
 
   it('answers the facet query from the service', async () => {

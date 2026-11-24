@@ -4,7 +4,8 @@ import type { Request } from 'express';
 
 import { isScopeLimitedApiKey } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
-import { IntentCatalogService } from '@ci/domains/tools';
+import { DESKTOP_APP_CLOSED_MESSAGE, DesktopAppService } from '@ci/domains/llm';
+import { IntentCatalogService, toolErrorMessage } from '@ci/domains/tools';
 
 import { ToolExecutionError } from '../types';
 
@@ -15,6 +16,7 @@ export class McpServerService {
   constructor(
     private readonly toolService: McpToolService,
     private readonly intentCatalog: IntentCatalogService,
+    private readonly desktopApp: DesktopAppService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext('McpServerService');
@@ -78,7 +80,12 @@ export class McpServerService {
             {
               uri: uri.href,
               mimeType: 'application/json',
-              text: JSON.stringify(this.intentCatalog.getManifest(), null, 2),
+              // Per caller: an intent owned by one account is listed to that account only.
+              text: JSON.stringify(
+                this.intentCatalog.getManifest({ userId: (req.user as { id?: string } | undefined)?.id }),
+                null,
+                2,
+              ),
             },
           ],
         }),
@@ -100,7 +107,10 @@ export class McpServerService {
             content: [
               {
                 type: 'text' as const,
-                text: JSON.stringify(result, null, 2),
+                // Compact, not indented: a model reads both the same, and indentation was about a
+                // quarter of every search result's characters, all of it spent from the caller's
+                // context window (measured 2026-11-13, OpenClaw at 64k).
+                text: JSON.stringify(result),
               },
             ],
           };
@@ -108,6 +118,8 @@ export class McpServerService {
           const error = err instanceof Error ? err : new Error(String(err));
 
           this.logger.error(error, `MCP tool execution failed: ${tool.name}`);
+
+          const desktopAppClosed = await this.desktopApp.isClosed().catch(() => false);
 
           return {
             content: [
@@ -122,7 +134,7 @@ export class McpServerService {
                 // both harness plugins already read `error.code` and
                 // `error.details.pendingActionId` from that. A genuine
                 // unexpected throw still falls back to the bare message.
-                text: JSON.stringify({ error: serializeToolError(error) }),
+                text: JSON.stringify(failedToolPayload(error, desktopAppClosed)),
               },
             ],
             isError: true,
@@ -130,7 +142,6 @@ export class McpServerService {
         }
       };
 
-      // @ts-expect-error -- dynamic Zod shapes cause excessive type depth in registerTool generics
       server.registerTool(
         tool.name,
         {
@@ -155,6 +166,25 @@ export class McpServerService {
 }
 
 /**
+ * What an MCP client reads for a failed tool call.
+ *
+ * `notice` is there while Memory Desktop is closed and its model with it (see DesktopAppService.isClosed).
+ * Search and anything else that needs the model then fails with a transport error that says nothing an
+ * agent can act on, and the agent cannot see the web app's notice. It sits beside the tool's own error
+ * rather than replacing it: a call can still fail for its own reason (a bad argument, a refusal) while the
+ * app is closed, and the agent needs that error to correct the call.
+ */
+export function failedToolPayload(
+  error: Error,
+  desktopAppClosed: boolean,
+): { error: ReturnType<typeof serializeToolError>; notice?: string } {
+  return {
+    error: serializeToolError(error),
+    ...(desktopAppClosed ? { notice: DESKTOP_APP_CLOSED_MESSAGE } : {}),
+  };
+}
+
+/**
  * Present a thrown tool failure the way the REST plane presents a returned one.
  *
  * A queued action is not an error in the sense the word usually carries here —
@@ -172,5 +202,5 @@ function serializeToolError(error: Error): { code?: string; message: string; det
     };
   }
 
-  return { message: error.message };
+  return { message: toolErrorMessage(error) };
 }

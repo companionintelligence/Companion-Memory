@@ -6,6 +6,7 @@ import type { LoggerService } from '@ci/common/logging';
 import type { UserService } from '@ci/domains/user';
 
 import { makeUserService, type UserRow } from '../__tests__/support/userServiceDouble';
+import { todayIsoInTimezone } from '../dateUtil';
 import { DailyMetricEntity } from '../entities/DailyMetricEntity';
 import { DAILY_AGGREGATE_SQL } from '../metrics/dailyAggregateSql';
 import type { DailyMetrics, MetricCoverage, MetricValues } from '../types';
@@ -188,6 +189,67 @@ describe('DailyMetricsService.getRange', () => {
       BadRequestException,
     );
     expect(repo.find).not.toHaveBeenCalled();
+  });
+});
+
+describe('DailyMetricsService.refreshForUser stale days', () => {
+  const deleteCall = (repo: ReturnType<typeof makeRepo>) =>
+    repo.query.mock.calls.find(([sql]) => sql.includes('DELETE FROM ci_derived.daily_metrics'));
+
+  it('drops every stored day up to today that has no data when the window reached all of them', async () => {
+    const repo = makeRepo(['2026-07-07', '2026-07-05']);
+    const { service } = makeService(repo);
+
+    await service.refreshForUser(CONTEXT, 30, 'UTC');
+
+    const [, params] = deleteCall(repo) ?? [];
+    expect(params).toEqual([USER, null, todayIsoInTimezone('UTC'), ['2026-07-07', '2026-07-05']]);
+  });
+
+  it('leaves stored days older than the oldest one a cut-short window wrote', async () => {
+    const repo = makeRepo(['2026-07-07', '2026-07-05']);
+    const { service } = makeService(repo);
+
+    await service.refreshForUser(CONTEXT, 2, 'UTC');
+
+    const [, params] = deleteCall(repo) ?? [];
+    expect(params?.[1]).toBe('2026-07-05');
+  });
+
+  it('drops the stored days when no day has data any more', async () => {
+    const repo = makeRepo([]);
+    const { service } = makeService(repo);
+
+    await expect(service.refreshForUser(CONTEXT, 30, 'UTC')).resolves.toEqual([]);
+
+    const [, params] = deleteCall(repo) ?? [];
+    expect(params).toEqual([USER, null, todayIsoInTimezone('UTC'), []]);
+    expect(repo.upsert).not.toHaveBeenCalled();
+  });
+
+  it('refreshes in the profile timezone when the caller names none', async () => {
+    const repo = makeRepo(['2026-07-07']);
+    const users = { findById: jest.fn(async () => ({ id: USER, timezone: 'America/Los_Angeles' })) };
+    const { service } = makeService(repo, users as unknown as UserService);
+
+    await service.refreshForUser(CONTEXT, 30);
+
+    const selection = repo.query.mock.calls.find(([sql]) => sql.includes('WITH days AS'));
+    expect(selection?.[1]?.[1]).toBe('America/Los_Angeles');
+    expect(repo.upsert.mock.calls[0][0].timezone).toBe('America/Los_Angeles');
+    expect(deleteCall(repo)?.[1]?.[2]).toBe(todayIsoInTimezone('America/Los_Angeles'));
+    expect(users.findById).toHaveBeenCalledWith(CONTEXT, USER);
+  });
+
+  it('refreshes in UTC when the profile has no timezone', async () => {
+    const repo = makeRepo(['2026-07-07']);
+    const users = { findById: jest.fn(async () => ({ id: USER, timezone: '' })) };
+    const { service } = makeService(repo, users as unknown as UserService);
+
+    await service.refreshForUser(CONTEXT, 30);
+
+    const selection = repo.query.mock.calls.find(([sql]) => sql.includes('WITH days AS'));
+    expect(selection?.[1]?.[1]).toBe('UTC');
   });
 });
 

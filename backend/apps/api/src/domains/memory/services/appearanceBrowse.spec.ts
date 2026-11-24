@@ -8,6 +8,7 @@ import {
   placeAppearanceCountSql,
   placeAppearanceListSql,
 } from './appearanceBrowse';
+import { EVENT_HAPPENED_SQL } from './eventHappened';
 
 describe('appearanceBrowse', () => {
   it('treats either bound of a date filter as a window', () => {
@@ -47,6 +48,18 @@ describe('appearanceBrowse', () => {
     expect(sql).toContain('location_entity_id');
     expect(sql).toContain('MIN(at)');
     expect(sql).not.toContain('communications');
+  });
+
+  it('dates places only from events that happened, on the alias that rule is written for', () => {
+    // The filtering is SQL, so what it does is proven against Postgres in
+    // __tests__/PlaceService.appearance.integration.spec.ts. This pins that the
+    // list and the count both apply it, over `event`, and bring no bind
+    // parameter of their own.
+    for (const sql of [placeAppearanceListSql(), placeAppearanceCountSql()]) {
+      expect(sql).toContain('FROM ci.events event');
+      expect(sql).toContain(EVENT_HAPPENED_SQL);
+      expect(sql).not.toMatch(/\$[7-9]/);
+    }
   });
 
   it('pages the list by (appeared_at, entity_id) so the cursor matches SearchResolver', () => {

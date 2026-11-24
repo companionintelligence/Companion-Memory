@@ -648,6 +648,19 @@ describe('the system-line filter must not eat human messages', () => {
     expect((pipeline as EmittedGraph[] & { drops?: string[] }).drops).toEqual(['whatsapp_system_line']);
   });
 
+  it('drops the encryption notice an iPhone export starts with', async () => {
+    // The pattern for it is anchored at the start, so it has to be tested
+    // after the marker WhatsApp puts in front of the notice.
+    const pipeline = await importChat(
+      line(
+        `${LRM}Messages and calls are end-to-end encrypted. No one outside of this chat, not even WhatsApp, can read or listen to them.`,
+      ) + line('Are we still on for Saturday?'),
+    );
+
+    expect(bodies(pipeline)).toEqual(['Are we still on for Saturday?']);
+    expect((pipeline as EmittedGraph[] & { drops?: string[] }).drops).toEqual(['whatsapp_system_line']);
+  });
+
   it('keeps a media placeholder, which carries the marker but is not a system line', async () => {
     // The marker alone cannot be the rule: WhatsApp puts it on every line it
     // generates, including these. 745 of one export's lines carry it and only
@@ -655,5 +668,932 @@ describe('the system-line filter must not eat human messages', () => {
     const pipeline = await importChat(line(`${LRM}image omitted`));
 
     expect(pipeline).toHaveLength(1);
+  });
+
+  describe('times without a zone', () => {
+    const chatIn = async (lines: string[], timeZone?: string): Promise<string[]> => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'whatsapp-zone-'));
+
+      try {
+        fs.writeFileSync(path.join(root, '_chat.txt'), lines.join('\n'));
+
+        const pipeline: EmittedGraph[] = [];
+        await new WhatsAppFileImporter().fileImport({}, { filename: path.basename(root), fullPath: root }, {
+          pipeline,
+          timeframe: {},
+          timeZone,
+          log: () => {},
+        } as unknown as ImportParams);
+
+        return pipeline.map((entry) => entry.item.timestamp?.toISOString() ?? 'undated');
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    };
+
+    it("reads an iOS export's wall-clock times in the account's zone", async () => {
+      // Midnight on New Year's Day for a Pacific account is 08:00 UTC. Read in a
+      // UTC container it was stored at 00:00 UTC, which that account sees as
+      // 4 PM on Dec 31, 2020.
+      const times = await chatIn(
+        ['[1/1/21, 12:00:00 AM] Alice: Happy New Year!', '[1/2/21, 8:15:00 PM] Bob: Good night'],
+        'America/Los_Angeles',
+      );
+
+      expect(times).toEqual(['2021-01-01T08:00:00.000Z', '2021-01-03T04:15:00.000Z']);
+    });
+
+    it('does not depend on the zone the server runs in', async () => {
+      // Setting process.env.TZ here would not move this process's zone, because
+      // jest gives each test file its own copy of process.env. The same line read
+      // in two account zones covers it instead. At least one of them is not the
+      // zone this process runs in.
+      const line = ['[1/1/21, 12:00:00 AM] Alice: Happy New Year!'];
+
+      expect(await chatIn(line, 'UTC')).toEqual(['2021-01-01T00:00:00.000Z']);
+      expect(await chatIn(line, 'Asia/Tokyo')).toEqual(['2020-12-31T15:00:00.000Z']);
+    });
+
+    it('reads 12-hour, 24-hour and Android times in that zone too', async () => {
+      const times = await chatIn(
+        [
+          '[1/1/21, 12:30:00 PM] Alice: noon and a half',
+          '[1/1/21, 23:15] Bob: a 24-hour iOS export',
+          '01/07/2021, 09:05 - Alice: an Android export, day first',
+        ],
+        'Europe/Berlin',
+      );
+
+      expect(times).toEqual([
+        '2021-01-01T11:30:00.000Z',
+        '2021-01-01T22:15:00.000Z',
+        '2021-07-01T07:05:00.000Z',
+      ]);
+    });
+
+    it('leaves a header with an impossible time undated rather than inventing one', async () => {
+      expect(await chatIn(['[1/32/21, 1:00:00 AM] Alice: day 32'], 'UTC')).toEqual(['undated']);
+    });
+
+    it('keeps the message ids it made before, whatever zone the account is in', async () => {
+      // The id carries a time. Built from the account-zone instant, a chat
+      // imported before this change would get new ids. Importing a newer export
+      // of it would then save every old message again. It stays the server's
+      // reading, which is what `new Date` gave the old code in this process.
+      const lines = ['[1/1/21, 12:00:00 AM] Alice: Happy New Year!', '01/07/2021, 09:05 - Bob: Android'];
+      const imported = async (timeZone?: string): Promise<EmittedGraph[]> => {
+        const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'whatsapp-zone-id-'));
+        const root = path.join(parent, 'chat');
+
+        try {
+          fs.mkdirSync(root);
+          fs.writeFileSync(path.join(root, '_chat.txt'), lines.join('\n'));
+
+          const pipeline: EmittedGraph[] = [];
+          await new WhatsAppFileImporter().fileImport({}, { filename: 'chat', fullPath: root }, {
+            pipeline,
+            timeframe: {},
+            timeZone,
+            log: () => {},
+          } as unknown as ImportParams);
+
+          return pipeline;
+        } finally {
+          fs.rmSync(parent, { recursive: true, force: true });
+        }
+      };
+
+      const legacy = [
+        `whatsapp:chat:${new Date('1/1/21 12:00:00 AM').toISOString()}:0`,
+        `whatsapp:chat:${new Date('2021-07-01T09:05:00').toISOString()}:1`,
+      ];
+
+      // Two zones at least one of which is not this process's, so the stored
+      // instants move while the ids must not.
+      for (const timeZone of ['America/Los_Angeles', 'Pacific/Kiritimati', undefined]) {
+        const items = await imported(timeZone);
+
+        expect(items.map((entry) => entry.item.id)).toEqual(legacy);
+      }
+
+      expect((await imported('Pacific/Kiritimati'))[0].item.timestamp?.toISOString()).toBe(
+        '2020-12-31T10:00:00.000Z',
+      );
+
+      // With no account zone the stored time is the old reading too.
+      expect((await imported(undefined)).map((entry) => entry.item.timestamp?.toISOString())).toEqual([
+        new Date('1/1/21 12:00:00 AM').toISOString(),
+        new Date('2021-07-01T09:05:00').toISOString(),
+      ]);
+    });
+  });
+});
+
+describe("an Android export's own lines", () => {
+  const importAndroid = async (lines: string[], timeZone?: string) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-android-'));
+    const drops: string[] = [];
+    const items: EmittedGraph[] = [];
+    const consumed = jest.fn();
+
+    try {
+      fs.writeFileSync(path.join(dir, 'WhatsApp Chat with Ferry trip.txt'), lines.join('\n'));
+      const pipeline = Object.assign(items, { drop: (reason: string) => drops.push(reason), consumed });
+
+      await new WhatsAppFileImporter().fileImport({}, { filename: path.basename(dir), fullPath: dir }, {
+        pipeline,
+        timeframe: {},
+        timeZone,
+        log: () => {},
+      } as unknown as ImportParams);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+
+    return { items, drops, consumed };
+  };
+
+  const said = (items: EmittedGraph[]) =>
+    items.map((g) => `${String(g.item.metadata.Sender)}: ${String(g.item.metadata.Text)}`);
+
+  // A group chat as an Android phone exports it. WhatsApp's own lines carry the
+  // date but no sender.
+  const GROUP = [
+    '14/11/2026, 09:30 - Messages and calls are end-to-end encrypted. Only people in this chat can read, listen to, or share them. Learn more.',
+    '14/11/2026, 09:30 - Robin Hale created group "Ferry trip"',
+    '14/11/2026, 09:30 - Robin Hale added you',
+    '14/11/2026, 09:31 - Robin Hale: Welcome aboard! The ferry leaves at 10:15 on Saturday.',
+    '14/11/2026, 09:33 - Dana Brooks: Packing list',
+    '- sunscreen',
+    '- rain jacket',
+    '14/11/2026, 10:02 - Robin Hale added Casey Moreno',
+    '14/11/2026, 10:03 - Casey Moreno: Thanks for adding me!',
+    "14/11/2026, 10:05 - You changed this group's icon",
+    '14/11/2026, 10:06 - Robin Hale: Nice picture',
+    '14/11/2026, 10:08 - Robin Hale changed the subject from "Ferry trip" to "Ferry trip Saturday"',
+    '14/11/2026, 10:09 - Dana Brooks left',
+    '14/11/2026, 10:10 - Casey Moreno: See you all at the pier',
+  ];
+
+  it('drops them instead of adding them to the message before', async () => {
+    const { items, drops, consumed } = await importAndroid(GROUP);
+
+    expect(said(items)).toEqual([
+      'Robin Hale: Welcome aboard! The ferry leaves at 10:15 on Saturday.',
+      'Dana Brooks: Packing list\n- sunscreen\n- rain jacket',
+      'Casey Moreno: Thanks for adding me!',
+      'Robin Hale: Nice picture',
+      'Casey Moreno: See you all at the pier',
+    ]);
+    // The three lines before the first message are counted too. They used to
+    // be skipped without a word.
+    expect(drops).toEqual(Array(7).fill('whatsapp_system_line'));
+    expect(consumed).toHaveBeenCalledWith(12);
+  });
+
+  it('keeps the ids the messages had when the lines were added to them', async () => {
+    // Those lines never took a number, so dropping them takes none either. A
+    // chat imported before is matched message for message, not saved twice.
+    const { items } = await importAndroid(GROUP);
+    const idOf = (time: string, seq: number) =>
+      `whatsapp:Ferry trip:${new Date(`2026-11-14T${time}:00`).toISOString()}:${seq}`;
+
+    expect(items.map((g) => g.item.id)).toEqual([
+      idOf('09:31', 0),
+      idOf('09:33', 1),
+      idOf('10:03', 2),
+      idOf('10:06', 3),
+      idOf('10:10', 4),
+    ]);
+  });
+
+  it('does not make up a sender from a colon in a quoted group name', async () => {
+    const { items, drops } = await importAndroid([
+      '14/11/2026, 09:30 - Robin Hale created group "Trip: Lisbon"',
+      '14/11/2026, 09:31 - Robin Hale: Welcome aboard!',
+      '14/11/2026, 09:40 - Robin Hale changed the subject from "Trip: Lisbon" to "Trip: Porto"',
+      '14/11/2026, 09:41 - Dana Brooks: The plan: "Porto: day one" then home',
+    ]);
+
+    expect(said(items)).toEqual([
+      'Robin Hale: Welcome aboard!',
+      'Dana Brooks: The plan: "Porto: day one" then home',
+    ]);
+    expect(drops).toEqual(['whatsapp_system_line', 'whatsapp_system_line']);
+    // Split at their first colon, both lines were saved as messages and took
+    // numbers 0 and 2. They keep them, so the messages keep their ids.
+    expect(items.map((g) => g.item.id)).toEqual([
+      `whatsapp:Ferry trip:${new Date('2026-11-14T09:31:00').toISOString()}:1`,
+      `whatsapp:Ferry trip:${new Date('2026-11-14T09:41:00').toISOString()}:3`,
+    ]);
+  });
+
+  it('reads a sender whose quotes do not pair up at the first colon, as before', async () => {
+    const { items } = await importAndroid(['14/11/2026, 09:31 - Dana "DB Brooks: on my way']);
+
+    expect(said(items)).toEqual(['Dana "DB Brooks: on my way']);
+  });
+
+  it('reads the US 12-hour format, with either space before AM and PM', async () => {
+    const { items, drops } = await importAndroid(
+      [
+        '11/14/26, 9:30 AM - Messages and calls are end-to-end encrypted. Only people in this chat can read, listen to, or share them. Learn more.',
+        '11/14/26, 9:31 AM - Robin Hale: Welcome aboard!',
+        '11/14/26, 10:02 AM - Robin Hale added Casey Moreno',
+        '11/14/26, 1:05 PM - Casey Moreno: Thanks for adding me!',
+        'See you at the pier',
+      ],
+      'America/New_York',
+    );
+
+    expect(said(items)).toEqual([
+      'Robin Hale: Welcome aboard!',
+      'Casey Moreno: Thanks for adding me!\nSee you at the pier',
+    ]);
+    expect(items.map((g) => g.item.timestamp?.toISOString())).toEqual([
+      '2026-11-14T14:31:00.000Z',
+      '2026-11-14T18:05:00.000Z',
+    ]);
+    expect(items.map((g) => g.item.id)).toEqual([
+      `whatsapp:Ferry trip:${new Date('11/14/26 9:31 AM').toISOString()}:0`,
+      `whatsapp:Ferry trip:${new Date('11/14/26 1:05 PM').toISOString()}:1`,
+    ]);
+    expect(drops).toEqual(['whatsapp_system_line', 'whatsapp_system_line']);
+  });
+
+  it('reads a 12-hour export day first when one of its dates shows it', async () => {
+    // `05/11/26` alone could be either. The file's later `14/11/26` can only
+    // be day first, so the whole file is read that way.
+    const times = async (lines: string[]) =>
+      (await importAndroid(lines, 'UTC')).items.map((g) => g.item.timestamp?.toISOString());
+
+    expect(
+      await times(['05/11/26, 9:31 PM - Robin Hale: first', '14/11/26, 9:32 AM - Robin Hale: later']),
+    ).toEqual(['2026-11-05T21:31:00.000Z', '2026-11-14T09:32:00.000Z']);
+    expect(
+      await times(['05/11/26, 9:31 PM - Robin Hale: first', '11/14/26, 9:32 AM - Robin Hale: later']),
+    ).toEqual(['2026-05-11T21:31:00.000Z', '2026-11-14T09:32:00.000Z']);
+  });
+
+  it('reads a 12-hour export whose dates are all 12 or under the way that keeps them close together', async () => {
+    // Read month first, a three-day chat would span two months. Exported again
+    // once a later day is past the 12th, it is read day first, so reading it
+    // month first now would give every one of these messages a second id.
+    const times = async (lines: string[]) =>
+      (await importAndroid(lines, 'UTC')).items.map((g) => g.item.timestamp?.toISOString());
+
+    expect(
+      await times([
+        '05/11/26, 9:31 PM - Robin Hale: first',
+        '06/11/26, 8:02 AM - Robin Hale: next day',
+        '07/11/26, 8:03 AM - Dana Brooks: day after',
+      ]),
+    ).toEqual(['2026-11-05T21:31:00.000Z', '2026-11-06T08:02:00.000Z', '2026-11-07T08:03:00.000Z']);
+    // Across New Year, either order.
+    expect(
+      await times([
+        '12/31/25, 11:58 PM - Robin Hale: almost',
+        '1/1/26, 12:01 AM - Robin Hale: happy new year',
+      ]),
+    ).toEqual(['2025-12-31T23:58:00.000Z', '2026-01-01T00:01:00.000Z']);
+    expect(
+      await times([
+        '01/01/26, 12:01 AM - Robin Hale: happy new year',
+        '02/01/26, 9:00 AM - Dana Brooks: back to work',
+      ]),
+    ).toEqual(['2026-01-01T00:01:00.000Z', '2026-01-02T09:00:00.000Z']);
+    expect(
+      await times([
+        '1/1/26, 12:01 AM - Robin Hale: happy new year',
+        '1/2/26, 9:00 AM - Dana Brooks: back to work',
+      ]),
+    ).toEqual(['2026-01-01T00:01:00.000Z', '2026-01-02T09:00:00.000Z']);
+    // One day says nothing either way: month first.
+    expect(
+      await times(['05/11/26, 9:31 PM - Robin Hale: first', '05/11/26, 9:40 PM - Robin Hale: second']),
+    ).toEqual(['2026-05-11T21:31:00.000Z', '2026-05-11T21:40:00.000Z']);
+  });
+
+  it("keeps a line pasted in another export's header shape inside its message", async () => {
+    // An iPhone chat, a 24-hour Android one and a 12-hour Android one, with
+    // lines pasted from other exports. Read as headers they would cut the
+    // message short and, with a sender, number a new message: every id after
+    // it would move by one.
+    const pasted = [
+      '14/11/2026, 10:02 - Robin Hale added Casey Moreno',
+      '11/14/26, 10:02 AM - Robin: hi',
+      'and more text',
+    ];
+    const ios = await importAndroid(
+      ['[1/3/26, 8:00:00 AM] Alex: look at this', ...pasted, '[1/3/26, 8:01:00 AM] Sam: ok'],
+      'UTC',
+    );
+
+    expect(said(ios.items)).toEqual([`Alex: look at this\n${pasted.join('\n')}`, 'Sam: ok']);
+    expect(ios.items.map((g) => g.item.id)).toEqual([
+      `whatsapp:Ferry trip:${new Date('1/3/26 8:00:00 AM').toISOString()}:0`,
+      `whatsapp:Ferry trip:${new Date('1/3/26 8:01:00 AM').toISOString()}:1`,
+    ]);
+    expect(ios.drops).toEqual([]);
+
+    const android = await importAndroid(
+      [
+        '14/11/2026, 09:00 - Dana Brooks: look at this',
+        '11/14/26, 10:02 AM - Robin: hi',
+        '14/11/2026, 09:01 - Sam: ok',
+      ],
+      'UTC',
+    );
+
+    expect(said(android.items)).toEqual([
+      'Dana Brooks: look at this\n11/14/26, 10:02 AM - Robin: hi',
+      'Sam: ok',
+    ]);
+
+    const twelveHour = await importAndroid(
+      [
+        '11/14/26, 9:00 AM - Dana Brooks: look at this',
+        '[1/3/26, 8:00:00 AM] Alex: pasted from an iPhone',
+        '14/11/2026, 09:00 - Robin: pasted from a 24-hour export',
+        'and more text',
+        '11/14/26, 9:01 AM - Sam: ok',
+      ],
+      'UTC',
+    );
+
+    expect(said(twelveHour.items)).toEqual([
+      'Dana Brooks: look at this\n[1/3/26, 8:00:00 AM] Alex: pasted from an iPhone\n14/11/2026, 09:00 - Robin: pasted from a 24-hour export\nand more text',
+      'Sam: ok',
+    ]);
+    expect(twelveHour.drops).toEqual([]);
+  });
+});
+
+describe('12-hour times written outside the US and day-first iPhone dates', () => {
+  const importChat = async (name: string, lines: string[], timeZone?: string) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-clock-'));
+    const drops: Array<{ reason: string; detail?: string }> = [];
+    const items: EmittedGraph[] = [];
+    const consumed = jest.fn();
+
+    try {
+      fs.writeFileSync(path.join(dir, `WhatsApp Chat with ${name}.txt`), lines.join('\n'));
+      const pipeline = Object.assign(items, {
+        drop: (reason: string, detail?: string) => drops.push(detail ? { reason, detail } : { reason }),
+        consumed,
+      });
+
+      await new WhatsAppFileImporter().fileImport({}, { filename: path.basename(dir), fullPath: dir }, {
+        pipeline,
+        timeframe: {},
+        timeZone,
+        log: () => {},
+      } as unknown as ImportParams);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+
+    return { items, drops, consumed };
+  };
+
+  const said = (items: EmittedGraph[]) =>
+    items.map((g) => `${String(g.item.metadata.Sender)}: ${String(g.item.metadata.Text)}`);
+  const times = (items: EmittedGraph[]) => items.map((g) => g.item.timestamp?.toISOString() ?? 'undated');
+  const ids = (items: EmittedGraph[]) => items.map((g) => g.item.id);
+
+  it('reads lowercase am and pm in a 12-hour Android chat and group', async () => {
+    const chat = await importChat(
+      'Robin Hale',
+      [
+        '11/14/26, 10:02 am - Robin Hale: hi, are we still on for lunch?',
+        '11/14/26, 12:41 pm - Robin Hale: Running 5 minutes late',
+        'See you there',
+      ],
+      'UTC',
+    );
+
+    expect(said(chat.items)).toEqual([
+      'Robin Hale: hi, are we still on for lunch?',
+      'Robin Hale: Running 5 minutes late\nSee you there',
+    ]);
+    expect(times(chat.items)).toEqual(['2026-11-14T10:02:00.000Z', '2026-11-14T12:41:00.000Z']);
+    // No chat in these shapes was saved before, so the ids carry the time as
+    // written: no date order and no zone.
+    expect(ids(chat.items)).toEqual([
+      'whatsapp:Robin Hale:11-14-26T10:02:0',
+      'whatsapp:Robin Hale:11-14-26T12:41:1',
+    ]);
+
+    const group = await importChat(
+      'Book club',
+      [
+        '14/11/26, 7:00 pm - Dana Brooks created group "Book club"',
+        '14/11/26, 7:01 pm - Dana Brooks added you',
+        '14/11/26, 7:15 pm - Dana Brooks: Next book is The Long Way Home',
+        '15/11/26, 12:05 am - Casey Moreno: Great pick',
+      ],
+      'UTC',
+    );
+
+    expect(said(group.items)).toEqual([
+      'Dana Brooks: Next book is The Long Way Home',
+      'Casey Moreno: Great pick',
+    ]);
+    expect(times(group.items)).toEqual(['2026-11-14T19:15:00.000Z', '2026-11-15T00:05:00.000Z']);
+    expect(group.drops).toEqual([{ reason: 'whatsapp_system_line' }, { reason: 'whatsapp_system_line' }]);
+  });
+
+  it('reads a narrow no-break space before the marker, dots in it and a four-digit year', async () => {
+    const { items } = await importChat(
+      'Garden plot',
+      [
+        '14/11/2026, 9:05 am - Casey Moreno: Morning!',
+        '14/11/2026, 6:40 a.m. - Dana Brooks: Watering rota is up',
+        '14/11/2026, 5:12 p. m. - Robin Hale: I took the Tuesday slot',
+      ],
+      'UTC',
+    );
+
+    expect(said(items)).toEqual([
+      'Casey Moreno: Morning!',
+      'Dana Brooks: Watering rota is up',
+      'Robin Hale: I took the Tuesday slot',
+    ]);
+    expect(times(items)).toEqual([
+      '2026-11-14T09:05:00.000Z',
+      '2026-11-14T06:40:00.000Z',
+      '2026-11-14T17:12:00.000Z',
+    ]);
+    expect(ids(items)).toEqual([
+      'whatsapp:Garden plot:14-11-2026T09:05:0',
+      'whatsapp:Garden plot:14-11-2026T06:40:1',
+      'whatsapp:Garden plot:14-11-2026T17:12:2',
+    ]);
+  });
+
+  it('reads a lowercase iPhone export in its own date order', async () => {
+    const { items } = await importChat(
+      'Lee Park',
+      [
+        '[14/11/26, 10:02:13 am] Lee Park: hi, are we still on for lunch?',
+        '[15/11/26, 8:10:05 pm] Lee Park: Thanks!',
+      ],
+      'UTC',
+    );
+
+    expect(said(items)).toEqual(['Lee Park: hi, are we still on for lunch?', 'Lee Park: Thanks!']);
+    expect(times(items)).toEqual(['2026-11-14T10:02:13.000Z', '2026-11-15T20:10:05.000Z']);
+    expect(ids(items)).toEqual([
+      'whatsapp:Lee Park:14-11-26T10:02:13:0',
+      'whatsapp:Lee Park:15-11-26T20:10:05:1',
+    ]);
+  });
+
+  it('gives a 24-hour line pasted into a lowercase iPhone chat an id that reads no zone', async () => {
+    // Read as a header, as such a line is in any iPhone chat.
+    const { items } = await importChat('Lee Park', [
+      '[14/11/26, 10:02:13 am] Lee Park: look what Sam sent',
+      '14/11/2026, 09:05 - Sam Ortiz: pasted from an Android chat',
+      '[15/11/26, 8:10:05 pm] Lee Park: Thanks!',
+    ]);
+
+    expect(ids(items)).toEqual([
+      'whatsapp:Lee Park:14-11-26T10:02:13:0',
+      'whatsapp:Lee Park:14-11-2026T09:05:1',
+      'whatsapp:Lee Park:15-11-26T20:10:05:2',
+    ]);
+  });
+
+  it('keeps the ids of a chat in these shapes when a newer export settles its date order', async () => {
+    // Every date of the first export is 12 or under, so its order is a guess.
+    // The newer export's 13/11/26 settles it day first.
+    const first = await importChat('Book club', [
+      '05/11/26, 9:00 am - Dana Brooks: first',
+      '06/11/26, 9:00 am - Dana Brooks: next',
+    ]);
+    const newer = await importChat('Book club', [
+      '05/11/26, 9:00 am - Dana Brooks: first',
+      '06/11/26, 9:00 am - Dana Brooks: next',
+      '13/11/26, 9:00 am - Casey Moreno: later',
+    ]);
+
+    expect(ids(newer.items).slice(0, 2)).toEqual(ids(first.items));
+  });
+
+  it('reads a chat in these shapes by its first header, so a pasted old-shape line does not take it over', async () => {
+    const { items, drops } = await importChat(
+      'Book club',
+      [
+        '14/11/26, 7:15 pm - Dana Brooks: Next book is The Long Way Home',
+        '11/14/26, 9:00 AM - Sam: pasted from a US chat',
+        '15/11/26, 8:05 am - Casey Moreno: Great pick',
+      ],
+      'UTC',
+    );
+
+    expect(said(items)).toEqual([
+      'Dana Brooks: Next book is The Long Way Home',
+      'Sam: pasted from a US chat',
+      'Casey Moreno: Great pick',
+    ]);
+    expect(drops).toEqual([]);
+  });
+
+  it('times a day-first iPhone export in its own order and keeps the ids it was saved with', async () => {
+    const lines = [
+      '[10/11/2026, 09:00:00] Morgan Lane: early in the month',
+      '[14/11/2026, 10:02:13] Morgan Lane: hi, are we still on for lunch?',
+      '[15/11/2026, 08:10:05] Import Tester: Thanks for lunch!',
+    ];
+
+    const zoned = await importChat('Morgan Lane', lines, 'UTC');
+
+    expect(times(zoned.items)).toEqual([
+      '2026-11-10T09:00:00.000Z',
+      '2026-11-14T10:02:13.000Z',
+      '2026-11-15T08:10:05.000Z',
+    ]);
+    // The old code read every iPhone date month first: October 11, then two
+    // invalid dates. Those are the ids a re-import has to find.
+    expect(ids(zoned.items)).toEqual([
+      `whatsapp:Morgan Lane:${new Date('10/11/2026 09:00:00').toISOString()}:0`,
+      'whatsapp:Morgan Lane:noTs:1',
+      'whatsapp:Morgan Lane:noTs:2',
+    ]);
+
+    // With no account zone the stored time is the server's reading, now in the file's order.
+    expect(times((await importChat('Morgan Lane', lines)).items)).toEqual([
+      new Date('11/10/2026 09:00:00').toISOString(),
+      new Date('11/14/2026 10:02:13').toISOString(),
+      new Date('11/15/2026 08:10:05').toISOString(),
+    ]);
+  });
+
+  it('still reads an iPhone export month first when no date settles it, as it always did', async () => {
+    const { items } = await importChat(
+      'Morgan Lane',
+      ['[05/11/26, 9:31:00 PM] Morgan Lane: first', '[06/11/26, 8:02:00 AM] Morgan Lane: next'],
+      'UTC',
+    );
+
+    expect(times(items)).toEqual(['2026-05-11T21:31:00.000Z', '2026-06-11T08:02:00.000Z']);
+  });
+
+  it('keeps a US iPhone export month first when a day-first header was pasted in before the 13th', async () => {
+    // The pasted line reads as a header, as it always did. Its date can't be
+    // month first. The chat's own 1/13/26 can't be day first, so it wins.
+    const { items } = await importChat(
+      'Morgan Lane',
+      [
+        '[1/3/26, 9:00:00 AM] Morgan Lane: look what Sam sent',
+        '[25/12/25, 10:00:00 AM] Sam: Merry Christmas',
+        '[1/13/26, 9:00:00 AM] Morgan Lane: later',
+      ],
+      'UTC',
+    );
+
+    expect(times(items)).toEqual(['2026-01-03T09:00:00.000Z', 'undated', '2026-01-13T09:00:00.000Z']);
+  });
+
+  it('keeps a US iPhone export that never passes the 12th month first when a day-first header was pasted in', async () => {
+    // The chat's own dates all read both ways, so the pasted 25/12/25 is the
+    // only date that reads one way. The chat's own dates sit a week apart read
+    // month first and seven months apart read day first.
+    const { items } = await importChat(
+      'Morgan Lane',
+      [
+        '[1/3/26, 9:00:00 AM] Morgan Lane: look what Sam sent',
+        '[25/12/25, 10:00:00 AM] Sam: Merry Christmas',
+        '[1/10/26, 9:00:00 AM] Morgan Lane: later',
+      ],
+      'UTC',
+    );
+
+    expect(times(items)).toEqual(['2026-01-03T09:00:00.000Z', 'undated', '2026-01-10T09:00:00.000Z']);
+  });
+
+  it('keeps a lowercase day-first chat day first when a US header was pasted in before the 13th', async () => {
+    const ios = await importChat(
+      'Lee Park',
+      [
+        '[5/11/26, 9:00:00 am] Lee Park: early in the month',
+        '[11/20/26, 9:00:00 AM] Sam: pasted from a US chat',
+        '[14/11/26, 9:00:00 am] Lee Park: hi',
+        '[15/11/26, 9:00:00 am] Lee Park: bye',
+      ],
+      'UTC',
+    );
+    const android = await importChat(
+      'Book club',
+      [
+        '05/11/26, 9:00 am - Dana Brooks: early in the month',
+        '11/20/26, 9:00 AM - Sam: pasted from a US chat',
+        '14/11/26, 9:00 am - Dana Brooks: hi',
+        '15/11/26, 9:00 am - Dana Brooks: bye',
+      ],
+      'UTC',
+    );
+
+    for (const { items } of [ios, android]) {
+      expect(times(items)).toEqual([
+        '2026-11-05T09:00:00.000Z',
+        'undated',
+        '2026-11-14T09:00:00.000Z',
+        '2026-11-15T09:00:00.000Z',
+      ]);
+    }
+  });
+
+  it('reads a chat on the same day of each month by its dates past the 12th', async () => {
+    // Read both ways, the 3rds sit a day apart month first and a month apart
+    // day first. The three dates past the 12th settle it the other way.
+    const monthly = ['03/01/25', '03/02/25', '03/03/25', '03/04/25', '20/04/25', '21/04/25', '22/04/25'];
+    const ios = await importChat(
+      'Morgan Lane',
+      monthly.map((date, i) => `[${date}, 09:00:00] Morgan Lane: rent ${i}`),
+      'UTC',
+    );
+    const android = await importChat(
+      'Book club',
+      monthly.map((date, i) => `${date}, 9:00 am - Dana Brooks: rent ${i}`),
+      'UTC',
+    );
+    const sent = [
+      '2025-01-03T09:00:00.000Z',
+      '2025-02-03T09:00:00.000Z',
+      '2025-03-03T09:00:00.000Z',
+      '2025-04-03T09:00:00.000Z',
+      '2025-04-20T09:00:00.000Z',
+      '2025-04-21T09:00:00.000Z',
+      '2025-04-22T09:00:00.000Z',
+    ];
+
+    expect(times(ios.items)).toEqual(sent);
+    expect(times(android.items)).toEqual(sent);
+  });
+
+  it('keeps a day-first iPhone export day first when a US header was pasted in', async () => {
+    // The pasted 11/20/26 can't be day first, but the chat's own two dates
+    // can't be month first. The ids stay the old month-first reading.
+    const { items } = await importChat(
+      'Morgan Lane',
+      [
+        '[14/11/2026, 10:02:13] Morgan Lane: hi, are we still on for lunch?',
+        '[11/20/26, 9:00:00 AM] Sam: pasted from a US chat',
+        '[15/11/2026, 08:10:05] Morgan Lane: Thanks for lunch!',
+      ],
+      'UTC',
+    );
+
+    expect(times(items)).toEqual(['2026-11-14T10:02:13.000Z', 'undated', '2026-11-15T08:10:05.000Z']);
+    expect(ids(items)).toEqual([
+      'whatsapp:Morgan Lane:noTs:0',
+      `whatsapp:Morgan Lane:${new Date('11/20/26 9:00:00 AM').toISOString()}:1`,
+      'whatsapp:Morgan Lane:noTs:2',
+    ]);
+  });
+
+  it('keeps a lowercase line pasted into a chat it already read inside its message', async () => {
+    // Read as a header it would number a new message and move every id after it.
+    const pasted = '14/11/26, 10:02 am - Robin: hi';
+    const twelveHour = await importChat(
+      'Ferry trip',
+      ['11/14/26, 9:00 AM - Dana Brooks: look at this', pasted, '11/14/26, 9:01 AM - Sam: ok'],
+      'UTC',
+    );
+    const ios = await importChat(
+      'Ferry trip',
+      [
+        '[1/3/26, 8:00:00 AM] Alex: look at this',
+        '[1/3/26, 8:00:30 am] Robin: pasted',
+        '[1/3/26, 8:01:00 AM] Sam: ok',
+      ],
+      'UTC',
+    );
+
+    expect(said(twelveHour.items)).toEqual([`Dana Brooks: look at this\n${pasted}`, 'Sam: ok']);
+    expect(said(ios.items)).toEqual(['Alex: look at this\n[1/3/26, 8:00:30 am] Robin: pasted', 'Sam: ok']);
+    expect(ids(ios.items)).toEqual([
+      `whatsapp:Ferry trip:${new Date('1/3/26 8:00:00 AM').toISOString()}:0`,
+      `whatsapp:Ferry trip:${new Date('1/3/26 8:01:00 AM').toISOString()}:1`,
+    ]);
+  });
+
+  it('reports a file in which no line reads as a header instead of importing nothing silently', async () => {
+    const { items, drops, consumed } = await importChat('Notes', [
+      '2026-11-14 10:02 Robin: a shape this parser does not know',
+      'more text',
+    ]);
+
+    expect(items).toHaveLength(0);
+    expect(drops).toEqual([{ reason: 'whatsapp_no_header', detail: 'WhatsApp Chat with Notes.txt' }]);
+    expect(consumed).toHaveBeenCalledWith(1);
+  });
+
+  it('reports nothing for an empty file', async () => {
+    const { drops, consumed } = await importChat('Empty', ['', '']);
+
+    expect(drops).toEqual([]);
+    expect(consumed).toHaveBeenCalledWith(0);
+  });
+});
+
+describe('a _chat.txt in a folder the system named', () => {
+  const LRM = '\u200e';
+  const noticeFrom = (chat: string): string =>
+    `[1/3/21, 9:00:00 AM] ${chat}: ${LRM}Messages and calls are end-to-end encrypted. No one outside of this chat, not even WhatsApp, can read or listen to them.`;
+  const NOTICE_EXPORT = [
+    noticeFrom('Alice'),
+    '[1/3/21, 9:01:00 AM] Alice: Are we still on for the ferry on Saturday?',
+    '[1/3/21, 9:02:10 AM] Sam: Yes, the 10:40 one',
+  ].join('\n');
+
+  const tempRoots: string[] = [];
+
+  afterEach(() => {
+    for (const root of tempRoots.splice(0)) {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  const importFrom = async (folders: string[], transcript: string): Promise<EmittedGraph[]> => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'whatsapp-inbox-'));
+    tempRoots.push(tempRoot);
+    const root = path.join(tempRoot, ...folders);
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(path.join(root, '_chat.txt'), transcript);
+
+    const pipeline: EmittedGraph[] = [];
+    await new WhatsAppFileImporter().fileImport({}, { filename: path.basename(root), fullPath: root }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    return pipeline;
+  };
+
+  it('takes the chat name from the encryption notice, matching an upload of the same export', async () => {
+    // The folder is the inbox's own `whatsapp/`, which says nothing about the
+    // chat. Named after it, every message got a second identity and the
+    // export was saved twice.
+    const dropped = await importFrom(['whatsapp'], NOTICE_EXPORT);
+    const uploaded = await importFrom(['WhatsApp_Chat_-_Alice'], NOTICE_EXPORT);
+
+    // The notice names the chat but is not saved as one of its messages.
+    expect(dropped.map((entry) => entry.item.metadata.Conversation)).toEqual(['Alice', 'Alice']);
+    expect(dropped.map((entry) => entry.item.metadata.Text)).toEqual([
+      'Are we still on for the ferry on Saturday?',
+      'Yes, the 10:40 one',
+    ]);
+    expect(dropped.map((entry) => entry.item.id)).toEqual(uploaded.map((entry) => entry.item.id));
+  });
+
+  it.each([
+    ['a one-to-one chat', 'Alice', NOTICE_EXPORT],
+    [
+      'a group chat',
+      'Ferry trip',
+      [
+        `[1/3/21, 9:00:00 AM] Ferry trip: ${LRM}Messages and calls are end-to-end encrypted. Only people in this chat can read, listen to, or share them.`,
+        `[1/3/21, 9:00:05 AM] Ferry trip: ${LRM}Alice created group "Ferry trip"`,
+        `[1/3/21, 9:00:06 AM] Ferry trip: ${LRM}Alice added Sam`,
+        '[1/3/21, 9:01:00 AM] Alice: Are we still on for the ferry on Saturday?',
+        '[1/3/21, 9:02:10 AM] Sam: Yes, the 10:40 one',
+      ].join('\n'),
+    ],
+  ])(
+    'lands a re-import of %s saved with its notice on the ids it already has',
+    async (_, chat, transcript) => {
+      // The ids a chat got while the notice was still saved: the notice took
+      // number 0 and the messages after it 1 and 2. Importing the same export
+      // again must produce those ids, or every message is saved a second time.
+      const at = (time: string) => new Date(`1/3/21 ${time}`).toISOString();
+      const savedBefore = [
+        `whatsapp:${chat}:${at('9:00:00 AM')}:0`,
+        `whatsapp:${chat}:${at('9:01:00 AM')}:1`,
+        `whatsapp:${chat}:${at('9:02:10 AM')}:2`,
+      ];
+
+      const again = await importFrom([`WhatsApp_Chat_-_${chat.replace(/ /g, '_')}`], transcript);
+
+      expect(again.map((entry) => entry.item.id)).toEqual(savedBefore.slice(1));
+    },
+  );
+
+  it('names a transcript without the notice after its people, never after the service', async () => {
+    const fixture = fs.readFileSync(path.join(FIXTURES_DIR, 'whatsapp-export', '_chat.txt'), 'utf8');
+    const pipeline = await importFrom(['whatsapp'], fixture);
+
+    expect(new Set(pipeline.map((entry) => entry.item.metadata.Conversation))).toEqual(
+      new Set(['Alice, Bob']),
+    );
+  });
+
+  it("leaves an Android export's own lines out of the people it names a chat after", async () => {
+    const pipeline = await importFrom(
+      ['whatsapp'],
+      [
+        '14/11/2026, 09:30 - Robin Hale created group "Trip: Lisbon"',
+        '14/11/2026, 09:31 - Robin Hale: Welcome aboard!',
+        '14/11/2026, 09:33 - Dana Brooks: Thanks',
+      ].join('\n'),
+    );
+
+    expect(new Set(pipeline.map((entry) => entry.item.metadata.Conversation))).toEqual(
+      new Set(['Dana Brooks, Robin Hale']),
+    );
+  });
+
+  it('names a bare _chat.txt in a run folder from its transcript, not the run id', async () => {
+    // An uploaded `_chat.txt` lands at the top of the run's scratch folder,
+    // `<scratch>/<user>/<run id>/`. Named after the run id, the same chat
+    // uploaded twice was two chats.
+    const first = await importFrom(['01a1d557-26b6-7efb-aba2-2010f205eb9a'], NOTICE_EXPORT);
+    const second = await importFrom(['01a1d560-0b1c-7d2e-8f30-415263748596'], NOTICE_EXPORT);
+
+    expect(first.map((entry) => entry.item.metadata.Conversation)).toEqual(['Alice', 'Alice']);
+    expect(second.map((entry) => entry.item.id)).toEqual(first.map((entry) => entry.item.id));
+  });
+
+  it('keeps the export folder name when the folder sits inside the service folder', async () => {
+    const fixture = fs.readFileSync(path.join(FIXTURES_DIR, 'whatsapp-export', '_chat.txt'), 'utf8');
+    const pipeline = await importFrom(['whatsapp', 'whatsapp-export'], fixture);
+
+    expect(new Set(pipeline.map((entry) => entry.item.metadata.Conversation))).toEqual(
+      new Set(['whatsapp-export']),
+    );
+  });
+
+  it("names loose files the wizard packed from the transcript, not the pack's file count", async () => {
+    // `_chat.txt` and two photos picked with "Choose files" upload as
+    // `WhatsApp (3 files).zip` and unpack into `WhatsApp__3_files_/`.
+    const packed = await importFrom(['WhatsApp__3_files_'], NOTICE_EXPORT);
+    const uploaded = await importFrom(['WhatsApp_Chat_-_Alice'], NOTICE_EXPORT);
+
+    expect(packed.map((entry) => entry.item.id)).toEqual(uploaded.map((entry) => entry.item.id));
+  });
+
+  it('spells a notice sender with filename-unsafe characters the way its zip is spelled', async () => {
+    const chat = 'LITA | Companion Tech Team';
+    const transcript = [noticeFrom(chat), '[1/3/21, 9:01:00 AM] Alice: hi'].join('\n');
+
+    const dropped = await importFrom(['whatsapp'], transcript);
+    const uploaded = await importFrom(['WhatsApp_Chat_-_LITA___Companion_Tech_Team'], transcript);
+    const inbox = await importFrom(['whatsapp', 'WhatsApp Chat - LITA _ Companion Tech Team'], transcript);
+
+    expect(dropped.map((entry) => entry.item.id)).toEqual(uploaded.map((entry) => entry.item.id));
+    expect(dropped.map((entry) => entry.item.id)).toEqual(inbox.map((entry) => entry.item.id));
+  });
+
+  it('drops the bidi marks WhatsApp wraps around a phone number', async () => {
+    const transcript = [noticeFrom('\u202a+1 (555) 010-9999\u202c'), '[1/3/21, 9:01:00 AM] Alice: hi'].join(
+      '\n',
+    );
+
+    const dropped = await importFrom(['whatsapp'], transcript);
+    const inbox = await importFrom(['whatsapp', 'WhatsApp Chat - +1 (555) 010-9999'], transcript);
+
+    expect(dropped[0].item.metadata.Conversation).toBe('1 (555) 010-9999');
+    expect(dropped.map((entry) => entry.item.id)).toEqual(inbox.map((entry) => entry.item.id));
+  });
+
+  it('names a chat whose uploaded folder kept only the prefix from its transcript, not "Chat"', async () => {
+    // An upload turns every non-ASCII character into `_`, so two chats named in
+    // another script both arrive as `WhatsApp_Chat_-___`.
+    const first = await importFrom(
+      ['WhatsApp_Chat_-___'],
+      [noticeFrom('王伟'), '[1/3/21, 9:01:00 AM] 王伟: hi'].join('\n'),
+    );
+    const second = await importFrom(
+      ['WhatsApp_Chat_-___'],
+      [noticeFrom('李娜'), '[1/3/21, 9:01:00 AM] 李娜: hi'].join('\n'),
+    );
+
+    expect(first[0].item.metadata.Conversation).toBe('王伟');
+    expect(second[0].item.metadata.Conversation).toBe('李娜');
+  });
+
+  it('closes the transcript it stops reading at the notice', async () => {
+    const created: fs.ReadStream[] = [];
+    const original = fs.createReadStream;
+    const spy = jest.spyOn(fs, 'createReadStream').mockImplementation(((
+      ...args: Parameters<typeof original>
+    ) => {
+      const stream = original(...args);
+      created.push(stream);
+
+      return stream;
+    }) as typeof fs.createReadStream);
+
+    try {
+      await importFrom(['whatsapp'], NOTICE_EXPORT);
+    } finally {
+      spy.mockRestore();
+    }
+
+    // The kind of header, the name, then the import. The first two stop early.
+    expect(created).toHaveLength(3);
+    expect(created.every((stream) => stream.destroyed)).toBe(true);
   });
 });

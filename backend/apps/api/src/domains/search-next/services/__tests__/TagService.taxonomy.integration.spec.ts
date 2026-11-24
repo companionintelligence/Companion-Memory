@@ -64,13 +64,24 @@ describeWithDatabase(`TagService taxonomy against a live Postgres (${availabilit
     return id;
   };
 
-  const assignTag = async (tagId: string, entityType: string, entityId = randomUUID()) => {
+  const assignTag = async (tagId: string, entityType: string, entityId: string = randomUUID()) => {
     await dataSource.query(
       `INSERT INTO ci_search.entity_tag (entity_type, entity_id, tag_id) VALUES ($1, $2, $3)`,
       [entityType, entityId, tagId],
     );
 
     return entityId;
+  };
+
+  // setEntityCategories owner-checks the entity itself, so those fixtures must
+  // be real rows the caller owns, not bare uuids. A task is the smallest.
+  const seedTask = async (userId: string): Promise<string> => {
+    const [{ id }] = (await dataSource.query(
+      `INSERT INTO ci.tasks (user_id, title) VALUES ($1, 'tag taxonomy spec task') RETURNING id`,
+      [userId],
+    )) as Array<{ id: string }>;
+
+    return id;
   };
 
   const tagLabels = (tags: { label: string }[]) => tags.map((t) => t.label).sort();
@@ -105,9 +116,19 @@ describeWithDatabase(`TagService taxonomy against a live Postgres (${availabilit
     await dataSource.initialize();
 
     service = new TagService(dataSource.getRepository(TagEntity), dataSource);
+
+    // ci.tasks.user_id references ci.users; ci_search.tags.user_id does not.
+    for (const userId of [userA, userB]) {
+      await dataSource.query(`INSERT INTO ci.users (id, email, name) VALUES ($1, $2, $3)`, [
+        userId,
+        `tag-taxonomy.${userId}@example.test`,
+        'tag taxonomy spec fixture',
+      ]);
+    }
   });
 
   const cleanUp = async () => {
+    await dataSource.query('DELETE FROM ci.tasks WHERE user_id = ANY($1::uuid[])', [[userA, userB]]);
     // entity_tag has no ON DELETE rule to ci_search.tags, so it must go
     // first. Every other taxonomy table (tag_directions, tag_categories,
     // category_direction_optouts, entity_categories) cascades automatically
@@ -125,6 +146,7 @@ describeWithDatabase(`TagService taxonomy against a live Postgres (${availabilit
   afterAll(async () => {
     if (dataSource?.isInitialized) {
       await cleanUp();
+      await dataSource.query('DELETE FROM ci.users WHERE id = ANY($1::uuid[])', [[userA, userB]]);
       await dataSource.destroy();
     }
   });
@@ -331,7 +353,7 @@ describeWithDatabase(`TagService taxonomy against a live Postgres (${availabilit
     });
 
     it('sets and reads back an ordered category set', async () => {
-      const entityId = randomUUID();
+      const entityId = await seedTask(userA);
       const health = await seedTag(userA, 'health', { kind: 'category' });
       const career = await seedTag(userA, 'career', { kind: 'category' });
 
@@ -340,14 +362,14 @@ describeWithDatabase(`TagService taxonomy against a live Postgres (${availabilit
         career,
       ]);
 
-      expect(result.map((t) => t.label)).toEqual(['health', 'career']);
+      expect(result!.map((t) => t.label)).toEqual(['health', 'career']);
       expect(
         (await service.getEntityCategories(contextA, { type: 'task', id: entityId })).map((t) => t.label),
       ).toEqual(['health', 'career']);
     });
 
     it('a second call replaces rather than accumulates', async () => {
-      const entityId = randomUUID();
+      const entityId = await seedTask(userA);
       const health = await seedTag(userA, 'health', { kind: 'category' });
       const career = await seedTag(userA, 'career', { kind: 'category' });
 
@@ -360,7 +382,7 @@ describeWithDatabase(`TagService taxonomy against a live Postgres (${availabilit
     });
 
     it('caps at three and drops the rest', async () => {
-      const entityId = randomUUID();
+      const entityId = await seedTask(userA);
       const ids = await Promise.all(
         ['health', 'career', 'relationships', 'growth'].map((label) =>
           seedTag(userA, label, { kind: 'category' }),
@@ -370,11 +392,11 @@ describeWithDatabase(`TagService taxonomy against a live Postgres (${availabilit
       const result = await service.setEntityCategories(contextA, { type: 'task', id: entityId }, ids);
 
       expect(result).toHaveLength(3);
-      expect(result.map((t) => t.label)).toEqual(['health', 'career', 'relationships']);
+      expect(result!.map((t) => t.label)).toEqual(['health', 'career', 'relationships']);
     });
 
     it('de-duplicates repeated ids', async () => {
-      const entityId = randomUUID();
+      const entityId = await seedTask(userA);
       const health = await seedTag(userA, 'health', { kind: 'category' });
 
       const result = await service.setEntityCategories(contextA, { type: 'task', id: entityId }, [
@@ -387,7 +409,7 @@ describeWithDatabase(`TagService taxonomy against a live Postgres (${availabilit
     });
 
     it("silently drops an id that is not the caller's own kind='category' tag", async () => {
-      const entityId = randomUUID();
+      const entityId = await seedTask(userA);
       const health = await seedTag(userA, 'health', { kind: 'category' });
       const notACategory = await seedTag(userA, 'focus', { kind: 'intention' });
       const theirs = await seedTag(userB, 'career', { kind: 'category' });
@@ -398,38 +420,42 @@ describeWithDatabase(`TagService taxonomy against a live Postgres (${availabilit
         theirs,
       ]);
 
-      expect(result.map((t) => t.label)).toEqual(['health']);
+      expect(result!.map((t) => t.label)).toEqual(['health']);
     });
 
     it("an empty replacement clears the entity's categories", async () => {
-      const entityId = randomUUID();
+      const entityId = await seedTask(userA);
       const health = await seedTag(userA, 'health', { kind: 'category' });
 
       await service.setEntityCategories(contextA, { type: 'task', id: entityId }, [health]);
+      expect(await service.getEntityCategories(contextA, { type: 'task', id: entityId })).toHaveLength(1);
+
       await service.setEntityCategories(contextA, { type: 'task', id: entityId }, []);
 
       expect(await service.getEntityCategories(contextA, { type: 'task', id: entityId })).toEqual([]);
     });
 
     it('a category set on one entity is invisible on another', async () => {
-      const entityA = randomUUID();
-      const entityB = randomUUID();
+      const entityA = await seedTask(userA);
+      const entityB = await seedTask(userA);
       const health = await seedTag(userA, 'health', { kind: 'category' });
 
       await service.setEntityCategories(contextA, { type: 'task', id: entityA }, [health]);
 
+      expect(await service.getEntityCategories(contextA, { type: 'task', id: entityA })).toHaveLength(1);
       expect(await service.getEntityCategories(contextA, { type: 'task', id: entityB })).toEqual([]);
     });
   });
 
   describe('categories never leak into getTagsForEntity (entity_tag stays byte-identical)', () => {
     it('an entity with BOTH entity_tag rows and entity_categories rows only returns the entity_tag tags', async () => {
-      const entityId = randomUUID();
+      const entityId = await seedTask(userA);
       const plainTag = await seedTag(userA, 'urgent');
       const health = await seedTag(userA, 'health', { kind: 'category' });
 
       await assignTag(plainTag, 'task', entityId);
       await service.setEntityCategories(contextA, { type: 'task', id: entityId }, [health]);
+      expect(await service.getEntityCategories(contextA, { type: 'task', id: entityId })).toHaveLength(1);
 
       const tags = await service.getTagsForEntity(contextA, { type: 'task', id: entityId });
 
@@ -441,10 +467,11 @@ describeWithDatabase(`TagService taxonomy against a live Postgres (${availabilit
     });
 
     it('an entity with ONLY entity_categories rows (no entity_tag row) resolves no tags at all', async () => {
-      const entityId = randomUUID();
+      const entityId = await seedTask(userA);
       const health = await seedTag(userA, 'health', { kind: 'category' });
 
       await service.setEntityCategories(contextA, { type: 'task', id: entityId }, [health]);
+      expect(await service.getEntityCategories(contextA, { type: 'task', id: entityId })).toHaveLength(1);
 
       expect(await service.getTagsForEntity(contextA, { type: 'task', id: entityId })).toEqual([]);
     });

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository, QueryFailedError } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
@@ -13,6 +13,8 @@ import {
   CommunicationService,
   ContentService,
   CalendarEventService,
+  changedFieldsBetween,
+  GraphDeltaWriter,
   ItemService,
   PersonService,
   PlaceService,
@@ -27,6 +29,23 @@ import {
   RelationshipType,
   RelationshipMap,
 } from '../types';
+
+/**
+ * A `date` column as `YYYY-MM-DD`, however it arrives: TypeORM reads one back
+ * as that string, and `updateRelationship` hands in the GraphQL `Date` scalar's
+ * value, a Date at UTC midnight of the day.
+ */
+function dateOnly(value: Date | string | null | undefined): string | null {
+  if (value == null) {
+    return null;
+  }
+
+  if (typeof value === 'string') {
+    return value.slice(0, 10);
+  }
+
+  return Number.isNaN(value.getTime()) ? null : value.toISOString().slice(0, 10);
+}
 
 @Injectable()
 export class RelationshipService {
@@ -43,6 +62,9 @@ export class RelationshipService {
     private readonly placeService: PlaceService,
     private readonly threadService: ThreadService,
     private readonly logger: LoggerService,
+    // Change History. Optional so unit harnesses that build the service by hand
+    // keep working; MemoryModule always provides it.
+    @Optional() private readonly graphDeltaWriter?: GraphDeltaWriter,
   ) {
     this.logger.setContext(RelationshipService.name);
   }
@@ -201,6 +223,8 @@ export class RelationshipService {
     try {
       const entity = await this.relationshipRepository.save(record);
 
+      await this.recordDelta(entity, 'created', 'RelationshipService.create');
+
       return RelationshipEntity.toEgressType(entity);
     } catch (err: unknown) {
       // There is a uniqueness constraint on relationships to prevent duplicates
@@ -231,6 +255,106 @@ export class RelationshipService {
         throw err;
       }
     }
+  }
+
+  /**
+   * {@link create} for a batch: one multi-row `INSERT ... ON CONFLICT DO
+   * NOTHING`, returning the rows this call inserted. A duplicate of an existing
+   * active edge (relationships_unique_directed_idx) is skipped silently, which
+   * is what create()'s catch-23505-then-findOne path did one row at a time;
+   * duplicates within the batch collapse on the same key first, since the
+   * statement cannot touch one arbiter row twice.
+   *
+   * No per-row node lookups: create() SELECTs both endpoints before every
+   * insert, and the one caller of this (PromoteService) has just fetched or
+   * created every Person it links, so that is a round trip per edge for nothing.
+   * The caller vouches that every endpoint id exists.
+   */
+  async createMany(context: UserServiceContext, data: CreateRelationshipDto[]): Promise<Relationship[]> {
+    if (data.length === 0) {
+      return [];
+    }
+
+    const byKey = new Map<string, RelationshipEntity>();
+
+    for (const item of data) {
+      const prepared = this.prepareWrite(item);
+      const key = `${prepared.fromNodeId}\u0000${prepared.toNodeId}\u0000${prepared.type}`;
+
+      if (!byKey.has(key)) {
+        byKey.set(
+          key,
+          this.relationshipRepository.create({ id: uuidv7(), ...prepared, userId: context.userId }),
+        );
+      }
+    }
+
+    const rows = [...byKey.values()];
+    // Explicit SQL rather than the query builder's `.orIgnore().returning()`:
+    // the builder maps RETURNING values back onto the entity objects it was
+    // given BY POSITION, so with one of two rows skipped by the conflict the
+    // surviving id landed on the wrong object and both read as inserted.
+    // The conflict target names the partial index outright. Dates go through
+    // dateOnly() because the columns are `date`, as the entity declares.
+    const result = await this.relationshipRepository.manager.query<Array<{ relationship_id: string }>>(
+      `INSERT INTO ci.relationships
+         (relationship_id, from_entity_id, from_entity_type, to_entity_id, to_entity_type, relationship_type,
+          strength, is_bidirectional, start_date, end_date, owner_user_id, properties)
+       SELECT t.relationship_id, t.from_entity_id, t.from_entity_type, t.to_entity_id, t.to_entity_type,
+              t.relationship_type, COALESCE(t.strength, 1.0), COALESCE(t.is_bidirectional, false),
+              t.start_date, t.end_date, t.owner_user_id, COALESCE(t.properties, '{}'::jsonb)
+         FROM jsonb_to_recordset($1::jsonb) AS t(
+                relationship_id uuid, from_entity_id uuid, from_entity_type text, to_entity_id uuid,
+                to_entity_type text, relationship_type text, strength double precision,
+                is_bidirectional boolean, start_date date, end_date date, owner_user_id uuid,
+                properties jsonb, ord int)
+        ORDER BY t.ord
+       ON CONFLICT (from_entity_id, to_entity_id, relationship_type) WHERE is_active = TRUE DO NOTHING
+       RETURNING relationship_id`,
+      [
+        JSON.stringify(
+          rows.map((row, ord) => ({
+            ord,
+            relationship_id: row.id,
+            from_entity_id: row.fromNodeId,
+            from_entity_type: row.fromNodeType,
+            to_entity_id: row.toNodeId,
+            to_entity_type: row.toNodeType,
+            relationship_type: row.type,
+            strength: row.strength ?? null,
+            is_bidirectional: row.isBidirectional ?? null,
+            start_date: dateOnly(row.startDate),
+            end_date: dateOnly(row.endDate),
+            owner_user_id: row.userId,
+            properties: row.properties ?? {},
+          })),
+        ),
+      ],
+    );
+    const insertedIds = new Set(result.map((row) => row.relationship_id));
+    const inserted = rows.filter((row) => insertedIds.has(row.id));
+
+    await this.graphDeltaWriter?.recordMany(
+      inserted.map((relationship) => ({
+        nodeType: 'relationship' as const,
+        changeType: 'created' as const,
+        relationshipId: relationship.id,
+        relationshipType: relationship.type,
+        fromEntityId: relationship.fromNodeId,
+        toEntityId: relationship.toNodeId,
+        ownerUserId: relationship.userId,
+        changeSource: 'RelationshipService.createMany',
+        changedByUserId: relationship.userId,
+        changedFields: {
+          relationship_type: { new: relationship.type },
+          from_entity_id: { new: relationship.fromNodeId },
+          to_entity_id: { new: relationship.toNodeId },
+          properties: { new: relationship.properties ?? {} },
+        },
+      })),
+    );
+
+    return inserted.map((entity) => RelationshipEntity.toEgressType(entity));
   }
 
   // There are some relationships where multiple identical relationships should
@@ -345,6 +469,9 @@ export class RelationshipService {
       return null;
     }
 
+    // As it was, for Change History: `record` is mutated in place below.
+    const before = { ...record };
+
     Object.assign(record, withoutUndefined(data));
 
     const updatedEntity = await this.relationshipRepository.save(record);
@@ -363,17 +490,101 @@ export class RelationshipService {
     // #2703, where the same class of bug shipped without this safety net).
     const entity = await this.findById(context, updatedEntity.id);
 
+    // Against the re-read row, not `updatedEntity`: that still holds the DTO's
+    // values (a `Date` for a date column), the re-read holds what was stored.
+    if (entity) {
+      await this.recordUpdate(before, entity);
+    }
+
     return RelationshipEntity.toEgressType(entity!);
   }
 
+  /**
+   * The Change History row for a link edited in the app (`updateRelationship`):
+   * what moved among its type, strength, dates and properties, with both ends so
+   * both people's histories show it. Nothing when nothing moved.
+   */
+  private async recordUpdate(before: Relationship, after: Relationship): Promise<void> {
+    const fields = (row: Relationship) => ({
+      relationship_type: row.type,
+      strength: row.strength,
+      is_bidirectional: row.isBidirectional,
+      start_date: dateOnly(row.startDate),
+      end_date: dateOnly(row.endDate),
+      properties: row.properties ?? {},
+    });
+    const changedFields = changedFieldsBetween(fields(before), fields(after), [
+      'relationship_type',
+      'strength',
+      'is_bidirectional',
+      'start_date',
+      'end_date',
+      'properties',
+    ]);
+
+    if (Object.keys(changedFields).length === 0) {
+      return;
+    }
+
+    await this.graphDeltaWriter?.record({
+      nodeType: 'relationship',
+      changeType: 'updated',
+      relationshipId: after.id,
+      relationshipType: after.type,
+      fromEntityId: after.fromNodeId,
+      toEntityId: after.toNodeId,
+      ownerUserId: after.userId,
+      changeSource: 'RelationshipService.update',
+      changedByUserId: after.userId,
+      changedFields,
+    });
+  }
+
   async delete(context: ServiceContext, id: string): Promise<boolean> {
-    const result = await this.relationshipRepository.delete({
+    const where = {
       id,
       ...(context.userId !== SYSTEM_USER && {
         userId: context.userId,
       }),
-    });
+    };
+    const existing = this.graphDeltaWriter ? await this.relationshipRepository.findOne({ where }) : null;
+    const result = await this.relationshipRepository.delete(where);
+    const deleted = result.affected != null && result.affected > 0;
 
-    return result.affected != null && result.affected > 0;
+    if (deleted && existing) {
+      await this.recordDelta(existing, 'deleted', 'RelationshipService.delete');
+    }
+
+    return deleted;
+  }
+
+  /**
+   * The Change History row for a link made or removed in the app. Both people's
+   * histories read it, through its from and to entity ids.
+   */
+  private async recordDelta(
+    relationship: RelationshipEntity,
+    changeType: 'created' | 'deleted',
+    changeSource: string,
+  ): Promise<void> {
+    const side = changeType === 'created' ? 'new' : 'old';
+
+    await this.graphDeltaWriter?.record({
+      nodeType: 'relationship',
+      changeType,
+      relationshipId: relationship.id,
+      relationshipType: relationship.type,
+      fromEntityId: relationship.fromNodeId,
+      toEntityId: relationship.toNodeId,
+      ownerUserId: relationship.userId,
+      changeSource,
+      changedByUserId: relationship.userId,
+      changedFields: {
+        relationship_type: { [side]: relationship.type },
+        from_entity_id: { [side]: relationship.fromNodeId },
+        to_entity_id: { [side]: relationship.toNodeId },
+        properties: { [side]: relationship.properties ?? {} },
+      },
+    });
   }
 }

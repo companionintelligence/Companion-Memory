@@ -12,16 +12,18 @@ import {
   Param,
   Patch,
   Post,
+  Req,
   UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
-import { z } from 'zod';
+import type { Request } from 'express';
+import { z } from 'zod/v3';
 
 import { Context, type RequestContext, type UserServiceContext, toServiceContext } from '@ci/common/context';
+import { RequireCapability, WRITE_CAPABILITY } from '@ci/common/decorators';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
 import { ValidationPipe } from '@ci/common/pipes';
-import config from '@ci/configuration';
 import { BaseOAuth2Client } from '@ci/domains/connections/clients/BaseOAuth2Client';
 import { EventService } from '@ci/domains/events';
 
@@ -36,6 +38,7 @@ import {
   type CreateConnectionDto,
   type UpdateConnectionDto,
 } from '../types';
+import { callbackRequestOrigin, oauthCallbackUrlForConnection, sentRedirectUri } from '../utils/callbackUrls';
 
 const createConnectionSchema = z.object({
   name: z.string().min(1, 'Name is required'),
@@ -69,12 +72,29 @@ const updateConnectionSchema = z.object({
 
 type ProxyCompletion = Extract<CompleteConnectionDto, { flow: 'proxy' }>;
 
+/** What CI Portal hands back for a proxied grant. */
+interface PortalGrant {
+  tokens: TokenExchange;
+  /** The provider account CI Portal stored the grant under, when it says. */
+  accountId: string | null;
+}
+
 /**
  * How long completing a proxied connection waits on CI Portal's token refresh. CI Portal
  * waits on the provider's token endpoint in turn and neither request times out on its
  * own, so without a bound a stalled one holds the callback page's spinner for minutes.
  */
 const PORTAL_REFRESH_TIMEOUT_MS = 30_000;
+
+/**
+ * A connection as these routes return it: without its tokens, and without the redirect_uri kept
+ * for its code exchange, which only the api reads.
+ */
+function connectionResponse(connection: Connection) {
+  const { accessToken, refreshToken, oauthRedirectUri, ...returned } = connection;
+
+  return returned;
+}
 
 /**
  * When a token that lives `seconds` from now expires; null when that is not a positive
@@ -129,9 +149,7 @@ export class ConnectionsController {
 
     const connection = await this.connectionService.create(serviceContext, input);
 
-    const { accessToken, refreshToken, ...returnedConnection } = connection;
-
-    return returnedConnection;
+    return connectionResponse(connection);
   }
 
   @UseGuards(JwtOrApiKeyAuthGuard)
@@ -141,11 +159,7 @@ export class ConnectionsController {
 
     const connections = await this.connectionService.findAll(serviceContext);
 
-    return connections.map((connection) => {
-      const { accessToken, refreshToken, ...returnedConnection } = connection;
-
-      return returnedConnection;
-    });
+    return connections.map(connectionResponse);
   }
 
   @UseGuards(JwtOrApiKeyAuthGuard)
@@ -159,9 +173,7 @@ export class ConnectionsController {
       throw new NotFoundException();
     }
 
-    const { accessToken, refreshToken, ...returnedConnection } = connection;
-
-    return returnedConnection;
+    return connectionResponse(connection);
   }
 
   @UseGuards(JwtOrApiKeyAuthGuard)
@@ -179,9 +191,7 @@ export class ConnectionsController {
       throw new NotFoundException();
     }
 
-    const { accessToken, refreshToken, ...returnedConnection } = connection;
-
-    return returnedConnection;
+    return connectionResponse(connection);
   }
 
   // NOTE: DELETE /connections/:id is intentionally NOT defined here. Disconnect
@@ -192,7 +202,10 @@ export class ConnectionsController {
 
   @UseGuards(JwtOrApiKeyAuthGuard)
   @Get(':id/connect')
-  async connect(@Context() context: RequestContext, @Param('id') id: string) {
+  // A GET, but it writes: it keeps the redirect_uri on the connection for the code exchange. Priced
+  // by its verb, a read-only api key could overwrite that of an authorization in flight.
+  @RequireCapability(WRITE_CAPABILITY)
+  async connect(@Context() context: RequestContext, @Param('id') id: string, @Req() req?: Request) {
     const serviceContext = toServiceContext(context);
 
     const connection = await this.connectionService.findById(serviceContext, id);
@@ -218,9 +231,15 @@ export class ConnectionsController {
     //If the user has saved OAuth credentials for this provider, then just return the auth url generated for their OAuth app.
     //Otherwise refresh through the proxy service on CI Portal
     if (clientCredentials) {
-      return {
-        url: await client.getAuthorizationUrl(connection),
-      };
+      const url = await client.getAuthorizationUrl(connection, callbackRequestOrigin(req));
+      const redirectUri = sentRedirectUri(url);
+
+      // The code exchange must send the same redirect_uri; keep it rather than work it out again.
+      if (redirectUri) {
+        await this.connectionService.setOAuthRedirectUri(serviceContext, connection.id, redirectUri);
+      }
+
+      return { url };
     } else {
       const provider = this.cloudOAuthProxyService.getProviderNameForId(connection.providerId);
 
@@ -231,10 +250,9 @@ export class ConnectionsController {
         throw new InternalServerErrorException();
       }
 
-      // Build the callback URL from the configured OAUTH_CALLBACK_URL, embedding
-      // the connectionId so we know which connection to update on return.
-      const baseCallbackUrl = config.auth.oauth.callbackUrl || `${process.env.APP_PUBLIC_URL}/oauth/callback`;
-      const callbackUrl = `${baseCallbackUrl}?connectionId=${connection.id}`;
+      // The callback address with the connectionId in it, so we know which
+      // connection to update on return.
+      const callbackUrl = oauthCallbackUrlForConnection(connection.id);
 
       const scopes = client.getScopesFromActiveEndpoints(connection.activeEndpoints);
 
@@ -254,6 +272,7 @@ export class ConnectionsController {
   async completeCallback(
     @Context() context: RequestContext,
     @Body(new ValidationPipe(completeConnectionSchema)) body: CompleteConnectionDto,
+    @Req() req?: Request,
   ) {
     const serviceContext = toServiceContext(context);
 
@@ -290,13 +309,44 @@ export class ConnectionsController {
         throw new ConflictException('A connection to that account already exists');
       }
 
-      const tokens = await this.proxyTokens(body);
+      const grant = await this.proxyGrant(body);
+
+      if (grant.accountId != null && grant.accountId !== body.userProviderId) {
+        this.logger.warn('CI Portal bound this grant to a different account than the browser reported', {
+          connectionId,
+        });
+
+        // The duplicate check above went by the browser's id. The id this connection is stored
+        // under is CI Portal's, so check again by that one, or a second connection to the same
+        // account would be stored next to the first. CI Portal answered for this grant over the
+        // device's own channel, so its tokens can go to the connection that already holds the
+        // account (whose own proxy refresh token CI Portal has just replaced).
+        const [sameAccount] = (
+          await this.connectionService.search(serviceContext, {
+            providerId: connection.providerId,
+            active: true,
+            externalId: grant.accountId,
+          })
+        ).filter((c) => c.id !== connectionId);
+
+        if (sameAccount) {
+          await this.connectionService.update(serviceContext, sameAccount.id, grant.tokens);
+          await this.connectionService.remove(serviceContext, connectionId);
+          throw new ConflictException('A connection to that account already exists');
+        }
+      }
 
       await this.update(context, connectionId, {
-        ...tokens,
+        ...grant.tokens,
         active: true,
         needsReauth: false,
-        externalId: body.userProviderId,
+        // The account CI Portal holds this grant under, read over the device's own channel. On
+        // disconnect this id can address a credential at CI Portal, and every account on this
+        // appliance shares the device, so it must not be whatever the browser said. The
+        // browser's `userProviderId` is used only when there is nothing better: an older CI
+        // Portal that does not return the id, or an access-token-only grant (Facebook), for
+        // which CI Portal stores nothing.
+        externalId: grant.accountId ?? body.userProviderId,
       });
 
       const stored = await this.connectionService.findById(serviceContext, connectionId);
@@ -315,7 +365,13 @@ export class ConnectionsController {
       throw new InternalServerErrorException();
     }
 
-    const tokenExchange = await client.exchangeAuthorizationCode(connection, body.code);
+    // Sent with the redirect_uri the authorization kept on the connection. A connection authorized
+    // before that was kept works it out for this request, the callback page's.
+    const tokenExchange = await client.exchangeAuthorizationCode(
+      connection,
+      body.code,
+      callbackRequestOrigin(req),
+    );
 
     await this.update(context, connectionId, {
       ...tokenExchange,
@@ -475,7 +531,8 @@ export class ConnectionsController {
   }
 
   /**
-   * The tokens a proxied connection is stored with.
+   * The tokens a proxied connection is stored with, and the provider account CI Portal says the
+   * grant belongs to (null when it did not say).
    *
    * ⚠ NOT THE ACCESS TOKEN THE BROWSER CARRIED, whenever there is a better one
    * (CI-Server#2676). CI Portal returns the provider's access token through the
@@ -488,13 +545,20 @@ export class ConnectionsController {
    * carries none, Facebook's for instance — arrives with only the access token,
    * and that remains the only token there is.
    */
-  private async proxyTokens(body: ProxyCompletion): Promise<TokenExchange> {
+  private async proxyGrant(body: ProxyCompletion): Promise<PortalGrant> {
     if (body.refreshToken) {
       return this.refreshThroughPortal(body.state, body.refreshToken);
     }
 
     if (body.accessToken) {
-      return { accessToken: body.accessToken, refreshToken: null, tokenExpiry: expiryAfter(body.expiresIn) };
+      return {
+        tokens: {
+          accessToken: body.accessToken,
+          refreshToken: null,
+          tokenExpiry: expiryAfter(body.expiresIn),
+        },
+        accountId: null,
+      };
     }
 
     // `completeCallback` refuses this before anything is looked up; kept so a
@@ -509,11 +573,11 @@ export class ConnectionsController {
    * is spent by this call, so the rotated one CI Portal returns is what must be
    * stored; keeping the spent one would leave a connection that can never
    * refresh. If CI Portal returns none, none is stored.
+   *
+   * `accountId` is the `user_provider_id` CI Portal stored the grant under, which
+   * newer CI Portals return with every refresh. Null from one that does not.
    */
-  private async refreshThroughPortal(
-    connectionId: string,
-    proxyRefreshToken: string,
-  ): Promise<TokenExchange> {
+  private async refreshThroughPortal(connectionId: string, proxyRefreshToken: string): Promise<PortalGrant> {
     const refreshed = await this.cloudOAuthProxyService
       .refreshAccessToken(proxyRefreshToken, { signal: AbortSignal.timeout(PORTAL_REFRESH_TIMEOUT_MS) })
       .catch((error: unknown) => {
@@ -536,12 +600,18 @@ export class ConnectionsController {
     }
 
     return {
-      accessToken: refreshed.access_token,
-      refreshToken:
-        typeof refreshed.refresh_token === 'string' && refreshed.refresh_token !== ''
-          ? refreshed.refresh_token
+      tokens: {
+        accessToken: refreshed.access_token,
+        refreshToken:
+          typeof refreshed.refresh_token === 'string' && refreshed.refresh_token !== ''
+            ? refreshed.refresh_token
+            : null,
+        tokenExpiry: expiryAfter(refreshed.expires_in),
+      },
+      accountId:
+        typeof refreshed.user_provider_id === 'string' && refreshed.user_provider_id !== ''
+          ? refreshed.user_provider_id
           : null,
-      tokenExpiry: expiryAfter(refreshed.expires_in),
     };
   }
 
@@ -575,7 +645,7 @@ export class ConnectionsController {
     }
 
     try {
-      const tokens = await this.refreshThroughPortal(existing.id, body.refreshToken);
+      const { tokens } = await this.refreshThroughPortal(existing.id, body.refreshToken);
       const client = this.clientFactory.getClientByProviderId(pending.provider?.id);
       const accountId = await client?.getAccountIdentifier({ ...existing, accessToken: tokens.accessToken });
 

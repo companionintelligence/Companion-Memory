@@ -28,6 +28,22 @@
  */
 export type YieldGate = () => Promise<boolean> | boolean;
 
+/**
+ * The longest a worker loop waits on a gate's answer before treating it as
+ * open. A gate is a lookup (the chat gate is one indexed count), so a healthy
+ * one answers in milliseconds; five seconds can only be a database that has
+ * stopped answering.
+ *
+ * Without a bound, a gate that neither resolved nor rejected was the one wait
+ * on the fetch path nothing limited: every yielding queue's loop sits on the
+ * same pending lookup (the chat gate shares one in-flight query between all of
+ * them), so `llm-background`, `image-description`, `thing-vision` and
+ * `browser-activity-insight` all stop fetching at once, with nothing logged,
+ * while their senders keep enqueueing. Treating the timeout as OPEN is the
+ * rule this registry already applies to a missing or throwing gate.
+ */
+export const YIELD_GATE_TIMEOUT_MS = 5_000;
+
 export class YieldGateRegistry {
   private static gates = new Map<string, YieldGate>();
 
@@ -41,20 +57,31 @@ export class YieldGateRegistry {
 
   /**
    * `true` when the named gate is registered and currently asks the queue to
-   * stand aside. Unknown gates and gates that throw both read as open; the
-   * caller distinguishes "unknown" via {@link has} for its one-time warning.
+   * stand aside. Unknown gates, gates that throw and gates that do not answer
+   * within {@link YIELD_GATE_TIMEOUT_MS} all read as open; the caller
+   * distinguishes "unknown" via {@link has} for its one-time warning.
    */
-  static async shouldYield(name: string): Promise<boolean> {
+  static async shouldYield(name: string, timeoutMs: number = YIELD_GATE_TIMEOUT_MS): Promise<boolean> {
     const gate = this.gates.get(name);
 
     if (gate == null) {
       return false;
     }
 
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const unanswered = new Promise<false>((resolve) => {
+      timer = setTimeout(() => resolve(false), timeoutMs);
+    });
+
     try {
-      return (await gate()) === true;
+      // `then(() => gate())` so a gate that throws synchronously lands in the
+      // catch like an async one. A late rejection after the timeout is absorbed
+      // by the race, which has already subscribed to it.
+      return (await Promise.race([Promise.resolve().then(() => gate()), unanswered])) === true;
     } catch {
       return false;
+    } finally {
+      clearTimeout(timer);
     }
   }
 

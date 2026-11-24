@@ -1,11 +1,12 @@
 import { type ReactNode, useCallback, useState } from 'react';
 
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { EmptyState, LoadingPage, usePageTitle } from '@ci/common';
 import { Button, Collapsible, Input } from '@ci/shadcn';
 import { ChevronRight, Plus, Search } from '@ci/shadcn/icons';
 import { Link, useSearchParams } from 'react-router-dom';
 
+import { useReplicaDatabase } from '@/api/powersync/deviceFallback';
 import { ErrorState } from '@/components/ErrorState';
 import { SavedSearchIcon } from '@/components/icons';
 import { InfiniteListFooter } from '@/components/InfiniteList';
@@ -15,9 +16,9 @@ import { gql } from '@/graphql';
 import { type FragmentType, useFragment } from '@/graphql/fragment-masking';
 import { useInfiniteConnection } from '@/hooks/useInfiniteConnection';
 
-import { CreateSavedSearchModal } from './CreateSavedSearchModal';
 import { DeleteSavedSearchModal } from './DeleteSavedSearchModal';
 import { EditSavedSearchModal } from './EditSavedSearchModal';
+import { LocalSavedSearchesPage } from './LocalSavedSearchesPage';
 import { SavedSearchGridItemFragment, SavedSearch } from './SavedSearch';
 import { ShareSavedSearchModal } from './ShareSavedSearchModal';
 
@@ -45,7 +46,16 @@ const GET_SAVED_SEARCHES = gql(`
 
 type SavedSearchNode = FragmentType<typeof SavedSearchGridItemFragment>;
 
+/**
+ * On a phone with a synced replica the list is the phone's `saved_searches` table
+ * ({@link LocalSavedSearchesPage}), online or off, the way notes work; everywhere else the
+ * appliance's, through GraphQL ({@link RemoteSavedSearchesPage}).
+ */
 export function SavedSearchesPage() {
+  return useReplicaDatabase() ? <LocalSavedSearchesPage /> : <RemoteSavedSearchesPage />;
+}
+
+function RemoteSavedSearchesPage() {
   usePageTitle('Saved Searches - Companion Memory');
 
   const [searchParams, setSearchParams] = useSearchParams();
@@ -75,9 +85,8 @@ export function SavedSearchesPage() {
   const [starterOpen, setStarterOpen] = useState(false);
 
   const [savedSearchToDelete, setSavedSearchToDelete] = useState<SavedSearchNode | null>(null);
-  const [savedSearchToEdit, setSavedSearchToEdit] = useState<SavedSearchNode | null>(null);
   const [savedSearchToShare, setSavedSearchToShare] = useState<SavedSearchNode | null>(null);
-  const [creating, setCreating] = useState(false);
+  const [savedSearchToEdit, setSavedSearchToEdit] = useState<SavedSearchNode | null>(null);
 
   const openSavedSearchEditModal = (e: React.MouseEvent, savedSearch: SavedSearchNode) => {
     e.preventDefault();
@@ -188,9 +197,18 @@ export function SavedSearchesPage() {
   });
 
   let yourContent: ReactNode;
+  // `LoadingPage` and `EmptyState` paint as `absolute inset-0` overlays on their
+  // nearest positioned ancestor, which here is the whole scrolling page. Nothing
+  // sat under them until the Starter searches list opened into that same page on
+  // an account with no searches of its own: its rows rendered beneath the "You
+  // don't have any Saved Searches yet" block and were unreadable (QA MEM-08).
+  // An overlay therefore gets a box of its own, in the flow, and the list opens
+  // below it.
+  let yourContentIsOverlay = false;
 
   if (yourLoading && !yourData) {
     yourContent = <LoadingPage />;
+    yourContentIsOverlay = true;
   } else if (yourError && yourSearches.length === 0) {
     // `error` used to fall through to the empty state below, positively
     // telling the owner they have saved nothing and inviting them to
@@ -204,6 +222,7 @@ export function SavedSearchesPage() {
       />
     );
   } else if (yourSearches.length === 0) {
+    yourContentIsOverlay = true;
     yourContent = trimmedQuery ? (
       <EmptyState message={`No saved searches match "${trimmedQuery}".`} />
     ) : (
@@ -212,21 +231,23 @@ export function SavedSearchesPage() {
         message={
           <div className="flex max-w-md flex-col items-center gap-4 text-center">
             <div>
-              <div className="font-medium">You don't have any Saved Searches yet.</div>
+              <div className="font-medium">You don’t have any saved searches yet.</div>
               <div className="mt-1 text-sm text-muted-foreground">
                 Save a search you are running from Memory's advanced filters, or define one from scratch right
                 here.
               </div>
             </div>
             <div className="flex flex-wrap items-center justify-center gap-2">
-              <Button onClick={() => setCreating(true)}>
-                <Plus className="mr-2 h-4 w-4" />
-                New saved search
+              <Button asChild>
+                <Link to="/memory">
+                  <Plus className="mr-2 h-4 w-4" />
+                  New saved search
+                </Link>
               </Button>
               <Button variant="outline" asChild>
                 <Link to="/memory">
                   <Search className="mr-2 h-4 w-4" />
-                  Search Memory
+                  Search memory
                 </Link>
               </Button>
             </div>
@@ -241,8 +262,8 @@ export function SavedSearchesPage() {
           <SavedSearch
             key={savedSearch.id}
             savedSearch={savedSearch}
-            openSavedSearchDeleteModal={(e) => openSavedSearchDeleteModal(e, savedSearch)}
             openSavedSearchEditModal={(e) => openSavedSearchEditModal(e, savedSearch)}
+            openSavedSearchDeleteModal={(e) => openSavedSearchDeleteModal(e, savedSearch)}
             openSavedSearchShareModal={(e) => openSavedSearchShareModal(e, savedSearch)}
           />
         ))}
@@ -277,8 +298,8 @@ export function SavedSearchesPage() {
             <SavedSearch
               key={savedSearch.id}
               savedSearch={savedSearch}
-              openSavedSearchDeleteModal={(e) => openSavedSearchDeleteModal(e, savedSearch)}
               openSavedSearchEditModal={(e) => openSavedSearchEditModal(e, savedSearch)}
+              openSavedSearchDeleteModal={(e) => openSavedSearchDeleteModal(e, savedSearch)}
               openSavedSearchShareModal={(e) => openSavedSearchShareModal(e, savedSearch)}
             />
           ))}
@@ -298,9 +319,11 @@ export function SavedSearchesPage() {
             placeholder="Search your saved searches by name, description or tag..."
             className="w-full sm:max-w-sm"
           />
-          <Button onClick={() => setCreating(true)} className="shrink-0">
-            <Plus className="mr-2 h-4 w-4" />
-            New saved search
+          <Button asChild className="shrink-0">
+            <Link to="/memory">
+              <Plus className="mr-2 h-4 w-4" />
+              New saved search
+            </Link>
           </Button>
         </div>
 
@@ -310,14 +333,14 @@ export function SavedSearchesPage() {
           </div>
         )}
 
-        {yourContent}
+        {yourContentIsOverlay ? <div className="relative min-h-72 w-full">{yourContent}</div> : yourContent}
 
         <Collapsible open={starterOpen} onOpenChange={setStarterOpen} className="w-full pt-2">
           <Collapsible.Trigger asChild>
             <Button
               variant="ghost"
               size="sm"
-              className="h-8 gap-1.5 px-2 text-sm text-muted-foreground hover:text-foreground"
+              className="h-8 gap-1.5 px-2 text-sm text-muted-foreground hover:text-foreground max-device:h-11"
             >
               <ChevronRight
                 className={
@@ -338,19 +361,16 @@ export function SavedSearchesPage() {
         />
       )}
 
-      {savedSearchToEdit && (
-        <DropdownProvider args={[{ changeSearchParams: false }]}>
-          <EditSavedSearchModal savedSearch={savedSearchToEdit} onClose={() => setSavedSearchToEdit(null)} />
-        </DropdownProvider>
-      )}
-
       {savedSearchToShare && (
         <ShareSavedSearchModal savedSearch={savedSearchToShare} onClose={() => setSavedSearchToShare(null)} />
       )}
 
-      {creating && (
+      {/* The editor's type picker runs on the same dropdown hook the explorer
+          uses; `changeSearchParams: false` keeps its selection out of THIS
+          page's URL, which has its own `q`. */}
+      {savedSearchToEdit && (
         <DropdownProvider args={[{ changeSearchParams: false }]}>
-          <CreateSavedSearchModal onClose={() => setCreating(false)} />
+          <EditSavedSearchModal savedSearch={savedSearchToEdit} onClose={() => setSavedSearchToEdit(null)} />
         </DropdownProvider>
       )}
     </>

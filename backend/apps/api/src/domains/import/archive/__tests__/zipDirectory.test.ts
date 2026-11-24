@@ -93,7 +93,7 @@ describe('readZipDirectory', () => {
       const fd = fs.openSync(archive, 'r');
       const target = path.join(work, 'out', 'big.json');
       try {
-        expect(extractZipEntry(fd, entry, target)).toBe(true);
+        expect(extractZipEntry(fd, entry, target, work)).toBe(true);
       } finally {
         fs.closeSync(fd);
       }
@@ -127,7 +127,7 @@ describe('readZipDirectory', () => {
       const fd = fs.openSync(archive, 'r');
       const target = path.join(work, 'out', 'only.txt');
       try {
-        expect(extractZipEntry(fd, entry, target)).toBe(true);
+        expect(extractZipEntry(fd, entry, target, work)).toBe(true);
       } finally {
         fs.closeSync(fd);
       }
@@ -156,7 +156,7 @@ describe('readZipDirectory', () => {
     const fd = fs.openSync(archive, 'r');
     const target = path.join(work, 'out', 'huge-video.mp4');
     try {
-      expect(extractZipEntry(fd, huge, target)).toBe(true);
+      expect(extractZipEntry(fd, huge, target, work)).toBe(true);
     } finally {
       fs.closeSync(fd);
     }

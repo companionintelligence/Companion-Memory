@@ -4,7 +4,14 @@
 import fs from 'fs';
 import path from 'path';
 
-import { type ExifBag, extractCameraFields, exifInstant, extractVideoMetadata, parseExifSafe } from './_exif';
+import {
+  type ExifBag,
+  extractCameraFields,
+  exifInstant,
+  extractVideoMetadata,
+  parseExifSafe,
+} from '@ci/common/media/exif';
+
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams, Graph, Item } from './timeline';
@@ -505,6 +512,10 @@ class GooglePhotosFileImporter implements FileImporter {
         continue;
       }
 
+      // Real names in this folder. Motion clips are matched against these, not
+      // with existsSync, which is case-insensitive on macOS.
+      const albumNames = new Set(files.map((x) => x.name));
+
       for (const f of files) {
         if (!f.isFile() || f.name.startsWith('.')) {
           continue;
@@ -645,7 +656,12 @@ class GooglePhotosFileImporter implements FileImporter {
         const ext2 = path.extname(f.name);
         const editedCandidate = path.join(albumPath, `${path.basename(f.name, ext2)}-edited${ext2}`);
         if (fs.existsSync(editedCandidate)) {
-          graph.edges!.push({ relation: 'edit', to: { item: mediaItemFromFile(editedCandidate) } });
+          // Takeout gives the edited copy no sidecar of its own: it was taken
+          // when the original was, so it takes the original's time, like the
+          // motion clip below. Without it the copy was stored undated.
+          const editedItem = mediaItemFromFile(editedCandidate);
+          editedItem.timestamp = item.timestamp;
+          graph.edges!.push({ relation: 'edit', to: { item: editedItem } });
         }
 
         // Motion photo: a still paired with a short video sharing the base name.
@@ -653,7 +669,7 @@ class GooglePhotosFileImporter implements FileImporter {
           const baseName = path.basename(f.name, ext2);
           for (const mExt of ['.mp4', '.mov', '.MP4', '.MOV']) {
             const motionPath = path.join(albumPath, baseName + mExt);
-            if (fs.existsSync(motionPath)) {
+            if (albumNames.has(baseName + mExt)) {
               const motionItem = mediaItemFromFile(motionPath);
               motionItem.timestamp = item.timestamp;
               graph.edges!.push({ relation: 'motion_photo', to: { item: motionItem } });

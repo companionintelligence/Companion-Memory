@@ -1,8 +1,9 @@
 import type { ReactNode } from 'react';
 
-import { fireEvent, screen } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { DeviceKeyNotSavedError } from '@/hooks/deviceKeyNotSaved';
 import { renderWithProviders } from '@/test/renderWithProviders';
 
 import { DesktopSignInPage } from './DesktopSignInPage';
@@ -47,8 +48,9 @@ function renderPage() {
 }
 
 beforeEach(() => {
-  // The mark lazily imports a 1.9 MB Lottie animation unless reduced motion is
-  // on; under test the static SVG is both faster and deterministic.
+  // jsdom has no `matchMedia`, and `Reveal` reads it to decide whether to
+  // stagger the copy. Reduced motion is the deterministic path: no entrance
+  // animation classes, nothing timing-dependent.
   window.matchMedia = ((query: string) => ({
     matches: query.includes('prefers-reduced-motion'),
     media: query,
@@ -109,14 +111,19 @@ describe('DesktopSignInPage — sign-in leaves the webview', () => {
     const navigated = fireEvent.click(screen.getByRole('link', { name: 'Sign in with Companion account' }));
 
     expect(navigated).toBe(false);
-    expect(invoke).toHaveBeenCalledTimes(1);
-    expect(invoke).toHaveBeenCalledWith('open_external_url_command', {
-      // Absolute on purpose: desktop never calls setApiBaseUrl, so a bare
-      // relative path here is rejected outright by open_external_url_command,
-      // which only accepts http(s). `?client=native` is what makes the backend
-      // answer over the custom scheme instead of setting a browser cookie.
-      url: `${window.location.origin}/api/authenticate/oidc?client=native`,
-    });
+    // The PKCE pair and state are made before the browser opens, so the open is a beat later.
+    await waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
+
+    const [command, { url }] = invoke.mock.calls[0] as [string, { url: string }];
+    expect(command).toBe('open_external_url_command');
+    // Absolute on purpose: desktop never calls setApiBaseUrl, so a bare
+    // relative path here is rejected outright by open_external_url_command,
+    // which only accepts http(s). `?client=native` is what makes the backend
+    // answer over the custom scheme instead of setting a browser cookie, and the
+    // challenge and state bind the answer to this app.
+    expect(url.startsWith(`${window.location.origin}/api/authenticate/oidc?client=native&`)).toBe(true);
+    expect(new URL(url).searchParams.get('code_challenge')).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(new URL(url).searchParams.get('app_state')).toBeTruthy();
   });
 
   it('says so when the browser could not be opened, instead of looking like a dead button', async () => {
@@ -154,6 +161,14 @@ describe('DesktopSignInPage — sign-in leaves the webview', () => {
 
     expect(screen.getByRole('alert')).toHaveTextContent('Sign in failed. Please try again.');
     expect(screen.queryByLabelText('Invitation')).not.toBeInTheDocument();
+  });
+
+  it('says the keyring is the problem when it would not save the sign-in', () => {
+    authError = new DeviceKeyNotSavedError(new Error('No default keyring'));
+    renderPage();
+
+    expect(screen.getByRole('alert')).toHaveTextContent(/keyring would not save your sign-in/);
+    expect(screen.getByRole('alert')).not.toHaveTextContent('Please try again.');
   });
 
   it('asks for an invitation when this Memory already has an owner, and sends it with the next attempt', () => {

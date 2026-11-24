@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
-import { gql, useQuery } from '@apollo/client';
+import { gql } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 
 // How long to keep polling a non-READY forecast before giving up and showing an
 // actionable empty state. The timer resets whenever the status *or* item
@@ -22,6 +23,7 @@ const GET_FORECAST = gql(`
       buckets {
         bucketIndex
         startTime
+        predictedL0
         l0Probs { label probability }
         l1Probs { label probability }
         l2Probs { label probability }
@@ -41,6 +43,8 @@ export interface ProbabilityEntry {
 export interface ForecastBucket {
   bucketIndex: number;
   startTime: string;
+  /** Class to render. See ForecastBucketType — not argmax(l0Probs). */
+  predictedL0?: string | null;
   l0Probs: ProbabilityEntry[];
   l1Probs: ProbabilityEntry[];
   l2Probs: ProbabilityEntry[] | null;

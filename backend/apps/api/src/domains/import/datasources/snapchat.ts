@@ -10,15 +10,24 @@
    chat_history.json:
      { "Received Chat History": [ { "From": "user", "Created": "...", "Text": "hi" } ],
        "Sent Chat History":     [ { "To": "user",   "Created": "...", "Text": "yo" } ] }
+
+   Current exports key both files by conversation instead: a friend's username,
+   or an id for a group chat (which then carries a "Conversation Title"). Each
+   record says who wrote it and whether you did:
+     { "friend": [ { "From": "friend", "Media Type": "TEXT", "Created": "...",
+                     "Content": "hi", "Conversation Title": null, "IsSender": false, ... } ] }
+   The flag is spelled "IsSender" or "isSender" depending on the file, and
+   snap_history.json records have no "Content".
 */
 import fs from 'node:fs';
-import { readdir, stat } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { filesIn } from './fsWalk';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 const SIGNATURE_FILES = ['snap_history.json', 'chat_history.json'];
 
@@ -28,6 +37,27 @@ interface SnapchatRecord {
   Created?: string;
   'Media Type'?: string;
   Text?: string;
+}
+
+// A record from the conversation-keyed layout.
+interface ConversationRecord {
+  From?: unknown;
+  Created?: unknown;
+  'Media Type'?: unknown;
+  Content?: unknown;
+  'Conversation Title'?: unknown;
+  IsSender?: unknown;
+  isSender?: unknown;
+}
+
+function senderFlag(rec: ConversationRecord): boolean | undefined {
+  const flag = rec.IsSender ?? rec.isSender;
+
+  return typeof flag === 'boolean' ? flag : undefined;
+}
+
+function nonEmpty(v: unknown): string | undefined {
+  return typeof v === 'string' && v.trim() ? v : undefined;
 }
 
 // Parse Snapchat's "YYYY-MM-DD HH:MM:SS UTC" timestamp into a Date (treated as UTC).
@@ -78,18 +108,7 @@ async function findSignatureFiles(root: string): Promise<string[]> {
   const found: string[] = [];
   const candidates = [root, path.join(root, 'json'), path.join(root, 'json_data')];
   for (const dir of candidates) {
-    let names: string[];
-    try {
-      names = await readdir(dir);
-    } catch {
-      continue;
-    }
-
-    for (const name of names) {
-      if (SIGNATURE_FILES.includes(name.toLowerCase())) {
-        found.push(path.join(dir, name));
-      }
-    }
+    found.push(...(await filesIn(dir, (name) => SIGNATURE_FILES.includes(name.toLowerCase()))));
   }
 
   return found;
@@ -178,8 +197,22 @@ export class SnapchatFileImporter implements FileImporter {
         continue;
       }
 
-      const direction = /received/i.test(key) ? 'Received' : /sent/i.test(key) ? 'Sent' : undefined;
+      // Decided by the records, not the key: a username such as "absentee"
+      // would otherwise read as a "Sent ..." array.
+      if (
+        value.some(
+          (rec) => rec && typeof rec === 'object' && senderFlag(rec as ConversationRecord) !== undefined,
+        )
+      ) {
+        this.processConversation(key, value, base, params);
+        continue;
+      }
+
+      // The old keys open with the word ("Sent Saved Chat History"). A username
+      // has no spaces, so "absentee" with no sender flag is not one of them.
+      const direction = /^received\s/i.test(key) ? 'Received' : /^sent\s/i.test(key) ? 'Sent' : undefined;
       if (!direction) {
+        value.forEach(() => params.pipeline.drop?.('snapchat_unknown_layout', base));
         continue;
       }
 
@@ -196,12 +229,53 @@ export class SnapchatFileImporter implements FileImporter {
     }
   }
 
+  /**
+   * One conversation from the current layout. The key is the friend's username
+   * for a direct chat and an opaque id for a group, which names itself in
+   * "Conversation Title". A sent message to a group has no single recipient,
+   * so it carries the group as its conversation and no To.
+   */
+  private processConversation(key: string, records: unknown[], base: string, params: ImportParams): void {
+    const isSnap = base === 'snap_history.json';
+
+    records.forEach((raw, i) => {
+      const rec = raw as ConversationRecord;
+      const isSender = rec && typeof rec === 'object' ? senderFlag(rec) : undefined;
+      if (isSender === undefined) {
+        params.pipeline.drop?.('snapchat_unknown_layout', base);
+
+        return;
+      }
+
+      const title = nonEmpty(rec['Conversation Title']);
+      const record: SnapchatRecord = {
+        From: isSender ? undefined : nonEmpty(rec.From),
+        To: isSender && !title ? key : undefined,
+        Created: nonEmpty(rec.Created),
+        'Media Type': nonEmpty(rec['Media Type']),
+        Text: nonEmpty(rec.Content),
+      };
+
+      try {
+        // The index counts within this conversation, so the id carries its key:
+        // the same sender at the same second in two chats is two messages.
+        this.pushRecord(record, isSender ? 'Sent' : 'Received', isSnap, params, `${key}:${i}`, title ?? key);
+      } catch (e) {
+        params.log?.('error', 'Failed to import Snapchat record', {
+          file: base,
+          error: (e as Error).message,
+        });
+      }
+    });
+  }
+
   private pushRecord(
     rec: SnapchatRecord,
     direction: 'Received' | 'Sent',
     isSnap: boolean,
     params: ImportParams,
-    seq: number,
+    seq: number | string,
+    conversation?: string,
   ): void {
     if (!rec || typeof rec !== 'object') {
       return;
@@ -212,7 +286,7 @@ export class SnapchatFileImporter implements FileImporter {
       return;
     }
 
-    const username = direction === 'Received' ? rec.From : rec.To;
+    const username = (direction === 'Received' ? rec.From : rec.To) || conversation;
     const text = typeof rec.Text === 'string' ? rec.Text : undefined;
     const iso = ts ? ts.toISOString() : 'no-ts';
 
@@ -228,11 +302,7 @@ export class SnapchatFileImporter implements FileImporter {
         id: `snapchat:${isSnap ? 'snap' : 'chat'}:${direction}:${username || 'unknown'}:${iso}:${seq}`,
         classification: 'message',
         timestamp: ts,
-        content: {
-          filename: 'message.txt',
-          mediaType: 'text/plain',
-          data: async () => Buffer.from(body),
-        },
+        content: textContent('message.txt', body),
         metadata: {
           Direction: direction,
           // Without a title-bearing key, text-less snaps fall back to the
@@ -242,6 +312,7 @@ export class SnapchatFileImporter implements FileImporter {
           To: direction === 'Sent' ? rec.To || undefined : undefined,
           'Media Type': isSnap ? rec['Media Type'] || undefined : undefined,
           Text: text,
+          Conversation: conversation,
           Source: 'Snapchat',
         },
       },

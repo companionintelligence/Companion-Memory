@@ -234,3 +234,223 @@ describe('PersonService single create still emits', () => {
     expect(send).not.toHaveBeenCalled();
   });
 });
+
+describe('PersonService Change History', () => {
+  function makeDeltaService(stored: PersonEntity | null) {
+    const deltas = {
+      entityCreated: jest.fn(async () => undefined),
+      entityUpdated: jest.fn(async () => undefined),
+    };
+    const updateQb: Record<string, jest.Mock> = {};
+    for (const step of ['update', 'set', 'where', 'andWhere', 'setParameter']) {
+      updateQb[step] = jest.fn(() => updateQb);
+    }
+
+    updateQb.execute = jest.fn(async () => ({ affected: 1 }));
+    const repository: Record<string, unknown> = {
+      create: jest.fn((partial: Partial<PersonEntity>) => Object.assign(new PersonEntity(), partial)),
+      save: jest.fn(async (entity: PersonEntity) => entity),
+      findOne: jest.fn(async () => stored),
+      target: PersonEntity,
+      metadata: { target: PersonEntity, primaryColumns: [{ propertyName: 'id' }] },
+      createQueryBuilder: jest.fn(() => updateQb),
+    };
+    repository.manager = {
+      transaction: jest.fn(async (cb: (m: unknown) => unknown) => cb({ getRepository: () => repository })),
+    };
+    const service = new PersonService(
+      repository as never,
+      { setContext: jest.fn() } as never,
+      { send: jest.fn(async () => []) } as never,
+      deltas as never,
+    );
+
+    return { service, deltas };
+  }
+
+  const robin = () =>
+    Object.assign(new PersonEntity(), {
+      id: 'p1',
+      name: 'Robin Hale',
+      description: null,
+      userId: USER,
+      properties: { nickname: 'Rob', job_title: null, website: '' },
+    });
+
+  it('records a person added by hand', async () => {
+    const { service, deltas } = makeDeltaService(null);
+
+    await service.create(CONTEXT, { id: 'p1', name: 'Robin Hale' });
+
+    expect(deltas.entityCreated).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entityId: 'p1',
+        entityType: 'Person',
+        name: 'Robin Hale',
+        changeSource: 'PersonService.create',
+      }),
+    );
+  });
+
+  it('records only the fields an edit changed', async () => {
+    const { service, deltas } = makeDeltaService(robin());
+
+    await service.patch(CONTEXT, 'p1', {
+      name: 'Robin Hale',
+      description: '',
+      propertiesPatch: { nickname: 'Robbie', job_title: 'Tester', website: null },
+    });
+
+    expect(deltas.entityUpdated).toHaveBeenCalledTimes(1);
+    expect(deltas.entityUpdated).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entityId: 'p1',
+        changeSource: 'PersonService.patch',
+        changedFields: {
+          nickname: { old: 'Rob', new: 'Robbie' },
+          job_title: { old: null, new: 'Tester' },
+        },
+      }),
+    );
+  });
+
+  it('records nothing when the edit sends every field back unchanged', async () => {
+    const { service, deltas } = makeDeltaService(robin());
+
+    await service.patch(CONTEXT, 'p1', {
+      name: 'Robin Hale',
+      propertiesPatch: { nickname: 'Rob', job_title: null, website: null },
+    });
+
+    expect(deltas.entityUpdated).not.toHaveBeenCalled();
+  });
+
+  it('leaves an empty list the person never had out of a nickname-only edit', async () => {
+    const { service, deltas } = makeDeltaService(robin());
+
+    await service.patch(CONTEXT, 'p1', {
+      name: 'Robin Hale',
+      propertiesPatch: { nickname: 'Robbie', addresses: [], emails: [], phones: [] },
+    });
+
+    expect(deltas.entityUpdated).toHaveBeenCalledTimes(1);
+    expect(deltas.entityUpdated).toHaveBeenCalledWith(
+      expect.objectContaining({ changedFields: { nickname: { old: 'Rob', new: 'Robbie' } } }),
+    );
+  });
+
+  it('records a description the edit cleared with an explicit null', async () => {
+    const { service, deltas } = makeDeltaService(Object.assign(robin(), { description: 'Neighbour' }));
+
+    await service.patch(CONTEXT, 'p1', { name: 'Robin Hale', description: null as unknown as string });
+
+    expect(deltas.entityUpdated).toHaveBeenCalledWith(
+      expect.objectContaining({ changedFields: { description: { old: 'Neighbour', new: null } } }),
+    );
+  });
+
+  /** A repository whose UPDATE really changes what the next read returns, for `update` (applyUpdate). */
+  function makeUpdateService(stored: PersonEntity) {
+    const deltas = { entityUpdated: jest.fn(async () => undefined) };
+    let current = stored;
+    const repository: Record<string, unknown> = {
+      findOne: jest.fn(async () => current),
+      update: jest.fn(async (_where: unknown, patch: Partial<PersonEntity>) => {
+        current = Object.assign(new PersonEntity(), current, patch);
+
+        return { affected: 1 };
+      }),
+      target: PersonEntity,
+      metadata: { target: PersonEntity, primaryColumns: [{ propertyName: 'id' }] },
+    };
+    repository.manager = {
+      transaction: jest.fn(async (cb: (m: unknown) => unknown) => cb({ getRepository: () => repository })),
+    };
+    const service = new PersonService(
+      repository as never,
+      { setContext: jest.fn() } as never,
+      { send: jest.fn(async () => []) } as never,
+      deltas as never,
+    );
+
+    return { service, deltas };
+  }
+
+  it('records what a sync changed, naming the sync', async () => {
+    const { service, deltas } = makeUpdateService(robin());
+
+    await service.update(
+      CONTEXT,
+      'p1',
+      { name: 'Robin J. Hale', properties: { nickname: 'Rob', job_title: 'Pilot', website: '' } },
+      { source: 'TransformFacebookProfile.transform' },
+    );
+
+    expect(deltas.entityUpdated).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entityId: 'p1',
+        changeSource: 'TransformFacebookProfile.transform',
+        changedFields: {
+          name: { old: 'Robin Hale', new: 'Robin J. Hale' },
+          job_title: { old: null, new: 'Pilot' },
+        },
+      }),
+    );
+  });
+
+  it('records nothing for a sync that writes the same bag back', async () => {
+    const { service, deltas } = makeUpdateService(robin());
+
+    await service.update(CONTEXT, 'p1', { properties: { nickname: 'Rob', job_title: null, website: '' } });
+
+    expect(deltas.entityUpdated).not.toHaveBeenCalled();
+  });
+
+  it('records nothing for a re-sync that only moves its sync stamps', async () => {
+    const synced = Object.assign(robin(), {
+      properties: {
+        nickname: 'Rob',
+        last_synced_at: '2026-10-01T00:00:00.000Z',
+        facebook_data: { name: 'Robin Hale', last_synced: '2026-10-01T00:00:00.000Z' },
+      },
+    });
+    const { service, deltas } = makeUpdateService(synced);
+
+    await service.update(
+      CONTEXT,
+      'p1',
+      {
+        properties: {
+          nickname: 'Rob',
+          last_synced_at: '2026-10-27T00:00:00.000Z',
+          facebook_data: { name: 'Robin Hale', last_synced: '2026-10-27T00:00:00.000Z' },
+        },
+      },
+      { source: 'TransformGoogleContacts.processContact' },
+    );
+
+    expect(deltas.entityUpdated).not.toHaveBeenCalled();
+  });
+
+  it('records what a re-sync changed besides its sync stamps', async () => {
+    const synced = Object.assign(robin(), {
+      properties: { facebook_data: { name: 'Robin Hale', last_synced: '2026-10-01T00:00:00.000Z' } },
+    });
+    const { service, deltas } = makeUpdateService(synced);
+
+    await service.update(
+      CONTEXT,
+      'p1',
+      { properties: { facebook_data: { name: 'Robin J. Hale', last_synced: '2026-10-27T00:00:00.000Z' } } },
+      { source: 'TransformFacebookFriends.transform' },
+    );
+
+    expect(deltas.entityUpdated).toHaveBeenCalledWith(
+      expect.objectContaining({
+        changedFields: {
+          facebook_data: { old: { name: 'Robin Hale' }, new: { name: 'Robin J. Hale' } },
+        },
+      }),
+    );
+  });
+});

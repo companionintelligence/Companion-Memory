@@ -1,6 +1,8 @@
 import { Field, GraphQLISODateTime, ID, Int, ObjectType, registerEnumType } from '@nestjs/graphql';
 
 import {
+  buildIso27560ConsentReceipt,
+  computeAuditSaid,
   isGrantActive,
   type Ask,
   type AskAudit,
@@ -9,6 +11,7 @@ import {
   type DisclosureSummary,
   type GrantUsage,
   type AskBroadcast,
+  type Iso27560ConsentReceipt,
 } from '@ci/domains/asks';
 
 import { GlobalUID } from './GlobalUID';
@@ -63,6 +66,14 @@ export class AskQueryType {
   prompt!: string;
 
   /**
+   * Whether characters that render as nothing were removed from the prompt
+   * when the ask was made. `prompt` is stored without them, so a client cannot
+   * find them itself; this is what lets the review card say so.
+   */
+  @Field(() => Boolean)
+  promptHiddenCharactersRemoved!: boolean;
+
+  /**
    * What made this ask, when the asker declared it. Null means they did not —
    * which is itself the reason a delegation-restricted grant will not
    * auto-answer it.
@@ -86,6 +97,7 @@ export class AskQueryType {
       queryType: query.queryType,
       dataClass: query.dataClass ?? null,
       prompt: query.prompt,
+      promptHiddenCharactersRemoved: query.promptHiddenCharactersRemoved === true,
       actor: query.actor ? { kind: query.actor.kind, label: query.actor.label ?? null } : null,
       // Only a string counts. `filters` is jsonb and a non-string there is not
       // a purpose somebody stated — rendering `[object Object]` beside "they
@@ -669,6 +681,91 @@ export class AskAuditType {
       outcome: audit.outcome as AskAuditOutcomeEnum,
       disclosedCount: audit.disclosedCount,
       createdAt: audit.createdAt,
+    };
+  }
+}
+
+@ObjectType()
+export class AskConsentReceiptType {
+  @Field()
+  d!: string;
+
+  @Field()
+  schemaVersion!: string;
+
+  @Field()
+  recordId!: string;
+
+  @Field(() => String, { nullable: true })
+  piiPrincipalId!: string | null;
+
+  @Field(() => String, { nullable: true })
+  recipient!: string | null;
+
+  @Field()
+  legalBasis!: string;
+
+  @Field(() => [String])
+  purposes!: string[];
+
+  @Field(() => [String])
+  processing!: string[];
+
+  @Field(() => String, { nullable: true })
+  consentBasis!: string | null;
+
+  @Field()
+  outcome!: string;
+
+  @Field(() => Int)
+  disclosedCount!: number;
+
+  @Field()
+  issuedAt!: string;
+
+  static fromReceipt(receipt: Iso27560ConsentReceipt): AskConsentReceiptType {
+    return {
+      d: receipt.d,
+      schemaVersion: receipt.schemaVersion,
+      recordId: receipt.recordId,
+      piiPrincipalId: receipt.piiPrincipalId ?? null,
+      recipient: receipt.recipient ?? null,
+      legalBasis: receipt.legalBasis,
+      purposes: receipt.purposes,
+      processing: receipt.processing,
+      consentBasis: receipt.consentBasis ?? null,
+      outcome: receipt.outcome,
+      disclosedCount: receipt.disclosedCount,
+      issuedAt: receipt.issuedAt,
+    };
+  }
+}
+
+@ObjectType()
+export class AskAuditReceiptPayload {
+  @Field(() => ID)
+  auditId!: string;
+
+  @Field(() => ID, { nullable: true })
+  askId!: string | null;
+
+  @Field()
+  auditSaid!: string;
+
+  @Field(() => AskConsentReceiptType)
+  receipt!: AskConsentReceiptType;
+
+  static fromAudit(audit: AskAudit): AskAuditReceiptPayload {
+    const auditSaid = computeAuditSaid(audit);
+    const receipt = buildIso27560ConsentReceipt(audit, {
+      issuedAt: audit.createdAt.toISOString(),
+    });
+
+    return {
+      auditId: GlobalUID.encode('ask-audit', audit.id),
+      askId: audit.askId ? GlobalUID.encode('ask', audit.askId) : null,
+      auditSaid,
+      receipt: AskConsentReceiptType.fromReceipt(receipt),
     };
   }
 }

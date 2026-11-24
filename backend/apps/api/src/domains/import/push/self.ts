@@ -19,7 +19,13 @@
  * returning a closure is for. A run is hundreds of thousands of records; this
  * must not be per-record work.
  */
-import { normalizeEmail, normalizeName, normalizePhone } from '@ci/domains/graph';
+import {
+  type IdentifierKey,
+  isPhoneShaped,
+  normalizeEmail,
+  normalizeName,
+  normalizePhone,
+} from '@ci/domains/graph';
 
 /** Does this sender display name belong to the appliance owner? */
 export type IsSelf = (name: string) => boolean;
@@ -60,10 +66,43 @@ export const NOBODY_IS_SELF: IsSelf = () => false;
 export interface SelfIdentity {
   /** `ci.users.name`, plus the name on the owner's own `is_self` Person row. */
   names: string[];
-  /** `ci.users.email` — matched on its local part ("liam.broza" → "liam broza"). */
+  /**
+   * `ci.users.email`. Matched as an address exactly, and its local part
+   * ("liam.broza" → "liam broza") as a display name, exactly too.
+   */
   email: string | null;
-  /** Phones on the self Person (`properties.phones` / `.phone`), for exact owner match. */
+  /**
+   * Every other address the owner's own Person holds (`properties.emails` /
+   * `.email`, and its `ci.entity_identifiers` email rows, which is where Edit
+   * Person adds one). Matched as addresses exactly, like {@link email}, and
+   * never read as a name: a work or alias local part ("info", "home") is not
+   * evidence of who someone is.
+   */
+  emails?: string[];
+  /** Phones on the self Person (`properties.phones` / `.phone`, and its phone identifiers), for exact owner match. */
   phones: string[];
+}
+
+/**
+ * The owner's addresses, normalized: the account's and the self Person's.
+ *
+ * Only values with an `@` count, the rule `classifyParticipant` uses for an
+ * email. `properties.emails` is free JSON, and `normalizeEmail` lower-cases
+ * anything, so a stray "info" there would otherwise let a display name "Info"
+ * match the owner as an exact address in every trust mode.
+ */
+function ownerEmails(identity: SelfIdentity): Set<string> {
+  const out = new Set<string>();
+
+  for (const raw of [identity.email, ...(identity.emails ?? [])]) {
+    const normalized = raw ? normalizeEmail(raw) : null;
+
+    if (normalized?.includes('@')) {
+      out.add(normalized);
+    }
+  }
+
+  return out;
 }
 
 /**
@@ -88,7 +127,7 @@ export interface SelfIdentityReader {
  * the owner.
  */
 const SELF_IDENTITY_SQL = `
-  SELECT u.name AS name, u.email AS email, NULL::jsonb AS phones_json
+  SELECT u.name AS name, u.email AS email, NULL::jsonb AS phones_json, NULL::jsonb AS emails_json
     FROM ci.users u
    WHERE u.id = $1::uuid
   UNION ALL
@@ -97,22 +136,80 @@ const SELF_IDENTITY_SQL = `
            WHEN jsonb_typeof(e.properties->'phones') = 'array' THEN e.properties->'phones'
            WHEN COALESCE(e.properties->>'phone', '') <> '' THEN jsonb_build_array(e.properties->>'phone')
            ELSE '[]'::jsonb
-         END AS phones_json
+         END AS phones_json,
+         CASE
+           WHEN jsonb_typeof(e.properties->'emails') = 'array' THEN e.properties->'emails'
+           WHEN COALESCE(e.properties->>'email', '') <> '' THEN jsonb_build_array(e.properties->>'email')
+           ELSE '[]'::jsonb
+         END AS emails_json
     FROM ci.entities e
    WHERE e.owner_user_id = $1::uuid
      AND e.entity_type = 'Person'
      AND e.merged_into_entity_id IS NULL
+     AND (e.is_self IS TRUE OR e.properties ->> 'is_self' = 'true')
+  UNION ALL
+  SELECT NULL::text AS name, NULL::text AS email,
+         CASE WHEN i.kind = 'phone' THEN jsonb_build_array(i.value_normalized) ELSE '[]'::jsonb END AS phones_json,
+         CASE WHEN i.kind = 'email' THEN jsonb_build_array(i.value_normalized) ELSE '[]'::jsonb END AS emails_json
+    FROM ci.entity_identifiers i
+    JOIN ci.entities e ON e.entity_id = i.entity_id
+   WHERE i.owner_user_id = $1::uuid
+     AND i.kind IN ('email', 'phone')
+     AND e.entity_type = 'Person'
+     AND e.merged_into_entity_id IS NULL
      AND (e.is_self IS TRUE OR e.properties ->> 'is_self' = 'true')`;
+
+/**
+ * The From addresses of this run's mail that Gmail filed as Sent
+ * (`DirectionBasis: 'sent_label'`, email_direction.ts), normalized.
+ *
+ * Mail in the owner's Sent folder is the owner's, whatever address it went out
+ * from: an alias, or the account of a Takeout that is not the one they signed
+ * in with. Neither is on the self Person, so without this {@link isOwnerContact}
+ * reads that sender as a stranger who shares the owner's name and files the
+ * owner's own mail under them. PushStage adds these to the owner's addresses
+ * for the run.
+ *
+ * The label is only Google's word when the importer read it from the header
+ * Google wrote (email_direction.ts#trustedGmailLabels): a sender can put an
+ * `X-Gmail-Labels: Sent` in any mail, and this list makes every contact with
+ * that From address the owner for the whole run. A From address that also sent
+ * this run a mail whose Sent label was refused (`SentLabelRefused`) is somebody
+ * forging the label, so it is left out even if one of its mails got through.
+ */
+export async function readSentLabelSenders(db: SelfIdentityReader, runId: string): Promise<string[]> {
+  const rows = await db.query<Array<{ sender: string | null; refused: boolean | null }>>(
+    `SELECT DISTINCT metadata ->> 'From' AS sender,
+            metadata ->> 'DirectionBasis' IS DISTINCT FROM 'sent_label' AS refused
+       FROM ci_import.staged_items
+      WHERE run_id = $1::uuid
+        AND (metadata ->> 'DirectionBasis' = 'sent_label' OR metadata ->> 'SentLabelRefused' = 'true')
+        AND jsonb_typeof(metadata -> 'From') = 'string'`,
+    [runId],
+  );
+  const out = new Set<string>();
+  const refused = new Set<string>();
+
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const address = normalizeEmail(row.sender);
+
+    if (address && address.includes('@')) {
+      (row.refused ? refused : out).add(address);
+    }
+  }
+
+  return [...out].filter((address) => !refused.has(address));
+}
 
 /** Read the owner's names. Callers decide what a failure means — see PushStage. */
 export async function readSelfIdentity(db: SelfIdentityReader, userId: string): Promise<SelfIdentity> {
-  const rows = await db.query<Array<{ name: string | null; email: string | null; phones_json: unknown }>>(
-    SELF_IDENTITY_SQL,
-    [userId],
-  );
+  const rows = await db.query<
+    Array<{ name: string | null; email: string | null; phones_json: unknown; emails_json?: unknown }>
+  >(SELF_IDENTITY_SQL, [userId]);
 
   const names: string[] = [];
   const phones: string[] = [];
+  const emails: string[] = [];
   let email: string | null = null;
 
   for (const row of rows) {
@@ -132,9 +229,18 @@ export async function readSelfIdentity(db: SelfIdentityReader, userId: string): 
         }
       }
     }
+
+    const rawEmails = row.emails_json;
+    if (Array.isArray(rawEmails)) {
+      for (const address of rawEmails) {
+        if (typeof address === 'string' && address.trim().length > 0 && !emails.includes(address)) {
+          emails.push(address);
+        }
+      }
+    }
   }
 
-  return { names, email, phones };
+  return { names, email, emails, phones };
 }
 
 /**
@@ -200,6 +306,13 @@ function containsAll(sub: string[], sup: string[]): boolean {
 interface SelfTarget {
   readonly full: string;
   readonly tokens: string[];
+  /**
+   * Only an exact folded match counts. Set for the email local part: it is a
+   * name in disguise on most accounts, but it is also routinely a word like
+   * "family", "home" or "info", and containment or edit distance against it
+   * would claim anyone whose display name shares one token with it.
+   */
+  readonly exactOnly: boolean;
 }
 
 /**
@@ -212,7 +325,8 @@ interface SelfTarget {
  *
  * A name matches on any of three grounds, in ascending cost: exact folded
  * equality, token containment either way ("Liam" vs "Liam Broza", "Liam A
- * Broza" vs "Liam Broza"), or ≥{@link SIMILARITY_FLOOR} edit similarity.
+ * Broza" vs "Liam Broza"), or ≥{@link SIMILARITY_FLOOR} edit similarity. The
+ * account email's local part matches on the first ground only.
  *
  * FAIL SAFE: with nothing to compare against this returns
  * {@link NOBODY_IS_SELF} rather than a predicate that matches everything or
@@ -221,21 +335,23 @@ interface SelfTarget {
 export function makeIsSelf(identity: SelfIdentity): IsSelf {
   const targets: SelfTarget[] = [];
 
-  const add = (raw: string | null | undefined): void => {
+  const add = (raw: string | null | undefined, exactOnly: boolean): void => {
     const full = raw ? fold(raw) : '';
 
     if (full && !targets.some((target) => target.full === full)) {
-      targets.push({ full, tokens: full.split(' ') });
+      targets.push({ full, tokens: full.split(' '), exactOnly });
     }
   };
 
   for (const name of identity.names) {
-    add(name);
+    add(name, false);
   }
 
   // The email local part is a name in disguise on most accounts, and on an
-  // account created without a display name it is the only signal left.
-  add(identity.email ? identity.email.split('@')[0].replace(/[._+-]/g, ' ') : null);
+  // account created without a display name it is the only signal left. Exact
+  // only: see SelfTarget.exactOnly. Added after the names, so a local part that
+  // folds to the same string as a name keeps that name's looser matching.
+  add(identity.email ? identity.email.split('@')[0].replace(/[._+-]/g, ' ') : null, true);
 
   if (targets.length === 0) {
     return NOBODY_IS_SELF;
@@ -257,9 +373,10 @@ export function makeIsSelf(identity: SelfIdentity): IsSelf {
       targets.some(
         (target) =>
           target.full === candidate ||
-          containsAll(tokens, target.tokens) ||
-          containsAll(target.tokens, tokens) ||
-          similarity(candidate, target.full) >= SIMILARITY_FLOOR,
+          (!target.exactOnly &&
+            (containsAll(tokens, target.tokens) ||
+              containsAll(target.tokens, tokens) ||
+              similarity(candidate, target.full) >= SIMILARITY_FLOOR)),
       );
 
     decided.set(name, verdict);
@@ -269,44 +386,115 @@ export function makeIsSelf(identity: SelfIdentity): IsSelf {
 }
 
 /**
+ * The display-name part of a participant string, or `null` when it has none.
+ *
+ * A mailbox header is `"Display Name" <addr@host>`; the address is not part of
+ * the name, and folding it in ("liam broza x evil example") let a stranger's
+ * address join the tokens a name test reads. So every address-shaped token,
+ * bracketed or bare, is removed first, and a string that was only an address
+ * has no name left.
+ */
+function displayNameOf(trimmed: string): string | null {
+  const name = trimmed.replace(/\S+@\S+/g, ' ').trim();
+
+  return name.length > 0 ? name : null;
+}
+
+/**
+ * Is this email address or phone number itself the owner's?
+ *
+ * The only test that may bind an email or phone participant to the self
+ * Person: the identifier has to BE one of the owner's, compared in the
+ * normalized form `classifyParticipant` produced. A display name that merely
+ * looks like the owner's says nothing about whose mailbox or number it came
+ * from, so it is never consulted here; that is {@link matchOwner}'s name test,
+ * and it belongs to name-only participants.
+ */
+export function matchOwnerIdentifier(
+  identity: SelfIdentity,
+  kind: 'email' | 'phone',
+  valueNormalized: string,
+): OwnerMatch | null {
+  if (valueNormalized.length === 0) {
+    return null;
+  }
+
+  if (kind === 'email') {
+    return ownerEmails(identity).has(valueNormalized)
+      ? { kind: 'email', confidence: OWNER_MATCH_CONFIDENCE.email, raw: valueNormalized }
+      : null;
+  }
+
+  return identity.phones.some((phone) => normalizePhone(phone) === valueNormalized)
+    ? { kind: 'phone', confidence: OWNER_MATCH_CONFIDENCE.phone, raw: valueNormalized }
+    : null;
+}
+
+/**
+ * Is this communication participant the owner?
+ *
+ * The one rule the participant link listener and the stub backfill share. An
+ * email or phone participant is the owner only when the address or number
+ * itself is the owner's ({@link matchOwnerIdentifier}): its display name is
+ * whatever the sender typed, so a stranger writing as `"<owner name>"
+ * <x@elsewhere>` stays an ordinary contact. Only a name-only participant (a
+ * chat display name) is matched by name, through {@link matchOwner}.
+ */
+export function matchParticipantOwner(
+  identity: SelfIdentity,
+  key: IdentifierKey,
+  rawName: string,
+): OwnerMatch | null {
+  if (key.kind === 'name') {
+    return matchOwner(identity, rawName.length > 0 ? rawName : key.valueNormalized);
+  }
+
+  return matchOwnerIdentifier(identity, key.kind, key.valueNormalized);
+}
+
+/**
  * Classify a raw string (email, phone, or display name) as the owner when possible.
  *
  * Prefer exact email / phone over fuzzy name so trust policy can treat account
  * email as authoritative while keeping name matches review-gated under
  * cautious/balanced.
+ *
+ * Each test reads only the part of the string it is about. The phone test runs
+ * only on a string that is a phone number end to end ({@link isPhoneShaped}):
+ * every digit in "Support 415 555 0100" used to be read as a number, and a
+ * display name carrying the owner's digits matched as the owner's phone, an
+ * exact identifier in every trust mode. The name test reads the display name
+ * with every address in it removed, so a bare address has no name to test.
  */
-export function matchOwner(
-  identity: SelfIdentity,
-  raw: string,
-  options: { phones?: readonly string[] } = {},
-): OwnerMatch | null {
+export function matchOwner(identity: SelfIdentity, raw: string): OwnerMatch | null {
   const trimmed = raw.trim();
   if (trimmed.length === 0) {
     return null;
   }
 
   const emailNorm = normalizeEmail(trimmed);
-  const ownerEmail = identity.email ? normalizeEmail(identity.email) : null;
-  if (emailNorm != null && ownerEmail != null && emailNorm === ownerEmail) {
+  if (emailNorm != null && ownerEmails(identity).has(emailNorm)) {
     return { kind: 'email', confidence: OWNER_MATCH_CONFIDENCE.email, raw: trimmed };
   }
 
-  const phoneNorm = normalizePhone(trimmed);
+  const phoneNorm = isPhoneShaped(trimmed) ? normalizePhone(trimmed) : null;
   if (phoneNorm != null) {
-    const ownerPhones = options.phones ?? identity.phones;
-    for (const phone of ownerPhones) {
+    // Always the OWNER's phones. There used to be an override here, and the
+    // self-collation heal passed each candidate's own phones through it.
+    for (const phone of identity.phones) {
       if (normalizePhone(phone) === phoneNorm) {
         return { kind: 'phone', confidence: OWNER_MATCH_CONFIDENCE.phone, raw: trimmed };
       }
     }
   }
 
+  const name = displayNameOf(trimmed);
   const isSelf = makeIsSelf(identity);
-  if (!isSelf(trimmed)) {
+  if (name == null || !isSelf(name)) {
     return null;
   }
 
-  const folded = fold(trimmed);
+  const folded = fold(name);
   const exactTargets = new Set<string>();
   for (const name of identity.names) {
     const f = fold(name);
@@ -330,7 +518,7 @@ export function matchOwner(
 }
 
 /** True when this match is exact account email or phone — safe to redirect in all trust modes. */
-export function isExactOwnerIdentifier(match: OwnerMatch): boolean {
+export function isExactOwnerIdentifier(match: Pick<OwnerMatch, 'kind'>): boolean {
   return match.kind === 'email' || match.kind === 'phone';
 }
 
@@ -358,14 +546,54 @@ export function shouldMapContactToSelf(
 }
 
 /**
+ * Whether a contact the push is about to mint is the owner, so it maps onto the
+ * self Person instead of becoming a Person of its own.
+ *
+ * The rule {@link matchParticipantOwner} applies to a message's participants,
+ * over a contact's handles. A contact that carries an email or a phone is the
+ * owner only when one of them IS the owner's: its display name is whatever the
+ * sender typed, so a mail from `"<owner name>" <x@elsewhere>` stays somebody
+ * else. Matched on the name, it became the owner, the push filed the mail as
+ * sent by them, and a SENT edge from the owner was projected that nothing
+ * later took back. Only a contact with no handle at all (a chat display name)
+ * is matched by name, and {@link shouldMapContactToSelf} gates that on trust.
+ */
+export function isOwnerContact(
+  identity: SelfIdentity,
+  contact: { name?: string | null; emails: readonly string[]; phones: readonly string[] },
+  trustMode: 'cautious' | 'balanced' | 'hands_off',
+): boolean {
+  const handleMatches = [
+    ...contact.emails.map((email) => matchOwnerIdentifier(identity, 'email', normalizeEmail(email) ?? '')),
+    ...contact.phones.map((phone) => matchOwnerIdentifier(identity, 'phone', normalizePhone(phone) ?? '')),
+  ];
+
+  if (handleMatches.some((match) => shouldMapContactToSelf(match, trustMode))) {
+    return true;
+  }
+
+  if (contact.emails.length > 0 || contact.phones.length > 0 || !contact.name) {
+    return false;
+  }
+
+  return shouldMapContactToSelf(matchOwner(identity, contact.name), trustMode);
+}
+
+/**
  * Trust dial for folding owner stubs into self (mirrors `person_self_merge` /
  * graph_entity decide rules without importing PersonalizationService — that
  * barrel closes a maintenance ↔ llm ↔ tools ↔ import cycle).
+ *
+ * `auto` needs an exact identifier, in every trust mode: a merge into self
+ * moves every email and phone the stub holds onto the owner, and a name is not
+ * evidence that those are the owner's. A name match is at most `review`.
  */
 export function decideSelfCollation(
   trustMode: 'cautious' | 'balanced' | 'hands_off',
-  confidence: number,
+  match: Pick<OwnerMatch, 'kind' | 'confidence'>,
 ): 'auto' | 'review' | 'skip' {
+  const { confidence } = match;
+
   if (confidence < 0.7) {
     return 'review';
   }
@@ -375,7 +603,7 @@ export function decideSelfCollation(
   }
 
   if (trustMode === 'hands_off') {
-    return confidence >= 0.7 ? 'auto' : 'review';
+    return isExactOwnerIdentifier(match) ? 'auto' : 'review';
   }
 
   // balanced — never silent-merge owner stubs; People UI is the review surface.

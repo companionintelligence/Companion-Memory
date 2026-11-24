@@ -21,7 +21,7 @@ import type {
 } from '../types';
 
 import { McpSecretCodec } from './McpSecretCodec';
-import { grandfatherApprovals } from './mcpToolDigest';
+import { grandfatherApprovals, pinApprovedDescriptions } from './mcpToolDigest';
 
 interface LiveConnection {
   client: Client;
@@ -29,6 +29,10 @@ interface LiveConnection {
 }
 
 const MCP_PROVIDER_NAME = 'mcp';
+
+/** Recorded on a stdio config the boot sweep refused to start, so Settings can say why. */
+export const STDIO_NEEDS_ADMIN_OWNER =
+  'Not started: a local command server runs only for an administrator account';
 
 /**
  * Owns every live connection to a user-configured external MCP server: spawning/opening the
@@ -126,6 +130,33 @@ export class McpClientManagerService implements OnModuleDestroy {
       return;
     }
 
+    let ownerMayRunCommands = true;
+
+    if (config.transport === 'stdio') {
+      try {
+        ownerMayRunCommands = await this.ownerIsAdmin(config.userId);
+      } catch (error) {
+        // The lookup failing is transient, unlike a refusal, so it retries like any other failed
+        // connect. Letting it throw would break this method's never-throws contract: the reconnect
+        // timer and `onConfigChanged` call it with `void`, and an unhandled rejection exits the process.
+        await this.handleConnectFailure(configId, error);
+
+        return;
+      }
+    }
+
+    if (!ownerMayRunCommands) {
+      // No retry: this is a decision about the row, not a transient failure.
+      this.clearReconnectTimer(configId);
+      this.logger.warn('Refusing to start a stdio MCP server whose owner is not an administrator', {
+        configId,
+        slug: config.slug,
+      });
+      await this.persist(configId, { connectionStatus: 'error', lastError: STDIO_NEEDS_ADMIN_OWNER });
+
+      return;
+    }
+
     this.clearReconnectTimer(configId);
     await this.persist(configId, { connectionStatus: 'connecting' });
 
@@ -161,6 +192,17 @@ export class McpClientManagerService implements OnModuleDestroy {
     try {
       const discoveredTools = (await live.client.listTools()).tools.map(toDiscoveredTool);
 
+      // Approvals made before descriptions were pinned get the prose of the PREVIOUS connect
+      // pinned now, before this connect's list replaces it, so a description this server changes
+      // from here on is caught instead of inherited. See pinApprovedDescriptions. The approvals are
+      // re-read here rather than taken from the row read before the (slow) connect, so an approval
+      // made meanwhile is not written over; this writes at most once per approval.
+      const latest =
+        config.approvedTools == null ? null : await this.repo.findOne({ where: { id: configId } });
+      const pinned = latest
+        ? pinApprovedDescriptions(latest.approvedTools, config.discoveredTools, discoveredTools)
+        : null;
+
       await this.persist(configId, {
         discoveredTools,
         // One-shot conversion of a pre-approval-gate row (approved_tools IS NULL): grandfather
@@ -176,7 +218,9 @@ export class McpClientManagerService implements OnModuleDestroy {
                 new Date().toISOString(),
               ),
             }
-          : {}),
+          : pinned
+            ? { approvedTools: pinned }
+            : {}),
         connectionStatus: 'connected',
         lastConnectedAt: new Date(),
         lastError: null,
@@ -468,6 +512,25 @@ export class McpClientManagerService implements OnModuleDestroy {
     throw new Error(`Unsupported MCP transport: ${(draft as { transport: string }).transport}`);
   }
 
+  /**
+   * Whether the account that owns a config is a live administrator.
+   *
+   * A stdio config is a command this process spawns, so only an administrator may have one
+   * running. `McpServerConfigController` enforces that on every route that writes a config
+   * (`AdminOnlyGuard`), but the rows are read back here for EVERY user at boot, and a row can
+   * reach the table without that controller: an account import used to restore it verbatim, and
+   * an admin who is later demoted keeps the rows they made. So the spawn path asks again, about
+   * the owner as they are now, rather than trusting how the row got there.
+   */
+  private async ownerIsAdmin(userId: string): Promise<boolean> {
+    const rows = (await this.repo.manager.query(
+      `SELECT role FROM ci.users WHERE id = $1 AND deleted_at IS NULL`,
+      [userId],
+    )) as Array<{ role: string | null }>;
+
+    return rows[0]?.role === 'admin';
+  }
+
   private async persist(configId: string, patch: Partial<McpServerConfigEntity>): Promise<void> {
     try {
       // `discoveredTools`/its nested `inputSchema: Record<string, unknown>` jsonb shape does not
@@ -512,11 +575,17 @@ export class McpClientManagerService implements OnModuleDestroy {
 
 function toDiscoveredTool(tool: {
   name: string;
+  title?: string;
+  annotations?: { title?: string };
   description?: string;
   inputSchema: unknown;
 }): McpDiscoveredTool {
+  const title = typeof tool.title === 'string' ? tool.title : tool.annotations?.title;
+
   return {
     name: tool.name,
+    // Kept so the description digest covers it: the title is prose a server controls too.
+    ...(typeof title === 'string' ? { title } : {}),
     description: tool.description,
     inputSchema: (tool.inputSchema ?? {}) as Record<string, unknown>,
   };

@@ -1,5 +1,7 @@
 import { CanActivate, ExecutionContext, ForbiddenException, Injectable } from '@nestjs/common';
 
+import type { PortalPrincipalMarker } from './PortalTokenVerifier';
+
 /**
  * Refuses any request whose authenticated principal is not `role === 'admin'`
  * (`UserEntity.role` — see `domains/user/entities/UserEntity.ts`).
@@ -17,10 +19,10 @@ import { CanActivate, ExecutionContext, ForbiddenException, Injectable } from '@
  * only what the auth guard already put on the request.
  *
  * All three principals reaching this guard DO carry `role`: `JwtStrategy` and `ApiKeyStrategy` both
- * return `userService.findById(...)`, and `PortalTokenService.verifyAndProvision` returns a whole
- * `User` too — its interface merely used to say `{ id }` (now widened, and asserted in
- * `__tests__/AdminOnlyGuard.test.ts`). An earlier revision of this comment claimed the portal path
- * was refused here; it is not, and that claim was being cited as a reason not to admin-gate routes.
+ * return `userService.findById(...)`, and the Portal guards put `PortalPrincipal.user`, a whole
+ * `User`, on the request (asserted in `__tests__/AdminOnlyGuard.test.ts`). A Portal principal also
+ * leaves `request.portalPrincipal`, and one whose `admin` is false is refused here whatever its
+ * role: only a token addressed to this appliance acts as its administrator.
  *
  * ═══ ADMIN BOOTSTRAPPING (was: THE REAL CAVEAT) ═══
  *
@@ -42,10 +44,11 @@ import { CanActivate, ExecutionContext, ForbiddenException, Injectable } from '@
  * exemption and `UserService.findAllOnboarded` already assumed.
  *
  * So a route may now be gated here without stranding new installs. `/jobs`' appliance-wide
- * controls still use {@link ApplianceAdminGuard} rather than this guard, and deliberately: that
- * one degrades to admitting everyone on an appliance with no live admin, which is the honest
- * answer for a control plane, whereas these routes fail closed because stdio transport is
- * arbitrary local command execution and "unclaimed" is not a reason to hand that out.
+ * controls still use {@link ApplianceAdminGuard}, which differs only on an appliance with no live
+ * account at all (it admits there). It used to admit everyone whenever no live admin existed,
+ * which let a member reach admin once the owner deleted their account; it no longer does. These
+ * routes fail closed in every case, because stdio transport is arbitrary local command execution
+ * and "unclaimed" is not a reason to hand that out.
  */
 @Injectable()
 export class AdminOnlyGuard implements CanActivate {
@@ -55,6 +58,12 @@ export class AdminOnlyGuard implements CanActivate {
 
     if (role !== 'admin') {
       throw new ForbiddenException('This action requires an administrator account');
+    }
+
+    // The owner's role says who they are, not that this bearer may act as them here. A Portal
+    // token not addressed to this appliance carries the owner's role too.
+    if ((request as PortalPrincipalMarker | undefined)?.portalPrincipal?.admin === false) {
+      throw new ForbiddenException('This action needs a sign-in issued for this Memory');
     }
 
     return true;

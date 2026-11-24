@@ -1,4 +1,4 @@
-import { isIosPlatform } from '@ci/common';
+import { isIosPlatform, isNativePlatform } from '@ci/common';
 import type { LucideIcon } from '@ci/shadcn/icons';
 import {
   Bot,
@@ -12,7 +12,11 @@ import {
   MessageCircle,
   Palette,
   Plug,
+  Lock,
   Shield,
+  ShieldCheck,
+  Smartphone,
+  LockKeyhole,
 } from '@ci/shadcn/icons';
 
 export interface SettingsSection {
@@ -21,6 +25,8 @@ export interface SettingsSection {
   readonly icon: LucideIcon;
   /** Bundled Safari Web Extension — only the iOS Memory app contains it. */
   readonly iosOnly?: boolean;
+  /** Needs the native iOS/Android shell — the on-device model engine does not exist in a browser. */
+  readonly nativeOnly?: boolean;
 }
 
 /**
@@ -35,18 +41,24 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: 'preferences', label: 'Preferences', icon: Globe },
   { id: 'autonomy', label: 'Autonomy', icon: Shield },
   { id: 'model', label: 'Model', icon: Cpu },
+  { id: 'on-device', label: 'On-device model', icon: Smartphone, nativeOnly: true },
+  { id: 'app-lock', label: 'App lock', icon: LockKeyhole, nativeOnly: true },
   { id: 'location', label: 'Location', icon: MapPin },
   { id: 'safari', label: 'Safari', icon: Compass, iosOnly: true },
   { id: 'bluebubbles', label: 'BlueBubbles', icon: MessageCircle },
-  { id: 'mcp', label: 'MCP Servers', icon: Plug },
+  { id: 'mcp', label: 'MCP servers', icon: Plug },
   { id: 'agents', label: 'Agents', icon: Bot },
-  { id: 'api-keys', label: 'API Keys', icon: KeyRound },
-  { id: 'oauth', label: 'OAuth Credentials', icon: Key },
+  { id: 'api-keys', label: 'API keys', icon: KeyRound },
+  { id: 'oauth', label: 'OAuth credentials', icon: Key },
+  { id: 'privacy', label: 'Privacy', icon: Lock },
+  { id: 'protocols', label: 'Trust & protocols', icon: ShieldCheck },
   { id: 'data', label: 'Your data', icon: HardDrive },
 ];
 
 export function visibleSettingsSections(): SettingsSection[] {
-  return SETTINGS_SECTIONS.filter((section) => !section.iosOnly || isIosPlatform());
+  return SETTINGS_SECTIONS.filter(
+    (section) => (!section.iosOnly || isIosPlatform()) && (!section.nativeOnly || isNativePlatform()),
+  );
 }
 
 export function settingsPathToProfile(pathname: string): string {

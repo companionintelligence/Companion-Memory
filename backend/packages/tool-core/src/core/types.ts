@@ -100,6 +100,14 @@ export interface IntentPrivacy {
   destructive: boolean;
   /** Touches a third-party service / sends data off the appliance. */
   external: boolean;
+  /**
+   * With `external`: the call leaves the appliance but reaches only a server the owner set up and
+   * runs, such as their own Mac's BlueBubbles server, never a third party. A read like that is not
+   * one a lookup could use to choose what an outside party receives, so the gate lets it run after
+   * a lookup where a third-party read asks (see `ToolGateOptions.followsLookup`). Absent means a
+   * third party. Set it only when the code can reach nothing else.
+   */
+  ownServer?: boolean;
 }
 
 /**
@@ -136,6 +144,22 @@ export interface IntentDefinition {
   title: string;
   description: string;
   parameters: JSONSchema;
+  /**
+   * A leaner description and parameter schema for the on-device (`local`) tier, substituted for
+   * `description` and `parameters` when the manifest is requested with `tier=local`.
+   *
+   * Every tool declaration sits in the prompt of every on-device turn, and the full schemas are
+   * written for a large model: on a phone the 21 local-tier intents came to ~18 KB, ~4,350 tokens,
+   * against Gemma 4's 4,000-token window, so no message could ever fit. A 2B model is also better
+   * served by a tight schema than a sprawling one. The lean form keeps the parameters a small model
+   * will actually use and says in a sentence what the tool is for.
+   *
+   * It must be a strict subset of the full schema: every property it names exists in `parameters`
+   * with the same `type`, any `enum` is a subset, and everything the full schema requires it
+   * requires too, because the appliance still validates the call against the FULL schema. The
+   * catalog's real-tools test enforces that. Optional: an intent without one is published in full.
+   */
+  local?: { description: string; parameters: JSONSchema };
   privacy: IntentPrivacy;
   /**
    * Whether this intent can genuinely be served by the on-device (local) tier.
@@ -175,6 +199,13 @@ export interface IntentDefinition {
    * a tool built from one user's config is listed to — and executable by — every other account on
    * the appliance. `getAvailableTools` hides an owned tool from anyone but its owner, and
    * `executeTool` refuses it, so ownership is enforced rather than merely advertised.
+   *
+   * The owner may also be decided at runtime. The `messaging.*` intents are native tools, but
+   * they act on the one BlueBubbles connector, which belongs to whichever account an
+   * administrator connected it for; they expose `schema` as a getter that reads that owner on
+   * every access. So the registry reads this field when it decides, never once at registration,
+   * and anything that snapshots schemas (MCP's tool map) has to ask
+   * `ToolRegistryCore.isToolVisibleTo` per request.
    */
   ownerUserId?: string;
   /** Entity types this tool reads. */
@@ -314,6 +345,15 @@ export interface ToolInvocationContext extends ToolRequestContext {
    * Ignored for an owner principal.
    */
   principalName?: string | null;
+
+  /**
+   * This call comes from a chat round after the turn already ran a lookup. The
+   * gate then asks before any write or any read from a third-party service
+   * under a dial that asks before a delete; see
+   * `ToolGateOptions.followsLookup`. Absent means false, so no other caller
+   * changes behaviour.
+   */
+  followsLookup?: boolean;
 
   /**
    * The `ci.pending_actions` row this call is the confirmed replay of.

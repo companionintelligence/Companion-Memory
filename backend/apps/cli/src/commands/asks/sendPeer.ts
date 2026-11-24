@@ -85,8 +85,8 @@ function parseMinMinutes(value: string | undefined): number | undefined {
 
   const parsed = Number(value);
 
-  if (!Number.isFinite(parsed)) {
-    throw new CliError(`--min-minutes takes a number, got "${value}".`);
+  if (value.trim() === '' || !Number.isFinite(parsed) || parsed < 0) {
+    throw new CliError(`--min-minutes takes a number of minutes, 0 or more, got "${value}".`);
   }
 
   return parsed;

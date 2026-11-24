@@ -1,10 +1,10 @@
-import { UseGuards } from '@nestjs/common';
+import { BadRequestException, UseGuards } from '@nestjs/common';
 import { Mutation, Parent, Query, ResolveField, Resolver, Args, ID } from '@nestjs/graphql';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { MaxArraySizePipe } from '@ci/common/pipes';
-import { AnswerService } from '@ci/domains/intelligence';
+import { AnswerService, answerTextSchema } from '@ci/domains/intelligence';
 
 import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { QuestionLoader } from '../loaders/QuestionLoader';
@@ -17,6 +17,23 @@ import { PaginationArgs } from '../types/PaginationArgs';
 import { QuestionType } from '../types/QuestionType';
 import { UpdateAnswerInput } from '../types/UpdateAnswerInput';
 import { Paginator } from '../utils/Paginator';
+
+/**
+ * `POST /answers` and `PATCH /answers/:id` run the answer text through
+ * `answerTextSchema`; these mutations are the same write by another door and ran
+ * nothing, so an answer of any length went in, and a blank one reached the
+ * database CHECK and came back a 500. One schema, applied here, makes both a 400
+ * and keeps the limit one number.
+ */
+function checkedAnswerText(text: string): string {
+  const result = answerTextSchema.safeParse(text);
+
+  if (!result.success) {
+    throw new BadRequestException(result.error.issues[0]?.message ?? 'Invalid answer text');
+  }
+
+  return text;
+}
 
 @UseGuards(JwtOrApiKeyAuthGuard)
 @Resolver(() => AnswerType)
@@ -36,7 +53,7 @@ export class AnswerResolver {
     const serviceContext = toServiceContext(context);
 
     const entity = await this.answerService.create(serviceContext, {
-      text: input.answer,
+      text: checkedAnswerText(input.answer),
       question: {
         id: input.questionId,
       },
@@ -63,7 +80,7 @@ export class AnswerResolver {
     const answers = await this.answerService.createMany(
       serviceContext,
       input.map((item) => ({
-        text: item.answer,
+        text: checkedAnswerText(item.answer),
         question: {
           id: item.questionId,
         },
@@ -87,7 +104,7 @@ export class AnswerResolver {
     const id = GlobalUID.parse('answer', input.id);
 
     const entity = await this.answerService.update(serviceContext, id, {
-      text: input.answer,
+      text: input.answer === undefined ? undefined : checkedAnswerText(input.answer),
     });
 
     return entity ? AnswerType.toType(entity) : entity;

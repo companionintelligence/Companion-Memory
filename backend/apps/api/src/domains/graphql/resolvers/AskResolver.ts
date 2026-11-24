@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException, NotFoundException, UseGuards } from '@nestjs/common';
 import { Args, ID, Mutation, Query, Resolver } from '@nestjs/graphql';
+import { validate as isUuid } from 'uuid';
 
 import { Context, type RequestContext, type UserServiceContext, toServiceContext } from '@ci/common/context';
 import { FeatureService } from '@ci/common/feature';
@@ -56,6 +57,7 @@ import {
   SendPeerAskPayload,
 } from '../types/AskPayloads';
 import {
+  AskAuditReceiptPayload,
   AskAuditType,
   AskBroadcastType,
   AskDisclosureHistoryPayload,
@@ -464,7 +466,7 @@ export class AskResolver {
       throw new BadRequestException(`Ask ${ask.id} is not ready to answer (status: ${ask.status})`);
     }
 
-    const identifiers = await this.executorService.execute(ask);
+    const identifiers = await this.executorService.execute(ask, { tier: options.tier });
     const matches = identifiers.map((identifier) => ({ id: identifier.id, type: identifier.type }));
 
     const redacted = new Set(options.redactItemIds ?? []);
@@ -600,7 +602,7 @@ export class AskResolver {
 
   /** One of the caller's own peer links, or a 404. Never another owner's. */
   private async requirePeerLink(context: UserServiceContext, id: string): Promise<PeerLink> {
-    const link = await this.peerLinkService.findById(context, id);
+    const link = await this.peerLinkService.findById(context, peerLinkIdFrom(id));
     if (link == null) {
       throw new NotFoundException(`Peer link ${id} not found`);
     }
@@ -732,6 +734,38 @@ export class AskResolver {
       // The handle is the one the caller addressed, so no lookup is needed to
       // say who this outbound ask went to.
       ask: AskType.toType(ask, undefined, input.handle),
+      status: response.status,
+      reason: response.reason,
+    };
+  }
+
+  /**
+   * Fetch the answer to one of the caller's own outbound asks from the peer it
+   * went to, now, instead of waiting for `PeerAnswerCollectionCron`. An ask
+   * already answered returns the stored answer without calling the peer.
+   */
+  @Mutation(() => SendPeerAskPayload)
+  // Reaches another Companion, as sendPeerAsk does.
+  @GraphqlPrivacy({ external: true })
+  async collectPeerAnswer(
+    @Context() context: RequestContext,
+    @Args('askId', { type: () => ID }) gid: string,
+  ): Promise<SendPeerAskPayload> {
+    if (!(await this.enabled())) {
+      return { success: false };
+    }
+
+    const serviceContext = toServiceContext(context);
+    await this.rateLimitService.consume(serviceContext.userId);
+
+    const { ask, response } = await this.outboundAskService.pollForAnswer(
+      serviceContext,
+      GlobalUID.parse('ask', gid),
+    );
+
+    return {
+      success: true,
+      ask: await this.toAskType(serviceContext, ask),
       status: response.status,
       reason: response.reason,
     };
@@ -1003,6 +1037,35 @@ export class AskResolver {
     return { rows: rows.map(AskAuditType.toType), truncated };
   }
 
+  /** Build the deterministic CESR SAID and ISO/IEC TS 27560 consent receipt for a responder audit entry. */
+  @Query(() => AskAuditReceiptPayload, { nullable: true })
+  async askAuditReceipt(
+    @Context() context: RequestContext,
+    @Args('id', { type: () => ID }) id: string,
+  ): Promise<AskAuditReceiptPayload | null> {
+    if (!(await this.enabled())) {
+      return null;
+    }
+
+    let decoded: { type: string; id: string };
+    try {
+      decoded = GlobalUID.decode(id);
+    } catch {
+      return null;
+    }
+
+    if (
+      decoded.type !== 'ask-audit' ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(decoded.id)
+    ) {
+      return null;
+    }
+
+    const audit = await this.auditService.findByIdForResponder(toServiceContext(context), decoded.id);
+
+    return audit ? AskAuditReceiptPayload.fromAudit(audit) : null;
+  }
+
   /**
    * The same record, folded BY RELATIONSHIP — the unit an owner arrives with.
    *
@@ -1237,7 +1300,15 @@ function resolveTier(ask: Ask, link: PeerLink | null, householdTier?: TrustTier)
     return householdTier ?? 'household';
   }
 
-  return (link?.trustTier as TrustTier | undefined) ?? 'stranger';
+  // Closes G5(a): `findById` returns revoked links so the owner can still read
+  // their history and attribute audit rows, so a link that has since been
+  // revoked or is not active must clamp to `stranger` rather than supplying its
+  // pre-revocation trustTier to asks remaining in the inbox.
+  if (link == null || link.revokedAt != null || link.status !== 'active') {
+    return 'stranger';
+  }
+
+  return (link.trustTier as TrustTier | undefined) ?? 'stranger';
 }
 
 /**
@@ -1282,6 +1353,37 @@ function toPeerAskRequest(input: SendPeerAskInput): PeerAskRequest {
     default:
       throw new BadRequestException(`Unsupported ask archetype: ${input.archetype}`);
   }
+}
+
+/**
+ * The `ci.peer_links.id` a client named, from either spelling the API hands
+ * out: the raw uuid (`AskGrantType.granteePeerLinkId`) or the `peer-link`
+ * global id (`PeerLinkType.id`, what `createPeerLink` and `peerLinks` return).
+ *
+ * The global id used to go straight to the uuid column and came back as a 500
+ * (`invalid input syntax for type uuid`), so the id `createPeerLink` returns
+ * could not be used to grant that peer anything. Anything else, including a
+ * global id of another type, is a 400 that says what to pass.
+ */
+export function peerLinkIdFrom(value: string): string {
+  if (isUuid(value)) {
+    return value;
+  }
+
+  let decoded: { type: string; id: string } | null;
+  try {
+    decoded = GlobalUID.decode(value);
+  } catch {
+    decoded = null;
+  }
+
+  if (decoded?.type === 'peer-link' && isUuid(decoded.id)) {
+    return decoded.id;
+  }
+
+  throw new BadRequestException(
+    'granteePeerLinkId is not a peer link id: pass the id createPeerLink or peerLinks returns',
+  );
 }
 
 /**

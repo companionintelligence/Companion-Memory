@@ -30,6 +30,14 @@ set -euo pipefail
 #                        Used by the multi-arch publish workflow: each native
 #                        build leg pushes :VERSION-<arch>, and merge-manifests.sh
 #                        combines them into the :VERSION manifest list.
+#   DIGEST_FILE          If set, append "<remote repo> <sha256 digest>" for every
+#                        image pushed, and fail when a push reports no digest.
+#                        merge-manifests.sh reads these (DIGESTS_DIR) so the
+#                        release manifest names exactly what this run pushed,
+#                        not whatever the tag points at by then.
+#   REGISTRY_ATTEMPTS    Tries per image push                        (default: 3)
+#   REGISTRY_RETRY_DELAY Seconds before retry n, times n             (default: 60)
+#                        See registry-retry.sh.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -114,6 +122,8 @@ done
 
 # shellcheck source=scripts/publish/images.sh
 source "${SCRIPT_DIR}/images.sh"
+# shellcheck source=scripts/publish/registry-retry.sh
+source "${SCRIPT_DIR}/registry-retry.sh"
 
 # ── Helpers ────────────────────────────────────────────────────────────
 
@@ -152,19 +162,39 @@ fail() {
 #   * Volumes. Everything hangs off ${APP_DATA_DIR} hostPaths because that is
 #     the only storage runtipi hands an app; the named volumes (db-data,
 #     object-data, secrets) and the operator bind mounts (CI_IMPORT_WORK_DIR,
-#     CI_REPO_DIR) have no equivalent here, so the api/worker get one /app-data
-#     mount instead. The secrets volumes all map onto
-#     ${APP_DATA_DIR}/data/secrets: production's master `secrets` volume is
-#     that directory, mounted (read-write) into setup-secrets ONLY, and each
-#     `secrets-<svc>` projection volume is its services/<svc> subdirectory —
-#     where setup-secrets writes it (its SECRETS_PROJECTION_ROOT default,
-#     /run/secrets/services) and which that service alone mounts at
-#     /run/secrets. The <svc> names are the `project` calls in
+#     CI_REPO_DIR) have no equivalent here, so the api/worker share one folder,
+#     ${APP_DATA_DIR}/data/shared, mounted at /app-data/data (the LLM endpoint
+#     file and the import work dirs below; summary reads it read-only).
+#     Production's master `secrets` volume is ${APP_DATA_DIR}/data/secrets,
+#     mounted (read-write) into setup-secrets ONLY, and each `secrets-<svc>`
+#     projection volume is ${APP_DATA_DIR}/data/service-secrets/<svc>, BESIDE
+#     the master, not inside it: setup-secrets mounts each one at
+#     /run/secrets/services/<svc> (its SECRETS_PROJECTION_ROOT default), and
+#     that service alone mounts it at /run/secrets. A Hub refuses one mount's
+#     folder inside another the app can write to (code in the outer container
+#     could swap the inner folder for a link, which Docker follows on the next
+#     start), so neither the projections nor anything else may sit under a
+#     folder a service mounts read-write. The <svc> names are the `project` calls in
 #     infrastructure/setup-secrets/entrypoint.sh; mount a name that map does
 #     not project and the service boots with an empty /run/secrets. The master
 #     is 0600 root, so pointing a non-root reader (hbpe, summary) at it instead
 #     is not a fallback: it cannot read it and exits. The gateway reads no
 #     secrets and mounts none, as in production.
+#   * `powersync` runs companion/powersync (infrastructure/powersync/Dockerfile),
+#     not production's upstream image with infrastructure/powersync mounted:
+#     runtipi can mount nothing from this repo, so the config, sync rules and
+#     the secrets wrapper are baked into the image. The api's POWERSYNC_URL is
+#     \${APP_BASE_URL}/powersync, production's own default; if a Hub ever hands
+#     out an empty APP_BASE_URL it reads `/powersync`, which the token endpoint
+#     joins to the origin each request arrived on.
+#   * `sync-publication` exists only here: setup-database again, after
+#     migrate-database. setup-database runs BEFORE the migrations, so on a fresh
+#     install the tables PowerSync replicates do not exist yet and the
+#     `powersync` publication stays empty; compose installs fill it on their next
+#     `up`, which re-runs setup-database, but a Hub restart does not re-run
+#     one-shot services, so a store install never would (seen on a Hub install
+#     2026-10-30: replication running, nothing published). setup-database is
+#     idempotent, so the second run only adds the now-existing tables.
 #   * `fix-db-permissions` exists only here: runtipi creates ${APP_DATA_DIR}
 #     as root, and postgres:18.4-bookworm runs as uid 999.
 #   * `setup-secrets` is production compose's `generate-secrets`, renamed after
@@ -234,15 +264,6 @@ fail() {
 #     so only the gateway's dependsOn entry is missing here — but an unproven
 #     wait would leave the gateway stuck forever on a store install, so it is
 #     left to whoever can test a real install rather than guessed at here.
-#   * The /app-data mounts see ${APP_DATA_DIR}/data/secrets, so on a store
-#     install the per-service isolation is partial: api and worker (root) can
-#     read the master through it, and summary-service (uid 1000) every 0644
-#     projection, the api's AUTH_* secrets included. summary mounts /app-data
-#     only for llm-endpoint.json, which the api writes; a single-file bind is
-#     not the fix (Docker creates a DIRECTORY at an absent host path, and the
-#     api would then fail to write it). Moving that file out from beside
-#     data/secrets is an api + summary path change, not a mirror edit.
-#
 # It is also kept in step with CI-Marketplace's apps/ci-memory/docker-compose.json,
 # with one deliberate exception: the database volume.
 #
@@ -280,17 +301,17 @@ generate_compose() {
       "image": "${reg}/companion/api:${ver}",
       "restart": "unless-stopped",
       "environment": [
-        { "key": "ENABLE_REQUIRE_SIGNUP_CODES", "value": "false" },
         { "key": "LLM_ENDPOINT_CONFIG_PATH", "value": "/app-data/data/llm-endpoint.json" },
         { "key": "CI_ROLE", "value": "web" },
         { "key": "CI_IMPORT_UPLOADS_DIR", "value": "/app-data/data/import-work/uploads" },
         { "key": "CI_IMPORT_SCRATCH_DIR", "value": "/app-data/data/import-work/scratch" },
-        { "key": "CI_IMPORT_INBOX_DIR", "value": "/app-data/data/import-work/inbox" }
+        { "key": "CI_IMPORT_INBOX_DIR", "value": "/app-data/data/import-work/inbox" },
+        { "key": "POWERSYNC_URL", "value": "\${APP_BASE_URL}/powersync" }
       ],
       "extraHosts": ["host.docker.internal:host-gateway"],
       "volumes": [
-        { "hostPath": "\${APP_DATA_DIR}", "containerPath": "/app-data" },
-        { "hostPath": "\${APP_DATA_DIR}/data/secrets/services/api", "containerPath": "/run/secrets", "readOnly": true }
+        { "hostPath": "\${APP_DATA_DIR}/data/shared", "containerPath": "/app-data/data" },
+        { "hostPath": "\${APP_DATA_DIR}/data/service-secrets/api", "containerPath": "/run/secrets", "readOnly": true }
       ],
       "healthCheck": {
         "test": "curl -f http://localhost:3030/health",
@@ -317,8 +338,8 @@ generate_compose() {
       ],
       "extraHosts": ["host.docker.internal:host-gateway"],
       "volumes": [
-        { "hostPath": "\${APP_DATA_DIR}", "containerPath": "/app-data" },
-        { "hostPath": "\${APP_DATA_DIR}/data/secrets/services/api", "containerPath": "/run/secrets", "readOnly": true }
+        { "hostPath": "\${APP_DATA_DIR}/data/shared", "containerPath": "/app-data/data" },
+        { "hostPath": "\${APP_DATA_DIR}/data/service-secrets/api", "containerPath": "/run/secrets", "readOnly": true }
       ],
       "dependsOn": {
         "migrate-database": { "condition": "service_completed_successfully" },
@@ -341,7 +362,7 @@ generate_compose() {
       "restart": "unless-stopped",
       "volumes": [
         { "hostPath": "\${APP_DATA_DIR}/data/db", "containerPath": "/var/lib/postgresql" },
-        { "hostPath": "\${APP_DATA_DIR}/data/secrets/services/database", "containerPath": "/run/secrets", "readOnly": true }
+        { "hostPath": "\${APP_DATA_DIR}/data/service-secrets/database", "containerPath": "/run/secrets", "readOnly": true }
       ],
       "dependsOn" : {
         "fix-db-permissions": { "condition": "service_completed_successfully" },
@@ -360,7 +381,7 @@ generate_compose() {
       "restart": "unless-stopped",
       "volumes": [
         { "hostPath": "\${APP_DATA_DIR}/data/objects", "containerPath": "/data/objects" },
-        { "hostPath": "\${APP_DATA_DIR}/data/secrets/services/object-store", "containerPath": "/run/secrets", "readOnly": true }
+        { "hostPath": "\${APP_DATA_DIR}/data/service-secrets/object-store", "containerPath": "/run/secrets", "readOnly": true }
       ],
       "dependsOn": {
         "setup-secrets": { "condition": "service_completed_successfully" }
@@ -375,8 +396,8 @@ generate_compose() {
         { "key": "LLM_ENDPOINT_CONFIG_PATH", "value": "/app-data/data/llm-endpoint.json" }
       ],
       "volumes": [
-        { "hostPath": "\${APP_DATA_DIR}", "containerPath": "/app-data", "readOnly": true },
-        { "hostPath": "\${APP_DATA_DIR}/data/secrets/services/summary", "containerPath": "/run/secrets", "readOnly": true }
+        { "hostPath": "\${APP_DATA_DIR}/data/shared", "containerPath": "/app-data/data", "readOnly": true },
+        { "hostPath": "\${APP_DATA_DIR}/data/service-secrets/summary", "containerPath": "/run/secrets", "readOnly": true }
       ],
       "dependsOn": {
         "database": { "condition": "service_healthy" },
@@ -389,7 +410,7 @@ generate_compose() {
       "image": "${reg}/companion/setup-database:${ver}",
       "restart": "no",
       "volumes": [
-        { "hostPath": "\${APP_DATA_DIR}/data/secrets/services/setup-database", "containerPath": "/run/secrets", "readOnly": true }
+        { "hostPath": "\${APP_DATA_DIR}/data/service-secrets/setup-database", "containerPath": "/run/secrets", "readOnly": true }
       ],
       "dependsOn": {
         "database": { "condition": "service_healthy" },
@@ -401,7 +422,14 @@ generate_compose() {
       "image": "${reg}/companion/setup-secrets:${ver}",
       "restart": "no",
       "volumes": [
-        { "hostPath": "\${APP_DATA_DIR}/data/secrets", "containerPath": "/run/secrets" }
+        { "hostPath": "\${APP_DATA_DIR}/data/secrets", "containerPath": "/run/secrets" },
+        { "hostPath": "\${APP_DATA_DIR}/data/service-secrets/api", "containerPath": "/run/secrets/services/api" },
+        { "hostPath": "\${APP_DATA_DIR}/data/service-secrets/database", "containerPath": "/run/secrets/services/database" },
+        { "hostPath": "\${APP_DATA_DIR}/data/service-secrets/hbpe", "containerPath": "/run/secrets/services/hbpe" },
+        { "hostPath": "\${APP_DATA_DIR}/data/service-secrets/object-store", "containerPath": "/run/secrets/services/object-store" },
+        { "hostPath": "\${APP_DATA_DIR}/data/service-secrets/powersync", "containerPath": "/run/secrets/services/powersync" },
+        { "hostPath": "\${APP_DATA_DIR}/data/service-secrets/setup-database", "containerPath": "/run/secrets/services/setup-database" },
+        { "hostPath": "\${APP_DATA_DIR}/data/service-secrets/summary", "containerPath": "/run/secrets/services/summary" }
       ]
     },
     {
@@ -411,7 +439,7 @@ generate_compose() {
       "volumes": [
         { "hostPath": "\${APP_DATA_DIR}/data/hbpe-models", "containerPath": "/app/models" },
         { "hostPath": "\${APP_DATA_DIR}/data/hbpe-corpus", "containerPath": "/app/data" },
-        { "hostPath": "\${APP_DATA_DIR}/data/secrets/services/hbpe", "containerPath": "/run/secrets", "readOnly": true }
+        { "hostPath": "\${APP_DATA_DIR}/data/service-secrets/hbpe", "containerPath": "/run/secrets", "readOnly": true }
       ],
       "dependsOn": {
         "database": { "condition": "service_healthy" },
@@ -420,12 +448,37 @@ generate_compose() {
       }
     },
     {
+      "name": "powersync",
+      "image": "${reg}/companion/powersync:${ver}",
+      "restart": "unless-stopped",
+      "volumes": [
+        { "hostPath": "\${APP_DATA_DIR}/data/service-secrets/powersync", "containerPath": "/run/secrets", "readOnly": true }
+      ],
+      "dependsOn": {
+        "database": { "condition": "service_healthy" },
+        "sync-publication": { "condition": "service_completed_successfully" },
+        "setup-secrets": { "condition": "service_completed_successfully" }
+      }
+    },
+    {
+      "name": "sync-publication",
+      "image": "${reg}/companion/setup-database:${ver}",
+      "restart": "no",
+      "volumes": [
+        { "hostPath": "\${APP_DATA_DIR}/data/service-secrets/setup-database", "containerPath": "/run/secrets", "readOnly": true }
+      ],
+      "dependsOn": {
+        "migrate-database": { "condition": "service_completed_successfully" },
+        "database": { "condition": "service_healthy" }
+      }
+    },
+    {
       "name": "migrate-database",
       "image": "${reg}/companion/api:${ver}",
       "restart": "no",
       "command": ["yarn", "migrate"],
       "volumes": [
-        { "hostPath": "\${APP_DATA_DIR}/data/secrets/services/api", "containerPath": "/run/secrets", "readOnly": true }
+        { "hostPath": "\${APP_DATA_DIR}/data/service-secrets/api", "containerPath": "/run/secrets", "readOnly": true }
       ],
       "dependsOn": {
         "setup-secrets": { "condition": "service_completed_successfully" },
@@ -435,6 +488,34 @@ generate_compose() {
   ]
 }
 COMPOSE_EOF
+}
+
+# ── Check the generated bundle ─────────────────────────────────────────
+#
+# Settings a store bundle must never carry, checked on what generate_compose
+# actually emitted rather than on its source text.
+#
+# ENABLE_REQUIRE_SIGNUP_CODES: a store install keeps the server default, where
+# every account after the first needs an invite code. The bundle used to set it
+# to "false", a workaround from before the first account on an empty appliance
+# was exempt (#2594). It meant anyone who could reach an exposed install could
+# register, and the next signup after the owner's account was deleted became
+# the administrator. CI-Marketplace dropped the same line in 992f29ad. Any
+# value is refused, not just "false": the default is the only correct setting
+# here, and a later "true" would only hide a future flip back.
+check_bundle() {
+  local compose="$1"
+  local hits
+
+  # Every string in the document, keys included, so the variable is found
+  # whether it is written as {"key": ...}, "NAME=value" or an object key.
+  hits=$(jq '[(.. | strings), (paths | .[] | strings)]
+    | map(select(. == "ENABLE_REQUIRE_SIGNUP_CODES" or startswith("ENABLE_REQUIRE_SIGNUP_CODES=")))
+    | length' "$compose") || fail "could not read ${compose} as JSON"
+
+  if [[ "$hits" != "0" ]]; then
+    fail "the generated bundle sets ENABLE_REQUIRE_SIGNUP_CODES; store installs must keep the server default (signup codes required)"
+  fi
 }
 
 # ── Main ───────────────────────────────────────────────────────────────
@@ -454,9 +535,15 @@ main() {
   # ── Step 1: Prepare bundle ──────────────────────────────────────────
   log "=== Step 1: Prepare app bundle ==="
 
+  # The tarball gets a mktemp -d directory, not a file template: BSD mktemp
+  # (macOS) randomizes only TRAILING X's, so /tmp/bundle-XXXXXX.tar.gz is
+  # created as that literal path. Concurrent runs collide on it, and a run
+  # killed before the trap fires leaves it behind to fail every later run with
+  # "File exists".
   BUNDLE_DIR=$(mktemp -d)
-  BUNDLE=$(mktemp /tmp/bundle-XXXXXX.tar.gz)
-  trap "rm -rf '$BUNDLE_DIR' '$BUNDLE'" EXIT
+  BUNDLE_OUT_DIR=$(mktemp -d)
+  BUNDLE="${BUNDLE_OUT_DIR}/bundle.tar.gz"
+  trap "rm -rf '$BUNDLE_DIR' '$BUNDLE_OUT_DIR'" EXIT
 
   # Copy static manifest files
   cp -r "${SCRIPT_DIR}/manifest/." "${BUNDLE_DIR}/"
@@ -468,6 +555,7 @@ main() {
 
   # Generate docker-compose.json
   generate_compose "$REGISTRY" "$VERSION" > "${BUNDLE_DIR}/docker-compose.json"
+  check_bundle "${BUNDLE_DIR}/docker-compose.json"
 
   log "  config.json version: $(jq -r .version "$CONFIG")"
   log "  docker-compose.json: $(jq '.services | length' "${BUNDLE_DIR}/docker-compose.json") services"
@@ -558,12 +646,28 @@ main() {
       logn "  ${LOCAL_IMAGE}:latest → ${REMOTE} … "
 
       docker image tag "${LOCAL_IMAGE}:latest" "${REMOTE}"
-      if PUSH_OUTPUT=$(docker image push "${REMOTE}" 2>&1); then
+      if registry_retry "push ${REMOTE}" docker image push "${REMOTE}"; then
+        PUSH_OUTPUT="${REGISTRY_OUTPUT}"$'\n'"${REGISTRY_ERRORS}"
         log "✓"
         PUSH_COUNT=$((PUSH_COUNT + 1))
+
+        if [[ -n "${DIGEST_FILE:-}" ]]; then
+          # `docker push` ends with "<tag>: digest: sha256:<hex> size: <n>".
+          # That is the digest the registry stored for this push, read from
+          # the push itself rather than from a later lookup of the tag.
+          local DIGEST
+          DIGEST=$(printf '%s\n' "${PUSH_OUTPUT}" \
+            | sed -n 's/.*digest: \(sha256:[0-9a-f]\{64\}\).*/\1/p' | tail -n 1)
+          if [[ -z "${DIGEST}" ]]; then
+            echo "${PUSH_OUTPUT}" >&2
+            fail "pushed ${REMOTE} but found no digest in the push output"
+          fi
+          echo "${REPO} ${DIGEST}" >> "${DIGEST_FILE}"
+          log "    ${DIGEST}"
+        fi
       else
         log "✗"
-        echo "$PUSH_OUTPUT" >&2
+        registry_report
         PUSH_FAILED=$((PUSH_FAILED + 1))
       fi
     done

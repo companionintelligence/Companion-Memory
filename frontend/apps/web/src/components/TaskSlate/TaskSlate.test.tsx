@@ -1,5 +1,5 @@
 import type { MockedResponse } from '@apollo/client/testing';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { gql } from '@/graphql';
@@ -65,11 +65,13 @@ const CREATE_EVENT = gql(`
 /** A create mock that records the input it was called with. */
 function createMock(capture: (input: Record<string, unknown>) => void): MockedResponse {
   return {
-    request: { query: CREATE_EVENT },
-    variableMatcher: (variables: { input: Record<string, unknown> }) => {
-      capture(variables.input);
+    request: {
+      query: CREATE_EVENT,
+      variables: (variables: { input: Record<string, unknown> }) => {
+        capture(variables.input);
 
-      return true;
+        return true;
+      },
     },
     result: {
       data: {
@@ -90,6 +92,37 @@ function createMock(capture: (input: Record<string, unknown>) => void): MockedRe
 
 describe('TaskSlateDrawer — Plan backlog', () => {
   afterEach(() => setViewport(false));
+
+  it('opens in the overlay slot on the phone so the navigation drawer cannot cover it', async () => {
+    setViewport(true);
+    const overlay = document.createElement('div');
+    overlay.id = 'overlay-modal';
+    document.body.appendChild(overlay);
+
+    renderWithProviders(
+      <TaskSlateDrawer open onOpenChange={() => {}} slot={SLOT} sections={backlog([task()])} {...NOOP} />,
+    );
+
+    await waitFor(() => {
+      expect(overlay.querySelector('[data-slot="sheet-content"]')).not.toBeNull();
+    });
+
+    overlay.remove();
+  });
+
+  it('contains overscroll on the phone sheet so the day underneath does not move', async () => {
+    setViewport(true);
+
+    renderWithProviders(
+      <TaskSlateDrawer open onOpenChange={() => {}} slot={SLOT} sections={backlog([task()])} {...NOOP} />,
+    );
+
+    await waitFor(() => {
+      expect(document.querySelector('[data-slot="sheet-content"]')?.className).toContain(
+        'overscroll-contain',
+      );
+    });
+  });
 
   it('stays shut until it is asked for', () => {
     renderWithProviders(
@@ -122,7 +155,11 @@ describe('TaskSlateDrawer — Plan backlog', () => {
     expect(await screen.findByRole('tab', { name: /^proposed/i })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByText('Try this')).toBeInTheDocument();
     expect(screen.queryByText('Call Mum')).not.toBeInTheDocument();
-    expect(screen.queryByText(/scheduled on calendar/i)).not.toBeInTheDocument();
+    // The rail is the backlog only — Scheduled and Done live on the Plan board.
+    // Anchored on the word start because "Unscheduled" contains "scheduled" too;
+    // counting the tabs is what keeps this from passing by accident.
+    expect(screen.getAllByRole('tab')).toHaveLength(2);
+    expect(screen.queryByRole('tab', { name: /^scheduled\b/i })).not.toBeInTheDocument();
 
     fireEvent.mouseDown(screen.getByRole('tab', { name: /unscheduled/i }), { button: 0 });
 
@@ -212,6 +249,102 @@ describe('TaskSlateDrawer — Plan backlog', () => {
 
     expect(await screen.findByText('Call Mum')).toBeInTheDocument();
     expect(screen.queryByLabelText('Dismiss Call Mum')).not.toBeInTheDocument();
+  });
+
+  it('leaves Enter and Space on Dismiss to the button instead of placing the task', async () => {
+    // The card is a role="button" <li> that places on Enter and Space. The
+    // Dismiss button's key presses bubbled up to it. The task was placed and
+    // the card's preventDefault() cancelled the button's own click.
+    const onPlace = vi.fn();
+    const onDismissProposed = vi.fn();
+
+    renderWithProviders(
+      <TaskSlateDrawer
+        open
+        onOpenChange={() => {}}
+        slot={SLOT}
+        sections={backlog([task({ id: 'p1', title: 'Try this', status: 'proposed' })])}
+        {...NOOP}
+        onPlace={onPlace}
+        onDismissProposed={onDismissProposed}
+      />,
+    );
+
+    const dismiss = await screen.findByLabelText('Dismiss Try this');
+
+    // `false` would mean a handler called preventDefault().
+    expect(fireEvent.keyDown(dismiss, { key: 'Enter' })).toBe(true);
+    expect(fireEvent.keyDown(dismiss, { key: ' ' })).toBe(true);
+    expect(onPlace).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(screen.getByRole('button', { name: /Add Try this at this time/ }), { key: 'Enter' });
+    expect(onPlace).toHaveBeenCalledWith('p1');
+  });
+
+  it('places once per key press on the card, Space as well as Enter, even when the key is held', async () => {
+    const onPlace = vi.fn();
+
+    renderWithProviders(
+      <TaskSlateDrawer
+        open
+        onOpenChange={() => {}}
+        slot={SLOT}
+        sections={backlog([task({ id: 'u1', title: 'Call Mum' })])}
+        {...NOOP}
+        onPlace={onPlace}
+      />,
+    );
+
+    const card = await screen.findByRole('button', { name: /Add Call Mum at this time/ });
+
+    expect(fireEvent.keyDown(card, { key: ' ' })).toBe(false);
+    expect(onPlace).toHaveBeenCalledTimes(1);
+
+    // Each repeat still swallows the key, so a held Space does not scroll the sheet.
+    expect(fireEvent.keyDown(card, { key: ' ', repeat: true })).toBe(false);
+    fireEvent.keyDown(card, { key: 'Enter', repeat: true });
+    expect(onPlace).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not place the task from a click on the Dismiss toolbar or its tooltip', async () => {
+    const onPlace = vi.fn();
+    const onDismissProposed = vi.fn();
+
+    renderWithProviders(
+      <TaskSlateDrawer
+        open
+        onOpenChange={() => {}}
+        slot={SLOT}
+        sections={backlog([task({ id: 'p1', title: 'Try this', status: 'proposed' })])}
+        {...NOOP}
+        onPlace={onPlace}
+        onDismissProposed={onDismissProposed}
+      />,
+    );
+
+    const dismiss = await screen.findByLabelText('Dismiss Try this');
+
+    // The toolbar's padding around the X.
+    fireEvent.click(dismiss.parentElement as HTMLElement);
+
+    // The "Dismiss" bubble sits in a portal, but React still bubbles its
+    // click through the card.
+    act(() => dismiss.focus());
+    const bubble = await waitFor(() => {
+      const element = document.querySelector('[data-slot="tooltip-content"]');
+
+      expect(element).not.toBeNull();
+
+      return element as HTMLElement;
+    });
+
+    fireEvent.click(bubble);
+    expect(onPlace).not.toHaveBeenCalled();
+    expect(onDismissProposed).not.toHaveBeenCalled();
+
+    fireEvent.click(dismiss);
+    expect(onDismissProposed).toHaveBeenCalledWith('p1');
+    expect(onPlace).not.toHaveBeenCalled();
   });
 
   /**
@@ -515,16 +648,93 @@ describe('TaskSlateDrawer — composing an event on the slot', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Add' }));
 
-    expect(await screen.findByText(/give the event a title/i)).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent(/give the event a title/i);
     expect(sent).not.toHaveBeenCalled();
     expect(onCreated).not.toHaveBeenCalled();
+  });
+
+  // ═══ THE REASON USED TO BE ONLY WHERE THE FINGER WASN'T ═══
+  //
+  // The composer is a long form in a bottom sheet that scrolls, and Add is the
+  // last thing in it. A refusal was written only beside the offending field —
+  // screens above the button just tapped — so on a phone Add looked dead until
+  // the person scrolled back up to find out why. The sentence now also sits in
+  // the slot a rejected write already used: directly above the buttons.
+  it('says what is wrong directly above the Add button, not only beside the field', () => {
+    compose([]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+
+    const alert = screen.getByRole('alert');
+
+    expect(alert).toHaveTextContent(/give the event a title/i);
+    expect(alert.nextElementSibling).toContainElement(screen.getByRole('button', { name: 'Add' }));
+    // …and still beside the field too, which is what says WHICH one.
+    expect(screen.getAllByText(/give the event a title/i)).toHaveLength(2);
+  });
+
+  // The reason is one more line above the buttons, so on a sheet already
+  // scrolled to its end it pushes them just below the fold — the person reads
+  // why, and Add has vanished. They are scrolled back into view with it.
+  it('keeps the buttons in view next to the reason', () => {
+    const scrollIntoView = vi.fn();
+    const had = 'scrollIntoView' in Element.prototype;
+    const original = Element.prototype.scrollIntoView;
+
+    Element.prototype.scrollIntoView = scrollIntoView;
+
+    try {
+      compose([]);
+
+      expect(scrollIntoView).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' });
+      expect(scrollIntoView.mock.contexts[0]).toBe(screen.getByRole('button', { name: 'Add' }).parentElement);
+    } finally {
+      if (had) {
+        Element.prototype.scrollIntoView = original;
+      } else {
+        delete (Element.prototype as Partial<Element>).scrollIntoView;
+      }
+    }
+  });
+
+  it('says an event that ends before it starts the same way', () => {
+    const sent = vi.fn();
+
+    compose([createMock(sent)]);
+
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Coffee with Sam' } });
+    fireEvent.change(screen.getByLabelText('Ends at'), { target: { value: '2026-08-05' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+
+    const alert = screen.getByRole('alert');
+
+    expect(alert).toHaveTextContent(/ends before it starts/i);
+    expect(alert.nextElementSibling).toContainElement(screen.getByRole('button', { name: 'Add' }));
+    expect(sent).not.toHaveBeenCalled();
+  });
+
+  it('takes the reason away once the draft is valid and goes through', async () => {
+    const { onCreated } = compose([createMock(() => {})]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    expect(screen.getByRole('alert')).toHaveTextContent(/give the event a title/i);
+
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Coffee with Sam' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+
+    await waitFor(() => expect(onCreated).toHaveBeenCalled());
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('surfaces a rejected write instead of hanging on "Adding…"', async () => {
     const { onCreated } = compose([
       {
-        request: { query: CREATE_EVENT },
-        variableMatcher: () => true,
+        request: { query: CREATE_EVENT, variables: () => true },
         error: new Error('calendar is read only'),
       } as unknown as MockedResponse,
     ]);
@@ -550,8 +760,7 @@ describe('TaskSlateDrawer — composing an event on the slot', () => {
   it('does not re-raise the abandoned error when the composer is reopened after Cancel', async () => {
     compose([
       {
-        request: { query: CREATE_EVENT },
-        variableMatcher: () => true,
+        request: { query: CREATE_EVENT, variables: () => true },
         error: new Error('calendar is read only'),
       } as unknown as MockedResponse,
     ]);
@@ -576,11 +785,13 @@ describe('TaskSlateDrawer — composing an event on the slot', () => {
     compose([]);
 
     fireEvent.click(screen.getByRole('button', { name: 'Add' }));
-    expect(screen.getByText(/give the event a title/i)).toBeInTheDocument();
+    // Beside the field AND above the button.
+    expect(screen.getAllByText(/give the event a title/i)).toHaveLength(2);
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     fireEvent.click(screen.getByRole('button', { name: 'New event' }));
 
     expect(screen.queryByText(/give the event a title/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });

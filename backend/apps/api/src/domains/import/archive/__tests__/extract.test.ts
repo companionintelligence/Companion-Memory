@@ -225,6 +225,42 @@ describe('extractUploadedArchive streaming (large-archive) path', () => {
     expect(fs.readFileSync(path.join(d, 'small', 'walk.gpx'), 'utf8')).toBe(GPX);
   });
 
+  it('streams a small archive whose entries unpack past the threshold', async () => {
+    // The shape of a 2.9 MB zip holding one 3 GB file of zeros, scaled down: the
+    // archive is far under the threshold and its one entry far over it. Chosen
+    // by the archive's own size this went to adm-zip, which inflates an entry
+    // into a single Buffer and cannot pass 2 GiB.
+    const d = dir();
+    const archive = path.join(d, 'zeros.zip');
+    const payload = zipWith({ 'zeros.bin': '\0'.repeat(200_000) });
+    fs.writeFileSync(archive, payload);
+
+    expect(payload.length).toBeLessThan(2_000);
+
+    const res = await extractUploadedArchive(archive, { largeArchiveThreshold: 100_000 });
+    expect(res.method).toBe('system-unzip');
+    expect(res.files).toBe(1);
+    expect(fs.statSync(path.join(d, 'zeros', 'zeros.bin')).size).toBe(200_000);
+  });
+
+  it('refuses to write through a link a previous attempt left in the destination', async () => {
+    // `unzip` replaces a link on a file's own path but follows one in a parent
+    // directory, so this is the streaming twin of the adm-zip test above. A
+    // small zip that unpacks past the threshold now lands here too.
+    const d = dir();
+    const outside = path.join(d, 'outside');
+    fs.mkdirSync(outside);
+    fs.mkdirSync(path.join(d, 'export'));
+    fs.symlinkSync(outside, path.join(d, 'export', 'link'));
+    const archive = path.join(d, 'export.zip');
+    fs.writeFileSync(archive, zipWith({ 'zeros.bin': '\0'.repeat(200_000), 'link/pwned.txt': 'x' }));
+
+    await expect(extractUploadedArchive(archive, { largeArchiveThreshold: 100_000 })).rejects.toThrow(
+      /through a link/,
+    );
+    expect(fs.readdirSync(outside)).toEqual([]);
+  });
+
   it('the threshold boundary is inclusive (size == threshold streams)', async () => {
     const d = dir();
     const archive = path.join(d, 'boundary.zip');

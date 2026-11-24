@@ -68,7 +68,17 @@ export class ActionService {
     return entities.filter((row) => localCalendarDay(row.createdAt, timezone) === localDayIso).length;
   }
 
-  async findAll(context: ServiceContext, options: { source?: string | string[] } = {}): Promise<Action[]> {
+  /**
+   * @param options.dismissed keep only rows whose `dismissed` flag matches;
+   *   omitted, both are returned (the Brief surface shows dismissed ones greyed).
+   * @param options.limit cap the rows read, in priority order. The chat
+   *   prompt's Brief block wants the top eight and used to hydrate the user's
+   *   entire action history to slice them off in memory, every turn.
+   */
+  async findAll(
+    context: ServiceContext,
+    options: { source?: string | string[]; dismissed?: boolean; limit?: number } = {},
+  ): Promise<Action[]> {
     const sources =
       options.source === undefined
         ? undefined
@@ -84,10 +94,12 @@ export class ActionService {
           },
         }),
         ...(sources ? { source: In(sources) } : {}),
+        ...(options.dismissed === undefined ? {} : { dismissed: options.dismissed }),
       },
       order: {
         priority: 'asc',
       },
+      ...(options.limit === undefined ? {} : { take: options.limit }),
     });
 
     return entities.map((entity) => ActionEntity.toEgressType(entity));
@@ -221,6 +233,43 @@ export class ActionService {
     const updated = await this.actionRepository.save(entity);
 
     return ActionEntity.toEgressType(updated);
+  }
+
+  /**
+   * Point an action at the chat thread opened about it, when it has none.
+   *
+   * The Today window chats about an action by continuing `action.threadId`.
+   * Actions the engines derive (Confirm home, metric suggestions) are created
+   * without a thread, so the first turn about one starts a new thread; linking
+   * it here is what makes the next visit continue that conversation.
+   *
+   * `replacing` is the thread the caller saw on the action: none, or one that
+   * has since been archived and so can no longer be continued. The update only
+   * lands while the action still points there, so an action whose thread
+   * another turn has just linked keeps that one.
+   */
+  async attachThread(
+    context: UserServiceContext,
+    id: string,
+    threadId: string,
+    replacing: string | null = null,
+  ): Promise<boolean> {
+    const query = this.actionRepository
+      .createQueryBuilder()
+      .update(ActionEntity)
+      .set({ threadId })
+      .where('id = :id', { id })
+      .andWhere('user_id = :userId', { userId: context.userId });
+
+    if (replacing == null) {
+      query.andWhere('thread_id IS NULL');
+    } else {
+      query.andWhere('thread_id = :replacing', { replacing });
+    }
+
+    const result = await query.execute();
+
+    return (result.affected ?? 0) > 0;
   }
 
   /**

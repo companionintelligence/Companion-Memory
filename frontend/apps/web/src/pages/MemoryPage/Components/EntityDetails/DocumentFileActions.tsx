@@ -1,3 +1,4 @@
+import { formatBytes as formatSharedBytes } from '@ci/common';
 import { Download, ExternalLink } from '@ci/shadcn/icons';
 
 const LINK_CLASS =
@@ -7,25 +8,9 @@ export function isHttpUrl(value?: string | null): boolean {
   return /^https?:\/\//.test(value ?? '');
 }
 
+/** "100.0 KB" — the drawer's size line; nothing for a size the row does not carry. */
 export function formatBytes(bytes?: number | null): string | null {
-  if (bytes == null) {
-    return null;
-  }
-
-  if (bytes < 1024) {
-    return `${bytes} B`;
-  }
-
-  const units = ['KB', 'MB', 'GB', 'TB'];
-  let value = bytes / 1024;
-  let unit = 0;
-
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-
-  return `${value.toFixed(1)} ${units[unit]}`;
+  return bytes == null ? null : formatSharedBytes(bytes);
 }
 
 /**

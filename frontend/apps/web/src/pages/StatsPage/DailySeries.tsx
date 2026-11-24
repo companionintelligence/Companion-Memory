@@ -1,4 +1,5 @@
-import { gql, useQuery } from '@apollo/client';
+import { gql } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { Card } from '@ci/shadcn';
 import { Line, LineChart, XAxis, YAxis } from 'recharts';
 
@@ -14,6 +15,15 @@ const GET_DAILY_METRICS = gql`
     }
   }
 `;
+
+interface DailySeriesData {
+  dailyMetrics: Array<{
+    date: string;
+    nMessages: number | null;
+    nPlaces: number | null;
+    kmTraveled: number | null;
+  }>;
+}
 
 const CHART_CONFIG = {
   nMessages: { label: 'Messages', color: 'var(--chart-1)' },
@@ -33,7 +43,7 @@ function isoDay(value: string | undefined, fallbackDaysBack: number): string {
 }
 
 export function DailySeries({ from, to }: { from?: string; to?: string }) {
-  const { data } = useQuery(GET_DAILY_METRICS, {
+  const { data } = useQuery<DailySeriesData>(GET_DAILY_METRICS, {
     variables: { from: isoDay(from, 730), to: isoDay(to, 0) },
     errorPolicy: 'all',
   });
@@ -46,9 +56,7 @@ export function DailySeries({ from, to }: { from?: string; to?: string }) {
   return (
     <Card>
       <Card.Content className="flex flex-col gap-3 pt-6">
-        <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          Daily series
-        </span>
+        <span className="text-xs font-medium text-muted-foreground">Daily series</span>
         <ChartContainer config={CHART_CONFIG} className="h-56 w-full">
           <LineChart data={rows}>
             <XAxis dataKey="date" tick={{ fontSize: 11 }} />

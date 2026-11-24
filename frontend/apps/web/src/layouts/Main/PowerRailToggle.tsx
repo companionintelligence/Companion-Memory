@@ -11,11 +11,11 @@ import { usePowerRail } from './PowerRailContext';
 // closes it — same property both ways, so closing is the reverse of opening
 // instead of unmounting the wordmark.
 const CAPSULE =
-  'inline-flex h-10 min-w-0 items-center overflow-hidden rounded-full border border-white/55 bg-white/30 p-1 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.7),0_1px_2px_rgba(0,0,0,0.08)] backdrop-blur-md transition-[max-width,padding,gap] duration-200 ease-in-out dark:border-white/20 dark:bg-white/10';
+  'inline-flex h-10 min-w-0 items-center overflow-hidden rounded-full border border-white/55 bg-white/30 p-1 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.7),0_1px_2px_rgba(0,0,0,0.08)] backdrop-blur-md transition-[max-width,padding,gap] duration-200 ease-in-out motion-reduce:transition-none dark:border-white/20 dark:bg-white/10';
 
 /**
  * Mark and name. Desktop keeps the full product name. The phone drawer
- * shares 224px with the close chevron, so it uses the short form — the
+ * shares its width with the close chevron, so it uses the short form — the
  * full string used to ellipsize.
  */
 function RailMark({
@@ -43,9 +43,10 @@ function RailMark({
 }) {
   return (
     <>
-      {/* Full-size mark on a disc. The disc is near-black, not white: the mark's
-          glows fall off to transparent and are drawn to sit on the splash's
-          black, so a white disc washes the node graph out to nothing. */}
+      {/* Full-size mark on a disc. The disc is the mark's ground, and it is
+          near-black rather than the capsule's light glass: the logo is drawn to
+          sit on dark navy, where the teal brain and its white node network
+          carry their contrast. */}
       <span
         className={cn(
           'grid size-8 shrink-0 place-items-center overflow-hidden rounded-full bg-neutral-950',
@@ -62,7 +63,7 @@ function RailMark({
           opticalNudge && '-translate-y-px',
           // The dock capsule animates its own max-width and wipes the name as
           // it closes; a shrinkable span would put an ellipsis in the middle of
-          // that. The drawer instead has a fixed 224px to share with the close
+          // that. The drawer instead has a fixed width to share with the close
           // chevron, so there the name is the part that gives way.
           truncateName ? 'min-w-0 truncate' : 'overflow-hidden whitespace-nowrap',
         )}
@@ -81,7 +82,7 @@ function RailMark({
  * name is one control too many. Desktop keeps the toggle below, because there
  * the mark IS the button.
  *
- * No capsule either: the drawer is already a pane of glass, and a bordered pill
+ * No capsule either: the drawer is already its own surface, and a bordered pill
  * inside it is a border drawn on a border — one that would also cost the width
  * the chevron needs.
  */
@@ -104,9 +105,10 @@ export function PowerRailToggle() {
   const { t } = useTranslation();
   const { expanded, pinned, toggle } = usePowerRail();
   const label = expanded ? t('NAV_RAIL_COLLAPSE') : t('NAV_RAIL_EXPAND');
-  // The mark animates only while the user is on it. A 32px loop running behind
-  // every screen is motion the chrome never asked for; on hover it reads as the
-  // control answering. Focus counts too, so keyboard users get the same answer.
+  // The mark animates only while the user is on it. A 32px entrance replaying
+  // behind every screen is motion the chrome never asked for; on hover it reads
+  // as the control answering. Focus counts too, so keyboard users get the same
+  // answer.
   const [active, setActive] = useState(false);
 
   return (
@@ -114,7 +116,12 @@ export function PowerRailToggle() {
     // so this box does not grow the header; the parent cell centers it, which
     // keeps padding above and below the mark the same. Pinning must not add
     // extra padding — that used to shove the rail down.
-    <div className={cn('flex items-center px-2 transition-[width] duration-200', pinned ? 'w-56' : 'w-14')}>
+    <div
+      className={cn(
+        'flex items-center px-2 transition-[width] duration-200 motion-reduce:transition-none',
+        pinned ? 'w-56' : 'w-14',
+      )}
+    >
       <Tooltip delayDuration={600}>
         <Tooltip.Content>{label}</Tooltip.Content>
         <Tooltip.Trigger asChild>

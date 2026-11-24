@@ -16,6 +16,8 @@ export type ApprovalReason =
   | 'destructive-requires-confirmation'
   | 'external-leaves-appliance'
   | 'confirmation-required'
+  | 'write-after-lookup'
+  | 'read-after-lookup'
   | 'not-local-capable'
   | 'capability-insufficient'
   | 'allowed';
@@ -46,6 +48,17 @@ export interface PendingApproval {
 
 interface ApprovalsResponse {
   actions: PendingApproval[];
+}
+
+/**
+ * What an approved card's run came back with: the tool's own `ToolResult`, as
+ * `POST /api/pending-actions/:id/approve` returns it. A run that failed still
+ * answers 200, with `success: false`.
+ */
+export interface ApprovalOutcome {
+  success: boolean;
+  data?: unknown;
+  error?: { code?: string; message?: string };
 }
 
 /**
@@ -111,21 +124,26 @@ export function useApprovals(refreshIntervalMs = 10000) {
   }, [ready, load, refreshIntervalMs]);
 
   /**
-   * Answer one card.
+   * Answer one card, and hand back what an approved run returned.
    *
    * Reloads rather than mutating in place: approving RE-EXECUTES the intent
    * server-side, so the row's terminal state (`executed`, or still `proposed`
    * because the run failed) is the server's to report. Guessing it here would
    * show the owner a success the appliance never had.
+   *
+   * The run's result is returned because nothing else shows it: a read chat
+   * queued (`read-after-lookup`) never answers back into the chat that asked.
    */
   const answer = useCallback(
-    async (id: string, verdict: 'approve' | 'decline') => {
-      await fetchJson(`/api/pending-actions/${encodeURIComponent(id)}/${verdict}`, {
-        method: 'POST',
-        headers,
-      });
+    async (id: string, verdict: 'approve' | 'decline'): Promise<ApprovalOutcome | null> => {
+      const body = await fetchJson<{ result?: ApprovalOutcome }>(
+        `/api/pending-actions/${encodeURIComponent(id)}/${verdict}`,
+        { method: 'POST', headers },
+      );
 
       await load();
+
+      return verdict === 'approve' ? (body?.result ?? null) : null;
     },
     [headers, load],
   );

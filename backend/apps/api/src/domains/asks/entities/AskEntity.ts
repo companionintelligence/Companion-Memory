@@ -74,8 +74,8 @@ export class AskEntity {
    * HOW this ask arrived — the channel facts, beside the consent facts above.
    *
    * NULL across all three means the ask came in over an UNSIGNED channel, which
-   * is a real answer and not an absence: `peers.requireHttpSignature` ships off,
-   * and a local ask never crosses a network boundary at all. The surfaces say
+   * is a real answer and not an absence: a local ask never crosses a network
+   * boundary at all, and a box may turn `peers.requireHttpSignature` off. The surfaces say
    * "unsigned" plainly rather than leaving a blank, because an owner who cannot
    * tell "unsigned" from "not recorded" cannot use the distinction.
    *

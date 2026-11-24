@@ -1,14 +1,21 @@
-import { Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable } from '@nestjs/common';
 
 import { BlueBubblesApiClient, type BlueBubblesChat, type BlueBubblesMessage } from '@ci/domains/import';
 
-import { BlueBubblesConfigService } from './BlueBubblesConfigService';
+import { BlueBubblesConfigService, serverAddressChanges } from './BlueBubblesConfigService';
 
 export interface BlueBubblesTestConnectionResult {
   ok: boolean;
   latencyMs?: number;
   error?: string;
 }
+
+/**
+ * Stands in for the owner on the `messaging.*` tool schemas while the connector
+ * has none, or before this process has read the row. It is not a uuid, so it
+ * can never equal an account id: a tool owned by it is visible to nobody.
+ */
+export const UNOWNED_CONNECTOR = 'bluebubbles:unowned';
 
 /** Connection fields a caller may override for a one-off test, without saving them. */
 export interface BlueBubblesConnectionOverride {
@@ -44,11 +51,22 @@ export class BlueBubblesClientService {
     const host = overrides.host ?? config.host;
     const port = overrides.port ?? config.port;
     const useHttps = overrides.useHttps ?? config.useHttps;
-    const password = overrides.password ?? config.password;
 
     if (!host || !port) {
       return { ok: false, error: 'Host and port are required.' };
     }
+
+    // The saved password goes only to the saved server. A test against another address would
+    // otherwise send the owner's credential to whatever host the caller typed.
+    if (
+      overrides.password == null &&
+      config.password.length > 0 &&
+      serverAddressChanges(config, { host, port, useHttps })
+    ) {
+      return { ok: false, error: 'Enter the password to test a different server address.' };
+    }
+
+    const password = overrides.password ?? config.password;
 
     const client = new BlueBubblesApiClient({ host, port, useHttps, password });
     const startedAt = Date.now();
@@ -63,12 +81,38 @@ export class BlueBubblesClientService {
   }
 
   /**
-   * A client built from the SAVED config, refused unless the connector is
-   * turned on — the gate the AI messaging tools go through, as distinct from
-   * {@link testConnection} above.
+   * Who the `messaging.*` tools belong to, for their schemas' `ownerUserId`.
+   *
+   * The tool registry hides an owned tool from every other account and refuses
+   * to run it for them, on the intents route, MCP and chat alike. This answer is
+   * the process's last view of the row (see
+   * `BlueBubblesConfigService.lastKnownOwnerUserId`); the database check in
+   * {@link requireOwnersClient} is what actually decides each call.
    */
-  private async requireEnabledClient(): Promise<BlueBubblesApiClient> {
-    const config = await this.configService.getOrCreate();
+  toolOwnerUserId(): string {
+    return this.configService.lastKnownOwnerUserId() ?? UNOWNED_CONNECTOR;
+  }
+
+  /**
+   * A client built from the SAVED config for the connector's owner, refused for
+   * anyone else and unless the connector is turned on. The gate the AI
+   * messaging tools go through, as distinct from {@link testConnection} above.
+   *
+   * The owner check reads the row on every call. The registry already hides
+   * and refuses these tools for other accounts, but it decides from a cached
+   * owner; this is the answer from the database, and it holds even for a
+   * caller that reaches the service some other way.
+   */
+  private async requireOwnersClient(callerUserId: string | undefined): Promise<BlueBubblesApiClient> {
+    const config = await this.configService.find();
+
+    if (config?.ownerUserId == null) {
+      throw new Error('BlueBubbles is not set up. An administrator connects it in Settings first.');
+    }
+
+    if (callerUserId == null || config.ownerUserId !== callerUserId) {
+      throw new ForbiddenException('BlueBubbles on this Companion is connected to another account.');
+    }
 
     if (!config.enabled) {
       throw new Error('BlueBubbles is not enabled. Turn it on in Settings first.');
@@ -86,15 +130,23 @@ export class BlueBubblesClientService {
     });
   }
 
-  async listChats(maxResults = 25): Promise<BlueBubblesChat[]> {
-    return (await this.requireEnabledClient()).queryChatsPage({ limit: maxResults });
+  async listChats(callerUserId: string | undefined, maxResults = 25): Promise<BlueBubblesChat[]> {
+    return (await this.requireOwnersClient(callerUserId)).queryChatsPage({ limit: maxResults });
   }
 
-  async listMessages(chatGuid: string, maxResults = 25): Promise<BlueBubblesMessage[]> {
-    return (await this.requireEnabledClient()).messagesForChat(chatGuid, maxResults);
+  async listMessages(
+    callerUserId: string | undefined,
+    chatGuid: string,
+    maxResults = 25,
+  ): Promise<BlueBubblesMessage[]> {
+    return (await this.requireOwnersClient(callerUserId)).messagesForChat(chatGuid, maxResults);
   }
 
-  async sendText(chatGuid: string, message: string): Promise<BlueBubblesMessage> {
-    return (await this.requireEnabledClient()).sendText(chatGuid, message);
+  async sendText(
+    callerUserId: string | undefined,
+    chatGuid: string,
+    message: string,
+  ): Promise<BlueBubblesMessage> {
+    return (await this.requireOwnersClient(callerUserId)).sendText(chatGuid, message);
   }
 }

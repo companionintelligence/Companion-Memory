@@ -23,6 +23,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 
+import { assertParentInside } from './containment';
+
 const EOCD_SIGNATURE = 0x06054b50;
 const ZIP64_LOCATOR_SIGNATURE = 0x07064b50;
 const ZIP64_EOCD_SIGNATURE = 0x06064b50;
@@ -108,25 +110,30 @@ function readFully(fd: number, buf: Buffer, position: number): void {
   }
 }
 
-interface CentralDirectoryLocation {
+export interface CentralDirectoryLocation {
   offset: number;
   size: number;
 }
 
+/** How much of an archive's tail can hold the end-of-central-directory record. */
+export function zipTailWindow(fileSize: number): number {
+  return Math.min(fileSize, 22 + 0xffff);
+}
+
 /**
- * Locate the central directory from the end-of-central-directory record, which
- * sits in the last 22 bytes plus up to 64 KiB of archive comment. When any of
- * its fields is saturated the real values live in the ZIP64 record the locator
- * immediately before it points at.
+ * Read the end-of-central-directory record out of an archive's tail (see
+ * {@link zipTailWindow}). Answers with the central directory's location, or —
+ * when a field is saturated — where the ZIP64 record holding the real values
+ * sits, for the caller to fetch and hand to {@link parseZip64EndOfCentralDirectory}.
+ * Pure, so a local file descriptor and a ranged HTTP download share it.
  */
-function locateCentralDirectory(fd: number, fileSize: number): CentralDirectoryLocation | null {
-  const window = Math.min(fileSize, 22 + 0xffff);
-  if (window < 22) {
+export function parseEndOfCentralDirectory(
+  tail: Buffer,
+  fileSize: number,
+): CentralDirectoryLocation | { zip64At: number } | null {
+  if (tail.length < 22) {
     return null;
   }
-
-  const tail = Buffer.alloc(window);
-  readFully(fd, tail, fileSize - window);
 
   let at = -1;
   for (let i = tail.length - 22; i >= 0; i -= 1) {
@@ -140,8 +147,8 @@ function locateCentralDirectory(fd: number, fileSize: number): CentralDirectoryL
     return null;
   }
 
-  let size = tail.readUInt32LE(at + 12);
-  let offset = tail.readUInt32LE(at + 16);
+  const size = tail.readUInt32LE(at + 12);
+  const offset = tail.readUInt32LE(at + 16);
 
   if (size === 0xffffffff || offset === 0xffffffff || tail.readUInt16LE(at + 10) === 0xffff) {
     const locatorAt = at - 20;
@@ -150,20 +157,37 @@ function locateCentralDirectory(fd: number, fileSize: number): CentralDirectoryL
     }
 
     const zip64At = Number(tail.readBigUInt64LE(locatorAt + 8));
-    if (!Number.isSafeInteger(zip64At) || zip64At < 0 || zip64At + 56 > fileSize) {
+    if (!Number.isSafeInteger(zip64At) || zip64At < 0 || zip64At + ZIP64_EOCD_BYTES > fileSize) {
       return null;
     }
 
-    const zip64 = Buffer.alloc(56);
-    readFully(fd, zip64, zip64At);
-    if (zip64.readUInt32LE(0) !== ZIP64_EOCD_SIGNATURE) {
-      return null;
-    }
-
-    size = Number(zip64.readBigUInt64LE(40));
-    offset = Number(zip64.readBigUInt64LE(48));
+    return { zip64At };
   }
 
+  return validCentralDirectoryLocation({ offset, size }, fileSize);
+}
+
+/** The fixed part of a ZIP64 end-of-central-directory record. */
+export const ZIP64_EOCD_BYTES = 56;
+
+export function parseZip64EndOfCentralDirectory(
+  zip64: Buffer,
+  fileSize: number,
+): CentralDirectoryLocation | null {
+  if (zip64.length < ZIP64_EOCD_BYTES || zip64.readUInt32LE(0) !== ZIP64_EOCD_SIGNATURE) {
+    return null;
+  }
+
+  return validCentralDirectoryLocation(
+    { size: Number(zip64.readBigUInt64LE(40)), offset: Number(zip64.readBigUInt64LE(48)) },
+    fileSize,
+  );
+}
+
+function validCentralDirectoryLocation(
+  { offset, size }: CentralDirectoryLocation,
+  fileSize: number,
+): CentralDirectoryLocation | null {
   if (!Number.isSafeInteger(size) || !Number.isSafeInteger(offset) || offset < 0 || size < 0) {
     return null;
   }
@@ -173,6 +197,32 @@ function locateCentralDirectory(fd: number, fileSize: number): CentralDirectoryL
   }
 
   return { offset, size };
+}
+
+/**
+ * Locate the central directory from the end-of-central-directory record, which
+ * sits in the last 22 bytes plus up to 64 KiB of archive comment. When any of
+ * its fields is saturated the real values live in the ZIP64 record the locator
+ * immediately before it points at.
+ */
+function locateCentralDirectory(fd: number, fileSize: number): CentralDirectoryLocation | null {
+  const window = zipTailWindow(fileSize);
+  if (window < 22) {
+    return null;
+  }
+
+  const tail = Buffer.alloc(window);
+  readFully(fd, tail, fileSize - window);
+
+  const located = parseEndOfCentralDirectory(tail, fileSize);
+  if (located == null || !('zip64At' in located)) {
+    return located;
+  }
+
+  const zip64 = Buffer.alloc(ZIP64_EOCD_BYTES);
+  readFully(fd, zip64, located.zip64At);
+
+  return parseZip64EndOfCentralDirectory(zip64, fileSize);
 }
 
 /** Find one extra-field record by id within an entry's extra block. */
@@ -195,7 +245,7 @@ function findExtraField(extra: Buffer, id: number): Buffer | null {
   return null;
 }
 
-function parseCentralDirectory(buf: Buffer): ZipEntry[] {
+export function parseCentralDirectory(buf: Buffer): ZipEntry[] {
   const entries: ZipEntry[] = [];
   let p = 0;
 
@@ -320,7 +370,8 @@ function payloadOffset(fd: number, entry: ZipEntry): number | null {
 /** Copy a STORED entry in chunks — constant memory, so entry size is unbounded. */
 function copyStoredEntry(fd: number, from: number, entry: ZipEntry, tempPath: string): boolean {
   const chunk = Buffer.alloc(Math.min(1024 * 1024, Math.max(entry.compressedSize, 1)));
-  const out = fs.openSync(tempPath, 'w');
+  // `wx`: create, and fail if anything is already there. See extractZipEntry.
+  const out = fs.openSync(tempPath, 'wx');
   let crc = 0xffffffff;
 
   try {
@@ -347,6 +398,31 @@ function copyStoredEntry(fd: number, from: number, entry: ZipEntry, tempPath: st
 }
 
 /**
+ * Clear the way for the temp file, or say it cannot be done.
+ *
+ * A regular file there is what an interrupted earlier repair leaves behind and
+ * is ours to remove. Anything else (a link above all, which opening the path
+ * would follow) means the tree is not the one this pass expects, so the entry
+ * is left unrepaired rather than written somewhere else.
+ */
+function clearTempPath(tempPath: string): boolean {
+  let info: fs.Stats;
+  try {
+    info = fs.lstatSync(tempPath);
+  } catch {
+    return true;
+  }
+
+  if (!info.isFile()) {
+    return false;
+  }
+
+  fs.unlinkSync(tempPath);
+
+  return true;
+}
+
+/**
  * Write one entry's contents to `targetPath`, creating parent directories.
  *
  * The payload is written to a sibling temp file and renamed only once its CRC
@@ -354,9 +430,28 @@ function copyStoredEntry(fd: number, from: number, entry: ZipEntry, tempPath: st
  * real path — the mangled copy the system extractor already wrote stays as the
  * better of two bad answers. Returns false (having cleaned up) in that case,
  * and for any entry {@link canExtractZipEntry} rejects.
+ *
+ * Every write stays inside `destDir` by where it REALLY lands, not by how the
+ * path reads. The tree it writes into came out of an archive, and a directory
+ * on the way to `targetPath` can be a link to anywhere: `mkdirSync` with
+ * `recursive` walks through one, and so do the open and the rename. So the
+ * parent is resolved with `assertParentInside` before anything is created, a
+ * link already sitting at the target is refused, and the temp file is created
+ * exclusively (`wx`), which fails on a link instead of following it. A refusal
+ * returns false like any other entry that could not be repaired.
  */
-export function extractZipEntry(fd: number, entry: ZipEntry, targetPath: string): boolean {
+export function extractZipEntry(fd: number, entry: ZipEntry, targetPath: string, destDir: string): boolean {
   if (!canExtractZipEntry(entry)) {
+    return false;
+  }
+
+  try {
+    assertParentInside(destDir, targetPath);
+
+    if (fs.lstatSync(targetPath, { throwIfNoEntry: false })?.isSymbolicLink()) {
+      return false;
+    }
+  } catch {
     return false;
   }
 
@@ -371,8 +466,20 @@ export function extractZipEntry(fd: number, entry: ZipEntry, targetPath: string)
     return false;
   }
 
-  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
   const tempPath = `${targetPath}.ci-name-repair`;
+
+  try {
+    // Inside the try: a directory the extractor restored read-only, or a full
+    // disk, makes this throw, and that is one entry that cannot be repaired,
+    // not a reason to abandon every entry after it.
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+
+    if (!clearTempPath(tempPath)) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
 
   try {
     let ok: boolean;
@@ -384,7 +491,7 @@ export function extractZipEntry(fd: number, entry: ZipEntry, targetPath: string)
       const data = zlib.inflateRawSync(compressed);
       ok = data.length === entry.uncompressedSize && crc32(data) === entry.crc32;
       if (ok) {
-        fs.writeFileSync(tempPath, data);
+        fs.writeFileSync(tempPath, data, { flag: 'wx' });
       }
     }
 

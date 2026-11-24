@@ -1,3 +1,4 @@
+import dnsModule from 'node:dns';
 import type dns from 'node:dns';
 
 import {
@@ -6,6 +7,8 @@ import {
   EgressBlockedError,
   isBlockedAddress,
   isEgressUrlAllowed,
+  outstandingPeerEgressLookups,
+  peerEgressLookup,
   type AddressResolver,
 } from './urlPolicy';
 
@@ -438,5 +441,143 @@ describe('createEgressLookup', () => {
       expect(error).toBeInstanceOf(EgressBlockedError);
       done();
     });
+  });
+});
+
+describe('outstandingPeerEgressLookups', () => {
+  // The counter is process-wide, so every case compares with where it started.
+  const PUBLIC = [{ address: '93.184.216.34', family: 4 }] as dns.LookupAddress[];
+
+  it('counts a resolver call from the moment it is made until its callback runs', () => {
+    const before = outstandingPeerEgressLookups();
+    let answer: () => void = () => undefined;
+    const lookup = createEgressLookup((_host, _options, callback) => {
+      answer = () => callback(null, PUBLIC);
+    });
+    const done = jest.fn();
+
+    lookup('peer.example.com', {}, done);
+
+    expect(outstandingPeerEgressLookups()).toBe(before + 1);
+    expect(done).not.toHaveBeenCalled();
+
+    answer();
+
+    expect(outstandingPeerEgressLookups()).toBe(before);
+    expect(done).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps counting a call whose caller has given up: only the resolver can end it', () => {
+    // The fetch behind a lookup can be aborted at its deadline; nothing aborts the getaddrinfo under it.
+    const before = outstandingPeerEgressLookups();
+    const answers: Array<() => void> = [];
+    const lookup = createEgressLookup((_host, _options, callback) => {
+      answers.push(() => callback(null, PUBLIC));
+    });
+
+    lookup('slow-one.example', {}, () => undefined);
+    lookup('slow-two.example', {}, () => undefined);
+    // …time passes, the callers move on…
+    expect(outstandingPeerEgressLookups()).toBe(before + 2);
+
+    answers.forEach((answer) => answer());
+    expect(outstandingPeerEgressLookups()).toBe(before);
+  });
+
+  it('counts a call that ends in an error or in a blocked address just the same', () => {
+    const before = outstandingPeerEgressLookups();
+    const failing = createEgressLookup((_host, _options, callback) =>
+      callback(new Error('ESERVFAIL') as never, []),
+    );
+    const inside = createEgressLookup((_host, _options, callback) =>
+      callback(null, [{ address: '127.0.0.1', family: 4 }]),
+    );
+
+    failing('peer.example.com', {}, () => undefined);
+    inside('peer.example.com', {}, () => undefined);
+
+    expect(outstandingPeerEgressLookups()).toBe(before);
+  });
+
+  it('lets go of a call whose resolver throws, and lets the error through', () => {
+    const before = outstandingPeerEgressLookups();
+    const lookup = createEgressLookup(() => {
+      throw new Error('resolver exploded');
+    });
+
+    expect(() => lookup('peer.example.com', {}, () => undefined)).toThrow('resolver exploded');
+    expect(outstandingPeerEgressLookups()).toBe(before);
+  });
+
+  it('has already let go of the call when the caller hears the answer', () => {
+    const before = outstandingPeerEgressLookups();
+    let answer: () => void = () => undefined;
+    const lookup = createEgressLookup((_host, _options, callback) => {
+      answer = () => callback(null, PUBLIC);
+    });
+    let seen = -1;
+
+    lookup('peer.example.com', {}, () => {
+      seen = outstandingPeerEgressLookups();
+    });
+    answer();
+
+    // A caller that starts its next lookup from inside the callback must not be counted against itself.
+    expect(seen).toBe(before);
+  });
+
+  it('counts the PRODUCTION lookup, the one the shared agent dials through', () => {
+    const before = outstandingPeerEgressLookups();
+    let answer: (error: Error | null, addresses: dns.LookupAddress[]) => void = () => undefined;
+    const spy = jest.spyOn(dnsModule, 'lookup').mockImplementation(((
+      _host: string,
+      _options: unknown,
+      callback: typeof answer,
+    ) => {
+      answer = callback;
+    }) as never);
+
+    try {
+      peerEgressLookup('stuck.example.com', {}, () => undefined);
+
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(outstandingPeerEgressLookups()).toBe(before + 1);
+
+      answer(null, PUBLIC);
+
+      expect(outstandingPeerEgressLookups()).toBe(before);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('counts a callback that is called twice once', () => {
+    const before = outstandingPeerEgressLookups();
+    const other = createEgressLookup((_host, _options, callback) => {
+      callback(null, PUBLIC);
+      callback(null, PUBLIC);
+    });
+    let held: () => void = () => undefined;
+    const holding = createEgressLookup((_host, _options, callback) => {
+      held = () => callback(null, PUBLIC);
+    });
+
+    holding('peer.example.com', {}, () => undefined);
+    other('peer.example.com', {}, () => undefined);
+
+    // The double answer must not have released the call that is still waiting.
+    expect(outstandingPeerEgressLookups()).toBe(before + 1);
+    held();
+    expect(outstandingPeerEgressLookups()).toBe(before);
+  });
+
+  it('does not count a name refused before it was resolved', () => {
+    const before = outstandingPeerEgressLookups();
+    const resolve = jest.fn();
+
+    createEgressLookup(resolve)('localhost', {}, () => undefined);
+
+    expect(resolve).not.toHaveBeenCalled();
+    expect(outstandingPeerEgressLookups()).toBe(before);
   });
 });

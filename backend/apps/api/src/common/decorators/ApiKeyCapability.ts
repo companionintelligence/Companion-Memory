@@ -81,10 +81,11 @@ export const REQUIRE_CAPABILITY_KEY = 'require_capability';
  * directions: `POST /memory/recall` only searches, and a future `GET` that triggers work would read
  * as harmless.
  *
- * An empty-scope (grandfathered full-access) key is subject to this too, on the routes that declare
- * it — "reaches every surface" and "may write on it" are separate grants. Routes with no annotation
- * keep their current behaviour for such keys; only scope-limited keys are fully confined, since only
- * they are confined to annotated routes in the first place.
+ * An empty-scope (grandfathered full-access) key is subject to this too: "reaches every surface"
+ * and "may write on it" are separate grants. A route with no annotation is priced by its shape
+ * (`capabilityImpliedByShape`: GET reads, DELETE needs `full`, everything else writes), so the
+ * annotation is only needed where the shape gives the wrong answer: a POST that destroys data asks
+ * for `full`, a POST that only computes drops to `read`.
  */
 export const RequireCapability = (capability: ApiKeyCapability) =>
   SetMetadata(REQUIRE_CAPABILITY_KEY, capability);

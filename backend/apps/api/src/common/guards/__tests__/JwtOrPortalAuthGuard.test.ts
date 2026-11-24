@@ -1,7 +1,12 @@
-import { InternalServerErrorException, UnauthorizedException, type ExecutionContext } from '@nestjs/common';
+import {
+  ForbiddenException,
+  InternalServerErrorException,
+  UnauthorizedException,
+  type ExecutionContext,
+} from '@nestjs/common';
 
 import { JwtOrPortalAuthGuard } from '../JwtOrPortalAuthGuard';
-import type { PortalTokenVerifier } from '../PortalTokenVerifier';
+import type { PortalPrincipal, PortalTokenVerifier } from '../PortalTokenVerifier';
 
 /**
  * This guard deliberately accepts a session JWT or a portal OIDC bearer and
@@ -99,7 +104,8 @@ describe('JwtOrPortalAuthGuard.canActivate — portal short-circuit vs. JWT fall
   it('a valid portal token short-circuits to true WITHOUT ever calling the JWT fallback', async () => {
     const spy = spyOnMixinCanActivate();
     const user = { id: 'portal-user' };
-    const portal = makePortal({ enabled: true, verifyAndProvision: jest.fn().mockResolvedValue(user) });
+    const principal: PortalPrincipal = { user, limits: null, credentialRoutes: true, admin: true };
+    const portal = makePortal({ enabled: true, verifyAndProvision: jest.fn().mockResolvedValue(principal) });
     const guard = new JwtOrPortalAuthGuard(portal);
     const req: Record<string, unknown> = { headers: { authorization: 'Bearer good-token' } };
 
@@ -107,6 +113,60 @@ describe('JwtOrPortalAuthGuard.canActivate — portal short-circuit vs. JWT fall
 
     expect(spy).not.toHaveBeenCalled();
     expect(req.user).toBe(user);
+    expect(req.portalPrincipal).toEqual({ admin: true });
+  });
+
+  it('carries a no-admin token through with the marker AdminOnlyGuard reads', async () => {
+    // A token from a Portal that predates appliance addressing: phone pairing mints its key with
+    // one, so it still reaches key management, but not the admin routes.
+    const principal: PortalPrincipal = {
+      user: { id: 'owner' },
+      limits: null,
+      credentialRoutes: true,
+      admin: false,
+    };
+    const guard = new JwtOrPortalAuthGuard(
+      makePortal({ enabled: true, verifyAndProvision: jest.fn().mockResolvedValue(principal) }),
+    );
+    const req: Record<string, unknown> = { headers: { authorization: 'Bearer old-token' } };
+
+    await expect(guard.canActivate(httpContext(req))).resolves.toBe(true);
+    expect(req.portalPrincipal).toEqual({ admin: false });
+  });
+
+  it('refuses a token that may not reach credential routes, without falling back', async () => {
+    // A capture client, or a token not addressed to this appliance: minting a key here would turn
+    // an hour-long token into a credential that never expires.
+    const spy = spyOnMixinCanActivate().mockResolvedValue(true);
+    const principal: PortalPrincipal = {
+      user: { id: 'owner', role: 'admin' },
+      limits: { scopes: ['capture'], capability: 'write' },
+      credentialRoutes: false,
+      admin: false,
+    };
+    const guard = new JwtOrPortalAuthGuard(
+      makePortal({ enabled: true, verifyAndProvision: jest.fn().mockResolvedValue(principal) }),
+    );
+    const req: Record<string, unknown> = { headers: { authorization: 'Bearer capture-token' } };
+
+    await expect(guard.canActivate(httpContext(req))).rejects.toThrow(ForbiddenException);
+    expect(req.user).toBeUndefined();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('passes a refusal from the verifier on as it is, without falling back', async () => {
+    // Another Memory's sign-in token, or an older phone app's: the verifier says why it is refused,
+    // and that is what the app shows.
+    const spy = spyOnMixinCanActivate().mockResolvedValue(true);
+    const refusal = new UnauthorizedException('This Companion sign-in was not issued for this Memory.');
+    const guard = new JwtOrPortalAuthGuard(
+      makePortal({ enabled: true, verifyAndProvision: jest.fn().mockRejectedValue(refusal) }),
+    );
+    const req: Record<string, unknown> = { headers: { authorization: 'Bearer other-memory-token' } };
+
+    await expect(guard.canActivate(httpContext(req))).rejects.toBe(refusal);
+    expect(req.user).toBeUndefined();
+    expect(spy).not.toHaveBeenCalled();
   });
 
   it('falls through to the JWT strategy when portal auth is disabled', async () => {

@@ -33,6 +33,11 @@ export const ENTITY_TYPE_MAP = {
   // (SearchResultType), so they are selectable in the What picker.
   Product: 'product',
   Receipt: 'receipt',
+  // No What picker either: chat threads and document excerpts only ride the
+  // When filter's exclude-list (see UNDATED_UNLISTED_TYPES), and the excerpt's
+  // server name is not its lowercased display name.
+  Thread: 'thread',
+  FileChunk: 'file-chunk',
 };
 
 /**

@@ -287,6 +287,86 @@ describe('buildActiveSnapshot', () => {
     expect(snapshot.queue.running).toBe(1);
   });
 
+  /**
+   * The reproduction this flag exists for: a worker restarted mid-parse left
+   * the stage `running`, `processed` frozen at 8141, no error — and every
+   * surface went on calling it running. `updatedAt` is the claim's heartbeat,
+   * so its silence is the tell.
+   */
+  it('flags a running stage whose heartbeat has gone silent as stalled', () => {
+    const parse = (overrides: Partial<ImportStage>) =>
+      stage({
+        id: 'takeout-parse',
+        runId: 'run-takeout',
+        seq: 1,
+        kind: 'parse',
+        status: 'running',
+        phase: 'parsing google_activity (3/56)',
+        processed: 8141,
+        total: null,
+        durationMs: null,
+        startedAt: new Date('2026-08-19T00:30:00Z'),
+        finishedAt: null,
+        ...overrides,
+      });
+
+    const silent = buildActiveSnapshot({
+      runs: [run()],
+      stages: [stage(), parse({ updatedAt: new Date(NOW.getTime() - 4 * 60_000) })],
+      units: new Map(),
+      records: new Map(),
+      now: NOW,
+    });
+    const stalled = silent.runs[0].stages[1];
+
+    // Still RUNNING — it holds its slot, and says so — and stalled beside it.
+    expect(stalled.queueState).toBe('running');
+    expect(stalled.stalled).toBe(true);
+    expect(stalled.heartbeatAt).toBe('2026-08-19T01:20:00.000Z');
+    expect(silent.runs[0].stalled).toBe(true);
+    expect(silent.queue.stalled).toBe(1);
+
+    // Two missed beats is a slow parse, not a stalled one.
+    const beating = buildActiveSnapshot({
+      runs: [run()],
+      stages: [stage(), parse({ updatedAt: new Date(NOW.getTime() - 60_000) })],
+      units: new Map(),
+      records: new Map(),
+      now: NOW,
+    });
+
+    expect(beating.runs[0].stages[1].stalled).toBe(false);
+    expect(beating.runs[0].stalled).toBe(false);
+    expect(beating.queue.stalled).toBe(0);
+  });
+
+  it('never calls a stage that is not running stalled, however old its row', () => {
+    // A finished stage, or one waiting in line, is not supposed to beat.
+    const snapshot = buildActiveSnapshot({
+      runs: [run()],
+      stages: [
+        stage({ updatedAt: new Date('2026-08-19T00:18:19Z') }),
+        stage({
+          id: 'takeout-parse',
+          seq: 1,
+          kind: 'parse',
+          status: 'queued',
+          processed: 0,
+          durationMs: null,
+          startedAt: null,
+          finishedAt: null,
+          updatedAt: new Date('2026-08-19T00:18:19Z'),
+        }),
+      ],
+      units: new Map(),
+      records: new Map(),
+      now: NOW,
+    });
+
+    expect(snapshot.runs[0].stages.map((entry) => entry.stalled)).toEqual([false, false]);
+    expect(snapshot.queue.stalled).toBe(0);
+  });
+
   it('carries a failed stage error and counts the failure in the batch', () => {
     const snapshot = buildActiveSnapshot({
       runs: [

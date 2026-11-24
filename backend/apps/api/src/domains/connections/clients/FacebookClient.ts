@@ -24,8 +24,10 @@ export class FacebookClient extends BaseOAuth2Client {
     Posts: ['user_posts'],
     Photos: ['user_photos'],
     Videos: ['user_videos'],
-    Friends: ['user_friends'],
-    Likes: ['user_likes'],
+    // Not requested for now: user_likes goes back in when we re-request it
+    // from Meta in a later App Review submission, separate from the
+    // posts/photos/videos one.
+    // Likes: ['user_likes'],
     default: ['email', 'public_profile'],
   };
 
@@ -33,8 +35,7 @@ export class FacebookClient extends BaseOAuth2Client {
   protected readonly scopes = [
     'email',
     'public_profile',
-    'user_friends',
-    'user_likes',
+    // 'user_likes', // re-requested later; see endpointScopeMap
     'user_photos',
     'user_posts',
     'user_videos',
@@ -46,7 +47,9 @@ export class FacebookClient extends BaseOAuth2Client {
     const scopesSet = new Set<string>(this.endpointScopeMap['default']);
 
     activeEndpoints.forEach((endpoint) => {
-      const scopes = this.endpointScopeMap[endpoint as keyof typeof this.endpointScopeMap];
+      // `?? []`: a connection made before Friends and Likes were withdrawn
+      // still lists them, and reconnecting it must not ask for their scopes.
+      const scopes = this.endpointScopeMap[endpoint as keyof typeof this.endpointScopeMap] ?? [];
       scopes.forEach((scope) => scopesSet.add(scope));
     });
 

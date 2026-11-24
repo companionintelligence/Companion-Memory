@@ -58,6 +58,8 @@ export interface McpEgressAuthConfig {
 /** One tool as reported by the server's `tools/list`, cached in `discovered_tools`. */
 export interface McpDiscoveredTool {
   name: string;
+  /** The display title `tools/list` gives, when it gives one (`title`, else `annotations.title`). */
+  title?: string;
   description?: string;
   inputSchema: Record<string, unknown>;
 }
@@ -73,6 +75,12 @@ export interface McpApprovedTool {
   name: string;
   /** sha256 hex over the canonicalised `inputSchema` — see `services/mcpToolDigest.ts`. */
   schemaDigest: string;
+  /**
+   * sha256 hex over the title, description and full `inputSchema`, prose included — see
+   * `computeDescriptionDigest`. Absent on an approval made before descriptions were pinned, until
+   * the next connect pins the prose it had then (`pinApprovedDescriptions`).
+   */
+  descriptionDigest?: string;
   /** ISO 8601. */
   approvedAt: string;
   /** User id, or `legacy:grandfathered` for a row converted from the pre-gate NULL state. */
@@ -86,6 +94,11 @@ export type McpToolApprovalState =
   | 'new'
   /** Approved under a different schema; the capability changed — invisible to chat until re-approved. */
   | 'schema_changed'
+  /**
+   * Same schema, but the title, description or parameter descriptions the chat model reads have
+   * changed since approval — invisible to chat until re-approved.
+   */
+  | 'description_changed'
   /** Approved, but the server no longer offers it. */
   | 'unavailable'
   /** Row predates the approval gate (`approved_tools IS NULL`); passthrough until the next connect. */
@@ -96,10 +109,14 @@ export interface McpToolApproval {
   name: string;
   /** Digest of what the server currently offers; `null` for an `unavailable` entry. */
   schemaDigest: string | null;
+  /** Description digest of what the server currently offers; `null` for an `unavailable` entry. */
+  descriptionDigest: string | null;
   state: McpToolApprovalState;
   approvedAt: string | null;
   /** Digest that was approved, when it differs from `schemaDigest` this is the drift. */
   approvedDigest: string | null;
+  /** Description digest that was approved; `null` when the approval predates description pinning. */
+  approvedDescriptionDigest: string | null;
 }
 
 /**
@@ -113,7 +130,12 @@ export interface McpToolApproval {
  */
 export interface ApproveMcpToolsDto {
   approveAll?: boolean;
-  tools?: Array<{ name: string; schemaDigest: string }>;
+  /**
+   * `descriptionDigest` is the description digest the client was shown. Optional so a client built
+   * before descriptions were pinned (an older mobile build) can still approve; when sent, a
+   * mismatch is rejected the same way a schema mismatch is.
+   */
+  tools?: Array<{ name: string; schemaDigest: string; descriptionDigest?: string }>;
   /** Tool names to drop from the approved set. */
   revoke?: string[];
 }

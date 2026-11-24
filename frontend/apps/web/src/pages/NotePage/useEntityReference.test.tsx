@@ -1,5 +1,6 @@
 import { GlobalUID } from '@ci/common';
 import { renderHook } from '@testing-library/react';
+import { print } from 'graphql';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useEntityReference } from './useEntityReference';
@@ -24,7 +25,7 @@ vi.mock('react-router-dom', async (importOriginal) => {
   return { ...original, useNavigate: () => navigate };
 });
 
-vi.mock('@apollo/client', async (importOriginal) => {
+vi.mock('@apollo/client/react', async (importOriginal) => {
   const original = await importOriginal<Record<string, unknown>>();
 
   return { ...original, useApolloClient: () => CLIENT };
@@ -63,6 +64,14 @@ describe('useEntityReference — search', () => {
         includeTypes: ['note', 'person', 'place', 'event', 'concept', 'item', 'content', 'communication'],
       },
     });
+  });
+
+  it('searches with the prefix flag, so a half-typed name finds the whole one', async () => {
+    const { result } = renderHook(() => useEntityReference());
+
+    await result.current.reference.search('Jor');
+
+    expect(print(query.mock.calls[0][0].query)).toMatch(/search\(input: \{[^}]*prefix: true/);
   });
 
   it('labels each entity type from its own aliased field', async () => {

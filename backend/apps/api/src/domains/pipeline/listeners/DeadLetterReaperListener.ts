@@ -47,7 +47,8 @@ import { pipelineDeadLetterReapPayloadSchema } from '../types';
  * Polling `pgboss.job` avoids that entirely and is better on its own merits:
  *
  *  - it captures EVERY event name, not the ones somebody remembered to register;
- *  - it captures `job.output`, which carries the actual error and stack. The
+ *  - it captures the failed job's output (`source_output` on the copy since
+ *    pg-boss 12), which carries the actual error and stack. The
  *    dispatch path cannot: `executeJob` hands the listener `job.data` only, so a
  *    subscribing reaper would record a failure with no failure in it;
  *  - it never completes or deletes anything, so pg-boss's own copy stays
@@ -55,9 +56,11 @@ import { pipelineDeadLetterReapPayloadSchema } from '../types';
  *
  * ── Exactly-once, without a schema change ──────────────────────────────────
  *
- * `ci.pipeline_dead_letters.id` is set to the ORIGINATING pg-boss job id rather
- * than a fresh uuid. Both are uuids, the pg-boss id is unique, and it gives the
- * copy a natural idempotency key: the anti-join skips rows already copied, and
+ * `ci.pipeline_dead_letters.id` is set to the pg-boss id of the dead-letter row
+ * (pg-boss inserts that copy as a new job, so it is not the id of the job that
+ * failed) rather than a fresh uuid. Both are uuids, the pg-boss id is unique,
+ * and it gives the copy a natural idempotency key: the anti-join skips rows
+ * already copied, and
  * `ON CONFLICT (id) DO NOTHING` closes the race between two concurrent reaps.
  * It also means an operator can correlate a dead letter straight back to
  * `pgboss.job` while that row still exists.
@@ -181,8 +184,29 @@ export class DeadLetterReaperListener {
     // this table's primary key, so the steady-state cost of a reap that finds
     // nothing is an index probe per candidate.
     //
+    // `failure` is the failed job's output. Since pg-boss 12 the dead-letter copy
+    // is a new job that has not run, so its own `output` is NULL and the failed
+    // job's output is in `source_output`, next to the queue it failed on in
+    // `source_name`. Reading `output` alone recorded every letter as
+    // `dead-letter` with the "no recorded output" placeholder. A copy made by
+    // pg-boss 10 has no `source_*` and its `output` holds the failure, so that
+    // is the fallback.
+    //
     // Column-by-column notes, each guarding a way this can meet data it did not
     // expect:
+    //  - `queue` is the queue the job FAILED on, read from the failure's `queue`,
+    //    which `PGBossEventService` writes on both of its failure paths, then
+    //    from `source_name`. Replay sends the letter to this
+    //    queue alone, unless it no longer listens for the event or the letter
+    //    has a better route (see `replayQueueFor` in PipelineRunService).
+    //    Before, every reaped letter said `dead-letter` and replay
+    //    fanned it out to every queue listening for the event: a `file.uploaded`
+    //    that failed only its preview re-ran all six of its listeners. A blank,
+    //    non-string or `dead-letter` value falls back to `source_name`, as does
+    //    an output with no queue (pg-boss's own expiry writes one; so did every
+    //    failure before this field existed). A copy with neither (made by
+    //    pg-boss 10) falls back to `j.name` and still replays by listener
+    //    registration.
     //  - `payload` is `j.data` VERBATIM. Never wrapped, never enriched — a dead
     //    letter that cannot be replayed byte-for-byte is just a log line.
     //    COALESCEd to '{}' because the column is NOT NULL and a job may carry
@@ -201,7 +225,14 @@ export class DeadLetterReaperListener {
       `INSERT INTO ci.pipeline_dead_letters
               (id, queue, event_name, stage, entity_type, entity_id, user_id, payload, error, failed_at)
        SELECT j.id,
-              j.name,
+              CASE
+                WHEN jsonb_typeof(f.failure->'queue') = 'string'
+                 AND f.failure->>'queue' NOT IN ('', $1)
+                THEN f.failure->>'queue'
+                WHEN j.source_name NOT IN ('', $1)
+                THEN j.source_name
+                ELSE j.name
+              END,
               COALESCE(NULLIF(j.data->>'name', ''), 'unknown'),
               j.data->>'stage',
               j.data->>'entityType',
@@ -213,19 +244,36 @@ export class DeadLetterReaperListener {
               -- that finds this row matters more than a strict parse, and one
               -- malformed payload must not abort the batch. NULL here means
               -- "not attributable to a user", which is legitimate for
-              -- maintenance and telemetry jobs.
-              CASE
-                WHEN j.data->>'userId' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-                THEN (j.data->>'userId')::uuid
-              END,
+              -- maintenance and telemetry jobs, and such a letter is shown to
+              -- the appliance admin only.
+              --
+              -- ownerId is the fallback because the graph and chat events
+              -- (graph.node.upserted, graph.relationship.upserted, chat.generate,
+              -- chat.summarization) name their user that way. Reading userId
+              -- alone filed those as NULL, and a NULL letter used to be listed
+              -- and replayable for every account on the appliance. Each key is
+              -- cast only when it is a uuid on its own, so a malformed userId
+              -- still falls through to a good ownerId. The backfill in
+              -- 20261006065131 applies the same rule to existing rows.
+              COALESCE(
+                CASE
+                  WHEN j.data->>'userId' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                  THEN (j.data->>'userId')::uuid
+                END,
+                CASE
+                  WHEN j.data->>'ownerId' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                  THEN (j.data->>'ownerId')::uuid
+                END
+              ),
               COALESCE(j.data, '{}'::jsonb),
               COALESCE(
-                NULLIF(j.output->>'message', '') || COALESCE(E'\\n' || (j.output->>'stack'), ''),
-                j.output::text,
+                NULLIF(f.failure->>'message', '') || COALESCE(E'\\n' || (f.failure->>'stack'), ''),
+                f.failure::text,
                 'pg-boss job exhausted its retries with no recorded output'
               ),
               j.created_on
          FROM pgboss.job j
+        CROSS JOIN LATERAL (SELECT COALESCE(j.source_output, j.output) AS failure) f
         WHERE j.name = $1
           AND NOT EXISTS (SELECT 1 FROM ci.pipeline_dead_letters d WHERE d.id = j.id)
         ORDER BY j.created_on

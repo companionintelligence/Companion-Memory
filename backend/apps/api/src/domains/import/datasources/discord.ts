@@ -3,14 +3,17 @@
  * Current packages: Messages/<channel>/messages.json (array of {ID,Timestamp,Contents,Attachments}),
  * plus Messages/index.json mapping channel ids to display names. */
 import fs from 'node:fs';
-import { open, readdir, readFile, stat } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { parseCSV } from './csv';
+import { parseFlexibleDate } from './dates';
+import { childDir } from './fsWalk';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
+import { readHead } from './sniff';
 import type { ImportParams } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 const DISCORD_HEADER = 'ID,Timestamp,Contents,Attachments';
 const MESSAGE_FILES = ['messages.csv', 'messages.json'];
@@ -49,14 +52,7 @@ function looksLikeMessagesJSON(text: string): boolean {
 // Timestamps in JSON packages are UTC but zone-less ("2022-08-03 17:55:02");
 // pin them to UTC instead of letting Date parse them as local time.
 function parseTimestamp(s: string | undefined): Date | undefined {
-  if (!s) {
-    return undefined;
-  }
-
-  const m = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}(?:\.\d+)?)$/.exec(s.trim());
-  const d = new Date(m ? `${m[1]}T${m[2]}Z` : s);
-
-  return isNaN(d.getTime()) ? undefined : d;
+  return parseFlexibleDate(s, { naiveUtc: true });
 }
 
 async function findMessageFile(channelDir: string): Promise<string | null> {
@@ -77,29 +73,7 @@ async function findMessageFile(channelDir: string): Promise<string | null> {
 // Package folder casing differs across export eras ("messages" vs "Messages",
 // "account" vs "Account") — look children up case-insensitively.
 async function findChildDir(dir: string, name: string): Promise<string | null> {
-  let names: string[];
-  try {
-    names = await readdir(dir);
-  } catch {
-    return null;
-  }
-
-  for (const n of names) {
-    if (n.toLowerCase() !== name.toLowerCase()) {
-      continue;
-    }
-
-    const p = path.join(dir, n);
-    try {
-      if ((await stat(p)).isDirectory()) {
-        return p;
-      }
-    } catch {
-      /* ignore */
-    }
-  }
-
-  return null;
+  return (await childDir(dir, name)) ?? null;
 }
 
 async function findMessagesDir(root: string): Promise<string | null> {
@@ -279,19 +253,7 @@ async function messageFileIsDiscord(fpath: string): Promise<boolean> {
 
 /** The first 4KB of a file as text, or '' when it cannot be read. */
 async function readPrefix(fpath: string): Promise<string> {
-  try {
-    const fh = await open(fpath, 'r');
-    try {
-      const buf = Buffer.alloc(4096);
-      const { bytesRead: n } = await fh.read(buf, 0, 4096, 0);
-
-      return buf.toString('utf8', 0, n);
-    } finally {
-      await fh.close().catch(() => {});
-    }
-  } catch {
-    return '';
-  }
+  return (await readHead(fpath)) ?? '';
 }
 
 // True when this directory directly contains channel-id subfolders each with a
@@ -536,11 +498,7 @@ export class DiscordFileImporter implements FileImporter {
           id: rowId ? `discord:${rowId}` : `discord:${path.basename(channelDir)}:${i}`,
           classification: 'message',
           timestamp: safeTs,
-          content: {
-            filename: 'message.txt',
-            mediaType: 'text/plain',
-            data: async () => Buffer.from(contents),
-          },
+          content: textContent('message.txt', contents),
           metadata: {
             Conversation: channelName,
             // Recipient names only (see participantsFor) — the comms mapping

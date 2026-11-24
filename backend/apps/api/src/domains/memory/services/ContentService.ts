@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
   Brackets,
@@ -14,15 +14,23 @@ import { v7 as uuidv7 } from 'uuid';
 
 import { type ServiceContext, SYSTEM_USER, type UserServiceContext } from '@ci/common/context';
 import {
+  type HourlyActivityOptions,
+  touchedHourlyBucketsSql,
   type BulkInsertResult,
   appendRecordSources,
   bulkInsertIdempotent,
   INGEST_REFRESH_COLUMNS,
   keysetPaginate,
+  keysetSeek,
   type KeysetPageArgs,
+  type KeysetCountOptions,
   type KeysetPage,
+  type OwnedLink,
+  OWNED_TABLES,
+  refuseForeignLinks,
 } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
+import { FileRemovedEvent } from '@ci/domains/files/events';
 import { ContentCreatedEvent, ContentRemovedEvent, ContentUpdatedEvent } from '@ci/domains/memory/events';
 import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
 
@@ -30,7 +38,7 @@ import { BaseEntity } from '../entities/BaseEntity';
 import { ContentBaseEntity } from '../entities/ContentBaseEntity';
 import { Content, ContentEntity } from '../entities/ContentEntity';
 import { EventEntity } from '../entities/EventEntity';
-import { classifyExternalId } from '../externalIdKind';
+import { classifyExternalId, EXTERNAL_ID_UUID_SHAPE } from '../externalIdKind';
 import { ledgerPlatform } from '../identity';
 import { CreateContentDto, SearchContentDto, UpdateContentDto } from '../types';
 
@@ -41,9 +49,15 @@ import {
   contentTypeFilterSql,
   contentTypeOptions,
   distinctColumnSql,
+  effectiveSourceSystemPredicate,
+  noteMirrorSql,
 } from './contentFacetsSql';
-import { CtiAggregate } from './CtiAggregate';
-import { GraphDeltaWriter } from './GraphDeltaWriter';
+import { type PurgedContentAggregates, purgeContentAggregates, purgeFilesWrappedBy } from './contentPurge';
+import { CtiAggregate, detailChanged } from './CtiAggregate';
+import { drainStoredObjectDeletes, STORED_OBJECTS, type StoredObjects } from './filePurge';
+import { GraphDeltaWriter, changedFieldsBetween } from './GraphDeltaWriter';
+import { clearHbpeLinks, deleteEdges, deleteLedgerRows } from './purgeTeardown';
+import { nothingWrapped } from './wrappedFilePurge';
 
 /** The provenance triple shared by a content row and the event it auto-links to. */
 /** Scoped filter for {@link ContentService.findPage}: the content library's pickers. */
@@ -91,6 +105,56 @@ export interface HourlyContentCount {
 }
 
 /**
+ * The events a write names explicitly, for {@link refuseForeignLinks}. `ci.content.event_id`'s key
+ * only asks that the event exists. The link made from a matching triple needs no check: it is
+ * looked up among the caller's own events.
+ */
+function contentLinks(rows: readonly CreateContentDto[]): OwnedLink[] {
+  return [
+    {
+      field: 'event_id',
+      table: 'ci.events',
+      key: 'event_id',
+      ownerColumn: 'user_id',
+      ids: rows.map((row) => row.event?.id),
+    },
+    fileLink(
+      rows.map((row) =>
+        wrappedFileId(row.external_id, row.external_id_kind ?? classifyExternalId(row.external_id)),
+      ),
+    ),
+  ];
+}
+
+/**
+ * The stored file a content row would wrap, given its `external_id` and the kind it is written with, or
+ * `undefined` when it wraps none. The same rule the purge applies when it decides what a row wraps
+ * (`planWrappedFiles`): a uuid-shaped id whose kind is `'file'` or unclassified, and never one marked
+ * `'external_uri'`. Lower case, because a file's id is, and the cast to a uuid accepts capitals.
+ */
+function wrappedFileId(
+  externalId: string | null | undefined,
+  kind: string | null | undefined,
+): string | undefined {
+  if (!externalId || !EXTERNAL_ID_UUID_SHAPE.test(externalId) || (kind != null && kind !== 'file')) {
+    return undefined;
+  }
+
+  return externalId.toLowerCase();
+}
+
+/**
+ * The files a write would have content wrap, for {@link refuseForeignLinks}. A content row that wraps a
+ * file is what decides that the file goes when the content is deleted (`ContentService.remove`, `purge`),
+ * and the purge only ever takes the deleter's own files; but a row that wrapped somebody else's file
+ * would still show it, and keep it in use. So a writer may only point content at a file of its own. An
+ * id that names no file is left alone, as `refuseForeignLinks` leaves one.
+ */
+function fileLink(ids: ReadonlyArray<string | undefined>): OwnedLink {
+  return { field: 'external_id', ...OWNED_TABLES.files, ids };
+}
+
+/**
  * Spanning-aggregate service for the content CTI split: content is ONE logical
  * entity persisted as a `ci.entities` base row (discriminated 'Content',
  * see {@link ContentBaseEntity}) plus a `ci.content` detail row sharing the same
@@ -100,24 +164,11 @@ export interface HourlyContentCount {
  * base-row fetch.
  */
 /**
- * `WHERE` fragment matching rows whose EFFECTIVE source system is in the named
- * `IN` parameter — the same value {@link ContentService.getFacets} offers.
- *
- * A row's effective systems are the platforms the `ci.record_sources` ledger
- * recorded for it, and only when the ledger recorded none, its own
- * `source_system`. The two arms are exclusive on purpose: a Google Photos
- * photo is `file` in the column and `google_photos` in the ledger, and picking
- * "file" must not sweep it in — "file" is the honest bucket only for a row no
- * platform claims. Both EXISTS probes hit `record_sources_record_idx`
- * `(user_id, record_table, record_id)`.
+ * {@link effectiveSourceSystemPredicate} for the query builder: rows whose
+ * effective source system is in the named `IN` parameter.
  */
 function effectiveSourceSystemSql(alias: string, param: string): string {
-  const ledger = `SELECT 1 FROM ci.record_sources rs WHERE rs.user_id = ${alias}.user_id AND rs.record_table = 'content' AND rs.record_id = ${alias}.id`;
-
-  return (
-    `(EXISTS (${ledger} AND rs.platform IN (:...${param}))` +
-    ` OR (${alias}.source_system IN (:...${param}) AND NOT EXISTS (${ledger} AND rs.platform IS NOT NULL)))`
-  );
+  return effectiveSourceSystemPredicate(alias, (expression) => `${expression} IN (:...${param})`);
 }
 
 /**
@@ -133,6 +184,8 @@ export class ContentService {
 
   private readonly unledgeredCache = new Map<string, { values: string[]; expiresAt: number }>();
 
+  private readonly logger = new Logger(ContentService.name);
+
   constructor(
     @InjectRepository(ContentEntity)
     private readonly contentRepository: Repository<ContentEntity>,
@@ -142,6 +195,12 @@ export class ContentService {
     private readonly eventRepository: Repository<EventEntity>,
     private readonly eventService: EventService,
     private readonly graphDeltaWriter: GraphDeltaWriter,
+    /**
+     * The object store, which {@link purge} deletes the stored files of a photo from. Optional so that a
+     * service built without one still does everything else; a purge that would have to delete stored
+     * bytes and has no store is refused before it changes anything.
+     */
+    @Optional() @Inject(STORED_OBJECTS) private readonly storedObjects?: StoredObjects,
   ) {
     this.aggregate = new CtiAggregate({
       detailRepository: this.contentRepository,
@@ -202,7 +261,9 @@ export class ContentService {
       sourceSystem: item.source_system ?? undefined,
       sourceId: item.source_id ?? undefined,
       connectionId: item.connection_id ?? undefined,
+      // Both mappings of `event_id`, from the one value, so the save cannot be handed two.
       event,
+      eventId: event?.id,
       userId: context.userId,
     });
   }
@@ -240,6 +301,13 @@ export class ContentService {
     // indexing for bulk-loaded rows is deferred to the post-load batch embed
     // (POST /api/maintenance/search-index/backfill). Interactive create() still emits.
     const emitCreated = options?.emitCreated ?? true;
+
+    await refuseForeignLinks(
+      this.contentRepository.manager,
+      context.userId,
+      contentLinks(dataArray),
+      'content',
+    );
 
     // TODO: Some of these can fail, we need to return partial success here?
     return Promise.all(
@@ -418,6 +486,8 @@ export class ContentService {
     }
 
     const emitCreated = options?.emitCreated ?? false;
+
+    await refuseForeignLinks(this.contentRepository.manager, context.userId, contentLinks(data), 'content');
 
     // Set-based event auto-link: resolve every triple-carrying row's event in ONE
     // query up front, so the per-entity `event` relation can be stamped before the
@@ -663,15 +733,23 @@ export class ContentService {
     context: UserServiceContext,
     args: KeysetPageArgs,
     filter: FindContentsFilter = {},
+    options: KeysetCountOptions = {},
   ): Promise<KeysetPage<Content>> {
     const page = await keysetPaginate(this.contentRepository, args, {
+      ...options,
       alias: 'content',
       timeProp: 'createdAt',
       userId: context.userId,
       // Same rule as findById/findByIds: a deleted event's photo must not resurface
-      // in the paginated library (and must not inflate totalCount).
+      // in the paginated library (and must not inflate totalCount). A note's
+      // Content mirror is a copy of the note with its HTML as text, so the
+      // library leaves it out as the explorer's browse does.
       scope: (qb) =>
-        this.applyContentsFilter(this.excludeDeletedEventMedia(qb, 'content'), 'content', filter),
+        this.applyContentsFilter(
+          this.excludeNoteMirrors(this.excludeDeletedEventMedia(qb, 'content'), 'content'),
+          'content',
+          filter,
+        ),
     });
 
     return {
@@ -714,15 +792,57 @@ export class ContentService {
       return rows.map((row) => row.v);
     };
 
-    const unledgered = await this.unledgeredSourceSystems(context.userId);
     const [rawTypes, mediaKinds, mimetypes, sourceSystems] = await Promise.all([
       values(distinctColumnSql('type')),
       values(MEDIA_KINDS_SQL),
       values(distinctColumnSql('mimetype')),
-      values(PLATFORMS_SQL, [unledgered]),
+      this.getSourceSystems(context),
     ]);
 
     return { types: contentTypeOptions(rawTypes, mediaKinds), mimetypes, sourceSystems };
+  }
+
+  /**
+   * Every platform that delivered one of the user's content rows, sorted —
+   * the How picker's content options (SourceSystemService) and the facet of
+   * the same name. The ledger's platform where it recorded one, else the
+   * row's own `source_system`: a document a Dropbox sync fetched is `file` in
+   * the column and `dropbox` only in the ledger, so a list read from the
+   * column alone never offers Dropbox, however much arrived from it.
+   */
+  async getSourceSystems(context: UserServiceContext): Promise<string[]> {
+    const unledgered = await this.unledgeredSourceSystems(context.userId);
+    const rows: Array<{ v: string }> = await this.contentRepository.manager.query(PLATFORMS_SQL, [
+      context.userId,
+      unledgered,
+    ]);
+
+    return rows.map((row) => row.v);
+  }
+
+  /**
+   * Which of these content rows a How selection keeps, by the same rule the
+   * SQL paths filter with ({@link effectiveSourceSystemSql}). For the search
+   * paths that pick their candidates first and narrow afterwards, where the
+   * resolved row's own `source_system` cannot answer for a federated row.
+   */
+  async idsMatchingSourceSystems(
+    context: ServiceContext,
+    ids: string[],
+    sourceSystems: string[],
+  ): Promise<Set<string>> {
+    if (ids.length === 0 || sourceSystems.length === 0) {
+      return new Set();
+    }
+
+    const rows: Array<{ id: string }> = await this.contentRepository.manager.query(
+      `SELECT c.id FROM ci.content c
+        WHERE c.user_id = $1 AND c.id = ANY($2::uuid[])
+          AND ${effectiveSourceSystemPredicate('c', (expression) => `${expression} = ANY($3::text[])`)}`,
+      [context.userId, ids, sourceSystems],
+    );
+
+    return new Set(rows.map((row) => row.id));
   }
 
   /**
@@ -802,6 +922,40 @@ export class ContentService {
     }
 
     return scoped;
+  }
+
+  /**
+   * Hides the Content mirror `NoteContentFoldService` gives a note: same id as
+   * the note, the note's stored HTML as its text. Wherever the note itself is
+   * listed, or a list is of content the user brought in, the mirror is a second,
+   * raw copy of the note. Keyed on the mirror's own base row
+   * ({@link noteMirrorSql}), not on the note, so deleting the note does not
+   * bring its copy back.
+   */
+  private excludeNoteMirrors<T extends ObjectLiteral>(
+    query: SelectQueryBuilder<T>,
+    alias: string,
+  ): SelectQueryBuilder<T> {
+    return query.andWhere(`NOT ${noteMirrorSql(alias)}`);
+  }
+
+  /**
+   * Which of these content ids are a note's Content mirror (see
+   * {@link excludeNoteMirrors}). For the search paths, which pick their
+   * candidates from the index before any SQL scope applies.
+   */
+  async noteMirrorIds(context: UserServiceContext, ids: string[]): Promise<Set<string>> {
+    if (ids.length === 0) {
+      return new Set();
+    }
+
+    const rows: Array<{ id: string }> = await this.contentRepository.manager.query(
+      `SELECT e.entity_id AS id FROM ci.entities e
+        WHERE e.entity_id = ANY($1::uuid[]) AND e.owner_user_id = $2 AND e.linked_table = 'notes'`,
+      [ids, context.userId],
+    );
+
+    return new Set(rows.map((row) => row.id));
   }
 
   /**
@@ -928,7 +1082,7 @@ export class ContentService {
 
     const scope = context.userId !== SYSTEM_USER ? { userId: context.userId } : {};
     const rows = await this.contentRepository.find({
-      select: ['id', 'externalId'],
+      select: { id: true, externalId: true },
       where: [
         { ...scope, externalId: In(fileIds), externalIdKind: 'file' },
         { ...scope, externalId: In(fileIds), externalIdKind: IsNull() },
@@ -1017,6 +1171,11 @@ export class ContentService {
    * Applied only by the chronological browse. Query, tag and type-filtered
    * searches still return these rows — a user who searches for a photo, or
    * filters to Content, must still find it.
+   *
+   * `excludeNoteMirrors` drops the Content mirror `NoteContentFoldService`
+   * gives a note: same id as the note, and the note's stored HTML as its text.
+   * The feed already lists the note itself, so the mirror was a second copy of
+   * every folded note with its markup on show.
    */
   async getEntitiesForContents(
     context: ServiceContext,
@@ -1030,6 +1189,8 @@ export class ContentService {
       order?: 'ASC' | 'DESC';
       /** Drop rows that belong to an event (see the method docstring). */
       excludeEventLinked?: boolean;
+      /** Drop the Content mirrors of notes (see the method docstring). */
+      excludeNoteMirrors?: boolean;
     } = {},
   ): Promise<EntityIdentifier<IndexableEntity>[]> {
     let query = this.excludeDeletedEventMedia(
@@ -1044,12 +1205,20 @@ export class ContentService {
       query = query.andWhere('content.event_id IS NULL');
     }
 
+    if (options.excludeNoteMirrors) {
+      query = this.excludeNoteMirrors(query, 'content');
+    }
+
     // The How filter: keep rows from the named sources. Every browsed table
-    // with a source_system column applies this same clause (see
+    // with a source_system column applies a clause like this (see
     // SearchResolver.searchByTimedEntities), so a source selected on /memory
-    // narrows every kind it can, not just events.
+    // narrows every kind it can, not just events. Content matches on the
+    // platform that DELIVERED the row, as the library does — its column says
+    // only `file` for a photo from Google Photos or a document from Dropbox.
     if (options.connectors && options.connectors.length > 0) {
-      query = query.andWhere('content.source_system IN (:...connectors)', { connectors: options.connectors });
+      query = query.andWhere(effectiveSourceSystemSql('content', 'connectors'), {
+        connectors: options.connectors,
+      });
     }
 
     if (options.startTime) {
@@ -1060,18 +1229,19 @@ export class ContentService {
       query = query.andWhere('content.updated_at <= :endTime', { endTime: options.endTime });
     }
 
-    // Composite keyset: page strictly past (afterTime, afterId) in
-    // (updated_at DESC, id DESC). Without it the search feed re-fetched the same
+    // Composite keyset: page strictly past (afterTime, afterId) in (updated_at, id), in
+    // `order` — see keysetSeek. Without it the search feed re-fetched the same
     // top-N rows every page and dead-ended at `first * FETCH_MULTIPLIER` rows.
+    const order = options.order ?? 'DESC';
+
     if (options.afterTime && options.afterId) {
       query = query.andWhere(
-        '(content.updated_at < :afterTime OR (content.updated_at = :afterTime AND content.id < :afterId))',
-        { afterTime: options.afterTime, afterId: options.afterId },
+        ...keysetSeek('content.updated_at', 'content.id', order, options.afterTime, options.afterId),
       );
     }
 
-    // Deterministic tiebreak so same-timestamp rows page consistently.
-    query = query.orderBy('content.updated_at', options.order ?? 'DESC').addOrderBy('content.id', 'DESC');
+    // Deterministic tiebreak so same-timestamp rows page consistently: the id runs the way the time does.
+    query = query.orderBy('content.updated_at', order).addOrderBy('content.id', order);
 
     if (options.limit) {
       query = query.limit(options.limit);
@@ -1089,7 +1259,13 @@ export class ContentService {
    */
   async countEntitiesForContents(
     context: ServiceContext,
-    options: { startTime?: Date; endTime?: Date; connectors?: string[]; excludeEventLinked?: boolean },
+    options: {
+      startTime?: Date;
+      endTime?: Date;
+      connectors?: string[];
+      excludeEventLinked?: boolean;
+      excludeNoteMirrors?: boolean;
+    },
   ): Promise<number> {
     let query = this.excludeDeletedEventMedia(
       this.contentRepository
@@ -1102,12 +1278,20 @@ export class ContentService {
       query = query.andWhere('content.event_id IS NULL');
     }
 
+    if (options.excludeNoteMirrors) {
+      query = this.excludeNoteMirrors(query, 'content');
+    }
+
     // The How filter: keep rows from the named sources. Every browsed table
-    // with a source_system column applies this same clause (see
+    // with a source_system column applies a clause like this (see
     // SearchResolver.searchByTimedEntities), so a source selected on /memory
-    // narrows every kind it can, not just events.
+    // narrows every kind it can, not just events. Content matches on the
+    // platform that DELIVERED the row, as the library does — its column says
+    // only `file` for a photo from Google Photos or a document from Dropbox.
     if (options.connectors && options.connectors.length > 0) {
-      query = query.andWhere('content.source_system IN (:...connectors)', { connectors: options.connectors });
+      query = query.andWhere(effectiveSourceSystemSql('content', 'connectors'), {
+        connectors: options.connectors,
+      });
     }
 
     if (options.startTime) {
@@ -1249,6 +1433,10 @@ export class ContentService {
   async update(context: ServiceContext, id: string, data: UpdateContentDto): Promise<Content | null> {
     const updateData: Partial<ContentEntity> = {};
 
+    if (data.external_id !== undefined || data.external_id_kind !== undefined) {
+      await this.refuseForeignFileOnUpdate(context, id, data);
+    }
+
     if (data.type !== undefined) {
       updateData.type = data.type;
     }
@@ -1323,14 +1511,14 @@ export class ContentService {
         base: basePatch,
       },
       {
-        withinTx: async ({ manager }) => {
+        withinTx: async ({ manager, before, after: reloaded, baseBefore }) => {
           const base = await manager.getRepository(ContentBaseEntity).findOne({ where: { id } });
-          const changedFields: Record<string, { old?: unknown; new?: unknown }> = {};
-          if (data.title !== undefined) {
-            changedFields.name = { new: data.title };
-          }
+          // Only what moved: the drawer sends the title with every save.
+          const changedFields: Record<string, { old?: unknown; new?: unknown }> = {
+            ...changedFieldsBetween({ name: baseBefore?.name }, basePatch, Object.keys(basePatch)),
+          };
 
-          if (Object.keys(updateData).length > 0) {
+          if (detailChanged(before, reloaded, Object.keys(updateData))) {
             changedFields.detail_updated = { new: true };
           }
 
@@ -1365,15 +1553,124 @@ export class ContentService {
     return content;
   }
 
+  /**
+   * Refuses an update that would have this content wrap a file its owner does not own
+   * ({@link fileLink}). The owner is the row's, so that a system caller is held to the same rule; the
+   * half of the pair the update leaves alone is read from the row. A row that is not visible to the
+   * caller is left to `update`, which answers `null` for it.
+   */
+  private async refuseForeignFileOnUpdate(
+    context: ServiceContext,
+    id: string,
+    data: UpdateContentDto,
+  ): Promise<void> {
+    const row = await this.contentRepository.findOne({
+      where: { id, ...(context.userId !== SYSTEM_USER && { userId: context.userId }) },
+    });
+
+    if (!row) {
+      return;
+    }
+
+    const externalId = data.external_id !== undefined ? data.external_id : row.externalId;
+    const kind =
+      data.external_id_kind !== undefined
+        ? data.external_id_kind
+        : data.external_id !== undefined
+          ? (classifyExternalId(data.external_id) ?? null)
+          : row.externalIdKind;
+    const fileId = wrappedFileId(externalId, kind);
+
+    if (fileId === undefined) {
+      return;
+    }
+
+    // A row with no owner may wrap no one's file: the nil uuid owns nothing.
+    await refuseForeignLinks(
+      this.contentRepository.manager,
+      row.userId ?? '00000000-0000-0000-0000-000000000000',
+      [fileLink([fileId])],
+      'content update',
+    );
+  }
+
+  /**
+   * The app's delete, which the Explorer drawer and the `deleteContent` mutation
+   * call: the content row and its `ci.entities` base row are destroyed, and
+   * nothing restores them. A `deleted` graph delta records it, which carries the
+   * title.
+   *
+   * **The stored file goes with it.** A photo or a document is two rows, and the
+   * bytes are the part that IS the photo: the content row wraps a `ci.files` row
+   * through `external_id`. That file, its variants, their `File` nodes, and the
+   * edges, deltas, pipeline state, tags, categories and search rows keyed by any
+   * of them are deleted exactly as `memory.forget`'s {@link purge} deletes them
+   * ({@link purgeFilesWrappedBy}, the one sequence both paths run): when nothing
+   * else uses the file, and kept when something does (a message's attachment,
+   * another content row, a chat attachment, a live event; see
+   * {@link planWrappedFiles}). Only the owner's own files are taken, whoever asks.
+   *
+   * The bytes are deleted after the transaction commits, never inside it
+   * ({@link drainStoredObjectDeletes}): a failure in the delete rolls the rows
+   * back with the bytes untouched, and a store that fails after the commit leaves
+   * the objects queued for the retry sweep. So the delete answers `true` once the
+   * rows are gone, and an object can outlive them until the sweep reaches it.
+   *
+   * **For a file-backed item, the edges and ledger rows that name the content go
+   * too.** An edge to a photo that no longer exists points at nothing, and its
+   * ledger row evidences nothing, so neither is kept. They are deleted in both
+   * directions, with the deltas that recorded the edges. Content that wraps none
+   * of the owner's files (a note, a link, a track) keeps its old behaviour
+   * exactly: its edges and ledger rows stay where they are. Every item keeps the
+   * node's own deltas and the `deleted` one this writes, which is what separates
+   * this from a purge; the content's search rows and tags are left to the
+   * {@link ContentRemovedEvent} listeners as before. Records that merely MENTION
+   * the content (a receipt's document, an observation) are left alone.
+   *
+   * HBPE's links to the row are cleared in the same transaction. They reference it
+   * with no `ON DELETE` action, so deleting clustered content, which is nearly all
+   * of it, used to fail on a foreign key.
+   *
+   * Deleting again is safe: the content is gone, so the second call answers
+   * `false` and changes nothing.
+   */
   async remove(context: ServiceContext, id: string): Promise<boolean> {
+    let files = nothingWrapped();
+    let queuedObjectIds: string[] = [];
+
     const removed = await this.aggregate.remove(context, id, {
       withinTx: async ({ manager, before }) => {
+        // Whose files may go is the content's owner's: the caller's, which the aggregate has already
+        // scoped the row to, or, for a system caller, the row's own. A row with no owner has no files
+        // that are anyone's to delete, and is deleted as it was.
+        const ownerId = context.userId !== SYSTEM_USER ? context.userId : (before.userId ?? before.user?.id);
+
+        if (ownerId) {
+          ({ files, queuedObjectIds } = await purgeFilesWrappedBy(
+            manager,
+            ownerId,
+            [id],
+            { objects: this.storedObjects },
+            async (plan) => {
+              await clearHbpeLinks(manager, 'ci.content', [id]);
+
+              // Only a file-backed item loses its edges and ledger rows; any other is deleted as before.
+              if (plan.wrapping.includes(id)) {
+                await deleteEdges(manager, [id]);
+                await deleteLedgerRows(manager, [id], 'content');
+              }
+            },
+          ));
+        } else {
+          await clearHbpeLinks(manager, 'ci.content', [id]);
+        }
+
         const base = await manager.getRepository(ContentBaseEntity).findOne({ where: { id } });
         await this.graphDeltaWriter.entityDeleted({
           entityId: id,
           entityType: 'Content',
           name: base?.name ?? null,
-          ownerUserId: context.userId !== SYSTEM_USER ? context.userId : before.user?.id,
+          ownerUserId: ownerId,
           changeSource: 'ContentService.remove',
           changedByUserId: typeof context.userId === 'string' ? context.userId : null,
           manager,
@@ -1385,11 +1682,110 @@ export class ContentService {
       return false;
     }
 
-    await this.eventService.send(ContentRemovedEvent, {
-      contentId: id,
-    });
+    await this.drainQueuedObjects(queuedObjectIds);
+
+    await this.sendAfterCommit(ContentRemovedEvent, { contentId: id });
+
+    for (const fileId of files.fileIds) {
+      await this.sendAfterCommit(FileRemovedEvent, { fileId });
+    }
 
     return true;
+  }
+
+  /**
+   * Deletes the objects a committed delete or purge queued ({@link drainStoredObjectDeletes}). Never
+   * throws, for the store or for the database: the rows are already gone, and what it could not delete
+   * stays queued for `StoredObjectDeletionSweepCron`, which is said here. A caller told that the delete
+   * failed would retry something that is done.
+   */
+  private async drainQueuedObjects(ids: string[]): Promise<void> {
+    if (ids.length === 0) {
+      return;
+    }
+
+    try {
+      const drained = await drainStoredObjectDeletes(this.contentRepository.manager, this.storedObjects, {
+        ids,
+      });
+
+      if (drained.pending > 0) {
+        this.logger.warn(
+          `${drained.pending} stored object(s) could not be deleted yet and are queued for the retry sweep: ${drained.errors.join('; ')}`,
+        );
+      }
+    } catch (error) {
+      this.logger.error(
+        `Could not finish deleting up to ${ids.length} stored object(s) after the commit; any not yet deleted stay queued for the retry sweep: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  /**
+   * Announces a removal that has already committed. A send that fails is logged at error and does not
+   * fail the call: the delete has happened, and each announcement is sent on its own, so one failure
+   * does not stop the rest.
+   */
+  private async sendAfterCommit(
+    event: typeof ContentRemovedEvent | typeof FileRemovedEvent,
+    payload: { contentId: string } | { fileId: string },
+  ): Promise<void> {
+    try {
+      await this.eventService.send(event, payload as never);
+    } catch (error) {
+      this.logger.error(
+        `Could not announce a content removal that has already committed: ${String(event)} ${JSON.stringify(payload)}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  /**
+   * Permanently deletes content, with everything that only exists because of it.
+   * This is `memory.forget`'s `archive_and_delete` for a `Content` node, and the
+   * other end from {@link remove}: see {@link purgeContentAggregates} for what
+   * goes, for what a plain delete of the base row would have failed on, and for
+   * how it differs from `remove`.
+   *
+   * A photo's file goes with its content when nothing else uses it, and stays, reported
+   * in `files.kept`, when something does: see {@link planWrappedFiles}. The files'
+   * objects are queued in the transaction and deleted from the object store after it
+   * commits ({@link purgeFilesWrappedBy}); what the store cannot delete then stays queued
+   * for the retry sweep.
+   *
+   * Content attached to an event is purged like any other and the event is left
+   * alone; purging the event is what takes its content with it
+   * ({@link CalendarEventService.purge}).
+   *
+   * Everything is one transaction. Search is told afterwards, and the ids that
+   * were not the caller's, or no longer exist, are simply left out of the result.
+   * A failure leaves everything as it was, bytes included.
+   *
+   * @returns the ids that were purged, and what was done about the files they wrapped.
+   */
+  async purge(context: UserServiceContext, ids: string[]): Promise<PurgedContentAggregates> {
+    const requested = Array.from(new Set(ids));
+
+    if (requested.length === 0) {
+      return { contentIds: [], files: nothingWrapped(), queuedObjectIds: [] };
+    }
+
+    const purged = await this.contentRepository.manager.transaction((manager) =>
+      purgeContentAggregates(manager, context.userId, requested, { objects: this.storedObjects }),
+    );
+
+    await this.drainQueuedObjects(purged.queuedObjectIds);
+
+    // The index rows were deleted in the transaction. This tells anything else
+    // that listens, and is what announces a removal everywhere else in the app.
+    for (const contentId of purged.contentIds) {
+      await this.sendAfterCommit(ContentRemovedEvent, { contentId });
+    }
+
+    for (const fileId of purged.files.fileIds) {
+      await this.sendAfterCommit(FileRemovedEvent, { fileId });
+    }
+
+    return purged;
   }
 
   /**
@@ -1421,6 +1817,132 @@ export class ContentService {
     const [content] = await this.composeMany([entity]);
 
     return content ?? null;
+  }
+
+  /**
+   * Moves this user's content rows from one `source_system` to another, in
+   * place, for a producer whose key changed system and kept its id. Each row
+   * keeps its uuid, so the message that names it, its graph node and edges, its
+   * search rows and HBPE's labels all still name it. The ledger rows that
+   * recorded the old identity move too, `platform` included: the content
+   * library's How filter reads the ledger before the column
+   * ({@link effectiveSourceSystemSql}).
+   *
+   * Called ahead of an insert, it makes the insert find the moved row instead of
+   * writing a second one beside it. That is how a Messenger attachment
+   * catalogued under `facebook` (before #2912) converges when it arrives again:
+   * migration 20261002005332 moved the rows present when it ran, and this
+   * catches one that comes back later, from a portability archive exported
+   * before it (an archive carries no schema version, so no migration reaches
+   * its rows) or from a writer still running the old code.
+   *
+   * A row moves only while its new key is free. When both keys are taken, the
+   * pair is a twin for that migration's teardown, and an import leaves it alone.
+   *
+   * `updated_at` is not touched: the explorer's chronological browse places
+   * content by it ({@link getEntitiesForContents}), and a corrected label is
+   * not a content change.
+   *
+   * @returns the ids of the rows that moved.
+   */
+  async rekeySourceSystem(
+    context: UserServiceContext,
+    rekey: { from: string; to: string; sourceIds: readonly string[] },
+  ): Promise<string[]> {
+    const sourceIds = Array.from(new Set(rekey.sourceIds));
+
+    if (sourceIds.length === 0 || rekey.from === rekey.to) {
+      return [];
+    }
+
+    // The platform each system's arrivals are ledgered under when the producer
+    // names none, which is how `ledgerArrival` and `createManyDetailed` stamp it.
+    const fromPlatform = ledgerPlatform(rekey.from);
+    const toPlatform = ledgerPlatform(rekey.to);
+
+    return this.contentRepository.manager.transaction(async (manager) => {
+      const moved: Array<{ id: string; source_id: string }> = await manager.query(
+        `WITH moved AS (
+           UPDATE ci.content c
+              SET source_system = $3
+            WHERE c.user_id = $1
+              AND c.source_system = $2
+              AND c.source_id = ANY($4::text[])
+              AND NOT EXISTS (
+                SELECT 1
+                  FROM ci.content taken
+                 WHERE taken.user_id = c.user_id
+                   AND taken.source_system = $3
+                   AND taken.source_id = c.source_id)
+           RETURNING c.id, c.source_id
+         )
+         SELECT id, source_id FROM moved`,
+        [context.userId, rekey.from, rekey.to, sourceIds],
+      );
+
+      if (moved.length === 0) {
+        return [];
+      }
+
+      const movedSourceIds = moved.map((row) => row.source_id);
+      const params = [
+        context.userId,
+        rekey.from,
+        rekey.to,
+        moved.map((row) => row.id),
+        movedSourceIds,
+        fromPlatform,
+        toPlatform,
+      ];
+
+      // The ledger's unique key leaves out `record_id`, so a row already holding
+      // the new key would make the re-key collide. One that names a record that
+      // is gone (`remove` leaves ledger rows behind) evidences nothing.
+      await manager.query(
+        `DELETE FROM ci.record_sources stale
+          WHERE stale.user_id = $1
+            AND stale.record_table = 'content'
+            AND stale.source_system = $2
+            AND stale.source_id = ANY($3::text[])
+            AND NOT EXISTS (SELECT 1 FROM ci.content c WHERE c.id = stale.record_id)`,
+        [context.userId, rekey.to, movedSourceIds],
+      );
+      // Anything else still holding it makes the old-key arrival redundant.
+      await manager.query(
+        `DELETE FROM ci.record_sources rs
+          USING unnest($4::uuid[], $5::text[]) AS m(id, source_id)
+          WHERE rs.user_id = $1
+            AND rs.record_table = 'content'
+            AND rs.record_id = m.id
+            AND rs.source_system = $2
+            AND rs.source_id = m.source_id
+            AND EXISTS (
+              SELECT 1
+                FROM ci.record_sources held
+               WHERE held.user_id = rs.user_id
+                 AND held.record_table = 'content'
+                 AND held.source_type = rs.source_type
+                 AND held.source_system = $3
+                 AND held.source_id = rs.source_id
+                 AND held.platform IS NOT DISTINCT FROM
+                       (CASE WHEN rs.platform IS NOT DISTINCT FROM $6::text THEN $7::text ELSE rs.platform END))`,
+        params,
+      );
+      await manager.query(
+        `UPDATE ci.record_sources rs
+            SET source_system = $3,
+                platform = CASE WHEN rs.platform IS NOT DISTINCT FROM $6::text THEN $7::text ELSE rs.platform END
+           FROM unnest($4::uuid[], $5::text[]) AS m(id, source_id)
+          WHERE rs.user_id = $1
+            AND rs.record_table = 'content'
+            AND rs.record_id = m.id
+            AND rs.source_system = $2
+            AND rs.source_id = m.source_id`,
+        params,
+      );
+
+      return moved.map((row) => row.id);
+    });
   }
 
   async search(context: ServiceContext, filters: SearchContentDto): Promise<Content[]> {
@@ -1485,16 +2007,32 @@ export class ContentService {
    * Hourly UTC activity buckets for the activity rollup: content counted by
    * creation time, per user. Rows without an owner are skipped.
    */
-  async aggregateHourlyActivity(): Promise<HourlyContentCount[]> {
-    const rows: Array<{ user_id: string; bucket_start: Date; count: number }> = await this.contentRepository
+  async aggregateHourlyActivity(options: HourlyActivityOptions = {}): Promise<HourlyContentCount[]> {
+    const query = this.contentRepository
       .createQueryBuilder('content')
       .select('content.userId', 'user_id')
       .addSelect(`date_trunc('hour', content.createdAt, 'UTC')`, 'bucket_start')
       .addSelect('COUNT(*)::int', 'count')
       .where('content.userId IS NOT NULL')
       .groupBy('user_id')
-      .addGroupBy('bucket_start')
-      .getRawMany();
+      .addGroupBy('bucket_start');
+
+    if (options.changedSince) {
+      query.andWhere(
+        touchedHourlyBucketsSql(
+          { user: 'content.userId', bucket: 'content.createdAt' },
+          {
+            table: 'ci.content',
+            userColumn: 'user_id',
+            bucketColumn: 'created_at',
+            changed: 'src.updated_at',
+          },
+        ),
+        { changedSince: options.changedSince },
+      );
+    }
+
+    const rows: Array<{ user_id: string; bucket_start: Date; count: number }> = await query.getRawMany();
 
     return rows.map((row) => ({ userId: row.user_id, bucketStart: row.bucket_start, count: row.count }));
   }

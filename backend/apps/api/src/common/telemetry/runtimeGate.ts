@@ -77,8 +77,7 @@ interface EnvelopeTransport {
 export function gateSentryTransport<T extends EnvelopeTransport>(inner: T): T {
   return {
     ...inner,
-    send: (envelope: never) =>
-      crashReportsUserEnabled ? inner.send(envelope) : Promise.resolve({}),
+    send: (envelope: never) => (crashReportsUserEnabled ? inner.send(envelope) : Promise.resolve({})),
     flush: (timeout?: number) => inner.flush(timeout),
   } as T;
 }

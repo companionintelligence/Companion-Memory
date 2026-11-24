@@ -1,0 +1,447 @@
+import { EventEmitter } from 'node:events';
+
+import type { Client } from 'pg';
+import type { DataSource } from 'typeorm';
+
+import { SYSTEM_USER } from '@ci/common/context';
+import type { LoggerService } from '@ci/common/logging';
+
+import { LIVE_CHANGES_CHANNEL, LiveChangesService } from '../services/LiveChangesService';
+
+jest.mock('@ci/common/roles', () => ({ serves: () => true }));
+
+class FakeClient extends EventEmitter {
+  connect = jest.fn(async () => undefined);
+
+  query = jest.fn(async () => undefined);
+
+  end = jest.fn(async () => undefined);
+}
+
+/** The service with the socket swapped for a fake: everything else is real. */
+class TestableLiveChangesService extends LiveChangesService {
+  clients: FakeClient[] = [];
+
+  /** How many of the next connects refuse, as a down database would. */
+  refuseConnects = 0;
+
+  protected override createClient(): Client {
+    const client = new FakeClient();
+
+    if (this.refuseConnects > 0) {
+      this.refuseConnects -= 1;
+      client.connect.mockRejectedValue(new Error('ECONNREFUSED'));
+    }
+
+    this.clients.push(client);
+
+    return client as unknown as Client;
+  }
+}
+
+function makeService() {
+  const dataSource = { query: jest.fn(async () => undefined) };
+  const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), debug: jest.fn() };
+  const service = new TestableLiveChangesService(
+    dataSource as unknown as DataSource,
+    logger as unknown as LoggerService,
+  );
+
+  return { service, dataSource, logger };
+}
+
+describe('LiveChangesService', () => {
+  describe('publish', () => {
+    it('sends one NOTIFY carrying the user and the topic', async () => {
+      const { service, dataSource } = makeService();
+
+      await service.publish('alice', 'tasks');
+
+      expect(dataSource.query).toHaveBeenCalledWith('SELECT pg_notify($1, $2)', [
+        LIVE_CHANGES_CHANNEL,
+        JSON.stringify({ userId: 'alice', topic: 'tasks' }),
+      ]);
+    });
+
+    it('is a no-op for the system user, who has no sessions to tell', async () => {
+      const { service, dataSource } = makeService();
+
+      await service.publish(SYSTEM_USER, 'calendar');
+      await service.publish('', 'calendar');
+
+      expect(dataSource.query).not.toHaveBeenCalled();
+    });
+
+    it('logs and swallows a failed notify — the write it describes already happened', async () => {
+      const { service, dataSource, logger } = makeService();
+      dataSource.query.mockRejectedValueOnce(new Error('connection reset'));
+
+      await expect(service.publish('alice', 'tasks')).resolves.toBeUndefined();
+      expect(logger.warn).toHaveBeenCalledWith(
+        'Live change notify failed',
+        expect.objectContaining({ topic: 'tasks' }),
+      );
+    });
+  });
+
+  describe('subscribe / dispatch', () => {
+    it("delivers a change to every listener of that user and nobody else's", () => {
+      const { service } = makeService();
+      const alice1 = jest.fn();
+      const alice2 = jest.fn();
+      const bob = jest.fn();
+      service.subscribe('alice', alice1);
+      service.subscribe('alice', alice2);
+      service.subscribe('bob', bob);
+
+      service.dispatch(JSON.stringify({ userId: 'alice', topic: 'calendar' }));
+
+      expect(alice1).toHaveBeenCalledWith('calendar');
+      expect(alice2).toHaveBeenCalledWith('calendar');
+      expect(bob).not.toHaveBeenCalled();
+    });
+
+    it('stops delivering after unsubscribe and forgets an empty user', () => {
+      const { service } = makeService();
+      const listener = jest.fn();
+      const unsubscribe = service.subscribe('alice', listener);
+
+      unsubscribe();
+      service.dispatch(JSON.stringify({ userId: 'alice', topic: 'tasks' }));
+
+      expect(listener).not.toHaveBeenCalled();
+      expect(service.subscriberCount).toBe(0);
+    });
+
+    it('drops a payload that is not JSON or not a known topic, with a warning', () => {
+      const { service, logger } = makeService();
+      const listener = jest.fn();
+      service.subscribe('alice', listener);
+
+      service.dispatch('not json');
+      service.dispatch(JSON.stringify({ userId: 'alice', topic: 'everything' }));
+      service.dispatch(JSON.stringify({ topic: 'tasks' }));
+      service.dispatch(undefined);
+
+      expect(listener).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledTimes(3);
+    });
+
+    it('keeps going when one listener throws', () => {
+      const { service } = makeService();
+      const bad = jest.fn(() => {
+        throw new Error('boom');
+      });
+      const good = jest.fn();
+      service.subscribe('alice', bad);
+      service.subscribe('alice', good);
+
+      service.dispatch(JSON.stringify({ userId: 'alice', topic: 'tasks' }));
+
+      expect(good).toHaveBeenCalledWith('tasks');
+    });
+  });
+
+  describe('revocations', () => {
+    it('sends a revoke notice on the same channel', async () => {
+      const { service, dataSource } = makeService();
+
+      await service.publishRevoked('alice');
+
+      expect(dataSource.query).toHaveBeenCalledWith('SELECT pg_notify($1, $2)', [
+        LIVE_CHANGES_CHANNEL,
+        JSON.stringify({ userId: 'alice', revoked: true }),
+      ]);
+    });
+
+    it("tells that user's revocation listeners and nobody's change listeners", () => {
+      const { service, logger } = makeService();
+      const changes = jest.fn();
+      const alice = jest.fn();
+      const bob = jest.fn();
+      service.subscribe('alice', changes);
+      service.subscribeRevocations('alice', alice);
+      const offBob = service.subscribeRevocations('bob', bob);
+      offBob();
+
+      service.dispatch(JSON.stringify({ userId: 'alice', revoked: true }));
+      service.dispatch(JSON.stringify({ userId: 'bob', revoked: true }));
+
+      expect(alice).toHaveBeenCalledTimes(1);
+      expect(bob).not.toHaveBeenCalled();
+      expect(changes).not.toHaveBeenCalled();
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+
+    it('looks up a key or a session but nothing for a token with neither', async () => {
+      const { service, dataSource } = makeService();
+      dataSource.query.mockResolvedValueOnce([{ '?column?': 1 }] as never).mockResolvedValueOnce([] as never);
+
+      await expect(service.isCredentialLive('alice', { kind: 'apiKey', keyId: 'key-1' })).resolves.toBe(true);
+      await expect(service.isCredentialLive('alice', { kind: 'session', sessionId: 'sess-1' })).resolves.toBe(
+        false,
+      );
+      await expect(service.isCredentialLive('alice', { kind: 'token' })).resolves.toBe(true);
+
+      expect(dataSource.query).toHaveBeenCalledTimes(2);
+      expect(dataSource.query).toHaveBeenNthCalledWith(1, expect.stringContaining('ci.api_keys'), [
+        'key-1',
+        'alice',
+      ]);
+      expect(dataSource.query).toHaveBeenNthCalledWith(2, expect.stringContaining('ci.sessions'), [
+        'sess-1',
+        'alice',
+      ]);
+    });
+
+    it("counts a deleted account's keys and sessions as gone", async () => {
+      const { service, dataSource } = makeService();
+      dataSource.query.mockResolvedValue([] as never);
+
+      await service.isCredentialLive('alice', { kind: 'apiKey', keyId: 'key-1' });
+      await service.isCredentialLive('alice', { kind: 'session', sessionId: 'sess-1' });
+
+      const statements = (dataSource.query.mock.calls as unknown as Array<[string]>).map(([sql]) => sql);
+
+      expect(statements).toHaveLength(2);
+
+      for (const sql of statements) {
+        expect(sql).toMatch(/JOIN ci\.users u ON u\.id = \w\.user_id/);
+        expect(sql).toContain('u.deleted_at IS NULL');
+      }
+    });
+
+    it('logs a lookup that failed before passing the error on', async () => {
+      const { service, dataSource, logger } = makeService();
+      dataSource.query.mockRejectedValueOnce(new Error('connection reset'));
+
+      await expect(service.isCredentialLive('alice', { kind: 'apiKey', keyId: 'key-1' })).rejects.toThrow(
+        'connection reset',
+      );
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        'Live change credential check failed',
+        expect.objectContaining({ userId: 'alice', kind: 'apiKey', error: 'connection reset' }),
+      );
+    });
+  });
+
+  describe('watchCredential', () => {
+    const key = { kind: 'apiKey', keyId: 'key-1' } as const;
+    const notice = (userId: string) => JSON.stringify({ userId, revoked: true });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('calls back once when a revoke notice finds the key gone, then stops listening', async () => {
+      const { service, dataSource } = makeService();
+      const onRevoked = jest.fn();
+      dataSource.query.mockResolvedValue([{ '?column?': 1 }] as never);
+      service.watchCredential('alice', key, onRevoked);
+
+      service.dispatch(notice('bob'));
+      service.dispatch(notice('alice'));
+      await new Promise(setImmediate);
+      expect(dataSource.query).toHaveBeenCalledTimes(1);
+      expect(onRevoked).not.toHaveBeenCalled();
+
+      dataSource.query.mockResolvedValue([] as never);
+      service.dispatch(notice('alice'));
+      await new Promise(setImmediate);
+      service.dispatch(notice('alice'));
+      await new Promise(setImmediate);
+
+      expect(onRevoked).toHaveBeenCalledTimes(1);
+      expect(dataSource.query).toHaveBeenCalledTimes(2);
+    });
+
+    it('looks again on its own timer, for what sends no notice', async () => {
+      jest.useFakeTimers();
+      const { service, dataSource } = makeService();
+      const onRevoked = jest.fn();
+      dataSource.query.mockResolvedValue([{ '?column?': 1 }] as never);
+      service.watchCredential('alice', key, onRevoked, 25_000);
+
+      await jest.advanceTimersByTimeAsync(25_000);
+      expect(dataSource.query).toHaveBeenCalledTimes(1);
+
+      dataSource.query.mockResolvedValue([] as never);
+      await jest.advanceTimersByTimeAsync(25_000);
+      expect(onRevoked).toHaveBeenCalledTimes(1);
+
+      await jest.advanceTimersByTimeAsync(75_000);
+      expect(dataSource.query).toHaveBeenCalledTimes(2);
+    });
+
+    it('asks again when a notice lands while a lookup is out and settles after both', async () => {
+      const { service, dataSource } = makeService();
+      const onRevoked = jest.fn();
+      let answer: (rows: unknown[]) => void = () => undefined;
+      dataSource.query.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            answer = resolve;
+          }) as never,
+      );
+      const watch = service.watchCredential('alice', key, onRevoked);
+
+      const first = watch.check();
+      dataSource.query.mockResolvedValue([] as never);
+      service.dispatch(notice('alice'));
+      answer([{ '?column?': 1 }]);
+      await first;
+
+      expect(dataSource.query).toHaveBeenCalledTimes(2);
+      expect(onRevoked).toHaveBeenCalledTimes(1);
+    });
+
+    it('logs a revoke handler that throws instead of dropping it', async () => {
+      const { service, dataSource, logger } = makeService();
+      dataSource.query.mockResolvedValue([] as never);
+      const watch = service.watchCredential('alice', key, () => {
+        throw new Error('socket gone');
+      });
+
+      await watch.check();
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        'Credential revoke handler threw',
+        expect.objectContaining({ userId: 'alice', error: 'socket gone' }),
+      );
+    });
+
+    it('still asks again for a notice that landed while a lookup was out and failed', async () => {
+      const { service, dataSource } = makeService();
+      const onRevoked = jest.fn();
+      let fail: (error: Error) => void = () => undefined;
+      dataSource.query.mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            fail = reject;
+          }) as never,
+      );
+      const watch = service.watchCredential('alice', key, onRevoked);
+
+      const first = watch.check();
+      dataSource.query.mockResolvedValue([] as never);
+      service.dispatch(notice('alice'));
+      fail(new Error('connection reset'));
+      await first;
+
+      expect(dataSource.query).toHaveBeenCalledTimes(2);
+      expect(onRevoked).toHaveBeenCalledTimes(1);
+    });
+
+    it('takes a failed lookup for no answer, not a revoke', async () => {
+      const { service, dataSource } = makeService();
+      const onRevoked = jest.fn();
+      dataSource.query.mockRejectedValue(new Error('connection reset'));
+      const watch = service.watchCredential('alice', key, onRevoked);
+
+      await watch.check();
+
+      expect(onRevoked).not.toHaveBeenCalled();
+    });
+
+    it('looks nothing up once stopped', async () => {
+      jest.useFakeTimers();
+      const { service, dataSource } = makeService();
+      const onRevoked = jest.fn();
+      const watch = service.watchCredential('alice', key, onRevoked, 25_000);
+
+      watch.stop();
+      watch.stop();
+      service.dispatch(notice('alice'));
+      await watch.check();
+      await jest.advanceTimersByTimeAsync(100_000);
+
+      expect(dataSource.query).not.toHaveBeenCalled();
+      expect(onRevoked).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('the listening connection', () => {
+    beforeEach(() => {
+      jest.useFakeTimers();
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('LISTENs on the channel and dispatches what arrives', async () => {
+      const { service } = makeService();
+      const listener = jest.fn();
+      service.subscribe('alice', listener);
+
+      await service.onModuleInit();
+
+      const [client] = service.clients;
+      expect(client.connect).toHaveBeenCalled();
+      expect(client.query).toHaveBeenCalledWith(`LISTEN ${LIVE_CHANGES_CHANNEL}`);
+
+      client.emit('notification', {
+        channel: LIVE_CHANGES_CHANNEL,
+        payload: JSON.stringify({ userId: 'alice', topic: 'tasks' }),
+      });
+      client.emit('notification', {
+        channel: 'something_else',
+        payload: JSON.stringify({ userId: 'alice', topic: 'tasks' }),
+      });
+
+      expect(listener).toHaveBeenCalledTimes(1);
+    });
+
+    it('reconnects on a fresh client when the socket ends', async () => {
+      const { service } = makeService();
+      await service.onModuleInit();
+      const [first] = service.clients;
+
+      first.emit('end');
+      expect(service.clients).toHaveLength(1);
+
+      await jest.advanceTimersByTimeAsync(1_000);
+
+      expect(service.clients).toHaveLength(2);
+      expect(service.clients[1].query).toHaveBeenCalledWith(`LISTEN ${LIVE_CHANGES_CHANNEL}`);
+    });
+
+    it('backs off while the connect itself keeps failing, and resets once it succeeds', async () => {
+      const { service } = makeService();
+      service.refuseConnects = 2;
+
+      await service.onModuleInit();
+      expect(service.clients).toHaveLength(1);
+
+      // First retry after 1 s.
+      await jest.advanceTimersByTimeAsync(1_000);
+      expect(service.clients).toHaveLength(2);
+
+      // Doubled: the second wait is 2 s, so 1 s is not enough.
+      await jest.advanceTimersByTimeAsync(1_000);
+      expect(service.clients).toHaveLength(2);
+      await jest.advanceTimersByTimeAsync(1_000);
+      expect(service.clients).toHaveLength(3);
+      expect(service.clients[2].query).toHaveBeenCalledWith(`LISTEN ${LIVE_CHANGES_CHANNEL}`);
+
+      // Connected, so the next drop waits the floor again, not 4 s.
+      service.clients[2].emit('end');
+      await jest.advanceTimersByTimeAsync(1_000);
+      expect(service.clients).toHaveLength(4);
+    });
+
+    it('closes the connection and stops reconnecting on shutdown', async () => {
+      const { service } = makeService();
+      await service.onModuleInit();
+      const [client] = service.clients;
+
+      await service.onModuleDestroy();
+      client.emit('end');
+      await jest.advanceTimersByTimeAsync(30_000);
+
+      expect(client.end).toHaveBeenCalled();
+      expect(service.clients).toHaveLength(1);
+    });
+  });
+});

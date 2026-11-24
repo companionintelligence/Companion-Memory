@@ -1,5 +1,5 @@
 import { fetchJson } from '@ci/common';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 import {
   downloadAccountExport,
@@ -66,11 +66,11 @@ function okJsonResponse(body: unknown): Response {
 
 const IMPORT_RESULT = { tablesImported: 3, rowsImported: 900, filesRestored: 2, format: 'ndjson' };
 
-let clickSpy: ReturnType<typeof vi.fn>;
+let clickSpy: Mock<() => void>;
 let originalAnchorClick: () => void;
 
 beforeEach(() => {
-  clickSpy = vi.fn();
+  clickSpy = vi.fn<() => void>();
   originalAnchorClick = HTMLAnchorElement.prototype.click;
   HTMLAnchorElement.prototype.click = clickSpy;
 

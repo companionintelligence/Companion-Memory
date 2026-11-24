@@ -83,6 +83,18 @@ export class BlueBubblesConfigEntity {
   @Column({ type: 'timestamptz', name: 'sync_heartbeat_at', nullable: true })
   syncHeartbeatAt!: Date | null;
 
+  /**
+   * The account this connector belongs to: whose Mac, whose iMessage account,
+   * whose Apple ID the assistant sends from. The row is appliance-wide, the
+   * data behind it is one person's. Claimed by the administrator who saves the
+   * connection when the row has no live owner, and read by everything that acts
+   * on it: the `messaging.*` tools are visible to and runnable by this account
+   * only, and the sync files messages under it. Null until someone configures
+   * the connector. See migration 20261006065617_bluebubbles_config_owner.
+   */
+  @Column({ type: 'uuid', name: 'owner_user_id', nullable: true })
+  ownerUserId!: string | null;
+
   @Column({ type: 'text', name: 'connection_status', default: 'unknown' })
   connectionStatus!: BlueBubblesConnectionStatus;
 

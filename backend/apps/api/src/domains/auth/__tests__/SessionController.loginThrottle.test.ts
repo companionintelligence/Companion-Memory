@@ -63,7 +63,7 @@ const mockAuthService = {
   rotateSessionToken: jest
     .fn()
     .mockResolvedValue({ sessionToken: 'rotated-session-token', sessionId: MOCK_SESSION_ID }),
-  invalidateSession: jest.fn().mockResolvedValue(undefined),
+  invalidateSession: jest.fn().mockResolvedValue(true),
   resolveCsrfScope: jest.fn().mockReturnValue(null),
 };
 
@@ -74,8 +74,19 @@ const mockCsrfService = {
   ensureToken: jest.fn().mockReturnValue(MOCK_CSRF_TOKEN),
 };
 
+const validatePassword = jest.fn().mockResolvedValue(mockUser);
+
 const mockUserService = {
-  validatePassword: jest.fn().mockResolvedValue(mockUser),
+  validatePassword,
+  // What the login route calls. Delegates to `validatePassword` so each case can keep saying
+  // whether the password was right; the real one also compares unknown addresses against a
+  // dummy hash, which `UserService.deletion.test.ts` pins.
+  authenticatePassword: jest.fn(
+    async (email: string, password: string): Promise<{ user: unknown; accountExists: boolean }> => ({
+      user: await validatePassword(email, password),
+      accountExists: true,
+    }),
+  ),
   findById: jest.fn().mockResolvedValue(mockUser),
 };
 

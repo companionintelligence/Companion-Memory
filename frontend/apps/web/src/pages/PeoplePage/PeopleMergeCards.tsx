@@ -1,6 +1,6 @@
 import { type ReactNode, useMemo, useState } from 'react';
 
-import { useMutation } from '@apollo/client';
+import { useMutation } from '@apollo/client/react';
 import { GlobalUID } from '@ci/common';
 import { Badge, Button } from '@ci/shadcn';
 import { Loader2, Merge } from '@ci/shadcn/icons';
@@ -104,12 +104,15 @@ export function MergeCandidateCard({
   candidate: MergeCandidate;
   onMerged: (outcome: MergeOutcome) => Promise<unknown>;
 }) {
+  const sharedPhones = useMemo(() => sharedPhoneNumbers(candidate.evidence), [candidate.evidence]);
+
   return (
     <MergeSuggestionCard
       people={candidate.people}
+      sharedPhones={sharedPhones}
       onMerged={onMerged}
       heading={<CandidateHeading candidate={candidate} />}
-      note={<CandidateDiff people={candidate.people} />}
+      note={<CandidateDiff people={candidate.people} sharedPhones={sharedPhones} />}
     />
   );
 }
@@ -165,35 +168,41 @@ export function MergeClusterCard({
   };
 
   return (
-    <div className="rounded-md border p-3">
-      <div className="mb-2 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-        <Merge className="h-4 w-4" />
+    <div className="rounded-lg border bg-card p-2.5 device:rounded-md device:p-3">
+      <div className="mb-2 flex items-start gap-2 text-xs text-muted-foreground device:items-center device:text-sm">
+        <Merge className="mt-0.5 h-4 w-4 shrink-0 device:mt-0" />
         <span>
           <span className="font-medium text-foreground">{anchor.name || token}</span> might be one of these
           people
         </span>
       </div>
 
-      <div className="mb-3 rounded-md bg-muted/50 px-3 py-2">
-        <PersonSummary person={anchor} shared={new Set()} counterpart={null} />
+      <div className="mb-2 rounded-md bg-muted/50 px-2.5 py-2 device:mb-3 device:px-3">
+        <PersonSummary
+          person={anchor}
+          shared={new Set()}
+          counterpart={null}
+          sharedPhones={NO_SHARED_PHONES}
+        />
       </div>
 
       <div className="flex flex-col gap-2">
         {options.map((person) => (
           <div
             key={person.id}
-            className="flex flex-col gap-2 rounded-md border p-2 sm:flex-row sm:items-center"
+            className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-md border p-2"
           >
-            <div className="min-w-0 flex-1">
+            <div className="min-w-0">
               <PersonSummary
                 person={person}
                 shared={sharedNameTokens(anchor.name, person.name)}
                 counterpart={anchor}
+                sharedPhones={NO_SHARED_PHONES}
               />
             </div>
             <Button
               size="sm"
-              className="self-start sm:self-auto shrink-0"
+              className="h-10 shrink-0 px-3 device:h-8"
               disabled={inFlight}
               onClick={() => {
                 void choose(person.id);
@@ -212,9 +221,15 @@ export function MergeClusterCard({
         ))}
       </div>
 
-      <div className="mt-3 flex flex-wrap items-center justify-end gap-3 border-t pt-2">
-        {error && <span className="text-sm text-destructive">{error}</span>}
-        <Button size="sm" variant="ghost" disabled={inFlight} onClick={() => void rejectAll()}>
+      <div className="mt-2 grid grid-cols-1 gap-2 border-t pt-2 device:mt-3 device:flex device:flex-wrap device:items-center device:justify-end device:gap-3">
+        {error && <span className="text-sm text-destructive device:mr-auto">{error}</span>}
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-10 w-full device:h-8 device:w-auto"
+          disabled={inFlight}
+          onClick={() => void rejectAll()}
+        >
           {inFlight && rejecting ? (
             <span className="inline-flex items-center gap-1.5">
               <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
@@ -231,11 +246,13 @@ export function MergeClusterCard({
 
 function MergeSuggestionCard({
   people,
+  sharedPhones,
   heading,
   note,
   onMerged,
 }: {
   people: readonly MergablePerson[];
+  sharedPhones: readonly SharedPhone[];
   heading: ReactNode;
   note?: ReactNode;
   onMerged: (outcome: MergeOutcome) => Promise<unknown>;
@@ -285,31 +302,36 @@ function MergeSuggestionCard({
   };
 
   return (
-    <div className={`rounded-md border p-3 ${inFlight ? 'opacity-80' : ''}`}>
-      <div className="mb-2 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">{heading}</div>
+    <div
+      data-merge-candidate
+      className={`rounded-lg border bg-card p-2.5 device:rounded-md device:p-3 ${inFlight ? 'opacity-80' : ''}`}
+    >
+      <div className="mb-2 grid grid-cols-[auto_auto_minmax(0,1fr)] items-center gap-x-2 gap-y-1 text-xs text-muted-foreground device:flex device:flex-wrap device:text-sm">
+        {heading}
+      </div>
 
       {note}
 
-      <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-1.5 device:gap-2">
         {orderedPeople.map((person) => (
           <div
             key={person.id}
-            className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:gap-3"
+            className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-md border border-border/60 bg-muted/20 p-2 device:flex device:gap-3 device:rounded-none device:border-0 device:bg-transparent device:p-0"
           >
-            <div className="flex min-w-0 flex-1 items-start gap-3">
-              <PersonAvatar name={person.name} avatarUrl={person.avatarUrl} size="sm" />
-              <PersonSummary
-                person={person}
-                shared={shared}
-                counterpart={orderedPeople.find((other) => other.id !== person.id) ?? null}
-              />
-            </div>
+            <PersonAvatar name={person.name} avatarUrl={person.avatarUrl} size="sm" />
+            <PersonSummary
+              person={person}
+              shared={shared}
+              counterpart={orderedPeople.find((other) => other.id !== person.id) ?? null}
+              sharedPhones={sharedPhones}
+            />
 
             {(!hasSelf || person.isSelf) && (
               <Button
                 size="sm"
-                variant="ghost"
-                className="self-start sm:self-auto shrink-0"
+                variant="outline"
+                aria-label={`Use ${person.name || 'this person'} as the kept person`}
+                className="h-10 shrink-0 px-2.5 device:h-8 device:px-3"
                 disabled={inFlight}
                 onClick={() => {
                   void merge(person.id);
@@ -321,7 +343,10 @@ function MergeSuggestionCard({
                     Merging…
                   </span>
                 ) : (
-                  'Use as the kept person'
+                  <>
+                    <span className="device:hidden">Keep</span>
+                    <span className="hidden device:inline">Use as kept person</span>
+                  </>
                 )}
               </Button>
             )}
@@ -329,20 +354,32 @@ function MergeSuggestionCard({
         ))}
       </div>
 
-      <div className="mt-3 flex flex-wrap items-center justify-end gap-3 border-t pt-2">
-        {mergeError && <span className="text-sm text-destructive">{mergeError}</span>}
-        <Button size="sm" variant="ghost" disabled={inFlight} onClick={() => void reject()}>
+      <div className="mt-2 grid grid-cols-2 gap-2 border-t pt-2 device:mt-3 device:flex device:flex-wrap device:items-center device:justify-end device:gap-3">
+        {mergeError && (
+          <span className="col-span-2 text-sm text-destructive device:mr-auto">{mergeError}</span>
+        )}
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-10 w-full px-2 device:h-8 device:w-auto device:px-3"
+          disabled={inFlight}
+          onClick={() => void reject()}
+        >
           {busy === 'reject' ? (
             <span className="inline-flex items-center gap-1.5">
               <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
               Saving…
             </span>
           ) : (
-            'Not the same person'
+            <>
+              <span className="device:hidden">Different people</span>
+              <span className="hidden device:inline">Not the same person</span>
+            </>
           )}
         </Button>
         <Button
           size="sm"
+          className="h-10 w-full px-2 device:h-8 device:w-auto device:px-3"
           disabled={inFlight || defaultTargetId == null}
           aria-label={busy === 'merge' ? 'Merging' : 'Merge into one person'}
           onClick={() => {
@@ -357,7 +394,10 @@ function MergeSuggestionCard({
               Merging…
             </span>
           ) : (
-            'Merge into one person'
+            <>
+              <span className="device:hidden">Merge people</span>
+              <span className="hidden device:inline">Merge into one person</span>
+            </>
           )}
         </Button>
       </div>
@@ -368,21 +408,27 @@ function MergeSuggestionCard({
 function CandidateHeading({ candidate }: { candidate: MergeCandidate }) {
   return (
     <>
-      <Merge className="h-4 w-4" />
+      <Merge className="h-4 w-4 shrink-0" />
       <Badge variant="secondary">{Math.round(candidate.score * 100)}% match</Badge>
-      <span>{humanReason(candidate.evidence)}</span>
+      <span className="min-w-0 leading-snug">{humanReason(candidate.evidence)}</span>
     </>
   );
 }
 
-function CandidateDiff({ people }: { people: readonly MergablePerson[] }) {
-  const differences = describeDifferences(people);
+function CandidateDiff({
+  people,
+  sharedPhones,
+}: {
+  people: readonly MergablePerson[];
+  sharedPhones: readonly SharedPhone[];
+}) {
+  const differences = describeDifferences(people, sharedPhones);
   if (differences.length === 0) {
     return null;
   }
 
   return (
-    <ul className="mb-2 list-disc space-y-0.5 pl-5 text-xs text-muted-foreground">
+    <ul className="mb-2 list-disc space-y-0.5 pl-4 text-xs leading-snug text-muted-foreground device:pl-5">
       {differences.map((line) => (
         <li key={line}>{line}</li>
       ))}
@@ -394,19 +440,38 @@ function PersonSummary({
   person,
   shared,
   counterpart,
+  sharedPhones,
 }: {
   person: MergablePerson;
   shared: Set<string>;
   counterpart: MergablePerson | null;
+  /**
+   * The numbers the pair's phone evidence says BOTH records carry. The server
+   * re-checks that evidence against the live records before the queue is
+   * shown, so a number here is on both people — even when this person's
+   * contact list cannot show it: `identifiers` is read from an index that can
+   * hold a number for only one person, and from `phone`/`phones`, never from a
+   * contact card's full typed list.
+   */
+  sharedPhones: readonly SharedPhone[];
 }) {
   const identifiers = person.identifiers ?? [];
   const counterpartKeys = new Set((counterpart?.identifiers ?? []).map(identifierKey));
+  const sharedPhoneKeys = new Set(sharedPhones.map((phone) => phone.key));
+  const listedPhoneKeys = new Set(
+    identifiers
+      .filter((identifier) => identifier.kind === 'phone')
+      .map((identifier) => phoneKey(identifier.value)),
+  );
+  // The evidence number this person's list does not show: listed here so the
+  // card never claims a shared number it then shows on one side only.
+  const unlistedShared = sharedPhones.filter((phone) => !listedPhoneKeys.has(phone.key));
   const channels = channelLabels(person);
   const stats = person.interactionStats;
 
   return (
     <div className="min-w-0 flex-1">
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
         <Link
           to={`/people/${GlobalUID.parse('person', person.id)}`}
           className="truncate font-medium hover:underline"
@@ -421,30 +486,40 @@ function PersonSummary({
         ))}
       </div>
 
-      {identifiers.length > 0 && (
-        <div className="mt-1 flex flex-col gap-0.5 text-sm text-muted-foreground">
+      {(identifiers.length > 0 ||
+        unlistedShared.length > 0 ||
+        (stats != null && (stats.eventCount > 0 || stats.communicationCount > 0))) && (
+        <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground device:mt-1">
           {identifiers.map((identifier) => {
-            const unique = counterpart != null && !counterpartKeys.has(identifierKey(identifier));
+            const unique =
+              counterpart != null &&
+              !counterpartKeys.has(identifierKey(identifier)) &&
+              !(identifier.kind === 'phone' && sharedPhoneKeys.has(phoneKey(identifier.value)));
 
             return (
-              <div key={`${identifier.kind}:${identifier.value}`}>
+              <div key={`${identifier.kind}:${identifier.value}`} className="min-w-0 max-w-full truncate">
                 {formatIdentifier(identifier)}
                 {unique && <span className="ml-1 text-xs">only here</span>}
                 {!unique && counterpart != null && <span className="ml-1 text-xs">shared</span>}
               </div>
             );
           })}
+          {unlistedShared.map((phone) => (
+            <div key={`shared-phone:${phone.key}`} className="min-w-0 max-w-full truncate">
+              {phone.display}
+              <span className="ml-1 text-xs">shared</span>
+            </div>
+          ))}
+          {stats != null && (stats.eventCount > 0 || stats.communicationCount > 0) && (
+            <div className="whitespace-nowrap">
+              {stats.eventCount} events · {stats.communicationCount} messages
+            </div>
+          )}
         </div>
       )}
 
-      {stats != null && (stats.eventCount > 0 || stats.communicationCount > 0) && (
-        <div className="mt-1 text-xs text-muted-foreground">
-          {stats.eventCount} events · {stats.communicationCount} messages
-        </div>
-      )}
-
-      {person.description && identifiers.length === 0 && (
-        <div className="truncate text-sm text-muted-foreground">{person.description}</div>
+      {person.description && identifiers.length === 0 && unlistedShared.length === 0 && (
+        <div className="truncate text-xs text-muted-foreground device:text-sm">{person.description}</div>
       )}
     </div>
   );
@@ -566,22 +641,47 @@ export function humanReason(evidence: MergeCandidate['evidence']): string {
   }
 
   const email = evidence.find((item) => item.kind === 'email');
+
+  // The server holds a shared email back from its automatic merge when the
+  // names say two people (`email_check`, written by
+  // `memory/utils/emailIdentity.ts`): one side is you and the other side's
+  // name is someone else's (`self_endpoint`), or two names share nothing
+  // (`name_conflict`) — a card that lists one person's address under
+  // another person's name.
+  const emailCheck = evidence.find((item) => item.kind === 'email_check');
+  if (emailCheck != null) {
+    if (emailCheck.value === 'self_endpoint') {
+      return email != null
+        ? `Same email ${email.value}, but one side is you and the names differ`
+        : 'Shares an email with you, but the names differ';
+    }
+
+    return email != null
+      ? `Same email ${email.value}, but the names differ`
+      : 'Same email, but the names differ';
+  }
+
   if (email != null) {
     return `Same email: ${email.value}`;
   }
 
   const phone = evidence.find((item) => item.kind === 'phone');
   if (phone != null) {
+    // Always name the number: a "same phone" line that does not say which one
+    // leaves the reviewer comparing two lists of different numbers.
+    const numbers = phoneNumbersIn(phone.value)
+      .map((number) => number.display)
+      .join(', ');
     const check = evidence.find((item) => item.kind === 'phone_check');
     if (check != null) {
-      return `Same phone number, but ${phoneCheckReason(check.value)}`;
+      return `Same phone number ${numbers}, but ${phoneCheckReason(check.value)}`;
     }
 
     if ((phone.score ?? 0) >= 0.95) {
-      return `Same phone: ${phone.value}`;
+      return `Same phone: ${numbers}`;
     }
 
-    return `Same phone digits: ${phone.value} — country not confirmed`;
+    return `Same phone digits: ${numbers} — country not confirmed`;
   }
 
   const overlap = evidence.find((item) => item.kind === 'name_overlap');
@@ -607,10 +707,17 @@ export function humanReason(evidence: MergeCandidate['evidence']): string {
   return 'Proposed as the same person';
 }
 
-function describeDifferences(people: readonly MergablePerson[]): string[] {
+function describeDifferences(
+  people: readonly MergablePerson[],
+  sharedPhones: readonly SharedPhone[],
+): string[] {
   if (people.length < 2) {
     return [];
   }
+
+  const sharedPhoneKeys = new Set(sharedPhones.map((phone) => phone.key));
+  const isSharedPhone = (item: PersonIdentifier) =>
+    item.kind === 'phone' && sharedPhoneKeys.has(phoneKey(item.value));
 
   const [left, right] = people;
   const lines: string[] = [];
@@ -630,8 +737,12 @@ function describeDifferences(people: readonly MergablePerson[]): string[] {
 
   const leftKeys = new Set((left.identifiers ?? []).map(identifierKey));
   const rightKeys = new Set((right.identifiers ?? []).map(identifierKey));
-  const onlyLeft = (left.identifiers ?? []).filter((item) => !rightKeys.has(identifierKey(item)));
-  const onlyRight = (right.identifiers ?? []).filter((item) => !leftKeys.has(identifierKey(item)));
+  const onlyLeft = (left.identifiers ?? []).filter(
+    (item) => !rightKeys.has(identifierKey(item)) && !isSharedPhone(item),
+  );
+  const onlyRight = (right.identifiers ?? []).filter(
+    (item) => !leftKeys.has(identifierKey(item)) && !isSharedPhone(item),
+  );
 
   if (onlyLeft.length > 0 || onlyRight.length > 0) {
     const leftBit =
@@ -656,6 +767,71 @@ function describeDifferences(people: readonly MergablePerson[]): string[] {
 
 function identifierKey(identifier: PersonIdentifier): string {
   return `${identifier.kind}:${identifier.value}`;
+}
+
+/** One number a pair's phone evidence names: its join key and how a reviewer reads it. */
+export interface SharedPhone {
+  /** The last ten digits — the server's join key for a phone, and what `identifiers[].value` holds. */
+  key: string;
+  display: string;
+}
+
+const NO_SHARED_PHONES: readonly SharedPhone[] = [];
+
+function phoneKey(value: string): string {
+  const digits = value.replace(/\D/g, '');
+
+  return digits.length > 10 ? digits.slice(-10) : digits;
+}
+
+/**
+ * A phone number as a reviewer reads it. North American E.164 — the only
+ * country the server ever infers — gets its usual grouping; ten bare digits
+ * (a number whose country was NOT confirmed) are grouped without inventing
+ * one; anything else is shown as stored.
+ */
+export function formatPhoneNumber(value: string): string {
+  const trimmed = value.trim();
+  const nanp = /^\+1(\d{3})(\d{3})(\d{4})$/.exec(trimmed);
+
+  if (nanp != null) {
+    return `+1 (${nanp[1]}) ${nanp[2]}-${nanp[3]}`;
+  }
+
+  const ten = /^(\d{3})(\d{3})(\d{4})$/.exec(trimmed);
+
+  return ten != null ? `${ten[1]}-${ten[2]}-${ten[3]}` : trimmed;
+}
+
+/** The numbers in one evidence value — every writer joins several with `, `. */
+function phoneNumbersIn(value: string): SharedPhone[] {
+  return value
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => phoneKey(part).length > 0)
+    .map((part) => ({ key: phoneKey(part), display: formatPhoneNumber(part) }));
+}
+
+/**
+ * The numbers a pair's `phone` evidence says both records carry, once each.
+ * Markers (`phone_check`, `phone_country_conflict`) name no shared number.
+ */
+export function sharedPhoneNumbers(evidence: MergeCandidate['evidence']): SharedPhone[] {
+  const byKey = new Map<string, SharedPhone>();
+
+  for (const item of evidence) {
+    if (item.kind !== 'phone') {
+      continue;
+    }
+
+    for (const number of phoneNumbersIn(item.value)) {
+      if (!byKey.has(number.key)) {
+        byKey.set(number.key, number);
+      }
+    }
+  }
+
+  return [...byKey.values()];
 }
 
 function formatIdentifier(identifier: PersonIdentifier): string {

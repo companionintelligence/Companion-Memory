@@ -11,7 +11,7 @@ from typing import Any
 
 import httpx
 
-from .config import resolve_embedding_api_base, resolve_embedding_api_key, settings
+from .config import resolve_embedding_api_key, resolve_embedding_target, settings
 from .llm_config import LLMConfig, run_agent_sync
 
 MAX_HOURLY_PROMPT_CHARS = 24_000
@@ -619,11 +619,14 @@ def _build_insights_prompt(context: dict[str, Any]) -> str:
             changed_fields = delta.get("changed_fields", {})
 
             if node_type == "entity":
-                name_field = changed_fields.get("name", {})
+                # A rename records changed_fields.name; any other edit has no
+                # name pair, so fall back to the joined entity's current name.
+                name_field = (changed_fields or {}).get("name")
                 if isinstance(name_field, dict):
-                    name = name_field.get("new") or name_field.get("old", "Unknown")
+                    name = name_field.get("new") or name_field.get("old")
                 else:
-                    name = str(name_field) if name_field else "Unknown"
+                    name = str(name_field) if name_field else None
+                name = name or delta.get("entity_name") or "Unknown"
                 parts.append(f"- {change_type.upper()} {entity_type}: {name}")
             else:
                 parts.append(f"- {change_type.upper()} relationship: {entity_type}")
@@ -713,14 +716,19 @@ def generate_embedding(llm_config: LLMConfig, text: str) -> list[float]:
         return []
 
     try:
+        embedding_base, embedding_model = resolve_embedding_target(
+            settings.llm_api_base
+        )
         with httpx.Client(timeout=30.0) as client:
             response = client.post(
-                f"{resolve_embedding_api_base(settings.llm_api_base)}/embeddings",
+                f"{embedding_base}/embeddings",
                 json={
-                    "model": settings.embedding_model,
+                    "model": embedding_model,
                     "input": text[:8000],  # Limit input size
                 },
-                headers={"Authorization": f"Bearer {resolve_embedding_api_key()}"},
+                headers={
+                    "Authorization": f"Bearer {resolve_embedding_api_key(embedding_base)}"
+                },
             )
             response.raise_for_status()
             data = response.json()

@@ -81,10 +81,10 @@ def test_summarizer_class_only_owns_the_dossier_path() -> None:
 def test_summarizer_instance_builds_only_the_dossier_agent() -> None:
     """One agent, because there is one caller.
 
-    `summarizer = Summarizer()` runs at import time, so every agent declared in
-    __init__ is constructed on any import of this module -- including by
-    llm_config, which only wants the response models. Agents for paths nobody
-    calls are import-time cost for nothing.
+    `summarizer = Summarizer()` runs at import time, on any import of this
+    module -- including by llm_config, which only wants the response models. So
+    __init__ only holds a slot for the agent, built on first use. A slot for a
+    path nobody calls would be dead code that reads as a live one.
     """
     agents = {name for name in _public_names(summarizer) if name.endswith("_agent")}
     assert agents == {"dossier_agent"}

@@ -1,48 +1,88 @@
+import type { Readable } from 'node:stream';
+
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import type { Request, Response } from 'express';
 import { DataSource, QueryRunner } from 'typeorm';
-import { v4 as uuidv4 } from 'uuid';
+import { validate as isUuid, v4 as uuidv4 } from 'uuid';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
-import { FileService } from '@ci/domains/files';
+import { FileService, type ObjectWriter } from '@ci/domains/files';
 import { UserService } from '@ci/domains/user';
 
 import {
   FILE_CHUNK_BYTES,
   PORTABILITY_NDJSON_CONTENT_TYPE,
+  PORTABILITY_NDJSON_VERSION,
+  fixedSizeChunks,
   readPortabilityNdjsonStream,
-  serializePortabilityLine,
+  writePortabilityLine,
   type PortabilityStreamRecord,
 } from '../portabilityNdjson';
 import type {
   FileBlobSnapshot,
   ImportResult,
+  UserColumn,
   UserDataArchive,
   UserProfileSnapshot,
   UserScopedTable,
 } from '../types';
 import {
+  DISCOVER_INSERTABLE_COLUMNS_SQL,
+  DISCOVER_LINK_REFERENCES_SQL,
+  DISCOVER_UNDECLARED_ENTITY_LINKS_SQL,
   DISCOVER_USER_TABLES_SQL,
+  type DiscoveredEntityLink,
+  type DiscoveredLinkReference,
+  type DiscoveredUserColumn,
+  EXCLUDED_TABLES,
+  type LinkTable,
   USER_DATA_SCHEMAS,
-  isExcluded,
+  findAccountLinks,
+  findLinkTables,
+  foreignLinkSql,
+  groupUserTables,
+  linkOutOfAccountMessage,
   qualifiedName,
   quoteIdentifier,
+  quotedTableName,
 } from '../userDataTables';
 
+/**
+ * Rows of a {@link LinkTable} the import moved into a temporary table, to put
+ * back once their rows are in.
+ */
+interface SetAsideLinks {
+  table: LinkTable;
+  /** The `pg_temp` table holding them, quoted; dropped when the transaction ends. */
+  stash: string;
+  rows: number;
+}
+
 const ARCHIVE_VERSION = 1 as const;
-const INSERT_CHUNK_SIZE = 200;
 /** The one user-scoped table whose rows point at object storage. */
 const FILES_TABLE = 'ci.files';
 const EXPORT_ROW_PAGE_SIZE = 500;
 
+/**
+ * A file the stream import is partway through. Its chunks go to the object
+ * store as they arrive, so only the part being filled is held in memory, not
+ * the file (see {@link FileService.openObjectWriter}).
+ */
 interface PendingFileImport {
-  /** The key the ARCHIVE names — resolved through the import's FileKeyMap at write time. */
-  archivedKey: string;
+  /** The file's id in the archive. */
+  id: string;
+  /** Where the bytes land: the archive's key resolved through the import's FileKeyMap. */
+  key: string;
+  writer: ObjectWriter;
   total: number;
-  parts: Map<number, string>;
+  /**
+   * Chunks written so far. The export writes a file's chunks one after another
+   * in index order, so this is also the index the next chunk must have.
+   */
+  received: number;
 }
 
 /**
@@ -69,6 +109,15 @@ class FileKeyMap {
 
   constructor(private readonly ownedKeys: ReadonlySet<string>) {}
 
+  /**
+   * Every key this import minted. Only rows the import wrote point at them,
+   * so a failed import can delete them all. Most of them hold a file it
+   * stored; deleting one that holds nothing is harmless.
+   */
+  mintedKeys(): string[] {
+    return [...this.minted.values()];
+  }
+
   resolve(archivedKey: string): string {
     if (this.ownedKeys.has(archivedKey)) {
       return archivedKey;
@@ -83,6 +132,118 @@ class FileKeyMap {
 
     return key;
   }
+}
+
+/**
+ * The "You" person an archive's manifest names, when it names one. Only a
+ * well-formed id: anything else would fail the uuid cast in
+ * reattachSelfEntity and take the whole import down with it.
+ */
+function profileEntityId(profile: Record<string, unknown> | null): string | null {
+  const entityId = profile?.entityId;
+
+  return typeof entityId === 'string' && isUuid(entityId) ? entityId : null;
+}
+
+/** A link an INSERT left empty, set once every row is in ({@link UserDataPortabilityService.restoreLinks}). */
+interface PendingLink {
+  table: UserScopedTable;
+  column: string;
+  /** The column that names the row being linked, and its value there. */
+  rowKeyColumn: string;
+  rowKey: unknown;
+  value: unknown;
+  /** Where the link points: another row of `table`, or a row of a table filled later. */
+  parent: { schema: string; table: string; key: string; userColumn: UserColumn };
+}
+
+/**
+ * Links an INSERT could not set yet, and rows held back until they can.
+ *
+ * An export lists a table's rows in storage order, and an UPDATE moves a row to
+ * the end: edit a message after it was answered and the export lists the reply
+ * first, whose `parent_message_id` then names a row the import has not inserted
+ * yet. Those foreign keys are checked at once and the app's role cannot switch
+ * the checks off.
+ *
+ * Inserting such a row with the link empty and setting it at the end breaks
+ * the partial unique indexes that read a link column: two cities of one name
+ * listed before their regions collide on `entities_admin_place_uniq` (it keys
+ * on `COALESCE(parent_place_id, …)`), and a merged product model listed before
+ * the model it was merged into collides with it on
+ * `product_models_brand_model_uniq` (`WHERE merged_into_product_id IS NULL`).
+ * So the row waits here until the row it names is in, and goes in with the
+ * link set. Only a link whose row never arrives (another account's, a row the
+ * archive lacks, a row naming itself) goes in empty and lands in
+ * {@link pending}.
+ */
+class ImportLinks {
+  readonly pending: PendingLink[] = [];
+
+  /** The table whose rows are held; rows are held for one table at a time. */
+  heldTable: UserScopedTable | null = null;
+
+  /** Held rows (already normalized), by the `${key column}\0${value}` of the row each waits for. */
+  private readonly held = new Map<string, Array<Record<string, unknown>>>();
+
+  hold(table: UserScopedTable, link: { column: string; key: string }, row: Record<string, unknown>): void {
+    const waitsFor = `${link.key}\0${String(row[link.column])}`;
+    const waiting = this.held.get(waitsFor);
+
+    this.heldTable = table;
+
+    if (waiting) {
+      waiting.push(row);
+    } else {
+      this.held.set(waitsFor, [row]);
+    }
+  }
+
+  /** The held rows that were waiting for `row`, which just went in. */
+  release(table: UserScopedTable, row: Record<string, unknown>): Array<Record<string, unknown>> {
+    const keys = new Set((table.selfReferences ?? []).map(({ key }) => key));
+
+    return [...keys].flatMap((key) => {
+      const waitsFor = `${key}\0${String(row[key])}`;
+      const waiting = this.held.get(waitsFor) ?? [];
+
+      this.held.delete(waitsFor);
+
+      return waiting;
+    });
+  }
+
+  /** The earliest held row, taken out, or null once none is left. */
+  takeHeld(): Record<string, unknown> | null {
+    const first = this.held.entries().next();
+
+    if (first.done) {
+      this.heldTable = null;
+
+      return null;
+    }
+
+    const [waitsFor, [row, ...rest]] = first.value;
+
+    if (rest.length > 0) {
+      this.held.set(waitsFor, rest);
+    } else {
+      this.held.delete(waitsFor);
+    }
+
+    return row;
+  }
+}
+
+/** What an import sets up before its first row and needs again after its last. */
+interface ImportState {
+  keyMap: FileKeyMap;
+  selfEntityIds: Array<string | null>;
+  setAside: SetAsideLinks[];
+  links: ImportLinks;
+  tables: readonly UserScopedTable[];
+  /** Every single-column foreign key in the account's schemas, read once at the start. */
+  references: readonly DiscoveredLinkReference[];
 }
 
 @Injectable()
@@ -107,36 +268,63 @@ export class UserDataPortabilityService {
 
     const manifest: PortabilityStreamRecord = {
       type: 'manifest',
-      version: ARCHIVE_VERSION,
+      version: PORTABILITY_NDJSON_VERSION,
       format: 'ndjson',
       exportedAt,
       userId: context.userId,
       profile: profile as Record<string, unknown> | null,
     };
 
-    res.write(`${serializePortabilityLine(manifest)}\n`);
+    let rows = 0;
+    let files = 0;
 
-    const tables = await this.discoverUserTables();
+    // Every line waits for the connection to take the one before it, so a
+    // file of any size passes through in FILE_CHUNK_BYTES pieces. The archive
+    // used to be queued as fast as it could be read: a 1.5 GB file sat in
+    // memory several times over and the transfer died partway, with nothing
+    // in what had arrived to say so.
+    try {
+      await writePortabilityLine(res, manifest);
 
-    for (const table of tables) {
-      for await (const row of this.iterateUserRows(context.userId, table)) {
-        const line: PortabilityStreamRecord = {
-          type: 'row',
-          table: qualifiedName(table),
-          row: this.serializeRow(row),
-        };
-        res.write(`${serializePortabilityLine(line)}\n`);
+      const tables = await this.discoverUserTables();
+
+      for (const table of tables) {
+        for await (const row of this.iterateUserRows(context.userId, table)) {
+          await writePortabilityLine(res, {
+            type: 'row',
+            table: qualifiedName(table),
+            row: this.serializeRow(row),
+          });
+          rows += 1;
+        }
       }
-    }
 
-    const fileRows = await this.selectUserRows(context.userId, {
-      schema: 'ci',
-      table: 'files',
-      userColumn: 'user_id',
-    });
+      const fileRows = await this.selectUserRows(context.userId, {
+        schema: 'ci',
+        table: 'files',
+        userColumn: 'user_id',
+      });
 
-    for (const row of fileRows) {
-      await this.writeFileChunks(context, res, row);
+      for (const row of fileRows) {
+        if (await this.writeFileChunks(context, res, row)) {
+          files += 1;
+        }
+      }
+
+      await writePortabilityLine(res, { type: 'end', rows, files });
+    } catch (error) {
+      // The 200 and part of the archive are already out. Ending the response
+      // normally would hand over a shorter archive that reads as whole, so it
+      // is cut instead. The download fails and an import of what arrived has
+      // no end record.
+      this.logger.warn('Export stopped before the end of the archive', {
+        rows,
+        files,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      res.destroy();
+
+      return;
     }
 
     res.end();
@@ -152,7 +340,12 @@ export class UserDataPortabilityService {
     const tables = await this.discoverUserTables();
     const tableByName = new Map(tables.map((table) => [qualifiedName(table), table]));
     const touchedTables = new Set<string>();
-    const pendingFiles = new Map<string, PendingFileImport>();
+    // The file being written. The export writes one file's chunks before the
+    // next. Each file in progress holds a part in memory, so only one may be.
+    let current: PendingFileImport | null = null;
+    // Files already stored. The export writes each file once. A chunk for one
+    // of these would start it over from nothing.
+    const finishedFiles = new Set<string>();
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -160,13 +353,24 @@ export class UserDataPortabilityService {
 
     let rowsImported = 0;
     let filesRestored = 0;
-    let started = false;
-    let keyMap: FileKeyMap | null = null;
+    let rowRecords = 0;
+    let state: ImportState | null = null;
+    let archiveVersion: number | null = null;
+    let end: { rows: number; files: number } | null = null;
+    // Set as COMMIT is sent. A COMMIT that fails may still have committed (the
+    // connection can drop after the database applied it), so the files it
+    // stored then stay: deleting them could leave committed rows pointing at
+    // nothing.
+    let committing = false;
 
     try {
       await readPortabilityNdjsonStream(req, async (record) => {
+        if (end) {
+          throw new BadRequestException('Archive has records after its end record');
+        }
+
         if (record.type === 'manifest') {
-          if (started) {
+          if (state) {
             throw new BadRequestException('Archive manifest must be the first record');
           }
 
@@ -174,84 +378,186 @@ export class UserDataPortabilityService {
             throw new BadRequestException('This archive belongs to a different account');
           }
 
+          archiveVersion = record.version;
+
           await this.setReplicationRole(queryRunner, 'replica');
-
-          // Must precede the deletes: "owned" means owned before this import
-          // touched anything, and the archive has no say in it.
-          keyMap = new FileKeyMap(await this.snapshotOwnedFileKeys(queryRunner, context.userId));
-
-          for (const table of [...tables].reverse()) {
-            await this.deleteUserRows(queryRunner, context.userId, table);
-          }
-
-          started = true;
+          state = await this.beginImport(queryRunner, context.userId, record.profile, tables);
 
           return;
         }
 
-        if (!started || !keyMap) {
+        if (!state) {
           throw new BadRequestException('Archive manifest must be the first record');
         }
 
+        const { keyMap, links } = state;
+
+        // Rows wait for rows of their own table only; anything else next means
+        // that table is done.
+        if (links.heldTable && (record.type !== 'row' || record.table !== qualifiedName(links.heldTable))) {
+          rowsImported += await this.insertHeldRows(queryRunner, context.userId, links);
+        }
+
+        if (record.type === 'end') {
+          end = { rows: record.rows, files: record.files };
+
+          return;
+        }
+
         if (record.type === 'row') {
+          rowRecords += 1;
+
           const table = tableByName.get(record.table);
 
           if (!table) {
+            // An archive written before a table joined EXCLUDED_TABLES still
+            // carries its rows. They are dropped, not restored, and not an
+            // error: refusing would make every older export unimportable.
+            if (EXCLUDED_TABLES.has(record.table)) {
+              return;
+            }
+
             throw new BadRequestException(`Unknown table in archive: ${record.table}`);
           }
 
-          rowsImported += await this.insertUserRows(queryRunner, context.userId, table, [record.row], keyMap);
+          rowsImported += await this.insertUserRows(
+            queryRunner,
+            context.userId,
+            table,
+            [record.row],
+            keyMap,
+            links,
+          );
           touchedTables.add(record.table);
 
           return;
         }
 
-        const pending =
-          pendingFiles.get(record.id) ??
-          ({
-            archivedKey: record.key,
-            total: record.total,
-            parts: new Map<number, string>(),
-          } satisfies PendingFileImport);
-
-        pending.parts.set(record.index, record.data);
-        pendingFiles.set(record.id, pending);
-
-        if (pending.parts.size === pending.total) {
-          const ordered = Array.from({ length: pending.total }, (_, index) => {
-            const part = pending.parts.get(index);
-
-            if (!part) {
-              throw new BadRequestException(`Missing file chunk ${index} for ${record.id}`);
-            }
-
-            return part;
-          });
-
-          await this.fileService.putObject(
-            context,
-            config.staticfiles.bucket,
-            keyMap.resolve(pending.archivedKey),
-            Buffer.concat(ordered.map((part) => Buffer.from(part, 'base64'))),
+        // Checked before a writer opens, so the stored file is not started over.
+        if (finishedFiles.has(record.id)) {
+          throw new BadRequestException(
+            `File chunk ${record.index} for ${record.id} came after the file was whole`,
           );
+        }
+
+        let file = current;
+
+        // A new file before the last one is whole means that one is missing chunks.
+        if (file && file.id !== record.id) {
+          throw new BadRequestException(`Missing file chunk ${file.received} for ${file.id}`);
+        }
+
+        if (!file) {
+          const key = keyMap.resolve(record.key);
+
+          file = {
+            id: record.id,
+            key,
+            writer: this.fileService.openObjectWriter(
+              context,
+              config.staticfiles.bucket,
+              key,
+              record.total * FILE_CHUNK_BYTES,
+            ),
+            total: record.total,
+            received: 0,
+          };
+          current = file;
+        }
+
+        if (record.total !== file.total) {
+          throw new BadRequestException(
+            `File chunk ${record.index} for ${record.id} counts ${record.total} chunks, its first counted ${file.total}`,
+          );
+        }
+
+        // Counted, not kept. A chunk out of turn means the one before it is
+        // missing (or this one came twice). The bytes already written cannot
+        // be put back in order.
+        if (record.index !== file.received) {
+          throw new BadRequestException(
+            record.index < file.received
+              ? `File chunk ${record.index} for ${record.id} arrived twice`
+              : `Missing file chunk ${file.received} for ${record.id}`,
+          );
+        }
+
+        const piece = Buffer.from(record.data, 'base64');
+
+        // The export cuts files into FILE_CHUNK_BYTES pieces. The writer sizes
+        // its parts from that to stay under the store's part count.
+        if (piece.length > FILE_CHUNK_BYTES) {
+          throw new BadRequestException(
+            `File chunk ${record.index} for ${record.id} holds ${piece.length} bytes, more than ${FILE_CHUNK_BYTES}`,
+          );
+        }
+
+        await file.writer.write(piece);
+        file.received += 1;
+
+        // An empty file is one chunk of "", so it completes here too.
+        if (file.received === file.total) {
+          await file.writer.finish();
+          current = null;
+          finishedFiles.add(record.id);
           filesRestored += 1;
-          pendingFiles.delete(record.id);
         }
       });
 
-      if (!started) {
+      // A const copy: TypeScript does not follow the assignment in the callback.
+      const begun = state as ImportState | null;
+
+      if (!begun) {
         throw new BadRequestException('Archive is missing a manifest record');
       }
 
-      if (pendingFiles.size > 0) {
+      // Const copies, as above.
+      const ended = end as { rows: number; files: number } | null;
+      const version = archiveVersion as number | null;
+
+      // Version 1 archives were written without an end record and still import.
+      // Checked before the file chunks. Most of an archive's bytes are file
+      // chunks, so a cut download usually stops partway through a file. This
+      // message says why; "missing file chunks" would not.
+      if (version !== 1 && !ended) {
+        throw new BadRequestException('Archive stops before its end record: the export was cut short');
+      }
+
+      // Cast for the same reason as the copies above.
+      if ((current as PendingFileImport | null) !== null) {
         throw new BadRequestException('Archive is missing one or more file chunks');
       }
 
+      if (ended && (ended.rows !== rowRecords || ended.files !== filesRestored)) {
+        throw new BadRequestException(
+          `Archive end record counts ${ended.rows} rows and ${ended.files} files, but the archive holds ${rowRecords} rows and ${filesRestored} files`,
+        );
+      }
+
+      rowsImported += await this.finishImport(queryRunner, context.userId, begun);
       await this.setReplicationRole(queryRunner, 'origin');
+      committing = true;
       await queryRunner.commitTransaction();
     } catch (error) {
       await this.setReplicationRole(queryRunner, 'origin').catch(() => undefined);
-      await queryRunner.rollbackTransaction();
+
+      // A rollback that fails (the connection is gone) must not replace the
+      // import's own error. Postgres ends a transaction whose connection drops.
+      try {
+        await queryRunner.rollbackTransaction();
+      } catch (rollbackError) {
+        this.logger.warn('Could not roll back a failed import', {
+          error: rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
+        });
+      }
+
+      const begun = state as ImportState | null;
+
+      await this.discardStreamedFiles(
+        current as PendingFileImport | null,
+        committing || !begun ? [] : begun.keyMap.mintedKeys(),
+      );
+
       throw error;
     } finally {
       await queryRunner.release();
@@ -263,6 +569,47 @@ export class UserDataPortabilityService {
       filesRestored,
       format: 'ndjson',
     };
+  }
+
+  /**
+   * Take back what a failed stream import put in the object store, as the
+   * rollback takes back its rows. The file it was partway through is aborted
+   * so no half-written file or unfinished upload stays behind. The keys it
+   * minted are deleted: nothing points at them now.
+   *
+   * A file restored under a key the account already owned stays. The row that
+   * points at it survives the rollback and the archive held that same file.
+   * Never throws, so the import's own error is what the caller sees.
+   */
+  private async discardStreamedFiles(
+    unfinished: PendingFileImport | null,
+    mintedKeys: string[],
+  ): Promise<void> {
+    // try/catch rather than .catch(). A call that throws before it returns a
+    // promise would otherwise escape and replace the import's own error.
+    if (unfinished) {
+      try {
+        await unfinished.writer.abort();
+      } catch (error) {
+        this.logger.warn('Could not abort a file upload after a failed import', {
+          key: unfinished.key,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    if (mintedKeys.length === 0) {
+      return;
+    }
+
+    try {
+      await this.fileService.deleteObjects(config.staticfiles.bucket, mintedKeys);
+    } catch (error) {
+      this.logger.warn('Could not delete the files a failed import stored', {
+        files: mintedKeys.length,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /** Legacy single-json export for small accounts and tests. */
@@ -297,25 +644,36 @@ export class UserDataPortabilityService {
     await queryRunner.startTransaction();
 
     let rowsImported = 0;
-    let filesRestored = 0;
+    let filesRestored: number;
 
     try {
       await this.setReplicationRole(queryRunner, 'replica');
 
       const tables = await this.discoverUserTables();
-      // Before the deletes — see FileKeyMap.
-      const keyMap = new FileKeyMap(await this.snapshotOwnedFileKeys(queryRunner, context.userId));
-
-      for (const table of [...tables].reverse()) {
-        await this.deleteUserRows(queryRunner, context.userId, table);
-      }
+      // The archive's profile is any object here; profileEntityId takes only a string id.
+      const state = await this.beginImport(
+        queryRunner,
+        context.userId,
+        archive.profile as Record<string, unknown> | null,
+        tables,
+      );
 
       for (const table of tables) {
         const rows = archive.tables[qualifiedName(table)] ?? [];
-        rowsImported += await this.insertUserRows(queryRunner, context.userId, table, rows, keyMap);
+        rowsImported += await this.insertUserRows(
+          queryRunner,
+          context.userId,
+          table,
+          rows,
+          state.keyMap,
+          state.links,
+        );
+        rowsImported += await this.insertHeldRows(queryRunner, context.userId, state.links);
       }
 
-      filesRestored = await this.restoreFileBlobs(context, archive.fileBlobs, keyMap);
+      rowsImported += await this.finishImport(queryRunner, context.userId, state);
+
+      filesRestored = await this.restoreFileBlobs(context, archive.fileBlobs, state.keyMap);
 
       await this.setReplicationRole(queryRunner, 'origin');
       await queryRunner.commitTransaction();
@@ -333,6 +691,86 @@ export class UserDataPortabilityService {
       filesRestored,
       format: 'json',
     };
+  }
+
+  /**
+   * Everything both import paths do before the first archive row: note which
+   * file keys the account owns, unhook what would refuse the deletes, then
+   * delete the account's rows, children first.
+   */
+  private async beginImport(
+    queryRunner: QueryRunner,
+    userId: string,
+    profile: Record<string, unknown> | null,
+    tables: readonly UserScopedTable[],
+  ): Promise<ImportState> {
+    // Must precede the deletes: "owned" means owned before this import
+    // touched anything, and the archive has no say in it. See FileKeyMap.
+    const keyMap = new FileKeyMap(await this.snapshotOwnedFileKeys(queryRunner, userId));
+    const selfEntityIds = [profileEntityId(profile), await this.detachSelfEntity(queryRunner, userId)];
+    const references = ((await queryRunner.query(DISCOVER_LINK_REFERENCES_SQL, [USER_DATA_SCHEMAS])) ??
+      []) as DiscoveredLinkReference[];
+    const setAside = await this.setAsideLinkedRows(queryRunner, userId, tables, references);
+
+    for (const table of [...tables].reverse()) {
+      await this.deleteUserRows(queryRunner, userId, table);
+    }
+
+    return { keyMap, selfEntityIds, setAside, links: new ImportLinks(), tables, references };
+  }
+
+  /**
+   * Everything both import paths do after the last archive row, before the
+   * commit. Returns the rows it inserted (the ones still held back).
+   */
+  private async finishImport(queryRunner: QueryRunner, userId: string, state: ImportState): Promise<number> {
+    const inserted = await this.insertHeldRows(queryRunner, userId, state.links);
+
+    await this.restoreLinks(queryRunner, userId, state.links);
+    await this.restoreLinkedRows(queryRunner, userId, state.setAside);
+    await this.reattachSelfEntity(queryRunner, userId, state.selfEntityIds);
+    await this.refuseLinksOutOfAccount(queryRunner, userId, state.tables, state.references);
+
+    return inserted;
+  }
+
+  /**
+   * Refuse the archive, naming the link, when a row it put in links to a row
+   * another account owns, or a row with no owner. Every row of this account is
+   * the archive's by now (the import deleted the rest first), so this reads what
+   * the archive set.
+   *
+   * A foreign key only asks that the parent exists, so an archive that named
+   * someone's thread, person or place by id got the link and with it their
+   * row in this account's chat, graph and known places. An export never
+   * carries one, as its links are between the account's own rows. A row with no
+   * owner counts too: rows a deleted account left behind lose their owner (the
+   * key is ON DELETE SET NULL), and they are no more this account's than a live
+   * account's. An id that names no row at all (a column with no key can hold
+   * one) imports as before.
+   *
+   * One join per link, over the rows that set it. A NULL link joins nothing, so
+   * the planner can hash the parent's keys once instead of probing it per row.
+   */
+  private async refuseLinksOutOfAccount(
+    queryRunner: QueryRunner,
+    userId: string,
+    tables: readonly UserScopedTable[],
+    references: readonly DiscoveredLinkReference[],
+  ): Promise<void> {
+    const entityLinks = ((await queryRunner.query(DISCOVER_UNDECLARED_ENTITY_LINKS_SQL, [
+      USER_DATA_SCHEMAS,
+    ])) ?? []) as DiscoveredEntityLink[];
+
+    for (const link of findAccountLinks(references, entityLinks, tables)) {
+      const [found] = ((await queryRunner.query(foreignLinkSql(link), [userId])) ?? []) as Array<{
+        id: string;
+      }>;
+
+      if (found) {
+        throw new BadRequestException(linkOutOfAccountMessage(link, found.id));
+      }
+    }
   }
 
   private async assertConfirmEmail(context: UserServiceContext, confirmEmail: string): Promise<void> {
@@ -362,22 +800,11 @@ export class UserDataPortabilityService {
   }
 
   private async discoverUserTables(): Promise<UserScopedTable[]> {
-    const discovered = (await this.dataSource.query(DISCOVER_USER_TABLES_SQL, [USER_DATA_SCHEMAS])) as Array<{
-      schema: string;
-      table: string;
-      user_column: string;
-      columns?: string[] | null;
-    }>;
+    const discovered = (await this.dataSource.query(DISCOVER_USER_TABLES_SQL, [
+      USER_DATA_SCHEMAS,
+    ])) as DiscoveredUserColumn[];
 
-    return discovered
-      .filter((row) => !isExcluded(row))
-      .map((row) => ({
-        schema: row.schema,
-        table: row.table,
-        userColumn: row.user_column as UserScopedTable['userColumn'],
-        // Fail closed: a row without a column list can accept no imported rows.
-        columns: Array.isArray(row.columns) ? row.columns : [],
-      }));
+    return groupUserTables(discovered);
   }
 
   private async *iterateUserRows(
@@ -410,45 +837,102 @@ export class UserDataPortabilityService {
     }
   }
 
+  /**
+   * Stream one file's bytes as `file-chunk` records, read from the object
+   * store a chunk at a time. True when every chunk was written.
+   *
+   * A file that can't be opened, or whose bytes can't be read before its first
+   * chunk goes out, is skipped with a warning, as before: its row is in the
+   * archive, its bytes are not. A failure once the first chunk is going out
+   * can't be skipped (the archive would hold half a file), so it throws and
+   * the export is cut.
+   */
   private async writeFileChunks(
     context: UserServiceContext,
     res: Response,
     row: Record<string, unknown>,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const id = String(row.id ?? '');
     const bucket = String(row.bucket ?? '');
     const key = String(row.key ?? '');
 
     if (!id || !bucket || !key) {
-      return;
+      return false;
     }
 
-    try {
-      const content = await this.fileService.getFileContent(context, key);
-      const buffer = Buffer.from(content);
-      const total = Math.max(1, Math.ceil(buffer.length / FILE_CHUNK_BYTES));
-
-      for (let index = 0; index < total; index += 1) {
-        const start = index * FILE_CHUNK_BYTES;
-        const chunk = buffer.subarray(start, start + FILE_CHUNK_BYTES);
-        const line: PortabilityStreamRecord = {
-          type: 'file-chunk',
-          id,
-          bucket,
-          key,
-          index,
-          total,
-          data: chunk.toString('base64'),
-        };
-        res.write(`${serializePortabilityLine(line)}\n`);
-      }
-    } catch (error) {
+    const skip = (error: unknown): false => {
       this.logger.warn('Skipped file blob during export', {
         fileId: id,
         key,
         error: error instanceof Error ? error.message : String(error),
       });
+
+      return false;
+    };
+
+    let stream: Readable;
+    let total: number;
+
+    try {
+      const opened = await this.fileService.getFileStreamWithLength(context, key);
+
+      if (opened.contentLength == null) {
+        opened.stream.destroy();
+        throw new Error('The object store gave no length for this file');
+      }
+
+      stream = opened.stream;
+      total = Math.max(1, Math.ceil(opened.contentLength / FILE_CHUNK_BYTES));
+    } catch (error) {
+      return skip(error);
     }
+
+    const chunk = (index: number, data: Buffer): PortabilityStreamRecord => ({
+      type: 'file-chunk',
+      id,
+      bucket,
+      key,
+      index,
+      total,
+      data: data.toString('base64'),
+    });
+    let index = 0;
+    let writing = false;
+
+    try {
+      for await (const data of fixedSizeChunks(stream, FILE_CHUNK_BYTES)) {
+        // Caught before the line goes out, so the archive never holds a chunk
+        // numbered past the file's total.
+        if (index >= total) {
+          throw new Error(`File ${id} runs past the ${total} chunks expected from its length`);
+        }
+
+        writing = true;
+        await writePortabilityLine(res, chunk(index, data));
+        index += 1;
+      }
+    } catch (error) {
+      // Up to its first line nothing of this file is in the archive. A read
+      // that fails there (the object store dropped the connection) skips the
+      // file the way a failed open does, instead of cutting the export.
+      if (writing) {
+        throw error;
+      }
+
+      return skip(error);
+    }
+
+    // An empty file is still one (empty) chunk, so the import restores it.
+    if (index === 0) {
+      await writePortabilityLine(res, chunk(0, Buffer.alloc(0)));
+      index = 1;
+    }
+
+    if (index !== total) {
+      throw new Error(`File ${id} came to ${index} chunks, ${total} expected from its length`);
+    }
+
+    return true;
   }
 
   private async exportProfile(context: UserServiceContext): Promise<UserProfileSnapshot | null> {
@@ -466,6 +950,7 @@ export class UserDataPortabilityService {
       onboarded: user.onboarded,
       onboardedAt: user.onboardedAt?.toISOString() ?? null,
       timezone: user.timezone,
+      timeFormat: user.timeFormat,
       onboardingProgress: (user.onboardingProgress as Record<string, unknown> | null) ?? null,
       createdAt: user.createdAt.toISOString(),
       updatedAt: user.updatedAt.toISOString(),
@@ -498,36 +983,161 @@ export class UserDataPortabilityService {
     table: UserScopedTable,
     rows: Record<string, unknown>[],
     keyMap: FileKeyMap,
+    links: ImportLinks,
   ): Promise<number> {
-    if (rows.length === 0) {
+    let inserted = 0;
+    const knownColumns = new Set(table.columns);
+
+    for (const row of rows) {
+      const normalized = this.normalizeImportRow(row, userId, table, keyMap);
+
+      // The archive's keys become identifiers in the statements below. Only
+      // names the catalog reports for this table may get there: anything else
+      // is either drift between the exporting and importing schema (which the
+      // INSERT would have rejected anyway, just later and less clearly) or an
+      // attempt to break out of the identifier position. Reject before SQL.
+      this.assertKnownColumns(table, Object.keys(normalized), knownColumns);
+
+      // A reference into a table filled later cannot be set yet; it goes in
+      // empty and restoreLinks sets it once that table is in.
+      const rowKey = table.primaryKey ? normalized[table.primaryKey] : null;
+
+      for (const { column, parent } of table.laterReferences ?? []) {
+        if (normalized[column] != null && rowKey != null) {
+          links.pending.push({
+            table,
+            column,
+            rowKeyColumn: table.primaryKey!,
+            rowKey,
+            value: normalized[column],
+            parent,
+          });
+          normalized[column] = null;
+        }
+      }
+
+      inserted += await this.insertOrHold(queryRunner, userId, table, normalized, links, false);
+    }
+
+    return inserted;
+  }
+
+  /**
+   * Insert one normalized row, or hold it in `links` while a row of the same
+   * table that it names is not in yet. Every held row this one was the missing
+   * row for goes in after it. With `force`, the row goes in regardless and the
+   * links it cannot set yet wait in {@link ImportLinks.pending}.
+   */
+  private async insertOrHold(
+    queryRunner: QueryRunner,
+    userId: string,
+    table: UserScopedTable,
+    row: Record<string, unknown>,
+    links: ImportLinks,
+    force: boolean,
+  ): Promise<number> {
+    const target = quotedTableName(table);
+    const queue: Array<{ row: Record<string, unknown>; force: boolean }> = [{ row, force }];
+    let inserted = 0;
+
+    while (queue.length > 0) {
+      const next = queue.shift()!;
+      const values = { ...next.row };
+      const absent = await this.absentSelfTargets(queryRunner, userId, table, values);
+      // A row naming itself can only be linked once it is in.
+      const waitFor = absent.find(({ column, key }) => String(values[column]) !== String(values[key]));
+
+      if (waitFor && !next.force) {
+        links.hold(table, waitFor, next.row);
+        continue;
+      }
+
+      for (const { column, key } of absent) {
+        if (values[key] != null) {
+          links.pending.push({
+            table,
+            column,
+            rowKeyColumn: key,
+            rowKey: values[key],
+            value: values[column],
+            parent: { schema: table.schema, table: table.table, key, userColumn: table.userColumn },
+          });
+        }
+
+        values[column] = null;
+      }
+
+      const columns = Object.keys(values);
+      const placeholders = columns.map((_, index) => `$${index + 1}`).join(', ');
+
+      await queryRunner.query(
+        `INSERT INTO ${target} (${columns.map(quoteIdentifier).join(', ')}) VALUES (${placeholders})`,
+        Object.values(values),
+      );
+      inserted += 1;
+
+      for (const waiting of links.release(table, values)) {
+        queue.push({ row: waiting, force: false });
+      }
+    }
+
+    return inserted;
+  }
+
+  /**
+   * The links of `row` to other rows of its table whose row is not in yet as
+   * one of this account's. The account's rows were all deleted before the
+   * first insert, so "in" means this import put it there.
+   */
+  private async absentSelfTargets(
+    queryRunner: QueryRunner,
+    userId: string,
+    table: UserScopedTable,
+    row: Record<string, unknown>,
+  ): Promise<Array<{ column: string; key: string }>> {
+    const selfLinks = (table.selfReferences ?? []).filter(({ column }) => row[column] != null);
+
+    if (selfLinks.length === 0) {
+      return [];
+    }
+
+    const present = new Set<string>();
+
+    for (const key of new Set(selfLinks.map((link) => link.key))) {
+      const wanted = selfLinks.filter((link) => link.key === key).map(({ column }) => String(row[column]));
+      const found = ((await queryRunner.query(
+        `SELECT p.${quoteIdentifier(key)}::text AS key FROM ${quotedTableName(table)} p
+          WHERE p.${quoteIdentifier(key)} = ANY($1) AND p.${quoteIdentifier(table.userColumn)} = $2`,
+        [wanted, userId],
+      )) ?? []) as Array<{ key: string }>;
+
+      for (const { key: value } of found) {
+        present.add(`${key}\0${value}`);
+      }
+    }
+
+    return selfLinks.filter(({ column, key }) => !present.has(`${key}\0${String(row[column])}`));
+  }
+
+  /**
+   * Put in the rows still held back once their table is done: the row each
+   * waits for is not coming (or is held itself, in a cycle), so each goes in
+   * with that link empty for restoreLinks, and lets in whatever waited on it.
+   */
+  private async insertHeldRows(
+    queryRunner: QueryRunner,
+    userId: string,
+    links: ImportLinks,
+  ): Promise<number> {
+    const table = links.heldTable;
+    let inserted = 0;
+
+    if (!table) {
       return 0;
     }
 
-    let inserted = 0;
-    const target = `${quoteIdentifier(table.schema)}.${quoteIdentifier(table.table)}`;
-    const knownColumns = new Set(table.columns);
-
-    for (let offset = 0; offset < rows.length; offset += INSERT_CHUNK_SIZE) {
-      const chunk = rows.slice(offset, offset + INSERT_CHUNK_SIZE);
-
-      for (const row of chunk) {
-        const normalized = this.normalizeImportRow(row, userId, table, keyMap);
-        const columns = Object.keys(normalized);
-
-        // The archive's keys become identifiers in the statement below. Only
-        // names the catalog reports for this table may get there: anything else
-        // is either drift between the exporting and importing schema (which the
-        // INSERT would have rejected anyway, just later and less clearly) or an
-        // attempt to break out of the identifier position. Reject before SQL.
-        this.assertKnownColumns(table, columns, knownColumns);
-
-        const values = Object.values(normalized);
-        const placeholders = columns.map((_, index) => `$${index + 1}`).join(', ');
-        const columnList = columns.map(quoteIdentifier).join(', ');
-
-        await queryRunner.query(`INSERT INTO ${target} (${columnList}) VALUES (${placeholders})`, values);
-        inserted += 1;
-      }
+    for (let row = links.takeHeld(); row; row = links.takeHeld()) {
+      inserted += await this.insertOrHold(queryRunner, userId, table, row, links, true);
     }
 
     return inserted;
@@ -565,6 +1175,21 @@ export class UserDataPortabilityService {
     keyMap: FileKeyMap,
   ): Record<string, unknown> {
     const normalized: Record<string, unknown> = { ...row, [table.userColumn]: userId };
+
+    // Computed by the database, which refuses a value for them.
+    for (const column of table.generatedColumns ?? []) {
+      delete normalized[column];
+    }
+
+    // Every other user column too, or the archive decides it. A null stays null:
+    // on these tables the second column is an attribution ("detected owner")
+    // that may be unknown, and the importer is the only account a non-null
+    // value may name.
+    for (const column of table.userColumns) {
+      if (normalized[column] != null) {
+        normalized[column] = userId;
+      }
+    }
 
     // A file row's storage pointer is rewritten alongside its bytes so the two
     // stay consistent — see FileKeyMap for why neither is taken from the archive.
@@ -671,6 +1296,211 @@ export class UserDataPortabilityService {
     }
 
     return restored;
+  }
+
+  /**
+   * Set the links the INSERTs left empty ({@link ImportLinks.pending}), now that every row is in.
+   *
+   * Only between this account's own rows: the row being linked and the row it
+   * points at both have to carry the importer in their table's user column. A
+   * link the archive aims at another account's row refuses the whole archive
+   * (see {@link refuseLinksOutOfAccount}); one whose row the archive lacks
+   * stays empty.
+   */
+  private async restoreLinks(queryRunner: QueryRunner, userId: string, links: ImportLinks): Promise<void> {
+    const dropped = new Map<string, number>();
+
+    for (const { table, column, rowKeyColumn, rowKey, value, parent } of links.pending) {
+      // node-postgres via TypeORM answers an UPDATE with [rows, affectedCount].
+      const result = (await queryRunner.query(
+        `UPDATE ${quotedTableName(table)} SET ${quoteIdentifier(column)} = $1
+          WHERE ${quoteIdentifier(rowKeyColumn)} = $2
+            AND ${quoteIdentifier(table.userColumn)} = $3
+            AND EXISTS (SELECT 1 FROM ${quotedTableName(parent)} p
+                         WHERE p.${quoteIdentifier(parent.key)} = $1 AND p.${quoteIdentifier(parent.userColumn)} = $3)`,
+        [value, rowKey, userId],
+      )) as [unknown, number] | undefined;
+
+      if ((result?.[1] ?? 0) === 0) {
+        const [foreign] = ((await queryRunner.query(
+          `SELECT 1 FROM ${quotedTableName(parent)} p
+            WHERE p.${quoteIdentifier(parent.key)} = $1 AND p.${quoteIdentifier(parent.userColumn)} IS DISTINCT FROM $2
+            LIMIT 1`,
+          [value, userId],
+        )) ?? []) as unknown[];
+
+        if (foreign) {
+          throw new BadRequestException(
+            linkOutOfAccountMessage({ child: table, column, parent }, String(value)),
+          );
+        }
+
+        const link = `${qualifiedName(table)}.${column}`;
+        dropped.set(link, (dropped.get(link) ?? 0) + 1);
+      }
+    }
+
+    if (dropped.size > 0) {
+      // The import used to fail on these; now they stay empty, so say so.
+      this.logger.warn("Import left links empty that name a row outside this account's restored data", {
+        dropped: Object.fromEntries(dropped),
+      });
+    }
+  }
+
+  /**
+   * Take out the {@link LinkTable} rows that hang off this account's rows, and
+   * keep them. Left in place they refuse the deletes below; an archive does not
+   * carry them, so dropping them would lose every tag on the account's things
+   * and HBPE's clusters on a restore of its own export.
+   */
+  private async setAsideLinkedRows(
+    queryRunner: QueryRunner,
+    userId: string,
+    userTables: readonly UserScopedTable[],
+    references: readonly DiscoveredLinkReference[],
+  ): Promise<SetAsideLinks[]> {
+    const setAside: SetAsideLinks[] = [];
+
+    for (const [index, table] of findLinkTables(references, userTables).entries()) {
+      const target = quotedTableName(table);
+      const stashName = quoteIdentifier(`portability_set_aside_${index}`);
+      const stash = `pg_temp.${stashName}`;
+      const owned = table.references
+        .filter(({ parent }) => parent.userColumn !== null)
+        .map(
+          ({ column, parent }) =>
+            `EXISTS (SELECT 1 FROM ${quotedTableName(parent)} p
+                      WHERE p.${quoteIdentifier(parent.column)} = c.${quoteIdentifier(column)}
+                        AND p.${quoteIdentifier(parent.userColumn!)} = $1)`,
+        )
+        .join(' OR ');
+
+      // Moved in one statement, server side: a link written between a SELECT
+      // and a DELETE would be deleted without being kept, and the rows keep
+      // their exact values (no round trip through JavaScript types).
+      await queryRunner.query(`CREATE TEMP TABLE ${stashName} (LIKE ${target}) ON COMMIT DROP`);
+      const [moved] = ((await queryRunner.query(
+        `WITH moved AS (DELETE FROM ${target} c WHERE ${owned} RETURNING c.*),
+              kept AS (INSERT INTO ${stash} SELECT * FROM moved RETURNING 1)
+         SELECT count(*)::int AS n FROM kept`,
+        [userId],
+      )) ?? []) as Array<{ n: number }>;
+
+      if ((moved?.n ?? 0) > 0) {
+        setAside.push({ table, stash, rows: moved.n });
+      }
+    }
+
+    return setAside;
+  }
+
+  /**
+   * Put back the rows {@link setAsideLinkedRows} took out whose every foreign
+   * key names a row that is back after the import, and in this account where
+   * that row is in one of its tables. A cluster of an event the archive no
+   * longer has, or a tag link to another account's tag, stays out. Only foreign
+   * keys are checked: `ci_search.entity_tag.entity_id` has none (it names a row
+   * of whichever table `entity_type` says), so a tag link to a note the archive
+   * no longer has does come back.
+   */
+  private async restoreLinkedRows(
+    queryRunner: QueryRunner,
+    userId: string,
+    setAside: readonly SetAsideLinks[],
+  ): Promise<void> {
+    const dropped: Record<string, number> = {};
+
+    for (const { table, stash, rows } of setAside) {
+      const columns = ((await queryRunner.query(DISCOVER_INSERTABLE_COLUMNS_SQL, [
+        table.schema,
+        table.table,
+      ])) ?? []) as Array<{ column: string }>;
+      const columnList = columns.map(({ column }) => quoteIdentifier(column));
+      const usesUser = table.references.some(({ parent }) => parent.userColumn !== null);
+      const conditions = table.references.map(({ column, parent }) => {
+        const owner = parent.userColumn === null ? '' : ` AND p.${quoteIdentifier(parent.userColumn)} = $1`;
+
+        return `(c.${quoteIdentifier(column)} IS NULL
+                 OR EXISTS (SELECT 1 FROM ${quotedTableName(parent)} p
+                             WHERE p.${quoteIdentifier(parent.column)} = c.${quoteIdentifier(column)}${owner}))`;
+      });
+
+      const [restored] = ((await queryRunner.query(
+        `WITH restored AS (
+           INSERT INTO ${quotedTableName(table)} (${columnList.join(', ')})
+           SELECT ${columnList.map((column) => `c.${column}`).join(', ')}
+             FROM ${stash} c
+            WHERE ${conditions.length > 0 ? conditions.join(' AND ') : 'TRUE'}
+           RETURNING 1)
+         SELECT count(*)::int AS n FROM restored`,
+        usesUser ? [userId] : [],
+      )) ?? []) as Array<{ n: number }>;
+      const missing = rows - (restored?.n ?? 0);
+
+      if (missing > 0) {
+        dropped[qualifiedName(table)] = missing;
+      }
+    }
+
+    if (Object.keys(dropped).length > 0) {
+      this.logger.warn('Import left out links whose rows the archive did not bring back', { dropped });
+    }
+  }
+
+  /**
+   * Clear the account's pointer to its own "You" person before the deletes.
+   *
+   * `ci.users.entity_id -> ci.entities` is NO ACTION and not deferrable, and
+   * `ci.users` is not one of the tables an import replaces, so deleting the
+   * account's entities with the pointer in place fails the whole import
+   * (`users_entity_id_fkey`). Every onboarded account has that person.
+   * `session_replication_role = replica` would skip the check, but the app's
+   * role cannot set it (see {@link setReplicationRole}). Returns the id it
+   * cleared, for {@link reattachSelfEntity}.
+   */
+  private async detachSelfEntity(queryRunner: QueryRunner, userId: string): Promise<string | null> {
+    // NO KEY UPDATE, the lock the UPDATE below takes anyway. FOR UPDATE would
+    // also block every foreign-key check on this account's row (FOR KEY SHARE),
+    // so any other insert naming this user would wait for the whole import.
+    const rows = (await queryRunner.query(`SELECT entity_id FROM ci.users WHERE id = $1 FOR NO KEY UPDATE`, [
+      userId,
+    ])) as Array<{ entity_id: string | null }> | undefined;
+
+    await queryRunner.query(`UPDATE ci.users SET entity_id = NULL WHERE id = $1`, [userId]);
+
+    return rows?.[0]?.entity_id ?? null;
+  }
+
+  /**
+   * Point the account back at its "You" person once the archive's rows are in:
+   * the first candidate (the archive's own profile, then the pointer the
+   * account had before) that the import left as an entity this account owns.
+   * With neither, the pointer stays empty rather than naming someone else.
+   */
+  private async reattachSelfEntity(
+    queryRunner: QueryRunner,
+    userId: string,
+    candidates: Array<string | null>,
+  ): Promise<void> {
+    // Usually both candidates are the same id; try it once.
+    for (const entityId of new Set(candidates)) {
+      if (!entityId) {
+        continue;
+      }
+
+      // node-postgres via TypeORM answers an UPDATE with [rows, affectedCount].
+      const result = (await queryRunner.query(
+        `UPDATE ci.users SET entity_id = $2
+          WHERE id = $1
+            AND EXISTS (SELECT 1 FROM ci.entities WHERE entity_id = $2 AND owner_user_id = $1)`,
+        [userId, entityId],
+      )) as [unknown, number] | undefined;
+
+      if ((result?.[1] ?? 0) > 0) {
+        return;
+      }
+    }
   }
 
   private async setReplicationRole(queryRunner: QueryRunner, role: 'replica' | 'origin'): Promise<void> {

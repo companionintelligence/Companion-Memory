@@ -1,8 +1,9 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 
 import { type UserServiceContext } from '@ci/common/context';
 import config from '@ci/configuration';
-import { PersonService, UserContextService } from '@ci/domains/memory';
+import { PersonService, UserContextService, ensureSelfEntityId } from '@ci/domains/memory';
 
 import {
   type DecideActionInput,
@@ -59,14 +60,32 @@ export class PersonalizationService {
   constructor(
     private readonly personService: PersonService,
     private readonly userContextService: UserContextService,
+    /**
+     * For `SELF_ENTITY_PROVISIONER`, resolved lazily by `ensureSelfEntityId`.
+     * Optional so a hand-built service (the unit tests) still constructs; without
+     * it a user who has no self entity gets the old error rather than a new one.
+     */
+    @Optional() private readonly moduleRef?: ModuleRef,
   ) {}
 
   invalidateCache(userId: string): void {
     this.profileCache.delete(userId);
   }
 
-  async getProfile(userId: string): Promise<PersonalizationProfile> {
-    const cached = this.profileCache.get(userId);
+  /**
+   * The owner's profile, from a 60 second per-instance cache unless `fresh` is set.
+   *
+   * `fresh` is for the tool-approval gate. This service is provided in more than one module, and
+   * the API and worker are separate processes, so `updateTrustMode` clears only its own instance's
+   * cache: a gate reading through another one would keep honouring Hands-off for up to a minute
+   * after the owner turned it down. The gate reads only for sends and deletes, so the extra read is
+   * cheap, and it refreshes this instance's cache on the way.
+   */
+  async getProfile(
+    userId: string,
+    { fresh = false }: { fresh?: boolean } = {},
+  ): Promise<PersonalizationProfile> {
+    const cached = fresh ? undefined : this.profileCache.get(userId);
     if (cached && cached.expiresAt > Date.now()) {
       return cached.profile;
     }
@@ -96,12 +115,13 @@ export class PersonalizationService {
   }
 
   async updateTrustMode(context: UserServiceContext, trustMode: TrustMode): Promise<PersonalizationProfile> {
-    const selfIdentity = await this.userContextService.getSelfIdentity(context.userId!);
-    if (!selfIdentity) {
-      throw new Error('Self entity not found');
-    }
+    // Provisioned when the user has none: an imported account has no self entity
+    // to store the dial on, so Settings → Autonomy could not be saved at all (a
+    // 500). Only this WRITE provisions; `getProfile` still answers the default
+    // for a user with no self entity, without creating one.
+    const selfEntityId = await ensureSelfEntityId(context, this.userContextService, this.moduleRef);
 
-    const self = await this.personService.findById(context, selfIdentity.entityId);
+    const self = await this.personService.findById(context, selfEntityId);
     if (!self) {
       throw new Error('Self entity not found');
     }

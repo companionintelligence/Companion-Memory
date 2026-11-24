@@ -119,6 +119,10 @@ describe('SyncNowService', () => {
     ] as never);
     connectionSyncJobService.search.mockImplementation(async (_ctx, query) => {
       if (query?.status === 'success' && query?.lastTransformed === null) {
+        // Only what the transform sweep would pick up counts: the executor's rows on active
+        // connections. Without both filters a paused connection's data would block every sync.
+        expect(query).toMatchObject({ fetchedByExecutor: true, connectionActive: true });
+
         return [{ status: 'success', lastTransformed: null, updatedAt: new Date() } as never];
       }
 

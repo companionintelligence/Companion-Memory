@@ -39,15 +39,18 @@ import { ConnectionsModule } from '@ci/domains/connections';
 import { ConsumptionModule } from '@ci/domains/consumption';
 import { DailyMetricsModule } from '@ci/domains/daily-metrics';
 import { DeviceModule } from '@ci/domains/devices';
+import { DidcommModule } from '@ci/domains/didcomm';
 import { EtlModule } from '@ci/domains/etl';
 import { EventsModule } from '@ci/domains/events';
 import { FilesModule } from '@ci/domains/files';
 import { GeocodeModule } from '@ci/domains/geocode';
 import { GraphModule } from '@ci/domains/graph';
-import { GraphQLModule } from '@ci/domains/graphql';
+import { GraphQLModule, GraphqlRequestLimitsMiddleware } from '@ci/domains/graphql';
+import { IdentikeyModule } from '@ci/domains/identikey';
 import { ImportModule } from '@ci/domains/import';
 import { IngestModule } from '@ci/domains/ingest';
 import { IntelligenceModule } from '@ci/domains/intelligence';
+import { LiveChangesModule } from '@ci/domains/live-changes';
 import { LLMModule } from '@ci/domains/llm';
 import { MaintenanceModule } from '@ci/domains/maintenance';
 import { McpModule } from '@ci/domains/mcp';
@@ -66,6 +69,7 @@ import { PositionModule } from '@ci/domains/position';
 import { PowerSyncModule } from '@ci/domains/powersync';
 import { PredictionsModule } from '@ci/domains/predictions';
 import { PrivacyModule } from '@ci/domains/privacy';
+import { PwsModule } from '@ci/domains/pws';
 import { PythonFunctionsModule } from '@ci/domains/python-functions';
 import { RetrievalPolicyModule } from '@ci/domains/retrieval-policy';
 import { ScheduleModule } from '@ci/domains/schedule';
@@ -75,7 +79,9 @@ import { SmartRotationModule } from '@ci/domains/smart-rotation';
 import { SolidModule } from '@ci/domains/solid';
 import { SummariesModule } from '@ci/domains/summaries';
 import { ToolsModule } from '@ci/domains/tools';
+import { TrustTasksModule } from '@ci/domains/trust-tasks';
 import { UserModule } from '@ci/domains/user';
+import { VtcModule } from '@ci/domains/vtc';
 import { flushTelemetry, isTelemetryEnabled } from '@ci/instrument';
 
 @Module({
@@ -105,6 +111,7 @@ import { flushTelemetry, isTelemetryEnabled } from '@ci/instrument';
     FeatureModule,
     LoggingModule,
     HbpeNotifyModule,
+    LiveChangesModule,
     EventEmitterModule.forRoot(),
     NestCronModule.forRoot(),
     ActivityModule,
@@ -112,6 +119,7 @@ import { flushTelemetry, isTelemetryEnabled } from '@ci/instrument';
     AsksModule,
     ConsumptionModule,
     PeersModule,
+    TrustTasksModule,
     AuditModule,
     AuthModule,
     PortalAuthModule,
@@ -157,6 +165,10 @@ import { flushTelemetry, isTelemetryEnabled } from '@ci/instrument';
     SearchIngressModule,
     SearchNextModule,
     SolidModule,
+    PwsModule,
+    IdentikeyModule,
+    VtcModule,
+    DidcommModule,
     SummariesModule,
     UserModule,
   ],
@@ -181,6 +193,9 @@ export class App implements NestModule, OnApplicationBootstrap, OnApplicationShu
     consumer.apply(RequestContextMiddleware).forRoutes('*');
     consumer.apply(BodyParserMiddleware).forRoutes('*');
     consumer.apply(RequestLoggerMiddleware).forRoutes('*');
+    // After the body parser, which is what puts a POST's document on req.body,
+    // and after the request logger, so a refused document is still logged.
+    consumer.apply(GraphqlRequestLimitsMiddleware).forRoutes('*');
   }
 
   onApplicationBootstrap() {

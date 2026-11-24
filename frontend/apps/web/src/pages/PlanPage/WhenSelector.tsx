@@ -48,7 +48,7 @@ export function WhenSelector({ onPick, onCancel }: Props) {
         <input
           type="date"
           min={today}
-          className="rounded-md border border-input bg-background px-2 py-1 text-sm text-foreground"
+          className="rounded-md border border-input bg-background px-2 py-1 text-base text-foreground md:text-sm"
           onChange={(event) => {
             if (event.target.value) {
               onPick(event.target.value);

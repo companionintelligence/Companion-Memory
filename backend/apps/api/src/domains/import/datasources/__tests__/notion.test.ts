@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'path';
 
 import { NotionFileImporter } from '../notion';
@@ -187,5 +189,121 @@ describe('Notion datasource', () => {
     } finally {
       await fs.promises.unlink(tmp).catch(() => {});
     }
+  });
+});
+
+describe('Notion datasource — nested pages, databases and embedded files', () => {
+  let root: string;
+
+  const write = (rel: string, body: string | Buffer): void => {
+    const fpath = path.join(root, rel);
+    fs.mkdirSync(path.dirname(fpath), { recursive: true });
+    fs.writeFileSync(fpath, body);
+  };
+
+  const RG = 'Reading Garden 74a391fc8c6449a78233d098f84227ed';
+  const BN = 'Book Notes 6b7d714dc27c3cafa521c95893bafbd3';
+  const QU = 'Quotes 4d5f6a86a4a9065049ee36fa045eb834';
+  const WL = 'Wishlist 863a4c0fbc23d78288d94d1004240ea0';
+
+  beforeEach(() => {
+    // An export zip unpacks into a folder named after the archive.
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'notion-nested-'));
+    const ex = 'Export-2c3d4e5f';
+    write(`${ex}/${RG}.md`, '# Reading Garden\n\nHome page.\n\n![bookshelf.jpg](bookshelf.jpg)\n');
+    write(`${ex}/${RG}/bookshelf.jpg`, Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+    write(`${ex}/${RG}/${BN}.md`, '# Book Notes\n');
+    write(`${ex}/${RG}/${BN}/${QU}.md`, '# Quotes\n\n> The beauty of the House is immeasurable.\n');
+    write(
+      `${ex}/${RG}/${BN}/${QU}/Favourite lines 0379d0c80a280df7ceddb6e17758f49c.md`,
+      '# Favourite lines\n',
+    );
+    // A database inside a page: the CSV (twice, as newer exports write it) and a page per row.
+    write(`${ex}/${RG}/${WL}.csv`, 'Name,Author,Status\nThe Bee Sting,Paul Murray,Wanted\n');
+    write(`${ex}/${RG}/${WL}_all.csv`, 'Name,Author,Status\nThe Bee Sting,Paul Murray,Wanted\n');
+    write(
+      `${ex}/${RG}/${WL}/The Bee Sting abce3e4f2d41949dfb6487a20291b1d7.md`,
+      '# The Bee Sting\n\nAuthor: Paul Murray\nStatus: Wanted\n',
+    );
+    // Not inside a Notion page folder: someone else's file in the same upload.
+    write('stray/readme.txt', 'not Notion');
+  });
+
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  const run = async (): Promise<{ pipeline: EmittedGraph[]; drops: [string, string?][] }> => {
+    const pipeline: EmittedGraph[] = [];
+    const drops: [string, string?][] = [];
+    (pipeline as unknown as { drop: (reason: string, detail?: string) => void }).drop = (reason, detail) =>
+      drops.push([reason, detail]);
+    await new NotionFileImporter().fileImport({}, { filename: path.basename(root), fullPath: root }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    return { pipeline, drops };
+  };
+
+  it('imports pages at every depth, database rows included', async () => {
+    const { pipeline } = await run();
+    const notes = pipeline.filter((g) => g.item.classification === 'note').map((g) => g.item.metadata.Title);
+    expect(notes.sort()).toEqual([
+      'Book Notes',
+      'Favourite lines',
+      'Quotes',
+      'Reading Garden',
+      'The Bee Sting',
+    ]);
+    const row = pipeline.find((g) => g.item.metadata.Title === 'The Bee Sting')!.item;
+    expect(metaText(row.metadata.Text)).toContain('Author: Paul Murray');
+  });
+
+  it('imports a file embedded in a page as media named after the page', async () => {
+    const { pipeline } = await run();
+    const files = pipeline.filter((g) => g.item.classification !== 'note').map((g) => g.item);
+    expect(files).toHaveLength(1);
+    expect(files[0].classification).toBe('media');
+    expect(files[0].id).toBe(`notion:${RG}/bookshelf.jpg`);
+    expect(files[0].metadata).toMatchObject({
+      Title: 'bookshelf.jpg',
+      Page: 'Reading Garden',
+      Source: 'Notion',
+    });
+    expect(files[0].intermediateLocation!.endsWith(path.join(RG, 'bookshelf.jpg'))).toBe(true);
+  });
+
+  it('counts the database CSVs as represented by their row pages', async () => {
+    const { drops } = await run();
+    expect(drops).toHaveLength(2);
+    expect(drops).toEqual(
+      expect.arrayContaining([
+        ['notion_database_csv', `${WL}.csv`],
+        ['notion_database_csv', `${WL}_all.csv`],
+      ]),
+    );
+  });
+
+  it('counts a database CSV exported without its row pages as a loss', async () => {
+    const RL = 'Reading List 5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b';
+    write(`Export-2c3d4e5f/${RG}/${RL}.csv`, 'Name,Author\nPiranesi,Susanna Clarke\n');
+    // An empty database has nothing to lose.
+    write(`Export-2c3d4e5f/${RG}/Empty 0123456789abcdef0123456789abcdef.csv`, 'Name\n');
+
+    const { drops } = await run();
+    expect(drops.filter(([reason]) => reason === 'notion_database_csv_without_pages')).toEqual([
+      ['notion_database_csv_without_pages', `${RL}.csv`],
+    ]);
+  });
+
+  it('skips the AppleDouble copies a macOS re-zip adds', async () => {
+    write(`__MACOSX/Export-2c3d4e5f/._${RG}.md`, Buffer.from([0x00, 0x05, 0x16, 0x07, 0x41]));
+    write(`__MACOSX/Export-2c3d4e5f/${RG}/._bookshelf.jpg`, Buffer.from([0x00, 0x05, 0x16, 0x07]));
+
+    const { pipeline } = await run();
+    expect(pipeline.some((g) => String(g.item.id).includes('._'))).toBe(false);
+    expect(pipeline.some((g) => g.item.intermediateLocation?.includes('__MACOSX'))).toBe(false);
   });
 });

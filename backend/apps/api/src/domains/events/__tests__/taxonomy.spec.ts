@@ -251,6 +251,12 @@ describe('job taxonomy', () => {
       ['embed.unfurl-sweep-request', JOB_CATEGORIES.pipeline],
       ['file.preview-sweep-request', JOB_CATEGORIES.pipeline],
       ['maintenance.derivation-run-request', JOB_CATEGORIES.graph],
+      // QA 2026-10-02 (JOBS-03, JOBS-20): the Jobs Health card carried a permanent
+      // "N jobs have no taxonomy entry" warning — the per-minute reminder tick
+      // alone was ~315 completed rows — because these two had a listener and a
+      // producer but no descriptor.
+      ['planning.fire_reminders', JOB_CATEGORIES.planning],
+      ['maintenance.person-stub-backfill-request', JOB_CATEGORIES.graph],
     ];
 
     for (const [event, category] of cases) {
@@ -262,6 +268,31 @@ describe('job taxonomy', () => {
       // dashboard shows the description in the expanded row.
       expect(descriptor.description.length).toBeGreaterThan(20);
     }
+  });
+
+  it('gives the reminder tick and the person-stub pass a real name on the queue each runs on', () => {
+    // Real queue names from PlanningJobsListener (PLANNING_QUEUE, shared with the
+    // other five planning jobs) and PersonStubBackfillRequestListener. A row on
+    // either must not fall back to the fingerprint — that is what rendered
+    // "Planning fire reminders" in the Unclassified bucket.
+    const reminders = describeJob('planning.fire_reminders', null, 'planning');
+    const stubs = describeJob('maintenance.person-stub-backfill-request', null, 'person-stub-backfill');
+
+    expect(reminders.label).toBe('Fire due reminders');
+    expect(reminders.description).not.toContain('No taxonomy entry');
+    expect(reminders.category).toBe(JOB_CATEGORIES.planning);
+
+    expect(stubs.label).toBe('Backfill person stubs');
+    expect(stubs.description).not.toContain('No taxonomy entry');
+    expect(stubs.category).toBe(JOB_CATEGORIES.graph);
+
+    // The Planning chip counts the reminder tick now, so it can no longer
+    // under-report against the planning queue it shares with its siblings.
+    expect(categoryOfJob('planning.fire_reminders', 'planning')).toBe(JOB_CATEGORIES.planning);
+    expect(jobCategorySelector(JOB_CATEGORIES.planning).events).toContain('planning.fire_reminders');
+    expect(jobCategorySelector(JOB_CATEGORIES.graph).events).toContain(
+      'maintenance.person-stub-backfill-request',
+    );
   });
 
   it('names the chat-turn memory producer rather than leaving it unclassified', () => {
@@ -510,6 +541,8 @@ describe('the category of a row is one answer, not three', () => {
     ['user.created', 'import-inbox-provision'],
     ['browseractivity.created', 'search-index'],
     ['browseractivity.created', 'browser-activity-insight'],
+    ['planning.fire_reminders', 'planning'],
+    ['maintenance.person-stub-backfill-request', 'person-stub-backfill'],
     // The queue is gone: pg-boss rewrote it on the dead-letter copy.
     ['content.created', DEAD_LETTER_QUEUE],
     ['browseractivity.created', DEAD_LETTER_QUEUE],

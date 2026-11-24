@@ -48,17 +48,15 @@ const UNITS = [
   },
 ];
 
-const scanInbox = vi.fn(
-  async (): Promise<import('./useImportApi').InboxScan> => ({
-    available: true,
-    inboxDir: '/var/lib/ci-import/inbox',
-    displayDir: '/var/lib/ci-import/inbox',
-    units: UNITS,
-    skippedSymlinks: 0,
-    truncated: false,
-    recognitionPartial: false,
-  }),
-);
+const scanInbox = vi.fn(async (): Promise<import('./useImportApi').InboxScan> => ({
+  available: true,
+  inboxDir: '/var/lib/ci-import/inbox',
+  displayDir: '/var/lib/ci-import/inbox',
+  units: UNITS,
+  skippedSymlinks: 0,
+  truncated: false,
+  recognitionPartial: false,
+}));
 
 const importInbox = vi.fn(async (units?: readonly string[]) => ({
   results: (units ?? UNITS.map((unit) => unit.path)).map((unit) =>

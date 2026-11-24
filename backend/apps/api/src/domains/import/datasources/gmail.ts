@@ -8,8 +8,9 @@ import readline from 'node:readline';
 import { messageIdFromHeaders, normalizeMessageId } from '@ci/domains/memory';
 
 import { extractAttachmentToFile, attachmentMediaKind } from './attachment_extract';
+import { ADDRESS_HEADERS, decodeAddressList, parseEmailAddress, splitAddressList } from './email_address';
 import { mboxFromLineDate, receivedDate } from './email_date';
-import { emailDirection, isDraft } from './email_direction';
+import { emailDirection, emailDirectionBasis, isDraft, keepTrustedGmailLabels } from './email_direction';
 import { decodeHeaderField, parseMime, readableBody, type ParsedMimeResult } from './email_mime';
 import { emailThreadId } from './email_thread';
 import { isHumanCorrespondence } from './human_correspondence';
@@ -21,8 +22,9 @@ import {
 } from './receipt_detect';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
+import { readHead } from './sniff';
 import type { ImportParams, Graph, Entity, EntityAttribute, Metadata, Relationship } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 // Read whole-file only for archives comfortably below Node's max string length
 // (~512MB). Larger .mbox files are streamed line-by-line so we never hold the
@@ -57,16 +59,8 @@ export class GmailFileImporter implements FileImporter {
         return { confidence: 0.9 };
       }
 
-      try {
-        const fd = await fs.promises.open(full, 'r');
-        const buf = Buffer.alloc(5);
-        await fd.read(buf, 0, 5, 0);
-        await fd.close();
-        if (buf.toString() === 'From ') {
-          return { confidence: 0.7 };
-        }
-      } catch {
-        /* ignore */
+      if ((await readHead(full, 5)) === 'From ') {
+        return { confidence: 0.7 };
       }
     }
 
@@ -234,6 +228,9 @@ export class GmailFileImporter implements FileImporter {
     // Unfold headers: replace CRLF + WSP with single space
     headersRaw = headersRaw.replace(/\n[ \t]+/g, ' ');
     const headersMap = parseHeaders(headersRaw);
+    // Only Google's own X-Gmail-Labels counts: a sender can write one too, and
+    // the map above joins duplicates (email_direction.ts#trustedGmailLabels).
+    const gmailLabels = keepTrustedGmailLabels(headersMap, headersRaw, decodeHeaderField);
     if (!headersMap.Subject && !headersMap.Date) {
       params.pipeline.drop?.('non_message');
 
@@ -348,7 +345,7 @@ export class GmailFileImporter implements FileImporter {
         return;
       }
 
-      for (const addr of line.split(/,/)) {
+      for (const addr of splitAddressList(line)) {
         const parsed = parseEmailAddress(addr.trim());
         // Bare addresses use the address as the name: entity dedup in persistence
         // keys on (type, name), so nameless participants would all merge into one
@@ -390,6 +387,7 @@ export class GmailFileImporter implements FileImporter {
     // canonical mapping reads `Direction` (mapping.ts#directionFor), so the
     // communication row carries it through to CI-Server.
     const direction = emailDirection(headersMap);
+    const directionBasis = emailDirectionBasis(headersMap);
     // Body snippet so the canonical mapping carries text to CI-Server; capped to
     // keep metadata/embeddings sane (full body still lives in content.data).
     // From/To ride along too so the comms mapping can fill participants_metadata.
@@ -442,6 +440,10 @@ export class GmailFileImporter implements FileImporter {
       To: to,
       Cc: cc,
       Direction: direction,
+      DirectionBasis: directionBasis,
+      // A Sent label a sender could have written was refused: the push never
+      // takes this mail's From for one of the owner's addresses (push/self.ts).
+      SentLabelRefused: gmailLabels.sentLabelRefused || undefined,
       MessageID: cleanMsgID,
       InReplyTo: inReply?.replace(/[<>]/g, ''),
       References: refs?.replace(/[<>]/g, ' '),
@@ -488,11 +490,7 @@ export class GmailFileImporter implements FileImporter {
       classification: isReceipt ? 'receipt' : 'email',
       timestamp: ts,
       intermediateLocation: fpath,
-      content: {
-        filename: path.basename(fpath),
-        mediaType: 'text/plain',
-        data: async () => Buffer.from(bodyText || ''),
-      },
+      content: textContent(path.basename(fpath), bodyText || ''),
       metadata: itemMetadata,
     };
     const g: Graph = { item, edges: edges.length ? edges : undefined };
@@ -522,7 +520,8 @@ function parseHeaders(raw: string): Record<string, string> {
     // encodes this way, and nothing else legitimately contains the marker, so
     // decoding unconditionally is safe and keeps this one map correct
     // end-to-end rather than requiring every reader to remember to decode.
-    const val = decodeHeaderField(line.slice(idx + 1).trim());
+    const value = line.slice(idx + 1).trim();
+    const val = ADDRESS_HEADERS.has(key.toLowerCase()) ? decodeAddressList(value) : decodeHeaderField(value);
     if (!map[key]) {
       map[key] = val;
     } else {
@@ -531,31 +530,6 @@ function parseHeaders(raw: string): Record<string, string> {
   }
 
   return map;
-}
-
-function parseEmailAddress(raw: string): { name?: string; email?: string } {
-  // Formats: Name <email@domain>, "Name" <email@domain>, bare email@domain.
-  // Linear indexOf/slice — NOT a regex. The previous
-  // /^(?:"?([^"<]+)"?\s*)?<([^>]+)>$/ overlaps [^"<]+ and \s* on whitespace and
-  // backtracks quadratically: a 120k-char address header took 8.5s, and a longer
-  // one hung the ENTIRE mbox import on a single pathological message (CPU-spun at
-  // 94% with zero progress, no way to skip it).
-  const lt = raw.indexOf('<');
-  if (lt !== -1) {
-    const gt = raw.indexOf('>', lt + 1);
-    if (gt !== -1) {
-      const email = raw.slice(lt + 1, gt).trim();
-      const name = raw.slice(0, lt).trim().replace(/^"|"$/g, '').trim() || undefined;
-
-      return { name, email };
-    }
-  }
-
-  if (/^[^@]+@[^@]+$/.test(raw)) {
-    return { email: raw };
-  }
-
-  return { name: raw };
 }
 
 registerDataSource({

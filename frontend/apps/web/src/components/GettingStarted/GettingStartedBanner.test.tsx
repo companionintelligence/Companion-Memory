@@ -1,11 +1,12 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import type { DesktopRecommendedModel } from '@ci/common';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { isGettingStartedActive, markGettingStartedActive } from '@/lib/gettingStarted';
 
-import { GettingStartedBanner } from './GettingStartedBanner';
 import type { MemoryTotals } from './firstSync';
+import { GettingStartedBanner } from './GettingStartedBanner';
 
 const EMPTY: MemoryTotals = {
   communications: 0,
@@ -17,7 +18,11 @@ const EMPTY: MemoryTotals = {
 };
 
 const h = vi.hoisted(() => ({
-  user: { id: 'u1', onboarded: true } as { id: string; onboarded: boolean } | null,
+  user: { id: 'u1', onboarded: true, isAdmin: true } as {
+    id: string;
+    onboarded: boolean;
+    isAdmin: boolean;
+  } | null,
   isMobile: false as boolean | undefined,
   models: [{ model: 'llama3' }] as Array<{ model: string }>,
   modelsLoading: false,
@@ -33,10 +38,15 @@ const h = vi.hoisted(() => ({
   startPush: vi.fn(),
   refreshImports: vi.fn(),
   toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }),
+  endpoint: { backend: 'ollama', port: 11434 } as {
+    backend: 'ollama' | 'openai_compatible';
+    port: number;
+  } | null,
+  useLlmEndpoint: vi.fn(),
 }));
 
-vi.mock('@apollo/client', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@apollo/client')>()),
+vi.mock('@apollo/client/react', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@apollo/client/react')>()),
   useQuery: () => ({ data: { connections: { totalCount: h.connections } } }),
 }));
 
@@ -51,12 +61,22 @@ vi.mock('@ci/shadcn', async (importOriginal) => ({
 }));
 
 vi.mock('@/common/feature', () => ({
-  useFeatures: () => ({ isFeatureEnabled: (flag: string) => (flag === 'import.page' ? h.importsFlag : false) }),
+  useFeatures: () => ({
+    isFeatureEnabled: (flag: string) => (flag === 'import.page' ? h.importsFlag : false),
+  }),
 }));
 
 vi.mock('@/hooks', () => ({
   useCurrentUser: () => ({ user: h.user }),
   useModel: () => [{ activeModels: h.models, loading: h.modelsLoading }, {}],
+}));
+
+vi.mock('@/hooks/useLlmEndpoint', () => ({
+  useLlmEndpoint: () => {
+    h.useLlmEndpoint();
+
+    return { config: h.endpoint };
+  },
 }));
 
 vi.mock('@/components/connect/ConnectedAccountsSection', () => ({ GET_CONNECTIONS: {} }));
@@ -68,6 +88,23 @@ vi.mock('@/pages/ImportPage/useImportApi', () => ({
 
 vi.mock('./useFirstSyncStatus', () => ({ useFirstSyncStatus: () => h.status }));
 
+type Invoke = (command: string, args?: unknown) => Promise<unknown>;
+
+/** Memory Desktop's IPC as the page sees it, answering what Settings > Model's Recommended model card reads. */
+function installDesktop(answer: Partial<DesktopRecommendedModel>) {
+  const invoke = vi.fn<Invoke>(async () => ({
+    ownOllama: true,
+    recommended: 'gemma4:e4b',
+    chatModel: 'qwen3.5:122b',
+    missing: ['gemma4:e4b'],
+    download: { state: 'idle' },
+    ...answer,
+  }));
+  (window as unknown as { __TAURI_INTERNALS__?: { invoke: Invoke } }).__TAURI_INTERNALS__ = { invoke };
+
+  return invoke;
+}
+
 function renderBanner() {
   return render(
     <MemoryRouter>
@@ -78,7 +115,7 @@ function renderBanner() {
 
 beforeEach(() => {
   window.localStorage.clear();
-  h.user = { id: 'u1', onboarded: true };
+  h.user = { id: 'u1', onboarded: true, isAdmin: true };
   h.isMobile = false;
   h.models = [{ model: 'llama3' }];
   h.modelsLoading = false;
@@ -90,6 +127,12 @@ beforeEach(() => {
   h.refreshImports.mockReset();
   h.toast.success.mockReset();
   h.toast.error.mockReset();
+  h.endpoint = { backend: 'ollama', port: 11434 };
+  h.useLlmEndpoint.mockReset();
+});
+
+afterEach(() => {
+  delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
 });
 
 describe('GettingStartedBanner', () => {
@@ -128,7 +171,10 @@ describe('GettingStartedBanner', () => {
     expect(screen.getByRole('link', { name: 'Set up a model' }).getAttribute('href')).toMatch(
       /\/settings\/model$/,
     );
-    expect(screen.getByRole('link', { name: 'Connect a source' })).toHaveAttribute('href', '/sources/connect');
+    expect(screen.getByRole('link', { name: 'Connect a source' })).toHaveAttribute(
+      'href',
+      '/sources/connect',
+    );
     expect(screen.getByRole('link', { name: 'Import data' })).toHaveAttribute('href', '/sources/import');
   });
 
@@ -199,5 +245,349 @@ describe('GettingStartedBanner', () => {
 
     expect(screen.queryByTestId('getting-started')).toBeNull();
     expect(isGettingStartedActive('u1')).toBe(false);
+  });
+
+  describe('a chat model that answers, inside Memory Desktop', () => {
+    it('stays done and points at the recommended model the Ollama lacks', async () => {
+      markGettingStartedActive('u1');
+      h.models = [{ model: 'qwen3.5:122b' }];
+      installDesktop({});
+      renderBanner();
+
+      expect(await screen.findByTestId('recommended-model-hint')).toHaveTextContent(
+        'Memory Desktop recommends gemma4:e4b, a small model that keeps chat and summaries quick.',
+      );
+      expect(screen.getByText('Chat model ready').closest('li')).toHaveAttribute('data-status', 'done');
+      expect(screen.getByRole('link', { name: 'Open model settings' }).getAttribute('href')).toMatch(
+        /\/settings\/model$/,
+      );
+    });
+
+    it('points at a recommended model pulled by hand that Memory does not use yet', async () => {
+      markGettingStartedActive('u1');
+      installDesktop({ missing: [] });
+      renderBanner();
+
+      expect(await screen.findByTestId('recommended-model-hint')).toHaveTextContent(
+        'Memory Desktop recommends gemma4:e4b',
+      );
+    });
+
+    it('names the search model when that is all the Ollama lacks', async () => {
+      markGettingStartedActive('u1');
+      installDesktop({ chatModel: 'gemma4:e4b', missing: ['nomic-embed-text'] });
+      renderBanner();
+
+      expect(await screen.findByTestId('recommended-model-hint')).toHaveTextContent(
+        'Search needs nomic-embed-text, which your Ollama doesn’t have.',
+      );
+    });
+
+    it('says nothing more once Memory runs on the recommended model', async () => {
+      markGettingStartedActive('u1');
+      h.models = [{ model: 'gemma4:e4b' }];
+      const invoke = installDesktop({ chatModel: 'gemma4:e4b', missing: [] });
+      renderBanner();
+
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith('get_recommended_model_command', undefined));
+      expect(screen.queryByTestId('recommended-model-hint')).toBeNull();
+      expect(h.useLlmEndpoint).not.toHaveBeenCalled();
+    });
+
+    it('says nothing when Memory uses another inference server', async () => {
+      markGettingStartedActive('u1');
+      h.endpoint = { backend: 'openai_compatible', port: 13305 };
+      installDesktop({});
+      renderBanner();
+
+      await waitFor(() => expect(h.useLlmEndpoint).toHaveBeenCalled());
+      expect(screen.queryByTestId('recommended-model-hint')).toBeNull();
+    });
+
+    it('does not keep asking for a line it cannot show', async () => {
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+
+      try {
+        markGettingStartedActive('u1');
+        h.endpoint = { backend: 'openai_compatible', port: 13305 };
+        const invoke = installDesktop({});
+        renderBanner();
+
+        // waitFor polls with setInterval, which is fake here. Nothing on screen changes to wake it either.
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        expect(h.useLlmEndpoint).toHaveBeenCalled();
+        vi.advanceTimersByTime(60_000);
+        expect(invoke).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('keeps the line when Memory Desktop fails to answer once', async () => {
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+
+      try {
+        markGettingStartedActive('u1');
+        const invoke = installDesktop({});
+        renderBanner();
+
+        expect(await screen.findByTestId('recommended-model-hint')).toBeInTheDocument();
+
+        // The recheck timer is armed in an effect, which can run after the hint is in the DOM.
+        // Let it run before the fake clock moves.
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+
+        invoke.mockRejectedValueOnce(new Error('Task join error'));
+        vi.advanceTimersByTime(15_000);
+        await waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(screen.getByTestId('recommended-model-hint')).toBeInTheDocument();
+
+        // Still asking: the next answer is heard.
+        vi.advanceTimersByTime(15_000);
+        expect(invoke).toHaveBeenCalledTimes(3);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('keeps following a download when the ask after a model list reload fails', async () => {
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+
+      try {
+        markGettingStartedActive('u1');
+        const invoke = installDesktop({
+          missing: null,
+          download: { state: 'downloading', model: 'gemma4:e4b', completedBytes: 1, totalBytes: 2 },
+        });
+        const { rerender } = renderBanner();
+
+        await waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+
+        invoke.mockRejectedValueOnce(new Error('Task join error'));
+        h.models = [{ model: 'qwen3.5:122b' }, { model: 'llama3' }];
+        rerender(
+          <MemoryRouter>
+            <GettingStartedBanner />
+          </MemoryRouter>,
+        );
+        await waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+
+        // The download fails in Settings. The line comes back on the next ask.
+        invoke.mockResolvedValue({
+          ownOllama: true,
+          recommended: 'gemma4:e4b',
+          chatModel: 'qwen3.5:122b',
+          missing: ['gemma4:e4b'],
+          download: { state: 'failed', message: 'Your Ollama stopped answering.' },
+        });
+        vi.advanceTimersByTime(15_000);
+
+        expect(await screen.findByTestId('recommended-model-hint')).toBeInTheDocument();
+        expect(invoke).toHaveBeenCalledTimes(3);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('asks again when the model list reloads after a download', async () => {
+      markGettingStartedActive('u1');
+      const invoke = installDesktop({});
+      const { rerender } = renderBanner();
+
+      expect(await screen.findByTestId('recommended-model-hint')).toBeInTheDocument();
+
+      invoke.mockResolvedValue({
+        ownOllama: true,
+        recommended: 'gemma4:e4b',
+        chatModel: 'gemma4:e4b',
+        missing: [],
+        download: {
+          state: 'done',
+          downloaded: ['gemma4:e4b'],
+          chatModel: 'gemma4:e4b',
+          waitsForStart: false,
+        },
+      });
+      h.models = [{ model: 'gemma4:e4b' }, { model: 'llama3' }];
+      rerender(
+        <MemoryRouter>
+          <GettingStartedBanner />
+        </MemoryRouter>,
+      );
+
+      await waitFor(() => expect(screen.queryByTestId('recommended-model-hint')).toBeNull());
+    });
+
+    it('asks again while the line is up, so a download started in Settings takes it away', async () => {
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+
+      try {
+        markGettingStartedActive('u1');
+        const invoke = installDesktop({});
+        renderBanner();
+
+        expect(await screen.findByTestId('recommended-model-hint')).toBeInTheDocument();
+        expect(invoke).toHaveBeenCalledTimes(1);
+
+        // Done while Memory is stopped: Memory Desktop does not ask the Ollama then.
+        invoke.mockResolvedValue({
+          ownOllama: true,
+          recommended: 'gemma4:e4b',
+          chatModel: 'gemma4:e4b',
+          missing: null,
+          download: {
+            state: 'done',
+            downloaded: ['gemma4:e4b'],
+            chatModel: 'gemma4:e4b',
+            waitsForStart: true,
+          },
+        });
+        vi.advanceTimersByTime(15_000);
+
+        await waitFor(() => expect(screen.queryByTestId('recommended-model-hint')).toBeNull());
+        expect(invoke).toHaveBeenCalledTimes(2);
+
+        // Memory started and runs on it: nothing on offer, nothing more to ask.
+        invoke.mockResolvedValue({
+          ownOllama: true,
+          recommended: 'gemma4:e4b',
+          chatModel: 'gemma4:e4b',
+          missing: [],
+          download: {
+            state: 'done',
+            downloaded: ['gemma4:e4b'],
+            chatModel: 'gemma4:e4b',
+            waitsForStart: false,
+          },
+        });
+        vi.advanceTimersByTime(15_000);
+        await waitFor(() => expect(invoke).toHaveBeenCalledTimes(3));
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+
+        vi.advanceTimersByTime(60_000);
+        expect(invoke).toHaveBeenCalledTimes(3);
+        expect(screen.queryByTestId('recommended-model-hint')).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('brings the line back when a download started in Settings fails', async () => {
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+
+      try {
+        markGettingStartedActive('u1');
+        const invoke = installDesktop({});
+        renderBanner();
+
+        expect(await screen.findByTestId('recommended-model-hint')).toBeInTheDocument();
+
+        invoke.mockResolvedValue({
+          ownOllama: true,
+          recommended: 'gemma4:e4b',
+          chatModel: 'qwen3.5:122b',
+          missing: null,
+          download: { state: 'downloading', model: 'gemma4:e4b', completedBytes: 1, totalBytes: 2 },
+        });
+        vi.advanceTimersByTime(15_000);
+        await waitFor(() => expect(screen.queryByTestId('recommended-model-hint')).toBeNull());
+
+        invoke.mockResolvedValue({
+          ownOllama: true,
+          recommended: 'gemma4:e4b',
+          chatModel: 'qwen3.5:122b',
+          missing: ['gemma4:e4b'],
+          download: { state: 'failed', message: 'Your Ollama stopped answering.' },
+        });
+        vi.advanceTimersByTime(15_000);
+
+        expect(await screen.findByTestId('recommended-model-hint')).toHaveTextContent(
+          'Memory Desktop recommends gemma4:e4b',
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('keeps asking while the Ollama does not answer after a failed download', async () => {
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+
+      try {
+        markGettingStartedActive('u1');
+        // The person's Ollama stopped during the download and is not answering yet.
+        const invoke = installDesktop({
+          missing: null,
+          download: { state: 'failed', message: 'Your Ollama stopped answering.' },
+        });
+        renderBanner();
+
+        await waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        vi.advanceTimersByTime(15_000);
+        await waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
+        expect(screen.queryByTestId('recommended-model-hint')).toBeNull();
+
+        // It answers again.
+        invoke.mockResolvedValue({
+          ownOllama: true,
+          recommended: 'gemma4:e4b',
+          chatModel: 'qwen3.5:122b',
+          missing: ['gemma4:e4b'],
+          download: { state: 'failed', message: 'Your Ollama stopped answering.' },
+        });
+        vi.advanceTimersByTime(15_000);
+
+        expect(await screen.findByTestId('recommended-model-hint')).toBeInTheDocument();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('says nothing to a member who is not an administrator', async () => {
+      markGettingStartedActive('u1');
+      h.user = { id: 'u1', onboarded: true, isAdmin: false };
+      const invoke = installDesktop({});
+      renderBanner();
+
+      expect(screen.getByText('Chat model ready')).toBeInTheDocument();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(screen.queryByTestId('recommended-model-hint')).toBeNull();
+      expect(invoke).not.toHaveBeenCalled();
+    });
+  });
+
+  it('adds nothing to the model step in a browser or on a phone', async () => {
+    markGettingStartedActive('u1');
+    renderBanner();
+
+    expect(screen.getByText('Chat model ready')).toBeInTheDocument();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByTestId('recommended-model-hint')).toBeNull();
+    expect(h.useLlmEndpoint).not.toHaveBeenCalled();
+  });
+
+  it('leaves a missing chat model to the Set up a model button', () => {
+    markGettingStartedActive('u1');
+    h.models = [];
+    const invoke = installDesktop({});
+    renderBanner();
+
+    expect(screen.getByRole('link', { name: 'Set up a model' })).toBeInTheDocument();
+    expect(invoke).not.toHaveBeenCalled();
   });
 });

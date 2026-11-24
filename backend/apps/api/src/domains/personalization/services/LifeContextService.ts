@@ -75,8 +75,9 @@ export class LifeContextService {
       `
       WITH last_run AS (
         SELECT COALESCE(MAX(completed_on), '1970-01-01'::timestamptz) AS ts
-        FROM pgboss.archive
-        WHERE data->>'name' = 'smart.rotation.work'
+        FROM pgboss.job
+        WHERE state IN ('completed', 'failed', 'cancelled')
+          AND data->>'name' = 'smart.rotation.work'
           AND data->>'workType' = $2
           AND data->>'userId' = $1::text
       )

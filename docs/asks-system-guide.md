@@ -1,6 +1,5 @@
 # The Asks system — reference guide
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
 >
 > **Read this before you change anything on the consent path.** It is the
 > reference document for the interpersonal ask feature: what it is, what the
@@ -41,7 +40,8 @@ that makes that survivable — a standing-consent model the owner writes in
 advance, a disclosure ladder that can only ever be walked downward, and an audit
 that records both what crossed and what was read to produce it. It works two
 ways: **locally**, between two accounts on one box, and **federated**, between
-two peer-linked boxes discovered through CI-Portal.
+two boxes whose owners have linked each other (by hand today: discovery through
+CI-Portal is designed but not wired; see [`peer-federation.md`](peer-federation.md)).
 
 ---
 
@@ -415,8 +415,12 @@ Whatever the outcome, the asker sees `answered` or `delivered` and nothing else
 
 ### 3.3 A federated ask, step by step
 
-Two boxes, one Portal-shaped OIDC issuer. Only two routes are reachable from
-another Companion: `POST /agent/v1/ask` and `GET /agent/v1/ask/:correlation`.
+Two boxes, one Portal-shaped OIDC issuer. Two routes are reachable from
+another Companion over the OIDC door: `POST /agent/v1/ask` and
+`GET /agent/v1/ask/:correlation`. When the optional `trust.tasks` feature is on
+(off by default), `POST /agent/v1/trust-tasks` is a third, a second way to
+establish who is asking that ends in the same four gates
+([trust-tasks.md](trust-tasks.md)).
 Rate limits: **10 asks/min** and a separate **30 polls/min**, both per verified
 `(issuer, subject)` and both applied **before** the peer-link lookup, so an
 unknown caller is limited too.
@@ -699,8 +703,9 @@ flowchart TD
   Conflating them would blur which side of the trust boundary each piece of data
   came from.
 - **`domains/graphql` is the local surface.** `AskResolver` is the only place
-  the local answer pipeline is assembled; `resolveTier` lives here, and it
-  returns the constant `'household'` for every local asker (see G6).
+  the local answer pipeline is assembled; `resolveTier` lives here. For a
+  local asker it returns the tier the owner set for that account, and
+  `'household'` when none is set (see G6).
 - **`domains/search-next` is the only thing that touches the archive** on an ask,
   in `mode: 'keyword'`, with `subjectIsName` as the only other input that
   crosses. Neither `asks` nor `peers` imports `@ci/domains/llm` or
@@ -727,19 +732,24 @@ Migrations: `20260715070602_add_asks` … `20260821120000_add_peer_ask_correlati
 // backend/apps/api/config/default.json
 "features": { "ask": true },        // ENABLE_ASK — ships true
 "peers": {
-  "directoryUrl": "",   // CI_PEER_DIRECTORY_URL   — empty disables discovery
-  "memoryEndpoint": "", // CI_PEER_MEMORY_ENDPOINT — this box's own /agent/v1
+  "directoryUrl": "",   // CI_PEER_DIRECTORY_URL   — reserved: nothing calls the directory yet
+  "memoryEndpoint": "", // CI_PEER_MEMORY_ENDPOINT — this box's own /agent/v1 base (https://<host>/api/agent/v1 behind the packaged gateway)
   "handle": "",         // CI_PEER_HANDLE
-  "audience": "",       // CI_PEER_AUDIENCE — REQUIRED for inbound
+  "audience": "",       // CI_PEER_AUDIENCE — REQUIRED for Portal-token inbound asks
   "timeoutMs": 10000    // CI_PEER_TIMEOUT_MS
 }
 ```
 
-**`peers.audience` is not optional for inbound.** Without it, a token issued for
-*any* first-party client would verify here — including one minted for a different
-Companion. The peer route refuses every request until it is set rather than
-falling back to the broad list. With the `ask` flag off, `POST /agent/v1/ask`
-returns 503, indistinguishable from a box with no peer surface at all.
+**`peers.audience` is not optional for Portal-token asks.** Without it, a token
+issued for *any* first-party client would verify here — including one minted for
+a different Companion. The peer route refuses every Portal-token request until it
+is set rather than falling back to the broad list. A signed `did:keri:D<x>` or
+`did:key` ask carries no token and does not consult it: it needs
+`peers.memoryEndpoint` set (503 until it is) and a link the owner made for exactly
+that keyid, and the signed `@target-uri`, rebuilt from `peers.memoryEndpoint`,
+and a single-use nonce bind it to this box. With the `ask` flag off,
+`POST /agent/v1/ask` returns 503, indistinguishable from a box with no peer
+surface at all.
 
 ---
 
@@ -1013,21 +1023,22 @@ this and answered*, and *declined*.
 Stated plainly, unsoftened. **This section is the point of the document.** The
 feature reads finished; it is not.
 
-**G1 — Retrieval bypass (high).** Phrase binding fires only on a run of
-**capitalised** words, or on the relationship/identity archetype — and the
-**asker controls both**. Executed against the real corpus: `queryType: 'content'`
-with the prompt `"do you know david miller"` returns **"Yes." unattended** on a
-corpus containing only *Steve* Miller. Capitalised, the same ask correctly
-returns nothing. Capitalisation is a hint the wire format does not promise, and
-`NAME_SUBJECT_QUERY_TYPES` is a string the asker types.
+**G1 — Retrieval bypass (high).** ✅ **Closed.** `buildPromptQuery` and
+`AskExecutorService` now detect person-recognition / relationship speech-act
+frames (`hasNameSubjectFrame` — e.g. `"do you know ..."`, `"have you met ..."`,
+`"who is ..."`, `"are you friends with ..."`) and bind their residual multi-token
+runs as required `'phrase'` groups regardless of capitalisation or the
+asker-supplied `queryType`. `"do you know david miller"` under `queryType: 'content'`
+now emits `phraseto_tsquery('english', 'david miller')` rather than OR-joining
+`'david' | 'miller'`.
 
-**G2 — No grant-creation entry point (blocker).** `createAskGrant` is complete on
-the wire — it takes `granteeId` or `granteePeerLinkId`, `maxDisclosure`, scope,
-mode, purpose — and **no UI calls it**. There is no `CREATE_ASK_GRANT` document
-in `asksOperations.ts`. An owner cannot create a standing grant through the
-product. The Grant Manager can only edit and revoke grants that already exist,
-which on a fresh box is none. (`createAskGrant` also has no `expiresAt` field
-yet; set one with `updateAskGrant`.)
+**G2 — No grant-creation entry point (blocker).** ✅ **Local grant creation
+shipped; peer-grant creation from the UI remains open.** `CREATE_ASK_GRANT` is
+now wired in `asksOperations.ts` and `AsksPage.tsx` (`GrantManager`'s
+`onAddGrant` control creates standing grants for local appliance accounts).
+Peer-linked grants can be created via `ci grants create` / `ci grants parse --apply`,
+and `createAskGrant` on GraphQL accepts `granteePeerLinkId`. (`createAskGrant`
+still sets initial expiry via `updateAskGrant`.)
 
 **G3 — Cross-box asks cannot be sent from the page (blocker).** The composer says
 so itself: *"asking across boxes needs an access token from the Portal that your
@@ -1042,13 +1053,16 @@ real resolvers and services against real Postgres. **The gap is reachability, no
 correctness.** Do not read the passing suites as "the feature works"; read them
 as "the feature would work if it had a front door".
 
-**G5 — Peer-link revocation is incomplete in three separate ways.**
-(a) A revoked link still supplies its original **trust tier** to asks already in
-the inbox — `resolveTier` reads `link?.trustTier` from an owner-scoped `findById`
-that returns revoked rows. (b) `updatePeerLink` calls `PeerLinkService.upsert`,
-which sets `revokedAt: null` unconditionally, so **editing a link erases its
-revocation timestamp**. (c) `PeerLinkResolver`'s five operations are **not gated
-by the `ask` feature flag**, while all sixteen of `AskResolver`'s are.
+**G5 — Peer-link revocation is incomplete in three separate ways.** ✅ **Closed.**
+(a) `AskResolver.resolveTier` now clamps any peer link with `revokedAt != null`
+or `status !== 'active'` to the `'stranger'` tier, so asks remaining in the
+inbox after revocation never inherit the pre-revocation `trustTier`.
+(b) `PeerLinkService.upsert` now preserves `existing?.revokedAt` unless
+`data.status === 'active'` is explicitly passed (`createPeerLink`), so
+`updatePeerLink` never clears a revocation timestamp.
+(c) All five operations on `PeerLinkResolver` (`myPeerLinks`, `peerLink`,
+`createPeerLink`, `updatePeerLink`, `revokePeerLink`) are now gated behind the
+`ask` feature flag via `FeatureService`, matching `AskResolver`.
 
 **G6 — A household `auto` grant on a sensitive class discloses full item
 references with no human in the loop.** ⚠️ **Mechanism shipped; the DEFAULT is
@@ -1069,9 +1083,11 @@ half of that exemption is pinned by **no test**.
 **G7 — The first `make fed-demo` on cold state fails a JWKS race** before any
 scenario runs. The second succeeds.
 
-**G8 — Rate limits are per-process in-memory maps.** Multiple processes multiply
-the effective limit, and a restart resets the window. Both files say so
-themselves; a shared store is needed before the ask path goes multi-instance.
+**G8 — Rate limits are per-process in-memory maps.** ✅ **Closed** (#2475). The
+ask and peer limiters, and the peer-signature nonce cache, keep their state in
+`ConsumptionStore`, which is Postgres unless `consumption.store` is `memory`, so a
+limit is shared across replicas and survives a restart. (Before #2475, multiple
+processes multiplied the effective limit, and a restart reset the window.)
 
 **G9 — Rate limits bound RATE, not TOTAL.** Nothing *enforces* a cumulative
 disclosure budget. (The owner can now SEE consumption per relationship — see

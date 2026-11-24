@@ -1,4 +1,4 @@
-import type { Repository } from 'typeorm';
+import type { DataSource, Repository } from 'typeorm';
 
 import type { FeatureService } from '@ci/common/feature';
 import type { LoggerService } from '@ci/common/logging';
@@ -48,16 +48,37 @@ function makeLogger(): LoggerService {
   } as unknown as LoggerService;
 }
 
-function makeCron(rows: UserRow[], planningEnabled = true) {
+/**
+ * Stands in for `listUsersWithDueReminders`' one query: the users among `rows`
+ * that are onboarded AND have a reminder due. The reminders cron no longer
+ * fans out to every onboarded user; it asks `ci.reminders` who is due first.
+ */
+function makeDataSource(rows: UserRow[], usersWithDueReminders: string[]): DataSource {
+  return {
+    query: jest.fn(async () =>
+      rows
+        .filter((row) => row.onboarded && usersWithDueReminders.includes(row.id))
+        .map((row) => ({ userId: row.id })),
+    ),
+  } as unknown as DataSource;
+}
+
+function makeCron(
+  rows: UserRow[],
+  planningEnabled = true,
+  usersWithDueReminders = rows.map((row) => row.id),
+) {
   const eventService = { send: jest.fn(async () => ['job-1']) } as unknown as EventService;
   const featureService = {
     isFeatureEnabled: jest.fn(async () => planningEnabled),
   } as unknown as FeatureService;
   const userService = new UserService(makeUserRepository(rows), eventService);
+  const dataSource = makeDataSource(rows, usersWithDueReminders);
 
   return {
-    cron: new PlanningJobsCron(eventService, userService, featureService, makeLogger()),
+    cron: new PlanningJobsCron(eventService, userService, featureService, makeLogger(), dataSource),
     send: eventService.send as jest.Mock,
+    query: dataSource.query as jest.Mock,
   };
 }
 
@@ -100,6 +121,15 @@ describe('PlanningJobsCron fan-out audience', () => {
       { userId: ONBOARDED },
       { singletonKey: `planning:${label}:${ONBOARDED}` },
     );
+  });
+
+  it('fires reminders only for users who have one due, not for every onboarded user', async () => {
+    const { cron, send, query } = makeCron(POPULATION, true, []);
+
+    await cron.enqueueFireReminders();
+
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(send).not.toHaveBeenCalled();
   });
 
   it('enqueues nothing when every account is still in signup', async () => {

@@ -15,6 +15,7 @@ import {
 import { Context, type RequestContext } from '@ci/common/context';
 import { INTENTS_SCOPE, READ_CAPABILITY, RequireCapability, RequireScopes } from '@ci/common/decorators';
 import { JwtOrApiKeyAuthGuard, type ApiKeyScopedRequest, apiKeyCapabilityOf } from '@ci/common/guards';
+import config from '@ci/configuration';
 import { isManagedAppPrincipal } from '@ci/domains/auth';
 import {
   DISPATCH_TIERS,
@@ -27,6 +28,7 @@ import {
   type IntentManifest,
   type ManifestIntent,
   type ToolResult,
+  withAbsoluteItemLinks,
 } from '@ci/domains/tools';
 
 /**
@@ -69,8 +71,9 @@ export class IntentsController {
    */
   @Get()
   @RequireCapability(READ_CAPABILITY)
-  getManifest(@Query('tier') tier?: string): IntentManifest {
-    return this.catalog.getManifest({ tier: parseTier(tier) });
+  getManifest(@Query('tier') tier?: string, @Context() context?: RequestContext): IntentManifest {
+    // The caller decides which owned intents are listed; see IntentCatalogService.getManifest.
+    return this.catalog.getManifest({ tier: parseTier(tier), userId: context?.userId });
   }
 
   /** The standardized schema-domain vocabulary. */
@@ -90,8 +93,12 @@ export class IntentsController {
   /** A single intent by its dotted name, e.g. `memory.recall`. Honours `?tier=` as above. */
   @Get(':name')
   @RequireCapability(READ_CAPABILITY)
-  getIntent(@Param('name') name: string, @Query('tier') tier?: string): ManifestIntent {
-    const manifest = this.catalog.getManifest({ tier: parseTier(tier) });
+  getIntent(
+    @Param('name') name: string,
+    @Query('tier') tier?: string,
+    @Context() context?: RequestContext,
+  ): ManifestIntent {
+    const manifest = this.catalog.getManifest({ tier: parseTier(tier), userId: context?.userId });
     const intent = manifest.intents.find((i) => i.name === name);
 
     if (!intent) {
@@ -126,11 +133,14 @@ export class IntentsController {
   ): Promise<ToolResult> {
     const toolName = resolveExecuteName(name);
 
-    if (!toolName || !this.registry.hasTool(toolName)) {
+    // Visible to this caller, not merely registered: an intent another account owns (the
+    // `messaging.*` intents belong to the BlueBubbles connector's owner) is unknown here, the same
+    // 404 the manifest routes give, rather than a 200 that confirms it exists.
+    if (!toolName || !this.registry.isToolVisibleTo(toolName, context.userId)) {
       throw new NotFoundException(`Unknown intent: ${name}`);
     }
 
-    return this.registry.executeTool(
+    const result = await this.registry.executeTool(
       toolName,
       {
         ...context,
@@ -144,6 +154,10 @@ export class IntentsController {
       },
       body ?? {},
     );
+
+    // Every caller of this route is served from another origin than the app, so
+    // a site-relative link would be completed against the caller's own host.
+    return withAbsoluteItemLinks(result, config.auth.oidc.publicBaseUrl);
   }
 }
 
@@ -168,7 +182,7 @@ function parseTier(tier: string | undefined): DispatchTier | undefined {
 
 /** Decode a path segment and map dotted intent ids onto the registry's underscored keys. */
 function resolveExecuteName(raw: string): string | null {
-  let name = raw;
+  let name: string;
   try {
     name = decodeURIComponent(raw);
   } catch {

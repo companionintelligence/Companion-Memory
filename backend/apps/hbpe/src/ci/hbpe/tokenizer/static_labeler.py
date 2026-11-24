@@ -14,6 +14,7 @@ import logging
 import psycopg2.extras
 
 from ci.hbpe.database import get_conn
+from ci.hbpe.event_status import LIVE_EVENT_SQL
 from ci.hbpe.tokenizer.vocab_registry import get_or_create_l1
 
 log = logging.getLogger(__name__)
@@ -63,7 +64,14 @@ def mapped_kind_sql() -> str:
 
 
 def label_mapped_events(user_id: str) -> dict:
-    """Assign static L1 clusters to unlabeled events matching kind_l0_map."""
+    """Assign static L1 clusters to unlabeled events matching kind_l0_map.
+
+    Events that did not happen (``LIVE_EVENT_SQL``) are not claimed, for the
+    same reason the Qwen drain does not queue them
+    (data_client._unlabeled_events_where): the serializer never publishes one.
+    The two labelers split one corpus on ``mapped_kind_sql()``, so they have to
+    agree on which events are in it.
+    """
     kind_map = load_kind_map()
     labeled = 0
     by_kind: dict[str, int] = {}
@@ -83,6 +91,7 @@ def label_mapped_events(user_id: str) -> dict:
                 LEFT JOIN hbpe.l1_event_cluster ec ON ec.event_id = e.event_id
                 WHERE e.user_id = %s::uuid
                   AND e.is_deleted = FALSE
+                  AND {LIVE_EVENT_SQL}
                   AND {KIND_EXPR} LIKE %s
                   AND ec.event_id IS NULL
                   AND e.start_time >= '2010-01-01'::timestamptz

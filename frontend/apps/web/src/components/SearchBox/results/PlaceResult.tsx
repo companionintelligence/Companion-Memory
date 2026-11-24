@@ -3,6 +3,8 @@ import { gql, useFragment, type FragmentType } from '@/graphql';
 
 import { startFilterDrag } from '../filterDrag';
 
+import { SearchResultRow } from './SearchResultRow';
+
 export const PLACE_FRAGMENT = gql(`
   fragment SearchResultPlaceData on PlaceType {
     id
@@ -21,16 +23,13 @@ export function PlaceResult({ place }: Props) {
   return (
     // Draggable onto the Memory explorer's filter drop area to add this place
     // as a where-filter; clicking still navigates to the place.
-    <div
+    <SearchResultRow
       draggable={Boolean(name)}
       onDragStart={(event) => startFilterDrag(event, 'place', name)}
-      className="flex cursor-grab items-center justify-between gap-2 active:cursor-grabbing"
-    >
-      <div className="flex items-center gap-2">
-        <PlaceIcon />
-        <div className="font-medium">{data.name}</div>
-      </div>
-      <div className="text-muted-foreground">Place</div>
-    </div>
+      className="cursor-grab active:cursor-grabbing"
+      icon={<PlaceIcon />}
+      title={data.name}
+      kind="Place"
+    />
   );
 }

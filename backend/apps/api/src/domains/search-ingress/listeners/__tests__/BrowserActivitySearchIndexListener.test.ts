@@ -6,6 +6,13 @@ function makeListener(activity: Record<string, unknown> | null = null) {
   const browserActivityService = { findById: jest.fn().mockResolvedValue(activity) };
   const embeddingGenerationService = { generateEmbedding: jest.fn().mockResolvedValue([0.1, 0.2]) };
   const embeddingService = {
+    upsertDocument: jest.fn(
+      async (_ctx: unknown, data: { text: string }, generate: (text: string) => Promise<number[]>) => {
+        await generate(data.text);
+
+        return 'embedded';
+      },
+    ),
     upsert: jest.fn().mockResolvedValue(null),
     remove: jest.fn().mockResolvedValue(true),
   };
@@ -58,7 +65,7 @@ describe('BrowserActivitySearchIndexListener.indexBrowserActivity / updateBrowse
 
     await listener.indexBrowserActivity({ browserActivityId: 'ghost' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalled();
   });
 
@@ -72,7 +79,7 @@ describe('BrowserActivitySearchIndexListener.indexBrowserActivity / updateBrowse
 
     await listener.indexBrowserActivity({ browserActivityId: 'ba-1' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
   });
 
   it('embeds and vectorizes a substantive page visit, scoped to its user, and clears any stale skip marker', async () => {
@@ -86,9 +93,10 @@ describe('BrowserActivitySearchIndexListener.indexBrowserActivity / updateBrowse
 
     await listener.updateBrowserActivity({ browserActivityId: 'ba-1' } as never);
 
-    expect(embeddingService.upsert).toHaveBeenCalledWith(
+    expect(embeddingService.upsertDocument).toHaveBeenCalledWith(
       { userId: 'user-1' },
-      { entityType: 'browser-activity', entityId: 'ba-1', embedding: [0.1, 0.2] },
+      { entityType: 'browser-activity', entityId: 'ba-1', text: expect.any(String) },
+      expect.any(Function),
     );
     expect(vectorService.upsert).toHaveBeenCalledWith(
       { userId: 'user-1' },
@@ -117,7 +125,7 @@ describe('BrowserActivitySearchIndexListener.indexBrowserActivity / updateBrowse
 
     await listener.indexBrowserActivity({ browserActivityId: 'ba-2' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(indexSkipService.clearSkip).not.toHaveBeenCalled();
     expect(indexSkipService.recordSkip).toHaveBeenCalledTimes(1);
     expect(indexSkipService.recordSkip).toHaveBeenCalledWith({
@@ -138,7 +146,7 @@ describe('BrowserActivitySearchIndexListener.indexBrowserActivity / updateBrowse
 
     await listener.indexBrowserActivity({ browserActivityId: 'ba-3' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(vectorService.upsert).not.toHaveBeenCalled();
     expect(indexSkipService.recordSkip).toHaveBeenCalledWith({
       entityType: 'browser-activity',

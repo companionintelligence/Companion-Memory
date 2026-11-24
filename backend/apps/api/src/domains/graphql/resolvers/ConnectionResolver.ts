@@ -86,7 +86,6 @@ export class ConnectionResolver {
       syncState: input.syncState,
       endpoints: input.activeEndpoints,
       needsReauth: input.needsReauth,
-      externalId: input.externalId ? input.externalId : undefined,
     });
 
     if (entity == null) {

@@ -1,6 +1,6 @@
 import { type ReactNode } from 'react';
 
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { GlobalUID } from '@ci/common';
 import { Button, Card } from '@ci/shadcn';
 import { type ResultOf } from '@graphql-typed-document-node/core';

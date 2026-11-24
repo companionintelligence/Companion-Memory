@@ -16,17 +16,33 @@ import { QueryFailedError } from 'typeorm';
 
 import { PgErrorCode } from '@ci/common/constants';
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
+import {
+  CAPTURE_SCOPE,
+  READ_CAPABILITY,
+  RequireCapability,
+  RequireScopes,
+  WRITE_CAPABILITY,
+} from '@ci/common/decorators';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { ValidationPipe } from '@ci/common/pipes';
 
 import { DeviceService } from '../services/DeviceService';
 import { CreateDeviceDto, UpdateDeviceDto, Device, createDeviceSchema, updateDeviceSchema } from '../types';
 
+/**
+ * The capture scope reaches the three routes a capture agent uses to keep its own device record:
+ * register, list, and the last-seen heartbeat. A capture agent (the browser extension, Companion
+ * Capture) holds nothing broader, as an api key or as a Portal token. The list returns every
+ * device record of the account (name, type, platform, last seen), not only the caller's own: the
+ * extension finds its record in it. It holds no captured content.
+ */
 @Controller('devices')
 export class DeviceController {
   constructor(private readonly deviceService: DeviceService) {}
 
   @UseGuards(JwtOrApiKeyAuthGuard)
+  @RequireScopes(CAPTURE_SCOPE)
+  @RequireCapability(WRITE_CAPABILITY)
   @Post()
   async create(
     @Context() context: RequestContext,
@@ -46,6 +62,8 @@ export class DeviceController {
   }
 
   @UseGuards(JwtOrApiKeyAuthGuard)
+  @RequireScopes(CAPTURE_SCOPE)
+  @RequireCapability(READ_CAPABILITY)
   @Get()
   async findAll(@Context() context: RequestContext): Promise<Device[]> {
     const serviceContext = toServiceContext(context);
@@ -120,6 +138,8 @@ export class DeviceController {
   }
 
   @UseGuards(JwtOrApiKeyAuthGuard)
+  @RequireScopes(CAPTURE_SCOPE)
+  @RequireCapability(WRITE_CAPABILITY)
   @Patch(':id/last-seen')
   async updateLastSeen(
     @Context() context: RequestContext,

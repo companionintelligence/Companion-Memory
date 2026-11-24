@@ -1,7 +1,5 @@
 # CI-Server GraphQL API Reference
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 The memory-brain GraphQL surface of CI-Server: a single Apollo/NestJS endpoint exposing the personal database (events, communications, content, inventory/things, receipts and product models, browser activity, files, notes, threads), the knowledge graph (entities, relationships, identifiers, merge candidates), intelligence (questions, answers, actions, summaries, daily metrics), planning (tasks, schedule candidates), asks & grants, cross-entity search, saved searches, connectors/providers, and the HBPE forecasts. Auth and conventions are in [auth-and-conventions.md](auth-and-conventions.md); REST surfaces in [rest.md](rest.md).
 
 - **Schema (source of truth):** `backend/apps/api/src/domains/graphql/__generated__/schema.graphql` — **92 queries, 116 mutations, 283 named type definitions** (187 `type`, 67 `input`, 21 `enum`, 4 `interface`, 2 `union`, 2 `scalar`), code-first generated from resolver decorators (`autoSchemaFile`, `index.ts:113`). **Do not edit it by hand.** (Counts drift as resolvers are added; the SDL is authoritative — counted against the file on 2026-08-19.)
@@ -178,7 +176,7 @@ Entities surface as the typed `PersonType`/`PlaceType`/`ConceptType` lists (rows
 
 ### 3.5d Asks & grants (peer federation)
 
-Gated by the **`ask` feature flag, which is now `true` by default** — the *local* ask/grant surface is live out of the box. Only the inbound peer REST route stays dark, and for a different reason (it also needs `peers.audience` configured).
+Gated by the **`ask` feature flag, which is now `true` by default** — the *local* ask/grant surface is live out of the box. Only the inbound peer REST route stays dark, and for a different reason: it needs settings that ship empty. `peers.audience` gates the asks that carry a Portal token, and an ask signed under a `did:keri:D<x>` or `did:key` keyid carries no token and needs `peers.memoryEndpoint` and a link the owner made for exactly that keyid instead. The signed `@target-uri`, which the box rebuilds from `peers.memoryEndpoint`, and a single-use nonce bind that ask to the box (see [Keyids that name themselves](../peer-federation.md#keyids-that-name-themselves-didkey-and-didkeridx)).
 
 | Query | Return |
 |---|---|
@@ -186,8 +184,9 @@ Gated by the **`ask` feature flag, which is now `true` by default** — the *loc
 | `askAnswer(…)` | `AskAnswerType` |
 | `myAskGrants` | `[AskGrantType!]!` |
 | `askDisclosureHistory` | `[AskAuditType!]!` |
+| `myPeerLinks` / `peerLink(id)` | `[PeerLinkType!]!` / `PeerLinkType` |
 
-> **Outbound asks need a token you supply.** `SendPeerAskInput.peerAccessToken` is non-nullable: the *caller* must present a CI-Portal-issued access token whose audience is the peer box. CI-Server never mints, exchanges or caches one. And there is **no API — REST or GraphQL — that creates a `ci.peer_links` row**; both directions hard-require a pre-existing link, so today a link is inserted by hand.
+> **Outbound asks need a token you supply.** `SendPeerAskInput.peerAccessToken` is non-nullable: the *caller* must present a CI-Portal-issued access token whose audience is the peer box. CI-Server never mints, exchanges or caches one. An empty `peerAccessToken` sends the ask signed with this box's key alone (`peers.signingKeyJwk`), which only the box's administrator may do ([The token](../peer-federation.md#the-token)). Both directions require a live `ci.peer_links` row. The owner creates one with `createPeerLink`, `ci peers add`, or the **Link someone new** form on `/asks`. The form cannot set the peer's identity (`peerIssuer`, `peerSubject`), which inbound asks are matched on. Set it with `createPeerLink` or `updatePeerLink`, or with `ci peers add|update --peer-issuer … --peer-subject …` (see [Binding a link to the peer's identity](../peer-federation.md#binding-a-link-to-the-peers-identity)). A peer's public signing key has no API or CLI yet, so it is recorded with SQL (see [Message signatures](../peer-federation.md#message-signatures)).
 
 ### 3.6 Connections / providers / sync jobs
 
@@ -206,7 +205,7 @@ Gated by the **`ask` feature flag, which is now `true` by default** — the *loc
 
 **`SearchResultConnection`** carries `edges`, `pageInfo`, `totalCount` **and `matchingTags: [TagType!]!`** — the tags represented in the result set, so a client can offer tag refinement without a second round-trip.
 
-**Candidate source:** `query` → search index (ranked); else `tags` → tag membership; else **timed** (recent events + communications + browser activity merged, with a `(time,id)` keyset cursor pushed to SQL). Remaining filters AND-ed as post-filters; who/where/connector restrict to matching events. **Cursor:** opaque `base64("<iso-time>::<globalId>")`. Node is the `SearchResultType` union (§5).
+**Candidate source:** `query` → search index (ranked); else `tags` → tag membership; else **timed** (recent events + communications + browser activity merged, with a `(time,id)` keyset cursor pushed to SQL). Remaining filters AND-ed as post-filters; who/where/connector restrict to matching events. **Cursor:** opaque `base64("<iso-time>::<globalId>")`. The keyset runs in the sort direction: `sortBy: "time"` with `sortOrder: "asc"` ("Oldest first") reads every table upwards from the start of the range and the cursor walks forward, so the first page holds the oldest rows and each page continues after the last; every other sort reads newest-first. The cursor's time is millisecond precision while the stored times are microseconds, so the seek treats the cursor's millisecond as one tie group and breaks it on the id. Node is the `SearchResultType` union (§5).
 
 **`mapPins(input: SearchInput!, limit: Int): MapPinsType!`** runs the *same* `SearchInput` and returns located events as map markers, so the map and list views cannot drift apart on what "the current query" means. Two deliberate differences: `hasLocation` is **forced on** regardless of input (an unlocated event has no pin) and the result is **events-only**; and it returns the whole matching set in one read (capped at `MAP_PIN_MAX_LIMIT` pins), not a page — with `totalCount` a real `COUNT(*)` of the matching located set, so a truncated response can say how much of the map it is showing.
 
@@ -261,7 +260,7 @@ Many newer writes return a `*Payload` wrapper; note also that several entities n
 `createEvent`/`updateEvent`/`removeEvent`/`deleteEvent`/`restoreEvent`, `rescheduleEvent`, `returnEventToSlate`, `createContent`/`updateContent`/`removeContent`/`deleteContent`, `createItem`/`updateItem`/`deleteItem` (payload-wrapped), `updateBrowserActivity`/`deleteBrowserActivity`, `updateCommunication`/`deleteCommunication`, `createNote`/`updateNote`/`deleteNote`, `createPlace`/`updatePlace`/`removePlace`/`deletePlace`, `createPerson`/`updatePerson`/`deletePerson`, `updateFile`, `updateKnownPlace`.
 
 ### 4.1b Identity, merge & object writes
-`mergePeople`, `rejectPersonDuplicates`, `addPersonIdentifier`/`removePersonIdentifier`; `mergeItems`, `addItemIdentifier`/`removeItemIdentifier`, `linkItemToProduct`; `mergeProductModels`; `confirmObservation`/`rejectObservation`; `rebuildPlaces`.
+`mergePeople`, `rejectPersonDuplicates`, `addPersonIdentifier`/`removePersonIdentifier`; `mergeItems`, `addItemIdentifier`/`removeItemIdentifier`, `linkItemToProduct`; `mergeProductModels`; `confirmObservation`/`rejectObservation`/`unlinkObservation`; `rebuildPlaces`.
 
 `ci.entity_merges` rows are written under `entity_type` `'ObjectInstance'` for `mergeItems` and `'ProductModel'` for `mergeProductModels`, preserving the instance-vs-model distinction.
 
@@ -273,15 +272,17 @@ Many newer writes return a `*Payload` wrapper; note also that several entities n
 ### 4.3 Intelligence writes
 `createQuestion`/`createQuestions`/`updateQuestion`/`removeQuestion`, `createAnswer`/`createAnswers`/`updateAnswer`/`removeAnswer`, `markActionAsSeen`/`markActionAsDismissed`, `markSummaryAsSeen`/`markSummaryAsDismissed`, `refreshDailyMetrics`, `triggerHbpe` (→ `String!`, `"disabled"` if flag off).
 
+> **Answer text.** `createAnswer`/`createAnswers`/`updateAnswer` hold the text to the same rule as `POST /api/answers` and `PATCH /api/answers/:id` — not blank, at most 5,000 characters (UTF-16 code units) — and answer a violation with a 400. An answer created without a method is recorded as `answerMethod: "user"`, the same value an edit stamps.
+
 > **Shared-catalogue write scope.** Seed reflection rows are read-only: editing one **forks a private copy** rather than mutating the shared row. Any new user-scoped selector over `ci.questions` must carry the forked-origin exclusion or retired reflections reappear.
 
 ### 4.3b Planning & schedule writes
 `createTask`/`updateTask`/`deleteTask`, `completeTask`/`reopenTask`/`deferTask`, `scheduleTask`/`unscheduleTask`, `breakDownTasks`, `acceptProposedTask`/`declineProposedTask`, `acceptTaskPendingChange`/`declineTaskPendingChange`, `acceptCandidate`/`declineCandidate`/`snoozeCandidate`, `syncScheduleSuggestions`.
 
 ### 4.3c Asks & grants writes
-`createAsk`, `approveAsk`/`declineAsk`, `runAsk`, `sendPeerAsk`, `createAskGrant`/`revokeAskGrant`.
+`createAsk`, `approveAsk`/`declineAsk`, `runAsk`, `sendPeerAsk`, `createAskGrant`/`revokeAskGrant`, `createPeerLink`/`updatePeerLink`/`revokePeerLink`.
 
-> The ask **UI components** exist under `frontend/apps/web/src/pages/AsksPage/` but nothing imports them and no route mounts them — the ask surface is backend-plus-component-library today, not reachable in the shipped web app.
+> The ask UI is the `/asks` page (`frontend/apps/web/src/pages/AsksPage/`), which the web app registers only while the `ask` flag is on.
 
 ### 4.4 Connections / providers writes
 `createConnection`/`updateConnection`/`deleteConnection`, `createConnectionSyncJob`/`updateConnectionSyncJob`/`deleteConnectionSyncJob`, `createProviderKey`/`updateProviderKey`/`deleteProviderKey`.
@@ -300,7 +301,7 @@ The high-throughput write paths. **Shape:** `mutation(input: [CreateXInput!]!): 
 
 **Idempotency — the provenance triple.** Each record carries `(sourceType, sourceSystem, sourceId)`; re-ingesting the same triple is a **no-op find-or-return**, enforced by set-based `INSERT … ON CONFLICT <arbiter> DO NOTHING`. A row is dedupable only when it carries the triple.
 
-**Deferred indexing (`emitCreated:false`).** The list paths **do not emit** per-row `*CreatedEvent`s (at ~1M rows the per-row PGBoss fan-out was the dominant cost). Search embedding is deferred to `POST /v1/ingest/finish` (or the older `POST /api/maintenance/search-index/backfill`). The single-row `createX` mutations **still** emit, so interactive creates index live.
+**Deferred indexing (`emitCreated:false`).** The list paths **do not emit** per-row `*CreatedEvent`s (at ~1M rows the per-row PGBoss fan-out was the dominant cost). Search embedding is deferred to `POST /v1/ingest/finish` (or the older `POST /maintenance/search-index/backfill`). The single-row `createX` mutations **still** emit, so interactive creates index live.
 
 | Mutation | Service path | Mechanism | ON CONFLICT arbiter | Scope col | Refresh on conflict |
 |---|---|---|---|---|---|

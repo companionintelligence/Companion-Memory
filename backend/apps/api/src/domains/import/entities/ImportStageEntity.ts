@@ -95,6 +95,33 @@ export class ImportStageEntity {
   @Column({ type: 'text', nullable: true })
   error!: string | null;
 
+  /**
+   * Fencing token of the claim currently running this stage, or null. Minted
+   * per claim by `ImportRunService.claimStage` and cleared when the claim ends
+   * (completed, failed, or reclaimed from a worker that went silent). Every
+   * write a worker makes for the stage is conditioned on it, so a worker that
+   * lost its stage to recovery cannot write into the attempt that replaced it.
+   */
+  @Column({ type: 'uuid', name: 'claim_token', nullable: true })
+  claimToken!: string | null;
+
+  /**
+   * The pg-boss job whose delivery holds the claim, and the queue it is on.
+   * Null for in-process runs (BlueBubbles), which never go through pg-boss —
+   * which is also what keeps them out of the orphan reaper, whose whole remedy
+   * is handing that job back to pg-boss.
+   */
+  @Column({ type: 'uuid', name: 'claim_job_id', nullable: true })
+  claimJobId!: string | null;
+
+  @Column({ type: 'text', name: 'claim_queue', nullable: true })
+  claimQueue!: string | null;
+
+  /**
+   * Doubles as the claim's HEARTBEAT: progress writes and the listener's timer
+   * touch it while a stage runs, so a `running` stage whose `updatedAt` has gone
+   * stale is one nothing is working on. See `IMPORT_STAGE_STALLED_SECONDS`.
+   */
   @UpdateDateColumn({ type: 'timestamptz', name: 'updated_at' })
   updatedAt!: Date;
 

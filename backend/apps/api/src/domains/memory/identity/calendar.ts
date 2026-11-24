@@ -45,8 +45,13 @@ function zonedWallClockOf(instantMs: number, timeZone: string): number {
  * fields. Guess-and-correct through `Intl` (twice, for the DST edge where the
  * first correction lands in the other offset); no timezone library needed —
  * the runtime's own IANA data answers.
+ *
+ * Whole seconds only; a caller holding fractional seconds adds them afterwards.
+ * Throws `RangeError` for a `timeZone` the runtime does not know (an IANA id is
+ * required: a Windows name such as "Pacific Standard Time" is unknown to it), so
+ * a caller that must not fail on one catches it.
  */
-function utcInstantOfZonedTime(
+export function utcInstantOfZonedTime(
   year: number,
   month: number,
   day: number,

@@ -3,20 +3,22 @@ import {
   Body,
   ConflictException,
   Controller,
+  ForbiddenException,
   Get,
   InternalServerErrorException,
   NotFoundException,
   Param,
   Post,
+  Req,
   UseGuards,
 } from '@nestjs/common';
+import type { Request } from 'express';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
-import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { ApplianceAdminGuard, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
 import { isOutboundEnabled } from '@ci/common/outbound';
 import { ValidationPipe } from '@ci/common/pipes';
-import config from '@ci/configuration';
 import { BaseOAuth2Client } from '@ci/domains/connections/clients/BaseOAuth2Client';
 
 import { ClientFactory } from '../clients';
@@ -26,6 +28,7 @@ import { ConnectionService } from '../services/ConnectionService';
 import { ProviderKeyService } from '../services/ProviderKeyService';
 import { ProviderService } from '../services/ProviderService';
 import { connectProviderDto, connectProviderSchema } from '../types';
+import { callbackRequestOrigin, oauthCallbackUrlForConnection, sentRedirectUri } from '../utils/callbackUrls';
 
 @Controller('providers')
 export class ProvidersController {
@@ -35,6 +38,7 @@ export class ProvidersController {
     private readonly connectionService: ConnectionService,
     private readonly providerService: ProviderService,
     private readonly providerKeyService: ProviderKeyService,
+    private readonly applianceAdminGuard: ApplianceAdminGuard,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(ProvidersController.name);
@@ -62,8 +66,10 @@ export class ProvidersController {
     @Context() context: RequestContext,
     @Param('id') id: string,
     @Body(new ValidationPipe(connectProviderSchema)) input: connectProviderDto,
+    @Req() request?: Partial<Pick<Request, 'headers' | 'secure'>> & { user?: { role?: string } },
   ) {
     const serviceContext = toServiceContext(context);
+    const requestOrigin = callbackRequestOrigin(request);
 
     const provider = await this.providerService.findById(serviceContext, id);
 
@@ -82,31 +88,7 @@ export class ProvidersController {
     }
 
     if (provider.authType === 'api_key') {
-      const apiKey = input.apiKey;
-
-      if (!apiKey) {
-        throw new BadRequestException('API key is required for this provider');
-      }
-
-      const signalClient = client as SignalClient;
-      const phoneNumber = await signalClient.resolveAccountFromApiKey(apiKey);
-
-      const connection = await this.connectionService.create(serviceContext, {
-        providerId: provider.id,
-        name: provider.name ?? 'My Connection',
-        accessToken: apiKey,
-        externalId: phoneNumber,
-        schedule: '1 hour',
-        endpoints: input.endpoints,
-      });
-
-      await this.connectionService.update(serviceContext, connection.id, {
-        active: true,
-      });
-
-      return {
-        authorizationUrl: '',
-      };
+      return this.connectSignal(serviceContext, provider, client as SignalClient, input, request);
     }
 
     const oauthClient = client as BaseOAuth2Client;
@@ -128,7 +110,7 @@ export class ProvidersController {
         endpoints: input.endpoints,
       });
 
-      const authorizationUrl = await oauthClient.getAuthorizationUrl(connection);
+      const authorizationUrl = await oauthClient.getAuthorizationUrl(connection, requestOrigin);
 
       return {
         authorizationUrl,
@@ -174,7 +156,13 @@ export class ProvidersController {
     const credentials = await oauthClient.getClientCredentials(connection);
 
     if (credentials) {
-      const authorizationUrl = await oauthClient.getAuthorizationUrl(connection);
+      const authorizationUrl = await oauthClient.getAuthorizationUrl(connection, requestOrigin);
+      const redirectUri = sentRedirectUri(authorizationUrl);
+
+      // The code exchange must send the same redirect_uri; keep it rather than work it out again.
+      if (redirectUri) {
+        await this.connectionService.setOAuthRedirectUri(serviceContext, connection.id, redirectUri);
+      }
 
       return {
         authorizationUrl,
@@ -188,8 +176,7 @@ export class ProvidersController {
       throw new InternalServerErrorException('Provider not configured for CI Cloud proxy');
     }
 
-    const baseCallbackUrl = config.auth.oauth.callbackUrl || `${process.env.APP_PUBLIC_URL}/oauth/callback`;
-    const callbackUrl = `${baseCallbackUrl}?connectionId=${connection.id}`;
+    const callbackUrl = oauthCallbackUrlForConnection(connection.id);
 
     const scopes = oauthClient.getScopesFromActiveEndpoints(input.endpoints);
     const { authorization_url } = await this.cloudOAuthProxyService.getAuthorizationUrl(
@@ -199,5 +186,84 @@ export class ProvidersController {
     );
 
     return { authorizationUrl: authorization_url };
+  }
+
+  /**
+   * Signal, the one `api_key` provider: a signal-cli REST service the administrator runs next to
+   * the appliance. It is appliance-wide (one URL in config) and, as usually deployed, has no
+   * authentication of its own, so whatever key a caller types passes. Each number it holds is one
+   * person's messages, and receiving dequeues them. Three rules follow:
+   *
+   * - Only an administrator connects Signal ({@link ApplianceAdminGuard}, asked rather than
+   *   applied, because this route serves every provider). The administrator is the one who set up
+   *   the service and knows whose numbers are on it.
+   * - The caller names the number, and it must be one the service holds. The connection used to be
+   *   bound to whichever number the service listed first.
+   * - A number another account already connected is refused, so two accounts never pull (and
+   *   split) the same person's messages.
+   */
+  private async connectSignal(
+    serviceContext: ReturnType<typeof toServiceContext>,
+    provider: { id: string; name?: string | null },
+    signalClient: SignalClient,
+    input: connectProviderDto,
+    request: { user?: { role?: string } } | undefined,
+  ) {
+    let isAdmin = false;
+
+    try {
+      isAdmin = await this.applianceAdminGuard.admits(request?.user);
+    } catch {
+      // The admin probe fails closed: unknown means "not an administrator".
+    }
+
+    if (!isAdmin) {
+      throw new ForbiddenException('Only an administrator can connect Signal on this Companion.');
+    }
+
+    const apiKey = input.apiKey;
+
+    if (!apiKey) {
+      throw new BadRequestException('API key is required for this provider');
+    }
+
+    if (!input.account) {
+      throw new BadRequestException('Name the Signal number to connect, for example +15551234567.');
+    }
+
+    const phoneNumber = await signalClient.findAccount(apiKey, input.account);
+
+    if (phoneNumber == null) {
+      throw new BadRequestException('The Signal service does not hold that number.');
+    }
+
+    if (
+      await this.connectionService.externalAccountHeldByAnotherUser(
+        serviceContext.userId,
+        provider.id,
+        phoneNumber,
+      )
+    ) {
+      throw new ConflictException(
+        'Another account on this Companion has already connected that Signal number.',
+      );
+    }
+
+    const connection = await this.connectionService.create(serviceContext, {
+      providerId: provider.id,
+      name: provider.name ?? 'My Connection',
+      accessToken: apiKey,
+      externalId: phoneNumber,
+      schedule: '1 hour',
+      endpoints: input.endpoints,
+    });
+
+    await this.connectionService.update(serviceContext, connection.id, {
+      active: true,
+    });
+
+    return {
+      authorizationUrl: '',
+    };
   }
 }

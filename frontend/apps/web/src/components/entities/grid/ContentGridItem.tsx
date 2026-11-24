@@ -5,6 +5,8 @@ import { PendingImage } from '@/components/PendingImage';
 import { gql, useFragment, type FragmentType } from '@/graphql';
 import { RICH_MEDIA_FRAGMENT } from '@/pages/MemoryPage/Components/EntityDetails/RichMediaCard';
 
+import { resolveMediaUrl } from '../resolveMediaUrl';
+
 import { EntityGridItem } from './EntityGridItem';
 
 export const CONTENT_FRAGMENT = gql(`
@@ -32,16 +34,6 @@ export const CONTENT_FRAGMENT = gql(`
 interface Props {
   content: FragmentType<typeof CONTENT_FRAGMENT>;
   onClick?: (e: MouseEvent<HTMLDivElement>) => void;
-}
-
-// External URLs are used directly; relative paths are served from the object
-// store under /static.
-function resolveMediaUrl(value?: string | null): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-
-  return /^https?:\/\//.test(value) ? value : `/static${value}`;
 }
 
 export function ContentGridItem({ content, onClick }: Props) {

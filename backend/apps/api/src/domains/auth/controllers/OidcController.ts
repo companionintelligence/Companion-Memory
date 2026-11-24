@@ -15,15 +15,22 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
+import type { EntityManager } from 'typeorm';
 import { Agent, fetch as undiciFetch } from 'undici';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { SYSTEM_USER } from '@ci/common/context';
 import { FeatureService } from '@ci/common/feature';
+import {
+  OIDC_ORIGIN_BOUNCE_PARAM,
+  readRequestOrigin,
+  resolveOidcCallbackUrl,
+  resolveOidcOriginBounce,
+} from '@ci/common/http/oidcCallbackUrl';
 import { LoggerService } from '@ci/common/logging';
 import { ValidationPipe } from '@ci/common/pipes';
 import config from '@ci/configuration';
-import { UserService } from '@ci/domains/user';
+import { type CreateUserDto, UserService } from '@ci/domains/user';
 
 import { AuthService, type SignupIntent } from '../services/AuthService';
 import { CsrfService } from '../services/CsrfService';
@@ -31,13 +38,8 @@ import { FederatedIdentityService } from '../services/FederatedIdentityService';
 import { HubForwardAuthBridgeService } from '../services/HubForwardAuthBridgeService';
 import { OidcNativeCodeService } from '../services/OidcNativeCodeService';
 import { SignupCodeService } from '../services/SignupCodeService';
+import { MEMORY_SIGN_IN_CLIENT } from '../utils/applianceAudience';
 import { ensureCsrfCookie, setCsrfCookie, setSessionCookie } from '../utils/authCookies';
-import {
-  OIDC_ORIGIN_BOUNCE_PARAM,
-  type OidcCallbackRequestOrigin,
-  resolveOidcCallbackUrl,
-  resolveOidcOriginBounce,
-} from '../utils/oidcCallbackUrl';
 import { renderSignupConfirmPage } from '../utils/signupConfirmPage';
 
 /**
@@ -48,8 +50,19 @@ import { renderSignupConfirmPage } from '../utils/signupConfirmPage';
  */
 type PortalUserResolution =
   | { kind: 'user'; user: { id: string } }
-  | { kind: 'refused'; reason: 'account_linked_elsewhere' | 'email_unverified' }
+  | { kind: 'refused'; reason: 'account_linked_elsewhere' | 'email_unverified' | 'account_exists' }
   | { kind: 'unknown' };
+
+/**
+ * The Portal person an account is created for. `emailVerified` is the Portal's `email_verified`
+ * claim: only an address the Portal verified counts as proven on the new account, because the
+ * proof is what lets a Hub person later be adopted into an account by that address.
+ */
+interface PortalPerson {
+  email: string;
+  name?: string;
+  emailVerified: boolean;
+}
 
 const STATE_COOKIE = 'oidc_state';
 const PKCE_COOKIE = 'oidc_pkce';
@@ -59,8 +72,27 @@ const PKCE_COOKIE = 'oidc_pkce';
 const CLIENT_COOKIE = 'oidc_client';
 const NATIVE_CLIENT = 'native';
 
+/**
+ * The app's half of a native sign-in, carried from initiate to callback like the cookies above.
+ * The app makes a PKCE pair and a state value of its own before it opens the browser: the
+ * challenge is stored with the one-time code, so only the app holding the verifier can redeem
+ * it, and the state comes back on the deep link, so the app can drop any callback for a sign-in
+ * it did not start. Without them the code alone was the credential, and any
+ * `companion://oidc/callback?code=...` link signed the app in, whoever's code it was.
+ */
+const NATIVE_CHALLENGE_COOKIE = 'oidc_native_challenge';
+const NATIVE_STATE_COOKIE = 'oidc_native_state';
+
+/** An S256 code challenge: base64url of a SHA-256 digest, 43 characters. */
+const PKCE_CHALLENGE = /^[A-Za-z0-9_-]{43}$/;
+/** A PKCE code verifier (RFC 7636 section 4.1). */
+const PKCE_VERIFIER = /^[A-Za-z0-9._~-]{43,128}$/;
+/** The app's own state value, echoed back on the deep link. */
+const APP_STATE = /^[A-Za-z0-9_-]{16,128}$/;
+
 const nativeExchangeSchema = z.object({
   code: z.string().min(1),
+  code_verifier: z.string().regex(PKCE_VERIFIER, 'Invalid code_verifier'),
 });
 
 // Carries the post-login destination (e.g. a /shared/<token> deep link) across
@@ -72,6 +104,17 @@ const SIGNUP_INTENT_COOKIE = 'oidc_signup_intent';
 /** An invite code offered at initiate, held until the callback can check it. */
 const SIGNUP_CODE_COOKIE = 'oidc_signup_code';
 const SIGNUP_INTENT_MAX_AGE = 10 * 60 * 1000;
+
+/**
+ * Rolls back an account being created for an invitation that another sign-in redeemed first.
+ * Thrown inside that account's transaction and caught by `OidcController.createOidcUser`; it never
+ * reaches the caller.
+ */
+class InvitationRedeemedElsewhere extends Error {
+  constructor() {
+    super('The invitation was redeemed by another sign-in first');
+  }
+}
 
 /**
  * Body of the confirm-account form POST. Mirrors ConnectController's
@@ -184,17 +227,7 @@ export class OidcController {
    * resulting localhost callback is unreachable for CI-Portal.
    */
   private getCallbackUrl(req: Request) {
-    return resolveOidcCallbackUrl(this.requestOrigin(req), config.auth.oidc.publicBaseUrl);
-  }
-
-  /** The origin the browser used to reach this app, honouring the reverse proxy. */
-  private requestOrigin(req: Request): OidcCallbackRequestOrigin {
-    return {
-      forwardedProto: req.headers['x-forwarded-proto'],
-      forwardedHost: req.headers['x-forwarded-host'],
-      host: req.headers.host,
-      secure: req.secure,
-    };
+    return resolveOidcCallbackUrl(readRequestOrigin(req), config.auth.oidc.publicBaseUrl);
   }
 
   /**
@@ -206,6 +239,8 @@ export class OidcController {
     @Query('client') client: string | undefined,
     @Query('redirect') redirectParam: string | undefined,
     @Query('signup_code') signupCodeParam: string | undefined,
+    @Query('code_challenge') codeChallengeParam: unknown,
+    @Query('app_state') appStateParam: unknown,
     @Req() req: Request,
     @Res() res: Response,
   ) {
@@ -224,18 +259,37 @@ export class OidcController {
     // or the /api/connect consent page) so the callback can return there.
     const redirect = safeRelativePath(redirectParam);
 
+    // A native sign-in is bound to the app that starts it, or it does not start. An app build
+    // from before the binding sends neither value; it is told to update rather than handed a
+    // code any app could redeem.
+    const nativeBinding =
+      client === NATIVE_CLIENT &&
+      typeof codeChallengeParam === 'string' &&
+      PKCE_CHALLENGE.test(codeChallengeParam) &&
+      typeof appStateParam === 'string' &&
+      APP_STATE.test(appStateParam)
+        ? { challenge: codeChallengeParam, state: appStateParam }
+        : null;
+
+    if (client === NATIVE_CLIENT && nativeBinding == null) {
+      this.logger.warn('OIDC native initiate refused: no code_challenge/app_state from the app');
+
+      return res.redirect(this.nativeRedirectUrl({ error: 'app_update_required' }));
+    }
+
     // The cookies below are set on the origin the browser used, but redirect_uri
     // is always the public base URL. If those differ, the callback lands on an
     // origin holding neither cookie and sign-in fails with `invalid_state`, so
     // move onto the public origin before minting any of them.
     const bounceUrl = resolveOidcOriginBounce(
-      this.requestOrigin(req),
+      readRequestOrigin(req),
       publicBaseUrl,
       redirect ?? undefined,
       // Already bounced once — proceed here rather than risk a redirect loop.
       req.query[OIDC_ORIGIN_BOUNCE_PARAM] !== undefined,
       client,
       signupCodeParam,
+      nativeBinding ?? undefined,
     );
 
     if (bounceUrl) {
@@ -264,7 +318,7 @@ export class OidcController {
 
     // Remember whether the native app launched this flow, so the callback returns the
     // result via the custom-scheme deep link instead of a browser session cookie.
-    if (client === NATIVE_CLIENT) {
+    if (nativeBinding) {
       res.cookie(CLIENT_COOKIE, NATIVE_CLIENT, {
         httpOnly: true,
         secure: req.secure,
@@ -272,6 +326,25 @@ export class OidcController {
         path: '/',
         maxAge: 10 * 60 * 1000,
       });
+
+      for (const [name, value] of [
+        [NATIVE_CHALLENGE_COOKIE, nativeBinding.challenge],
+        [NATIVE_STATE_COOKIE, nativeBinding.state],
+      ] as const) {
+        res.cookie(name, value, {
+          httpOnly: true,
+          secure: req.secure,
+          sameSite: 'lax',
+          path: '/',
+          maxAge: 10 * 60 * 1000,
+        });
+      }
+    } else {
+      // A web sign-in must not inherit an abandoned native attempt: not its binding, and not the
+      // flag that would send this browser's result to the app's deep link.
+      res.clearCookie(CLIENT_COOKIE, { path: '/' });
+      res.clearCookie(NATIVE_CHALLENGE_COOKIE, { path: '/' });
+      res.clearCookie(NATIVE_STATE_COOKIE, { path: '/' });
     }
 
     // An invitation, carried across the round-trip.
@@ -309,7 +382,7 @@ export class OidcController {
 
     const authorizeUrl = new URL('/api/auth/oauth2/authorize', issuerUrl);
 
-    authorizeUrl.searchParams.set('client_id', 'ci-server');
+    authorizeUrl.searchParams.set('client_id', MEMORY_SIGN_IN_CLIENT);
     authorizeUrl.searchParams.set('redirect_uri', callbackUrl);
     authorizeUrl.searchParams.set('response_type', 'code');
     authorizeUrl.searchParams.set('scope', 'openid email profile');
@@ -343,11 +416,36 @@ export class OidcController {
       path: '/',
     });
 
+    // The app's binding, read once and cleared like the other one-shot cookies.
+    const challengeCookie: unknown = req.cookies?.[NATIVE_CHALLENGE_COOKIE];
+    const stateCookie: unknown = req.cookies?.[NATIVE_STATE_COOKIE];
+
+    res.clearCookie(NATIVE_CHALLENGE_COOKIE, { path: '/' });
+    res.clearCookie(NATIVE_STATE_COOKIE, { path: '/' });
+
+    const nativeBinding =
+      isNative &&
+      typeof challengeCookie === 'string' &&
+      PKCE_CHALLENGE.test(challengeCookie) &&
+      typeof stateCookie === 'string' &&
+      APP_STATE.test(stateCookie)
+        ? { challenge: challengeCookie, state: stateCookie }
+        : null;
+
+    // Every native exit carries the app's state back, failures included, so the app can tell its
+    // own sign-in's result from a link somebody else sent it.
+    const toApp = (params: Record<string, string>) =>
+      this.nativeRedirectUrl(nativeBinding ? { ...params, state: nativeBinding.state } : params);
+
     // Route a failure to the native deep link (`?error=...`) or the web login page.
     const failRedirect = (reason: string) =>
       isNative
-        ? res.redirect(this.nativeRedirectUrl({ error: reason }))
+        ? res.redirect(toApp({ error: reason }))
         : res.redirect(`/login?error=${encodeURIComponent(reason)}`);
+
+    if (isNative && nativeBinding == null) {
+      return failRedirect('missing_pkce');
+    }
 
     if (error) {
       return failRedirect(error);
@@ -406,7 +504,7 @@ export class OidcController {
           grant_type: 'authorization_code',
           code,
           redirect_uri: callbackUrl,
-          client_id: 'ci-server',
+          client_id: MEMORY_SIGN_IN_CLIENT,
           code_verifier: codeVerifier,
         }),
         dispatcher: fetchDispatcher,
@@ -456,12 +554,17 @@ export class OidcController {
       }
 
       const issuer = this.resolveOidcIssuer(userInfo, tokens.id_token);
+      const person: PortalPerson = {
+        email: userInfo.email,
+        name: userInfo.name,
+        emailVerified: userInfo.email_verified === true,
+      };
       // (iss, sub) first; email is only a one-time link for unfederated rows.
       const resolution = await this.resolvePortalUser({
         subject: userInfo.sub,
         issuer,
-        email: userInfo.email,
-        emailVerified: userInfo.email_verified === true,
+        email: person.email,
+        emailVerified: person.emailVerified,
       });
 
       // An address that names an existing account this identity may not have:
@@ -479,10 +582,10 @@ export class OidcController {
         // Native: return the credential via the deep link — no browser session cookie
         // can reach the app's cross-origin webview. Mint a short-lived, single-use code
         // and deep-link it back; the app exchanges it for a JWT at /oidc/native/exchange.
-        if (isNative) {
-          const oneTimeCode = this.oidcNativeCodeService.issue(user.id);
+        if (nativeBinding) {
+          const oneTimeCode = this.oidcNativeCodeService.issue(user.id, nativeBinding.challenge);
 
-          return res.redirect(this.nativeRedirectUrl({ code: oneTimeCode }));
+          return res.redirect(toApp({ code: oneTimeCode }));
         }
 
         return this.finishLogin(req, res, user);
@@ -494,6 +597,12 @@ export class OidcController {
       // so every gate below would otherwise leave the owner locked out of the
       // machine they just installed. The first account is therefore always
       // allowed; from the second onwards the gates below apply as before.
+      //
+      // `unclaimed` only sorts this request onto a path and refuses early. It is
+      // never what creates an account: where it is the ONLY thing letting this
+      // person in, the account is created through `claimApplianceFor`, which
+      // decides "still unclaimed?" atomically with the insert. Another sign-in
+      // can claim the appliance between this line and that one.
       const unclaimed = await this.userService.hasNoUsers();
 
       // The signup-code gate still applies: when codes are required, only users
@@ -504,11 +613,12 @@ export class OidcController {
       // an OIDC redirect cannot carry a code, so before this every unknown
       // identity was refused outright and a claimed appliance could never admit
       // a second person at all.
-      const offeredCode = req.cookies?.[SIGNUP_CODE_COOKIE];
+      const cookieCode: unknown = req.cookies?.[SIGNUP_CODE_COOKIE];
+      const offeredCode = typeof cookieCode === 'string' && cookieCode.length > 0 ? cookieCode : null;
+      // Enough to refuse on, never to admit on: every sign-in presenting the
+      // same code sees it unused here until one of them redeems it.
       const invitedByCode =
-        typeof offeredCode === 'string' && offeredCode.length > 0
-          ? Boolean(await this.signupCodeService.findOne(offeredCode))
-          : false;
+        offeredCode != null && (await this.signupCodeService.findOne(offeredCode)) != null;
       // Signed into this Hub (verified forward-auth) is an invitation: the
       // person already passed the Hub org-member gate.
       const invitedByHub = Boolean(this.hubBridge.verifyUsername(req));
@@ -516,22 +626,29 @@ export class OidcController {
 
       res.clearCookie(SIGNUP_CODE_COOKIE, { path: '/' });
 
-      const isSignupCodeRequired =
-        !unclaimed && !invited && (await this.featureService.isFeatureEnabled('require.signup.codes'));
+      const signupCodesRequired = await this.featureService.isFeatureEnabled('require.signup.codes');
+      // Whether this person needs an invitation they do not hold. Waived only
+      // for the first account; anyone else is refused here.
+      const codeRequired = !invited && signupCodesRequired;
 
-      if (isSignupCodeRequired) {
+      if (codeRequired && !unclaimed) {
         this.logger.warn(`OIDC sign-in rejected for unknown user (signup codes required): ${userInfo.email}`);
 
         return isNative
-          ? res.redirect(this.nativeRedirectUrl({ error: 'signup_code_required' }))
+          ? res.redirect(toApp({ error: 'signup_code_required' }))
           : res.redirect('/login?error=signup_code_required');
       }
 
-      // Burn the invitation as soon as it has admitted someone, so it cannot be
-      // replayed by the next person to reach this appliance.
-      if (invited) {
-        await this.signupCodeService.update(offeredCode, { used: true });
-      }
+      // Where the admission rests on the code — no Hub vouches for this
+      // person, and it is a native sign-in or codes are required, the two
+      // cases that turn away an unknown identity without one — it is redeemed
+      // before anyone is admitted on it, and atomically, so that it admits one
+      // person however many present it at once. Where the account is created
+      // in this request, that happens in the same transaction; otherwise it
+      // happens before the confirmation page (see below). A code nothing rests
+      // on is left unspent, for whoever it was meant for.
+      const invitation =
+        invitedByCode && !invitedByHub && (isNative || signupCodesRequired) ? offeredCode : null;
 
       // Native first-time sign-in can't run the web "create account?" confirmation
       // (it lives outside the deep-link flow), so surface it as an error the app can
@@ -544,30 +661,66 @@ export class OidcController {
       // would ask about. An invitation answers it too: the owner chose to issue
       // it and this person chose to present it, which is the whole of what the
       // confirmation asks. Refusing here anyway — as this did — meant the code
-      // was burned a few lines up and the person was still turned away, so every
-      // attempt an invited person made from the desktop cost the owner an
-      // invitation and admitted nobody.
+      // was burned and the person was still turned away, so every attempt an
+      // invited person made from the desktop cost the owner an invitation and
+      // admitted nobody.
       if (isNative && !unclaimed && !invited) {
-        return res.redirect(this.nativeRedirectUrl({ error: 'signup_required' }));
+        return res.redirect(toApp({ error: 'signup_required' }));
       }
 
-      if (isNative) {
-        const created = await this.createOidcUser(userInfo.email, userInfo.name);
-        await this.bindIfPossible(created.id, issuer, userInfo.sub, userInfo.email);
+      if (nativeBinding) {
+        // An invitation admits whoever holds it. Without one, the only way in is
+        // to be the appliance's first account.
+        let created: { id: string } | null;
+
+        if (invited) {
+          created = await this.createOidcUser(person, invitation);
+
+          if (created == null) {
+            // Another sign-in redeemed the invitation after it was checked
+            // above. Refused as it would be with a code that was already used.
+            this.logger.warn(
+              `OIDC sign-in refused for ${userInfo.email}: its invitation was redeemed by another sign-in first`,
+            );
+
+            return res.redirect(
+              toApp({
+                error: signupCodesRequired ? 'signup_code_required' : 'signup_required',
+              }),
+            );
+          }
+
+          await this.bindIfPossible(created.id, issuer, userInfo.sub, userInfo.email);
+        } else {
+          created = await this.claimApplianceFor(
+            { issuer, subject: userInfo.sub, email: userInfo.email },
+            this.oidcAccount(person),
+          );
+        }
+
+        if (!created) {
+          // Another sign-in claimed the appliance after `unclaimed` was read.
+          // Refused exactly as it would have been had it arrived a moment later.
+          this.logger.warn(`OIDC sign-in refused for ${userInfo.email}: the appliance was claimed first`);
+
+          return res.redirect(toApp({ error: codeRequired ? 'signup_code_required' : 'signup_required' }));
+        }
 
         this.logger.log(
-          unclaimed
-            ? `Unclaimed appliance claimed by first OIDC sign-in: ${userInfo.email}`
-            : `Invited OIDC sign-in created Memory account for ${userInfo.email}`,
+          invited
+            ? `Invited OIDC sign-in created Memory account for ${userInfo.email}`
+            : `Unclaimed appliance claimed by first OIDC sign-in: ${userInfo.email}`,
         );
 
-        return res.redirect(this.nativeRedirectUrl({ code: this.oidcNativeCodeService.issue(created.id) }));
+        return res.redirect(
+          toApp({ code: this.oidcNativeCodeService.issue(created.id, nativeBinding.challenge) }),
+        );
       }
 
       // Hub already admitted this person as an org member. Skip the Memory
       // signup-code / confirm-account gates and give them an empty onboarding.
       if (invitedByHub) {
-        const created = await this.createOidcUser(userInfo.email, userInfo.name);
+        const created = await this.createOidcUser(person);
         await this.bindIfPossible(created.id, issuer, userInfo.sub, userInfo.email);
         this.logger.log(`Hub-invited Memory account created for ${userInfo.email}`);
 
@@ -579,12 +732,32 @@ export class OidcController {
       // to the "create account?" confirmation (GET/POST confirm-account below).
       // REDIRECT_COOKIE is left intact so the confirm POST can honour the
       // original destination.
+      //
+      // Where the code was waived only because the appliance is empty, the
+      // intent says so: the confirm step may run minutes from now, and must
+      // create the account only if it is still the first.
+      //
+      // An invitation is redeemed here, before that page, rather than by the
+      // step that creates the account: reaching the page is then a promise the
+      // confirm step keeps, not a race with whoever else holds the code for the
+      // intent's lifetime. The price is that declining the confirmation, or
+      // letting it expire, spends the invitation too.
+      if (invitation != null && !(await this.signupCodeService.consume(invitation))) {
+        this.logger.warn(
+          `OIDC sign-in refused for ${userInfo.email}: its invitation was redeemed by another sign-in first`,
+        );
+
+        return res.redirect('/login?error=signup_code_required');
+      }
+
       res.cookie(
         SIGNUP_INTENT_COOKIE,
-        this.authService.issueSignupIntentToken(userInfo.email, userInfo.name, {
-          issuer,
-          subject: userInfo.sub,
-        }),
+        this.authService.issueSignupIntentToken(
+          userInfo.email,
+          userInfo.name,
+          { issuer, subject: userInfo.sub },
+          { firstAccountOnly: codeRequired, emailVerified: person.emailVerified },
+        ),
         {
           httpOnly: true,
           secure: req.secure,
@@ -607,13 +780,19 @@ export class OidcController {
    * `<scheme>://oidc/callback?code=...` deep link for a real access token (JWT). The app
    * then trades that JWT for a durable API key — the same credential path as password
    * login. The code is single-use and expires after ~2 minutes; redeeming it here
-   * invalidates it, so it is replay-safe. Unauthenticated by design: the one-time code
-   * IS the bearer of proof, and it never grants access beyond a single JWT issuance.
+   * invalidates it, so it is replay-safe.
+   *
+   * Unauthenticated, but not on the code alone: the request must also carry the PKCE
+   * verifier whose challenge the app sent when it started the sign-in. A code that reached
+   * someone else (another app claiming the `companion` scheme, or a link somebody sent) is
+   * useless without it.
    */
   @Post('native/exchange')
   @HttpCode(200)
-  nativeExchange(@Body(new ValidationPipe(nativeExchangeSchema)) input: { code: string }) {
-    const userId = this.oidcNativeCodeService.redeem(input.code);
+  nativeExchange(
+    @Body(new ValidationPipe(nativeExchangeSchema)) input: { code: string; code_verifier: string },
+  ) {
+    const userId = this.oidcNativeCodeService.redeem(input.code, input.code_verifier);
 
     if (!userId) {
       // Generic message — do not distinguish "expired" from "unknown" to a caller.
@@ -765,21 +944,42 @@ export class OidcController {
 
       user = existing;
     } else {
-      user = await this.userService.create(
-        { userId: SYSTEM_USER },
-        {
-          name: identity.name || identity.email.split('@')[0],
-          email: identity.email,
-          // Random password — the account authenticates via OIDC.
-          password: randomBytes(32).toString('hex'),
-          passwordChosenByUser: false,
-        },
-      );
+      const account = {
+        name: identity.name || identity.email.split('@')[0],
+        email: identity.email,
+        // Random password — the account authenticates via OIDC.
+        password: randomBytes(32).toString('hex'),
+        passwordChosenByUser: false,
+        // The address came from the Portal identity creating the account, and counts as proven
+        // only where the Portal verified it.
+        emailProven: identity.emailVerified === true,
+      };
 
-      // Bind the new account to the Portal identity that asked for it, so the
-      // bearer path resolves it by (iss, sub) from the first API call on.
-      if (identity.issuer && identity.subject) {
-        await this.bindIfPossible(user.id, identity.issuer, identity.subject, identity.email);
+      if (identity.firstAccountOnly) {
+        // The callback let this person past the signup-code gate only because
+        // the appliance had no accounts, up to the intent's lifetime ago. Still
+        // true, or no account: decided now, atomically with creating it.
+        const claimed = await this.claimApplianceFor(identity, account);
+
+        if (claimed == null) {
+          this.logger.warn(
+            `confirm-account refused for ${identity.email}: the appliance was claimed after this sign-in began, and signup codes are required`,
+          );
+          res.clearCookie(SIGNUP_INTENT_COOKIE, { path: '/' });
+          res.redirect(HttpStatus.SEE_OTHER, '/login?error=signup_code_required');
+
+          return;
+        }
+
+        user = claimed;
+      } else {
+        user = await this.userService.create({ userId: SYSTEM_USER }, account);
+
+        // Bind the new account to the Portal identity that asked for it, so the
+        // bearer path resolves it by (iss, sub) from the first API call on.
+        if (identity.issuer && identity.subject) {
+          await this.bindIfPossible(user.id, identity.issuer, identity.subject, identity.email);
+        }
       }
     }
 
@@ -811,8 +1011,8 @@ export class OidcController {
 
   /**
    * Resolve a Portal person to a Memory user. `(issuer, subject)` wins;
-   * verified email is only a one-time link for accounts that pre-date the
-   * binding table and are not already federated.
+   * verified email is only a one-time link, into an account that is not
+   * already federated and whose own address is proven.
    */
   private async resolvePortalUser(identity: {
     subject?: string;
@@ -829,9 +1029,19 @@ export class OidcController {
       }
     }
 
-    const existing = await this.userService.findByEmail(identity.email);
+    const existing = await this.userService.findAccountByEmail(identity.email);
     if (!existing) {
       return { kind: 'unknown' };
+    }
+
+    // Several accounts share this address once case is ignored: rows that collided before
+    // addresses were stored lower-cased. Linking either would be a guess.
+    if (existing === 'ambiguous') {
+      this.logger.warn(
+        `refusing email link for ${identity.issuer}#${identity.subject ?? '?'}: several accounts match the address`,
+      );
+
+      return { kind: 'refused', reason: 'account_exists' };
     }
 
     // The address names an existing account. Email is not an identity — it is
@@ -839,7 +1049,8 @@ export class OidcController {
     // once, only when the issuer vouches for it, and never one that is already
     // somebody's. Both refusals are terminal for this sign-in: the caller must
     // not fall through to the first-time flow with the same address in hand.
-    const alreadyFederated = await this.federatedIdentityService.listForUser(existing.id);
+    // OIDC identities only: a Hub person's own binding is not another identity's claim.
+    const alreadyFederated = await this.federatedIdentityService.listForUser(existing.id, { oidcOnly: true });
     if (alreadyFederated.length > 0) {
       this.logger.warn(
         `refusing email link for ${identity.issuer}#${identity.subject ?? '?'}: user already bound to another identity`,
@@ -856,40 +1067,135 @@ export class OidcController {
       return { kind: 'refused', reason: 'email_unverified' };
     }
 
+    // The Portal vouches for ITS account's address, not for this one's. An address typed into
+    // signup or `PATCH /account/email` proves nothing, so linking on it would hand this person's
+    // sign-in to whoever typed it. Such an account keeps its password sign-in.
+    if (!this.userService.isEmailProven(existing)) {
+      this.logger.warn(
+        `refusing email link for ${identity.issuer}#${identity.subject ?? '?'}: the account's address is not proven`,
+      );
+
+      return { kind: 'refused', reason: 'account_exists' };
+    }
+
     await this.bindIfPossible(existing.id, identity.issuer, identity.subject, identity.email, 'email_link');
 
     return { kind: 'user', user: existing };
   }
 
-  private async createOidcUser(email: string, name?: string): Promise<{ id: string; email: string }> {
-    return this.userService.create(
+  /**
+   * The account a native or Hub-admitted OIDC sign-in creates.
+   *
+   * @param invitation the signup code admitting this person, if one is. It is redeemed in the
+   *   transaction that creates the account, so of two sign-ins presenting it only the one that
+   *   redeems it gets an account — and a sign-in whose account cannot be created leaves it unspent.
+   * @returns the new account; `null`, with nothing created, when another sign-in redeemed
+   *   `invitation` first.
+   */
+  private createOidcUser(person: PortalPerson): Promise<{ id: string; email: string }>;
+
+  private createOidcUser(
+    person: PortalPerson,
+    invitation: string | null,
+  ): Promise<{ id: string; email: string } | null>;
+
+  private async createOidcUser(
+    person: PortalPerson,
+    invitation: string | null = null,
+  ): Promise<{ id: string; email: string } | null> {
+    try {
+      return await this.userService.create(
+        { userId: SYSTEM_USER },
+        this.oidcAccount(person),
+        invitation == null
+          ? undefined
+          : async (manager) => {
+              if (!(await this.signupCodeService.consume(invitation, manager))) {
+                throw new InvitationRedeemedElsewhere();
+              }
+            },
+      );
+    } catch (err) {
+      if (err instanceof InvitationRedeemedElsewhere) {
+        return null;
+      }
+
+      throw err;
+    }
+  }
+
+  /** The account a native or Hub-invited OIDC sign-in creates. */
+  private oidcAccount({ email, name, emailVerified }: PortalPerson): CreateUserDto {
+    return {
+      name: name || email.split('@')[0],
+      email,
+      password: randomBytes(32).toString('hex'),
+      // Nobody has seen this password. Stamped as chosen, the account is asked
+      // for it before every email or password change.
+      passwordChosenByUser: false,
+      // The address came from the Portal identity creating the account. It counts as proven only
+      // where the Portal verified it: an unverified Portal address is whatever its holder typed,
+      // and a proven one is what a Hub person is later adopted into an account by.
+      emailProven: emailVerified,
+    };
+  }
+
+  /**
+   * Create `account` as the appliance's FIRST account, bound to `identity` in the same transaction —
+   * or, when the appliance already has an account, create nothing.
+   *
+   * For a sign-in that holds no invitation, being first is the whole of what admits it, so it is
+   * decided as the account is created (`UserService.createFirstAccount`) rather than trusted from an
+   * earlier look: two first sign-ins racing on an empty appliance used to both get in.
+   *
+   * @returns the new account; otherwise the account this same identity already claimed the
+   *   appliance with — a second tab, or a second flow, that won the race and committed its binding
+   *   with it; otherwise `null`, because the owner is somebody else.
+   */
+  private async claimApplianceFor(
+    identity: { issuer?: string; subject?: string; email: string },
+    account: CreateUserDto,
+  ): Promise<{ id: string } | null> {
+    const { issuer, subject, email } = identity;
+
+    const created = await this.userService.createFirstAccount(
       { userId: SYSTEM_USER },
-      {
-        name: name || email.split('@')[0],
-        email,
-        password: randomBytes(32).toString('hex'),
-      },
+      account,
+      (manager, user) => this.bindIfPossible(user.id, issuer, subject, email, 'sub', manager),
     );
+
+    if (created) {
+      return created;
+    }
+
+    const boundUserId =
+      issuer && subject ? await this.federatedIdentityService.findUserId(issuer, subject) : null;
+
+    return boundUserId ? this.userService.findById({ userId: SYSTEM_USER }, boundUserId) : null;
   }
 
   private async bindIfPossible(
     userId: string,
-    issuer: string,
+    issuer: string | undefined,
     subject: string | undefined,
     email: string,
     bindMethod: 'sub' | 'email_link' = 'sub',
+    manager?: EntityManager,
   ): Promise<void> {
     if (!subject || !issuer) {
       return;
     }
 
-    await this.federatedIdentityService.bind({
-      userId,
-      issuer,
-      subject,
-      email,
-      bindMethod,
-    });
+    await this.federatedIdentityService.bind(
+      {
+        userId,
+        issuer,
+        subject,
+        email,
+        bindMethod,
+      },
+      manager,
+    );
   }
 
   /**

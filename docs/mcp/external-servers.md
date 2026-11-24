@@ -1,7 +1,5 @@
 # Connecting the appliance to external MCP servers
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 The other direction. The owner configures third-party MCP servers — a
 filesystem server, a GitHub server, a hosted docs server — and the appliance
 connects **out** to them, treating their tools as a second provider alongside

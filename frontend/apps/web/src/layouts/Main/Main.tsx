@@ -1,15 +1,16 @@
 import { Suspense } from 'react';
 
 import { LoadingPage, Portal, useDeviceLayout } from '@ci/common';
-import { Toaster } from '@ci/shadcn';
 import { Outlet } from 'react-router-dom';
 
 import { AnimatedBackground } from '@/components/AnimatedBackground';
 import { AppErrorBoundary } from '@/components/AppErrorBoundary';
+import { AppToaster } from '@/components/AppToaster';
+import { DesktopAppClosedBanner } from '@/components/DesktopAppClosed/DesktopAppClosedBanner';
 import { GettingStartedBanner } from '@/components/GettingStarted/GettingStartedBanner';
 import { MemoryContractStrip } from '@/components/MemoryContractStrip/MemoryContractStrip';
-import { useBackground, useTheme } from '@/components/ThemePicker';
-import { useUnsyncedImportsNotice } from '@/components/UnsyncedImports/useUnsyncedImportsNotice';
+import { useBackground } from '@/components/ThemePicker';
+import { UnsyncedImportsBanner } from '@/components/UnsyncedImports/UnsyncedImportsBanner';
 import { useCurrentUser } from '@/hooks';
 import { isGettingStartedActive } from '@/lib/gettingStarted';
 
@@ -22,35 +23,35 @@ import { SecondaryNavigation } from './SecondaryNavigation';
 
 export function Main() {
   const { isMobile } = useDeviceLayout();
-  const { themeState } = useTheme();
   const { glowEnabled } = useBackground();
-
-  // Every authenticated page passes through this layout, which makes it the
-  // one place a page-load check reaches "across all pages".
-  //
-  // Held back while the getting-started banner is up: it already says "read but
-  // not saved yet" with its own Save button, and two prompts for one fact is
-  // nagging. The toast returns for everyone the banner is not owed to.
   const { user } = useCurrentUser();
-  useUnsyncedImportsNotice({ suppressed: isGettingStartedActive(user?.id) });
+  const gettingStartedActive = isGettingStartedActive(user?.id);
 
   if (isMobile) {
     return (
       <PowerRailProvider variant="overlay">
+        {/* Viewport-fixed, and offset past the safe area and the phone
+            header (see AppToaster) so the toast is in the content well, not
+            the notch.
+
+            A sibling of the column below, not a child of it, on purpose. While
+            the drawer is open `MobileNavigation` makes every other child of
+            that column `inert`, and an inert toast is still painted over the
+            drawer (z-index 999999999) but cannot be hit — so a tap on it fell
+            through to the drawer row beneath. Out here it stays tappable. */}
+        <AppToaster />
         {/* Top padding is the status-bar tap target (see useStatusBarScrollToTop). */}
         <div className="flex h-[var(--vv-height,100dvh)] max-h-[var(--vv-height,100dvh)] flex-col pt-[var(--safe-area-top)]">
-          {/* Viewport-fixed; default 16px top sits under the status bar /
-              Dynamic Island. Offset past safe-area + the phone header so the
-              toast is in the content well, not the notch. */}
-          <Toaster
-            position="top-center"
-            offset={{ top: 'calc(var(--safe-area-top) + 3.5rem)' }}
-            mobileOffset={{ top: 'calc(var(--safe-area-top) + 3.5rem)' }}
-            theme={themeState.mode}
-          />
           <MobileTopBar />
           <MemoryContractStrip />
+          {/* A row of this column, not an overlay: the page starts below it, every
+              modal slot after it paints over it, and while the drawer is open it is
+              page content, inert behind the scrim like the rest. Every authenticated
+              page passes through this layout, which makes it the one place the
+              page-load check reaches "across all pages". */}
+          <DesktopAppClosedBanner />
           <GettingStartedBanner />
+          <UnsyncedImportsBanner suppressed={gettingStartedActive} />
           <main className="flex-1 min-w-0 overflow-hidden min-h-0 relative">
             {/* Boundary INSIDE Suspense so a failed lazy chunk is caught too,
                 and around the outlet ALONE so the bottom bar and the modal
@@ -63,7 +64,7 @@ export function Main() {
             </Suspense>
           </main>
           <MobileNavigation />
-          <Portal id="overlay-modal" className="fixed inset-0 z-50 empty:hidden" />
+          <Portal id="overlay-modal" className="pointer-events-none fixed inset-0 z-50 empty:hidden" />
         </div>
       </PowerRailProvider>
     );
@@ -86,6 +87,15 @@ export function Main() {
           it there: the background is `fixed` at z-index 0, and a positioned
           sibling later in the DOM would otherwise paint over the whole app. */}
       {glowEnabled ? <AnimatedBackground /> : null}
+      {/* Outside the `relative z-10` shell below, on purpose. That shell is a
+          stacking context, so a toaster inside it — whatever its own z-index —
+          could never paint above anything portaled to <body>. The slot drawer
+          on the calendar is one of those (Radix Sheet, fixed, z-50), and the
+          "Could not put that on the calendar" toast sat behind it, bottom-right
+          under the panel, invisible: the desktop looked like a refused
+          placement did nothing. Same shape as the phone layout above, whose
+          toaster is a sibling of its column for a related reason (inert). */}
+      <AppToaster />
       <div className="relative z-10 grid h-lvh min-h-0 grid-cols-[auto_1fr] grid-rows-[auto_1fr]">
         {/* Left-aligned so the mark stays put when the rail widens. Centering
             it here walks the logo to the middle of the expanded column. */}
@@ -109,9 +119,11 @@ export function Main() {
 
         <div className="overflow-hidden min-w-0 min-h-0 flex flex-col">
           <MemoryContractStrip />
+          {/* Same notices as the phone's, in the same slot: above the page, in flow. */}
+          <DesktopAppClosedBanner />
           <GettingStartedBanner />
+          <UnsyncedImportsBanner suppressed={gettingStartedActive} />
           <Suspense fallback={<LoadingPage />}>
-            <Toaster theme={themeState.mode} />
             <div className="flex flex-row h-full min-h-0">
               <Portal id="tertiary-navigation" className="h-full" />
               {/* `tabIndex={-1}` so the skip link actually moves focus here
@@ -127,7 +139,7 @@ export function Main() {
             </div>
           </Suspense>
         </div>
-        <Portal id="overlay-modal" className="fixed inset-0 z-50 empty:hidden" />
+        <Portal id="overlay-modal" className="pointer-events-none fixed inset-0 z-50 empty:hidden" />
       </div>
     </PowerRailProvider>
   );

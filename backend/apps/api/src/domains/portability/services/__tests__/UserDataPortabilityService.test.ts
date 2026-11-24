@@ -1,5 +1,7 @@
+import { PassThrough, Readable, Writable } from 'node:stream';
+
 import { BadRequestException } from '@nestjs/common';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 import type { DataSource, QueryRunner } from 'typeorm';
 
 import type { LoggerService } from '@ci/common/logging';
@@ -7,6 +9,7 @@ import config from '@ci/configuration';
 import type { FileService } from '@ci/domains/files';
 import type { UserService } from '@ci/domains/user';
 
+import { FILE_CHUNK_BYTES } from '../../portabilityNdjson';
 import { UserDataPortabilityService } from '../UserDataPortabilityService';
 
 describe('UserDataPortabilityService', () => {
@@ -26,8 +29,27 @@ describe('UserDataPortabilityService', () => {
 
   const fileService = {
     getFileContent: jest.fn(),
+    getFileStreamWithLength: jest.fn(),
     putObject: jest.fn(),
+    openObjectWriter: jest.fn(),
+    deleteObjects: jest.fn(),
   } as unknown as FileService;
+
+  /** One object the stream import wrote, as a stand-in writer saw it. */
+  interface WrittenObject {
+    bucket: string;
+    key: string;
+    pieces: Buffer[];
+    finished: boolean;
+    aborted: boolean;
+  }
+
+  /** Every object the stream import opened, in order; reset before each test. */
+  let objects: WrittenObject[] = [];
+  /** What happened, in order, when a test needs to see writes between reads. */
+  let events: string[] = [];
+
+  const bytesOf = (object: WrittenObject | undefined) => Buffer.concat(object?.pieces ?? []).toString('utf8');
 
   const userService = {
     findById: jest.fn(),
@@ -46,6 +68,32 @@ describe('UserDataPortabilityService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     service = new UserDataPortabilityService(dataSource, fileService, userService, logger);
+
+    // Tests swap these for their own. A swap must not carry into the next test.
+    queryRunner.query = jest.fn() as unknown as QueryRunner['query'];
+    queryRunner.commitTransaction = jest.fn();
+    queryRunner.rollbackTransaction = jest.fn();
+
+    objects = [];
+    events = [];
+    fileService.openObjectWriter = jest.fn((_context: unknown, bucket: string, key: string) => {
+      const object: WrittenObject = { bucket, key, pieces: [], finished: false, aborted: false };
+      objects.push(object);
+
+      return {
+        write: async (piece: Buffer) => {
+          events.push(`write ${piece.toString('utf8')}`);
+          object.pieces.push(piece);
+        },
+        finish: async () => {
+          object.finished = true;
+        },
+        abort: async () => {
+          object.aborted = true;
+        },
+      };
+    }) as unknown as FileService['openObjectWriter'];
+    fileService.deleteObjects = jest.fn().mockResolvedValue(undefined);
   });
 
   it('exports discovered user tables and profile metadata', async () => {
@@ -62,6 +110,7 @@ describe('UserDataPortabilityService', () => {
       onboarded: true,
       onboardedAt: null,
       timezone: 'UTC',
+      timeFormat: 'h23',
       onboardingProgress: null,
       createdAt: new Date('2026-01-01T00:00:00.000Z'),
       updatedAt: new Date('2026-01-01T00:00:00.000Z'),
@@ -72,6 +121,7 @@ describe('UserDataPortabilityService', () => {
     expect(archive.version).toBe(1);
     expect(archive.userId).toBe('user-1');
     expect(archive.profile?.email).toBe('jane@example.com');
+    expect(archive.profile?.timeFormat).toBe('h23');
     expect(archive.tables['ci.notes']).toEqual([{ id: 'n1', title: 'Hello', user_id: 'user-1' }]);
     expect(archive.fileBlobs).toEqual([]);
   });
@@ -87,6 +137,246 @@ describe('UserDataPortabilityService', () => {
         fileBlobs: [],
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  describe('writeExportStream', () => {
+    const FILE_ROW = {
+      id: 'f1',
+      bucket: 'ci-files',
+      key: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      user_id: 'user-1',
+    };
+
+    beforeEach(() => {
+      userService.findById = jest.fn().mockResolvedValue(null);
+      dataSource.query = jest
+        .fn()
+        // discoverUserTables, then one page of ci.notes, then the ci.files rows
+        .mockResolvedValueOnce([{ schema: 'ci', table: 'notes', user_column: 'user_id' }])
+        .mockResolvedValueOnce([{ id: 'n1', title: 'Hello', user_id: 'user-1' }])
+        .mockResolvedValueOnce([FILE_ROW]);
+    });
+
+    /** A file's bytes as the object store hands them over: 64 KiB at a time, counting what was read. */
+    function storedFile(bytes: Buffer) {
+      const read = { pieces: 0 };
+
+      async function* pieces() {
+        for (let start = 0; start < bytes.length; start += 64 * 1024) {
+          read.pieces += 1;
+          yield bytes.subarray(start, start + 64 * 1024);
+        }
+      }
+
+      (fileService.getFileStreamWithLength as jest.Mock).mockResolvedValue({
+        stream: Readable.from(pieces()),
+        contentLength: bytes.length,
+      });
+
+      return read;
+    }
+
+    /** A response the test reads back line by line; it drains as the lines are read. */
+    function readableResponse() {
+      const res = Object.assign(new PassThrough(), { setHeader: jest.fn() });
+      let text = '';
+
+      res.on('data', (chunk: Buffer) => {
+        text += chunk.toString();
+      });
+
+      return {
+        res: res as unknown as Response,
+        records: () =>
+          text
+            .split('\n')
+            .filter(Boolean)
+            .map((line) => JSON.parse(line) as Record<string, unknown>),
+      };
+    }
+
+    it('streams a file larger than one chunk in order and ends with an end record', async () => {
+      const bytes = Buffer.alloc(2 * FILE_CHUNK_BYTES + 5);
+      bytes.forEach((_, i) => (bytes[i] = i % 251));
+      storedFile(bytes);
+      const { res, records } = readableResponse();
+
+      await service.writeExportStream({ userId: 'user-1' } as never, res);
+
+      const lines = records();
+      const chunks = lines.filter((line) => line.type === 'file-chunk');
+
+      expect(lines[0]).toMatchObject({ type: 'manifest', version: 2 });
+      expect(chunks.map((chunk) => [chunk.index, chunk.total])).toEqual([
+        [0, 3],
+        [1, 3],
+        [2, 3],
+      ]);
+      expect(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk.data as string, 'base64')))).toEqual(
+        bytes,
+      );
+      expect(lines.at(-1)).toEqual({ type: 'end', rows: 1, files: 1 });
+      expect(res.writableEnded).toBe(true);
+    });
+
+    it('stops reading and cuts the response when the download is closed partway through a file', async () => {
+      const read = storedFile(Buffer.alloc(3 * FILE_CHUNK_BYTES));
+      const written: string[] = [];
+      let tookThird!: () => void;
+      const third = new Promise<void>((resolve) => {
+        tookThird = resolve;
+      });
+      const res = Object.assign(
+        new Writable({
+          highWaterMark: 1,
+          // Takes the manifest, the row and the first chunk, then stops taking anything.
+          write(chunk: Buffer, _encoding, callback) {
+            written.push(chunk.toString());
+
+            if (written.length < 3) {
+              callback();
+            } else {
+              tookThird();
+            }
+          },
+        }),
+        { setHeader: jest.fn() },
+      );
+
+      const exporting = service.writeExportStream({ userId: 'user-1' } as never, res as unknown as Response);
+
+      // Wait for the first chunk rather than a fixed time, then give the export
+      // a few turns to read ahead if it were going to.
+      await third;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      res.destroy();
+      await exporting;
+
+      expect(written).toHaveLength(3);
+      expect(written.some((line) => line.includes('"type":"end"'))).toBe(false);
+      // Two chunks' worth at most, not the whole 9 MiB file.
+      expect(read.pieces).toBeLessThan((2 * FILE_CHUNK_BYTES) / (64 * 1024) + 2);
+      expect(logger.warn).toHaveBeenCalledWith(
+        'Export stopped before the end of the archive',
+        expect.objectContaining({ rows: 1, files: 0 }),
+      );
+    });
+
+    it('cuts the response, with no end record, when a file fails partway', async () => {
+      async function* failing() {
+        yield Buffer.alloc(FILE_CHUNK_BYTES);
+        throw new Error('object store went away');
+      }
+
+      (fileService.getFileStreamWithLength as jest.Mock).mockResolvedValue({
+        stream: Readable.from(failing()),
+        contentLength: 2 * FILE_CHUNK_BYTES,
+      });
+      const { res, records } = readableResponse();
+
+      await service.writeExportStream({ userId: 'user-1' } as never, res);
+
+      expect(res.destroyed).toBe(true);
+      expect(res.writableEnded).toBe(false);
+      expect(records().some((line) => line.type === 'end')).toBe(false);
+    });
+
+    it('skips a file it cannot open as before and still ends the archive', async () => {
+      (fileService.getFileStreamWithLength as jest.Mock).mockRejectedValue(new Error('NoSuchKey'));
+      const { res, records } = readableResponse();
+
+      await service.writeExportStream({ userId: 'user-1' } as never, res);
+
+      expect(records().at(-1)).toEqual({ type: 'end', rows: 1, files: 0 });
+      expect(logger.warn).toHaveBeenCalledWith('Skipped file blob during export', expect.anything());
+    });
+
+    it('writes an empty file as one empty chunk, so the import restores it', async () => {
+      storedFile(Buffer.alloc(0));
+      const { res, records } = readableResponse();
+
+      await service.writeExportStream({ userId: 'user-1' } as never, res);
+
+      const chunks = records().filter((line) => line.type === 'file-chunk');
+
+      expect(chunks).toEqual([expect.objectContaining({ id: 'f1', index: 0, total: 1, data: '' })]);
+      expect(records().at(-1)).toEqual({ type: 'end', rows: 1, files: 1 });
+    });
+
+    it('skips a file whose length the object store does not give and closes its stream', async () => {
+      const stream = Readable.from([Buffer.from('bytes')]);
+
+      (fileService.getFileStreamWithLength as jest.Mock).mockResolvedValue({
+        stream,
+        contentLength: undefined,
+      });
+      const { res, records } = readableResponse();
+
+      await service.writeExportStream({ userId: 'user-1' } as never, res);
+
+      expect(stream.destroyed).toBe(true);
+      expect(records().some((line) => line.type === 'file-chunk')).toBe(false);
+      expect(records().at(-1)).toEqual({ type: 'end', rows: 1, files: 0 });
+    });
+
+    it('cuts the response when a file ends short of the length the object store gave', async () => {
+      (fileService.getFileStreamWithLength as jest.Mock).mockResolvedValue({
+        stream: Readable.from([Buffer.alloc(FILE_CHUNK_BYTES)]),
+        contentLength: 2 * FILE_CHUNK_BYTES + 1,
+      });
+      const { res, records } = readableResponse();
+
+      await service.writeExportStream({ userId: 'user-1' } as never, res);
+
+      expect(res.destroyed).toBe(true);
+      expect(records().some((line) => line.type === 'end')).toBe(false);
+      expect(logger.warn).toHaveBeenCalledWith(
+        'Export stopped before the end of the archive',
+        expect.objectContaining({ error: 'File f1 came to 1 chunks, 3 expected from its length' }),
+      );
+    });
+
+    it('skips a file whose read fails before its first chunk is out and still ends the archive', async () => {
+      async function* resetEarly() {
+        yield Buffer.alloc(64 * 1024);
+        throw new Error('socket hang up');
+      }
+
+      (fileService.getFileStreamWithLength as jest.Mock).mockResolvedValue({
+        stream: Readable.from(resetEarly()),
+        contentLength: 1024 * 1024,
+      });
+      const { res, records } = readableResponse();
+
+      await service.writeExportStream({ userId: 'user-1' } as never, res);
+
+      expect(records().some((line) => line.type === 'file-chunk')).toBe(false);
+      expect(records().at(-1)).toEqual({ type: 'end', rows: 1, files: 0 });
+      expect(res.writableEnded).toBe(true);
+      expect(logger.warn).toHaveBeenCalledWith(
+        'Skipped file blob during export',
+        expect.objectContaining({ fileId: 'f1', error: 'socket hang up' }),
+      );
+    });
+
+    it('cuts the response before writing a chunk past the total when a file runs long', async () => {
+      (fileService.getFileStreamWithLength as jest.Mock).mockResolvedValue({
+        stream: Readable.from([Buffer.alloc(FILE_CHUNK_BYTES + 1)]),
+        contentLength: FILE_CHUNK_BYTES,
+      });
+      const { res, records } = readableResponse();
+
+      await service.writeExportStream({ userId: 'user-1' } as never, res);
+
+      expect(res.destroyed).toBe(true);
+      expect(records().filter((line) => line.type === 'file-chunk')).toEqual([
+        expect.objectContaining({ index: 0, total: 1 }),
+      ]);
+      expect(logger.warn).toHaveBeenCalledWith(
+        'Export stopped before the end of the archive',
+        expect.objectContaining({ error: 'File f1 runs past the 1 chunks expected from its length' }),
+      );
+    });
   });
 
   describe('importArchive — transaction boundary', () => {
@@ -362,11 +652,7 @@ describe('UserDataPortabilityService', () => {
 
       await service.importNdjsonStream({ userId: USER_ID } as never, req, 'jane@example.com');
 
-      const [, writtenBucket, writtenKey] = (fileService.putObject as jest.Mock).mock.calls[0] as [
-        unknown,
-        string,
-        string,
-      ];
+      const { bucket: writtenBucket, key: writtenKey } = objects[0];
       expect(writtenBucket).toBe(config.staticfiles.bucket);
       expect(writtenKey).toMatch(UUID_V4);
       expect(writtenKey).not.toBe(OTHER_USERS_KEY);
@@ -392,11 +678,7 @@ describe('UserDataPortabilityService', () => {
 
       await service.importNdjsonStream({ userId: USER_ID } as never, req, 'jane@example.com');
 
-      const [, , writtenKey] = (fileService.putObject as jest.Mock).mock.calls[0] as [
-        unknown,
-        string,
-        string,
-      ];
+      const writtenKey = objects[0].key;
       expect(writtenKey).toBe(OWNED_KEY);
       expect(inserts.find((insert) => insert.sql.includes('"files"'))?.params).toEqual([
         'f1',
@@ -520,54 +802,245 @@ describe('UserDataPortabilityService', () => {
       ).rejects.toThrow('Archive manifest must be the first record');
     });
 
-    it('reassembles a chunked file upload by index, regardless of arrival order', async () => {
+    const chunkOf = (index: number, text: string, total = 2, id = 'f1', key = 'user-1/f1') => ({
+      type: 'file-chunk',
+      id,
+      bucket: 'ci-files',
+      key,
+      index,
+      total,
+      data: Buffer.from(text).toString('base64'),
+    });
+
+    it('writes each chunk of a file to the object store before reading the next one', async () => {
       dataSource.query = jest.fn().mockResolvedValue([]);
-      fileService.putObject = jest.fn().mockResolvedValue(undefined);
 
-      const chunk0 = Buffer.from('hello ').toString('base64');
-      const chunk1 = Buffer.from('world').toString('base64');
+      const lines = [manifest(), chunkOf(0, 'hello '), chunkOf(1, 'world')];
+      // One line per read, noting each read, so the order of reads and writes shows.
+      const req = {
+        setEncoding: () => undefined,
 
-      const req = fakeRequest([
-        manifest(),
-        {
-          type: 'file-chunk',
-          id: 'f1',
-          bucket: 'ci-files',
-          key: 'user-1/f1',
-          index: 1,
-          total: 2,
-          data: chunk1,
+        [Symbol.asyncIterator]: async function* () {
+          for (const [index, line] of lines.entries()) {
+            events.push(`read ${index}`);
+            yield `${JSON.stringify(line)}\n`;
+          }
         },
-        {
-          type: 'file-chunk',
-          id: 'f1',
-          bucket: 'ci-files',
-          key: 'user-1/f1',
-          index: 0,
-          total: 2,
-          data: chunk0,
-        },
-      ]);
+      } as unknown as Request;
 
       const result = await service.importNdjsonStream({ userId: USER_ID } as never, req, 'jane@example.com');
 
-      expect(fileService.putObject).toHaveBeenCalledTimes(1);
-      const [, bucket, key, buffer] = (fileService.putObject as jest.Mock).mock.calls[0] as [
-        unknown,
-        string,
-        string,
-        Buffer,
-      ];
+      expect(events).toEqual(['read 0', 'read 1', 'write hello ', 'read 2', 'write world']);
+      expect(objects).toHaveLength(1);
       // Neither the bucket nor the key is the archive's: the bucket is always
       // this appliance's, and a key this account did not already own is
-      // replaced by a freshly minted one (see the "archive keys" block below).
-      expect(bucket).toBe(config.staticfiles.bucket);
-      expect(key).not.toBe('user-1/f1');
-      expect(key).toMatch(UUID_V4);
-      // Chunks arrived 1-then-0 but must reassemble in INDEX order, not
-      // arrival order — a network-level reorder must not corrupt the file.
-      expect(buffer.toString('utf8')).toBe('hello world');
+      // replaced by a freshly minted one (see the "archive keys" block above).
+      expect(objects[0].bucket).toBe(config.staticfiles.bucket);
+      expect(objects[0].key).not.toBe('user-1/f1');
+      expect(objects[0].key).toMatch(UUID_V4);
+      expect(bytesOf(objects[0])).toBe('hello world');
+      expect(objects[0].finished).toBe(true);
+      expect(fileService.openObjectWriter).toHaveBeenCalledWith(
+        expect.anything(),
+        config.staticfiles.bucket,
+        objects[0].key,
+        2 * FILE_CHUNK_BYTES,
+      );
       expect(result.filesRestored).toBe(1);
+    });
+
+    it.each([
+      [
+        'a chunk that comes before the one it follows',
+        [chunkOf(1, 'world'), chunkOf(0, 'hello ')],
+        'Missing file chunk 0 for f1',
+      ],
+      ['a gap', [chunkOf(0, 'a', 3), chunkOf(2, 'c', 3)], 'Missing file chunk 1 for f1'],
+      ['a chunk sent twice', [chunkOf(0, 'a', 3), chunkOf(0, 'a', 3)], 'File chunk 0 for f1 arrived twice'],
+      // Each file in progress holds a part in memory, so only one may be.
+      [
+        'a file started before the last one is whole',
+        [chunkOf(0, 'a', 2, 'f1'), chunkOf(0, 'b', 2, 'f2', 'user-1/f2'), chunkOf(1, 'c', 2, 'f1')],
+        'Missing file chunk 1 for f1',
+      ],
+      [
+        'a chunk that counts its file differently from the first',
+        [chunkOf(0, 'a', 3), chunkOf(1, 'b', 2)],
+        'File chunk 1 for f1 counts 2 chunks, its first counted 3',
+      ],
+      // The writer sizes its parts from the export's chunk size.
+      [
+        'a chunk larger than the export writes',
+        [{ ...chunkOf(0, '', 2), data: Buffer.alloc(FILE_CHUNK_BYTES + 1).toString('base64') }],
+        `File chunk 0 for f1 holds ${FILE_CHUNK_BYTES + 1} bytes, more than ${FILE_CHUNK_BYTES}`,
+      ],
+    ])('refuses %s, aborts the upload and rolls back', async (_, chunks, message) => {
+      dataSource.query = jest.fn().mockResolvedValue([]);
+
+      await expect(
+        service.importNdjsonStream(
+          { userId: USER_ID } as never,
+          fakeRequest([manifest(), ...chunks]),
+          'jane@example.com',
+        ),
+      ).rejects.toThrow(message);
+
+      expect(objects.every((object) => !object.finished)).toBe(true);
+      expect(objects.every((object) => object.aborted)).toBe(true);
+      expect(queryRunner.rollbackTransaction).toHaveBeenCalledTimes(1);
+      expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
+    });
+
+    it('takes back what it stored when it fails later: minted keys deleted, a file restored in place kept', async () => {
+      const OWNED_KEY = '33333333-3333-4333-8333-333333333333';
+      dataSource.query = jest.fn().mockResolvedValue([]);
+      queryRunner.query = jest.fn(async (sql: string) =>
+        sql.includes('SELECT key FROM ci.files') ? [{ key: OWNED_KEY }] : undefined,
+      ) as unknown as QueryRunner['query'];
+
+      await expect(
+        service.importNdjsonStream(
+          { userId: USER_ID } as never,
+          fakeRequest([
+            manifest({ version: 2 }),
+            chunkOf(0, 'new file', 1, 'f-new', 'somebody/else'),
+            chunkOf(0, 'own file', 1, 'f-owned', OWNED_KEY),
+            chunkOf(0, 'half of a ', 2, 'f-half', 'another/key'),
+          ]),
+          'jane@example.com',
+        ),
+      ).rejects.toThrow('Archive stops before its end record');
+
+      const [stored, owned, half] = objects;
+      expect(stored.finished && owned.finished).toBe(true);
+      expect(owned.key).toBe(OWNED_KEY);
+      // The file it was partway through is aborted, never stored.
+      expect(half.finished).toBe(false);
+      expect(half.aborted).toBe(true);
+      // Only keys this import minted are deleted, the aborted file's included
+      // (nothing is there). The owned key's row survives the rollback and
+      // still points at its object.
+      expect(fileService.deleteObjects).toHaveBeenCalledWith(config.staticfiles.bucket, [
+        stored.key,
+        half.key,
+      ]);
+      expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
+    });
+
+    it('still throws the import error when taking back its files fails', async () => {
+      dataSource.query = jest.fn().mockResolvedValue([]);
+      fileService.deleteObjects = jest.fn().mockRejectedValue(new Error('store down'));
+
+      await expect(
+        service.importNdjsonStream(
+          { userId: USER_ID } as never,
+          fakeRequest([manifest({ version: 2 }), chunkOf(0, 'x', 1)]),
+          'jane@example.com',
+        ),
+      ).rejects.toThrow('Archive stops before its end record');
+      expect(logger.warn).toHaveBeenCalledWith('Could not delete the files a failed import stored', {
+        files: 1,
+        error: 'store down',
+      });
+    });
+
+    it('keeps the import error when a cleanup call throws before it returns a promise', async () => {
+      dataSource.query = jest.fn().mockResolvedValue([]);
+      fileService.deleteObjects = jest.fn(() => {
+        throw new TypeError('not wired');
+      }) as unknown as FileService['deleteObjects'];
+
+      await expect(
+        service.importNdjsonStream(
+          { userId: USER_ID } as never,
+          fakeRequest([manifest({ version: 2 }), chunkOf(0, 'x', 1)]),
+          'jane@example.com',
+        ),
+      ).rejects.toThrow('Archive stops before its end record');
+    });
+
+    it('keeps the import error when the rollback fails too', async () => {
+      dataSource.query = jest.fn().mockResolvedValue([]);
+      queryRunner.rollbackTransaction = jest.fn().mockRejectedValue(new Error('Connection terminated'));
+
+      await expect(
+        service.importNdjsonStream(
+          { userId: USER_ID } as never,
+          fakeRequest([manifest({ version: 2 }), chunkOf(0, 'x', 1)]),
+          'jane@example.com',
+        ),
+      ).rejects.toThrow('Archive stops before its end record');
+      expect(logger.warn).toHaveBeenCalledWith('Could not roll back a failed import', {
+        error: 'Connection terminated',
+      });
+      expect(fileService.deleteObjects).toHaveBeenCalledWith(config.staticfiles.bucket, [objects[0].key]);
+    });
+
+    it('deletes a file whose finish failed, since the store may have kept it', async () => {
+      dataSource.query = jest.fn().mockResolvedValue([]);
+      const opening = fileService.openObjectWriter;
+      fileService.openObjectWriter = jest.fn((...args: Parameters<FileService['openObjectWriter']>) => ({
+        ...opening(...args),
+        finish: async () => {
+          throw new Error('The response was lost');
+        },
+      })) as unknown as FileService['openObjectWriter'];
+
+      await expect(
+        service.importNdjsonStream(
+          { userId: USER_ID } as never,
+          fakeRequest([manifest({ version: 2 }), chunkOf(0, 'x', 1)]),
+          'jane@example.com',
+        ),
+      ).rejects.toThrow('The response was lost');
+      expect(objects[0].aborted).toBe(true);
+      expect(fileService.deleteObjects).toHaveBeenCalledWith(config.staticfiles.bucket, [objects[0].key]);
+    });
+
+    it('keeps the files it stored when COMMIT itself fails, since the rows may have committed', async () => {
+      dataSource.query = jest.fn().mockResolvedValue([]);
+      queryRunner.commitTransaction = jest.fn().mockRejectedValueOnce(new Error('Connection terminated'));
+
+      await expect(
+        service.importNdjsonStream(
+          { userId: USER_ID } as never,
+          fakeRequest([manifest({ version: 2 }), chunkOf(0, 'x', 1), { type: 'end', rows: 0, files: 1 }]),
+          'jane@example.com',
+        ),
+      ).rejects.toThrow('Connection terminated');
+      expect(objects[0].finished).toBe(true);
+      expect(fileService.deleteObjects).not.toHaveBeenCalled();
+    });
+
+    it('asks the store to delete nothing when the import minted no key', async () => {
+      dataSource.query = jest.fn().mockResolvedValue([]);
+
+      await expect(
+        service.importNdjsonStream(
+          { userId: USER_ID } as never,
+          fakeRequest([manifest({ version: 2 })]),
+          'jane@example.com',
+        ),
+      ).rejects.toThrow('Archive stops before its end record');
+      expect(fileService.deleteObjects).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['numbered past its end', chunkOf(1, 'b', 1)],
+      ['sent again from its first chunk', chunkOf(0, 'b', 1)],
+    ])('refuses a chunk %s for a stored file, instead of starting it over', async (_, again) => {
+      dataSource.query = jest.fn().mockResolvedValue([]);
+
+      await expect(
+        service.importNdjsonStream(
+          { userId: USER_ID } as never,
+          fakeRequest([manifest(), chunkOf(0, 'a', 1), again]),
+          'jane@example.com',
+        ),
+      ).rejects.toThrow(`File chunk ${again.index} for f1 came after the file was whole`);
+      expect(objects).toHaveLength(1);
+      expect(bytesOf(objects[0])).toBe('a');
+      expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
     });
 
     it('rejects an archive whose file upload never completes (a chunk index never arrives)', async () => {
@@ -595,6 +1068,361 @@ describe('UserDataPortabilityService', () => {
       // it must not be left committed.
       expect(queryRunner.rollbackTransaction).toHaveBeenCalledTimes(1);
       expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
+      // Nor may the half-written file: its upload is aborted.
+      expect(objects[0].finished).toBe(false);
+      expect(objects[0].aborted).toBe(true);
+    });
+
+    describe('the end record', () => {
+      const chunk = {
+        type: 'file-chunk',
+        id: 'f1',
+        bucket: 'ci-files',
+        key: 'user-1/f1',
+        index: 0,
+        total: 1,
+        data: Buffer.from('hello').toString('base64'),
+      };
+
+      beforeEach(() => {
+        dataSource.query = jest.fn().mockResolvedValue([]);
+      });
+
+      const importing = (lines: unknown[]) =>
+        service.importNdjsonStream({ userId: USER_ID } as never, fakeRequest(lines), 'jane@example.com');
+
+      it('imports a version 2 archive whose end record matches what came before it', async () => {
+        const result = await importing([manifest({ version: 2 }), chunk, { type: 'end', rows: 0, files: 1 }]);
+
+        expect(result.filesRestored).toBe(1);
+        expect(queryRunner.commitTransaction).toHaveBeenCalledTimes(1);
+      });
+
+      it('refuses a version 2 archive that stops before its end record, as a cut download does', async () => {
+        await expect(importing([manifest({ version: 2 }), chunk])).rejects.toThrow(
+          'Archive stops before its end record',
+        );
+        expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
+      });
+
+      it('says a version 2 archive cut partway through a file stops before its end record', async () => {
+        await expect(importing([manifest({ version: 2 }), { ...chunk, total: 2 }])).rejects.toThrow(
+          'Archive stops before its end record',
+        );
+      });
+
+      it('still names missing file chunks in a version 1 archive', async () => {
+        await expect(importing([manifest(), { ...chunk, total: 2 }])).rejects.toThrow(
+          'Archive is missing one or more file chunks',
+        );
+      });
+
+      it('restores an empty file, which the export writes as one empty chunk', async () => {
+        const result = await importing([
+          manifest({ version: 2 }),
+          { ...chunk, data: '' },
+          { type: 'end', rows: 0, files: 1 },
+        ]);
+
+        expect(result.filesRestored).toBe(1);
+        expect(objects).toHaveLength(1);
+        expect(objects[0].bucket).toBe(config.staticfiles.bucket);
+        expect(objects[0].pieces).toEqual([Buffer.alloc(0)]);
+        expect(objects[0].finished).toBe(true);
+      });
+
+      it('refuses an end record whose counts do not match the archive', async () => {
+        await expect(
+          importing([manifest({ version: 2 }), chunk, { type: 'end', rows: 0, files: 2 }]),
+        ).rejects.toThrow('Archive end record counts 0 rows and 2 files');
+      });
+
+      it('refuses records after the end record', async () => {
+        await expect(
+          importing([manifest({ version: 2 }), { type: 'end', rows: 0, files: 0 }, chunk]),
+        ).rejects.toThrow('Archive has records after its end record');
+      });
+
+      it('still imports a version 1 archive, written before there was an end record', async () => {
+        const result = await importing([manifest(), chunk]);
+
+        expect(result.filesRestored).toBe(1);
+      });
+    });
+  });
+
+  describe('tables with both user_id and owner_user_id', () => {
+    const CALLER = '11111111-1111-4111-8111-111111111111';
+    const OTHER = '22222222-2222-4222-8222-222222222222';
+
+    // What the catalog returns for ci.receipts: one row per user column. In
+    // catalog order owner_user_id can come either side of user_id, so both
+    // orders are exercised.
+    const receiptsDiscovery = (order: Array<'user_id' | 'owner_user_id'>) =>
+      order.map((column) => ({
+        schema: 'ci',
+        table: 'receipts',
+        user_column: column,
+        columns: ['receipt_id', 'user_id', 'owner_user_id', 'merchant_name'],
+      }));
+
+    const insertsInto = (table: string) =>
+      (queryRunner.query as jest.Mock).mock.calls.filter(
+        ([sql]: [string]) => sql.startsWith('INSERT') && sql.includes(`"${table}"`),
+      );
+
+    const insertedRow = (call: [string, unknown[]]) => {
+      const columns = [...call[0].matchAll(/"([^"]+)"/g)].map((match) => match[1]).slice(2);
+
+      return Object.fromEntries(columns.map((column, index) => [column, call[1][index]]));
+    };
+
+    beforeEach(() => {
+      queryRunner.query = jest.fn().mockResolvedValue(undefined) as unknown as QueryRunner['query'];
+      userService.findById = jest.fn().mockResolvedValue({ email: 'jane@example.com' });
+    });
+
+    for (const order of [
+      ['user_id', 'owner_user_id'],
+      ['owner_user_id', 'user_id'],
+    ] as Array<Array<'user_id' | 'owner_user_id'>>) {
+      it(`JSON import: names only the importer, and inserts the row once (catalog order ${order.join(', ')})`, async () => {
+        dataSource.query = jest.fn().mockResolvedValue(receiptsDiscovery(order));
+
+        await service.importArchive({ userId: CALLER } as never, {
+          version: 1,
+          exportedAt: new Date().toISOString(),
+          userId: CALLER,
+          profile: null,
+          tables: {
+            'ci.receipts': [
+              { receipt_id: 'r1', user_id: OTHER, owner_user_id: OTHER, merchant_name: 'Shop' },
+            ],
+          },
+          fileBlobs: [],
+        });
+
+        const inserts = insertsInto('receipts');
+
+        expect(inserts).toHaveLength(1);
+        expect(insertedRow(inserts[0])).toMatchObject({ user_id: CALLER, owner_user_id: CALLER });
+      });
+
+      it(`stream import: names only the importer (catalog order ${order.join(', ')})`, async () => {
+        dataSource.query = jest.fn().mockResolvedValue(receiptsDiscovery(order));
+
+        const text = [
+          {
+            type: 'manifest',
+            version: 1,
+            format: 'ndjson',
+            exportedAt: new Date().toISOString(),
+            userId: CALLER,
+            profile: null,
+          },
+          {
+            type: 'row',
+            table: 'ci.receipts',
+            row: { receipt_id: 'r1', user_id: OTHER, owner_user_id: OTHER, merchant_name: 'Shop' },
+          },
+        ]
+          .map((line) => JSON.stringify(line))
+          .join('\n');
+        const req = {
+          setEncoding: () => undefined,
+          [Symbol.asyncIterator]: async function* () {
+            yield `${text}\n`;
+          },
+        } as unknown as Request;
+
+        await service.importNdjsonStream({ userId: CALLER } as never, req, 'jane@example.com');
+
+        const inserts = insertsInto('receipts');
+
+        expect(inserts).toHaveLength(1);
+        expect(insertedRow(inserts[0])).toMatchObject({ user_id: CALLER, owner_user_id: CALLER });
+      });
+    }
+
+    it('keeps an unknown (null) detected owner null rather than claiming it', async () => {
+      dataSource.query = jest.fn().mockResolvedValue(receiptsDiscovery(['user_id', 'owner_user_id']));
+
+      await service.importArchive({ userId: CALLER } as never, {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        userId: CALLER,
+        profile: null,
+        tables: { 'ci.receipts': [{ receipt_id: 'r1', user_id: CALLER, owner_user_id: null }] },
+        fileBlobs: [],
+      });
+
+      expect(insertedRow(insertsInto('receipts')[0])).toMatchObject({ user_id: CALLER, owner_user_id: null });
+    });
+
+    it("deletes and exports by user_id only, never reaching a row whose user_id is another account's", async () => {
+      dataSource.query = jest.fn().mockResolvedValue(receiptsDiscovery(['owner_user_id', 'user_id']));
+
+      await service.importArchive({ userId: CALLER } as never, {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        userId: CALLER,
+        profile: null,
+        tables: {},
+        fileBlobs: [],
+      });
+
+      const deletes = (queryRunner.query as jest.Mock).mock.calls
+        .map(([sql]: [string]) => sql)
+        .filter((sql: string) => sql.startsWith('DELETE') && sql.includes('"receipts"'));
+
+      expect(deletes).toEqual([expect.stringContaining('WHERE user_id = $1')]);
+
+      dataSource.query = jest
+        .fn()
+        .mockResolvedValueOnce(receiptsDiscovery(['owner_user_id', 'user_id']))
+        .mockResolvedValue([]);
+      userService.findById = jest.fn().mockResolvedValue(null);
+      await service.exportArchive({ userId: CALLER } as never);
+
+      const selects = (dataSource.query as jest.Mock).mock.calls
+        .map(([sql]: [string]) => sql)
+        .filter((sql: string) => sql.includes('"receipts"'));
+
+      expect(selects).toEqual([expect.stringContaining('WHERE user_id = $1')]);
+    });
+  });
+
+  describe('grant and trust tables never travel in an archive', () => {
+    const TRUST_TABLES = [
+      'federated_identities',
+      'mcp_server_configs',
+      'peer_links',
+      'ask_grants',
+      'household_tiers',
+      'push_subscriptions',
+      'pending_actions',
+      'pipeline_dead_letters',
+      'account_purges',
+    ];
+    const CALLER = '11111111-1111-4111-8111-111111111111';
+
+    const discovery = [
+      { schema: 'ci', table: 'notes', user_column: 'user_id', columns: ['id', 'user_id'] },
+      ...TRUST_TABLES.map((table) => ({
+        schema: 'ci',
+        table,
+        user_column:
+          table === 'peer_links' || table === 'ask_grants' || table === 'household_tiers'
+            ? 'owner_user_id'
+            : 'user_id',
+        columns: ['id', 'user_id', 'owner_user_id', 'issuer', 'subject', 'command'],
+      })),
+    ];
+
+    it('export leaves them out', async () => {
+      dataSource.query = jest.fn().mockResolvedValueOnce(discovery).mockResolvedValue([]);
+      userService.findById = jest.fn().mockResolvedValue(null);
+
+      const archive = await service.exportArchive({ userId: CALLER } as never);
+
+      expect(Object.keys(archive.tables)).toEqual(['ci.notes']);
+    });
+
+    it('the JSON import neither deletes nor restores them, so an older archive still imports', async () => {
+      dataSource.query = jest.fn().mockResolvedValue(discovery);
+      queryRunner.query = jest.fn().mockResolvedValue(undefined) as unknown as QueryRunner['query'];
+
+      await service.importArchive({ userId: CALLER } as never, {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        userId: CALLER,
+        profile: null,
+        tables: Object.fromEntries(
+          TRUST_TABLES.map((table) => [
+            `ci.${table}`,
+            [{ id: 'x', user_id: CALLER, issuer: 'https://idp.example.com' }],
+          ]),
+        ),
+        fileBlobs: [],
+      });
+
+      const touched = (queryRunner.query as jest.Mock).mock.calls
+        .map(([sql]: [string]) => sql)
+        .filter((sql: string) => TRUST_TABLES.some((table) => sql.includes(`"${table}"`)));
+
+      expect(touched).toEqual([]);
+      expect(queryRunner.commitTransaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('the stream import drops their rows from an older archive instead of failing on them', async () => {
+      dataSource.query = jest.fn().mockResolvedValue(discovery);
+      queryRunner.query = jest.fn().mockResolvedValue(undefined) as unknown as QueryRunner['query'];
+      userService.findById = jest.fn().mockResolvedValue({ email: 'jane@example.com' });
+
+      const text = [
+        {
+          type: 'manifest',
+          version: 1,
+          format: 'ndjson',
+          exportedAt: new Date().toISOString(),
+          userId: CALLER,
+          profile: null,
+        },
+        {
+          type: 'row',
+          table: 'ci.federated_identities',
+          row: { id: 'x', user_id: CALLER, issuer: 'https://idp.example.com' },
+        },
+        { type: 'row', table: 'ci.mcp_server_configs', row: { id: 'y', user_id: CALLER, command: 'true' } },
+        { type: 'row', table: 'ci.notes', row: { id: 'n1', user_id: CALLER } },
+      ]
+        .map((line) => JSON.stringify(line))
+        .join('\n');
+      const req = {
+        setEncoding: () => undefined,
+        [Symbol.asyncIterator]: async function* () {
+          yield `${text}\n`;
+        },
+      } as unknown as Request;
+
+      const result = await service.importNdjsonStream({ userId: CALLER } as never, req, 'jane@example.com');
+
+      const touched = (queryRunner.query as jest.Mock).mock.calls
+        .map(([sql]: [string]) => sql)
+        .filter((sql: string) => TRUST_TABLES.some((table) => sql.includes(`"${table}"`)));
+
+      expect(touched).toEqual([]);
+      expect(result.rowsImported).toBe(1);
+    });
+
+    it('a table nobody knows about still fails the stream import', async () => {
+      dataSource.query = jest.fn().mockResolvedValue(discovery);
+      queryRunner.query = jest.fn().mockResolvedValue(undefined) as unknown as QueryRunner['query'];
+      userService.findById = jest.fn().mockResolvedValue({ email: 'jane@example.com' });
+
+      const text = [
+        {
+          type: 'manifest',
+          version: 1,
+          format: 'ndjson',
+          exportedAt: new Date().toISOString(),
+          userId: CALLER,
+          profile: null,
+        },
+        { type: 'row', table: 'ci.not_a_table', row: { id: 'x' } },
+      ]
+        .map((line) => JSON.stringify(line))
+        .join('\n');
+      const req = {
+        setEncoding: () => undefined,
+        [Symbol.asyncIterator]: async function* () {
+          yield `${text}\n`;
+        },
+      } as unknown as Request;
+
+      await expect(
+        service.importNdjsonStream({ userId: CALLER } as never, req, 'jane@example.com'),
+      ).rejects.toThrow('Unknown table in archive: ci.not_a_table');
     });
   });
 });

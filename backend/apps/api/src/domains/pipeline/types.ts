@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { type UserServiceContext } from '@ci/common/context';
 
@@ -93,6 +93,35 @@ export interface StageSource {
    * literal. Never build it from request input.
    */
   predicate?: string;
+
+  /**
+   * A `timestamptz` column on the source row that every writer of the stage's
+   * INPUTS bumps — `updated_at`, in practice. Declaring it re-opens a decided
+   * row whose source row changed after the decision was recorded
+   * (`PipelineStateService.reopenChangedSources`, called by the control tick
+   * when the leg is due).
+   *
+   * The version answers "did the RULE change since this was decided?"; this
+   * answers "did the INPUT?". Without it a stage whose output mirrors a mutable
+   * row keeps its first answer until the next version bump, however the row
+   * changes — `enrich.person_self_claim` kept a self claim for every number a
+   * re-import, merge or edit had dropped from a Person.
+   *
+   * It is an INPUT column, never the one the stage writes, so it re-creates no
+   * ratchet: nothing the stage does moves it, and a re-opened row goes through
+   * THE ONE RULE like any other. Declare it only when all three hold:
+   *
+   *  - every writer of the fields the stage reads stamps it (a writer that
+   *    does not is invisible to this, and the stale answer survives until the
+   *    next bump);
+   *  - nothing bumps it at a high rate for reasons the stage does not care
+   *    about, or every such write buys a pointless re-run;
+   *  - a re-run is cheap. A change re-runs ONE row, but a bulk re-import
+   *    changes thousands at once.
+   *
+   * Interpolated as an identifier, so it must be a plain in-repo column name.
+   */
+  changedAtColumn?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -231,6 +260,15 @@ export interface StageSchedule {
    * Measured per (user, stage, entity_type) leg, never appliance-wide: a second
    * user's first import must not be held back because the first user's nightly
    * pass ran an hour ago.
+   *
+   * For a local stage confined to the enrichment window it is counted in
+   * windows: a leg that has not started in the open window and whose interval
+   * runs out before the next one opens is due now (`stageDueness`,
+   * `due_before_next_window`). Otherwise a leg first swept in the afternoon
+   * would miss that night's window by a few hours and wait a whole extra day.
+   * A metered stage only counts to the end of the open window: it starts at
+   * the opening of the window its interval runs out in and never gains one,
+   * since the interval is what bounds its spend.
    */
   minInterval: number;
 
@@ -537,6 +575,14 @@ export interface DeadLetterInput {
   stage?: string | null;
   entityType?: string | null;
   entityId?: string | null;
+
+  /**
+   * The user the failed job worked for. Written to `user_id`, which is what
+   * scopes the letter to that user on the Jobs page and in replay, and what
+   * export and erasure find it by. Leave it out only for work no user owns: a
+   * NULL letter is shown to the appliance admin alone.
+   */
+  userId?: string | null;
 
   /** The payload VERBATIM. Never trimmed — it is routinely the only surviving copy. */
   payload: Record<string, unknown>;

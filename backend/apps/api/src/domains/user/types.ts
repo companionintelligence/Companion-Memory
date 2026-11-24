@@ -1,4 +1,4 @@
-import type { OnboardingProgress } from './entities/UserEntity';
+import type { OnboardingProgress, TimeFormat } from './entities/UserEntity';
 
 export interface CreateUserDto {
   id?: string;
@@ -11,6 +11,13 @@ export interface CreateUserDto {
    * null and account changes cannot demand it. Default: the user chose it.
    */
   passwordChosenByUser?: boolean;
+  /**
+   * `true` when the address came from an identity that vouches for it: a Portal sign-in or a
+   * Hub-signed username. Stamps `emailProvenAt`, which the email link and the Hub bridge's
+   * adoption by username require. Default: unproven, which is what an address typed into
+   * signup is.
+   */
+  emailProven?: boolean;
   /**
    * IANA zone name. Omitted, the column default ('UTC') stands and
    * {@link ClientTimezoneInterceptor} adopts the first client zone it sees —
@@ -28,5 +35,6 @@ export interface UpdateUserDto {
   onboarded?: boolean;
   entityId?: string;
   timezone?: string;
+  timeFormat?: TimeFormat;
   onboardingProgress?: OnboardingProgress | null;
 }

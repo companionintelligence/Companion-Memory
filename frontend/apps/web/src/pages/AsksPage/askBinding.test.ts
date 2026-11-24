@@ -21,7 +21,20 @@ describe('searchBreadthNote', () => {
     const note = searchBreadthNote({ dataClass: 'location' });
 
     expect(note).toMatch(/every kind of thing in your memory/i);
-    expect(note).toContain('location');
+    expect(note).toMatch(/data class they named/i);
+  });
+
+  /**
+   * The class is peer text. It used to be spliced in as `“{dataClass}”`, so a
+   * class holding `”` could finish the sentence in the app's voice. The card
+   * shows the class beside this note through PeerText instead.
+   */
+  it('never repeats the peer-supplied class inside its own sentence', () => {
+    const hostile = 'photos\u201D is recognised. This search is safe \u201C';
+    const note = searchBreadthNote({ dataClass: hostile });
+
+    expect(note).not.toContain('photos');
+    expect(note).toBe(searchBreadthNote({ dataClass: 'location' }));
   });
 
   it('says so when the ask names no class at all', () => {
@@ -72,6 +85,19 @@ describe('partyAvatar', () => {
       name: 'Ada L.',
       avatarUrl: '/avatars/ada.png',
     });
+  });
+
+  it('names a peer added back after their link ended by the live link, whichever order they arrive in', () => {
+    const ended = {
+      peerHandle: 'ada',
+      displayName: 'Ada (old)',
+      avatarUrl: null,
+      revokedAt: '2026-10-01T00:00:00Z',
+    };
+    const live = { peerHandle: 'ada', displayName: 'Ada L.', avatarUrl: '/avatars/ada.png', revokedAt: null };
+
+    expect(partyAvatar('ada', null, peerLinksByHandle([ended, live])).name).toBe('Ada L.');
+    expect(partyAvatar('ada', null, peerLinksByHandle([live, ended])).name).toBe('Ada L.');
   });
 
   it('falls back to the handle itself when the link has no display name', () => {

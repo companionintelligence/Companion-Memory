@@ -324,16 +324,32 @@ SELECT queue, event_name, stage, count(*) AS letters,
  ORDER BY letters DESC;
 ```
 
-Two writers land in this table and `queue` tells them apart:
+Two writers land in this table. Both record the queue the job failed on, so
+`queue` no longer tells them apart. A `pipeline.slice` row whose `payload` has
+no `name` key came from `PipelineSliceListener`. Every other row came from the
+reaper, including reaped rows with `event_name = 'unknown'`, which have no
+`name` key because something other than `send()` inserted the job.
 
-- `queue` = a pipeline queue → written by `PipelineSliceListener` on **every**
-  throw, including the retries. The *first* row for a job usually carries the
-  informative error; by the third attempt the cause is often just "connection
-  refused".
-- `queue = 'dead-letter'` → harvested from `pgboss.job` by
-  `DeadLetterReaperListener` after pg-boss exhausted its 3 retries. `id` is the
-  originating pg-boss job id, so it correlates straight back to `pgboss.job`
-  while that row still exists.
+- `PipelineSliceListener` writes a row on **every** throw, including the
+  retries. It stores the parsed payload, which the bus has already stripped of
+  `name`. The *first* row for a job usually carries the informative error; by
+  the third attempt the cause is often just "connection refused".
+- `DeadLetterReaperListener` harvests a row from `pgboss.job` after pg-boss
+  exhausted its 3 retries. It stores pg-boss's `data` verbatim, and `send()`
+  stamps the event name into it. `queue` comes from the failure output, which
+  `PGBossEventService` writes on every failure. It still reads `dead-letter`
+  for letters reaped before that output named the queue, and for jobs pg-boss
+  failed itself by expiry. `id` is pg-boss's id for the dead-letter copy, so it
+  correlates back to `pgboss.job` while that row still exists.
+
+Replay sends a letter back to its `queue`, and only there. A
+`python.function.run` goes to its target's queue (`py-fn-summary` or
+`py-fn-hbpe`). A `pipeline.slice` or `pipeline.sweep` goes to the queue its
+stage declares in the running build, so a release that moved the stage does
+not send it back to a queue that refuses it. A letter that still reads
+`dead-letter`, or whose queue no longer listens for its event, is sent to
+every queue that listens for the event, which re-runs listeners that had
+succeeded.
 
 ```sql
 -- Theirs: records refused by validation, with the raw payload.
@@ -544,12 +560,14 @@ curl -sS -X POST $API/api/maintenance/backfill-media-dimensions \
 > back" therefore says nothing about whether the files are done — read the
 > ledger.
 
-> **This endpoint has a stale precondition.** It counts candidates with the OLD
-> `width IS NULL` predicate and returns `{"status":"noop"}` **without emitting
-> anything** when that count is 0. So once every file has a width, it will
-> refuse to start a sweep — including the re-probe sweep a version bump exists
-> to create. `body.limit` is accepted and ignored (a sweep runs to completion).
-> When it no-ops, hand-enqueue the sweep instead: [§9c](#9c-hand-enqueue-a-job).
+> **This endpoint only counts files with no width.** It counts the ones the
+> stage still has work for (no ledger row, a row below the current version, or a
+> failed probe whose retry is due) and returns `{"status":"noop"}` **without
+> emitting anything** when that count is 0. A file already measured never
+> counts, so after a bump that re-probes measured files it will refuse to start
+> the sweep once every unmeasured file has a current answer. `body.limit` is
+> accepted and ignored (a sweep runs to completion). When it no-ops, hand-enqueue
+> the sweep instead: [§9c](#9c-hand-enqueue-a-job).
 
 ### 5e. Watch it
 
@@ -603,7 +621,7 @@ Every id in the failing batch gets its own ledger row with a retry gate, so the
 outage reads as a rate. Cross-check the host:
 
 ```bash
-# Host from config: services.ollama.host / embedding.host (OLLAMA_EMBED_HOST),
+# Host from config: services.ollama.host / embedding.apiBase (LLM_EMBEDDING_API_BASE),
 # default http://host.docker.internal:11434 — i.e. :11434 on the appliance host.
 curl -sS http://localhost:11434/api/tags | head -c 400   # up? is CI_EMBED_MODEL pulled?
 docker stats --no-stream                                 # saturated?

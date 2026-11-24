@@ -87,7 +87,7 @@ describe('OllamaService.resolveModel uses the loaded backend model', () => {
   it('errors when the backend is serving no chat models', async () => {
     const { service } = buildService([]);
 
-    await expect(service.resolveModel(ctx)).rejects.toThrow(/No chat model is currently loaded/);
+    await expect(service.resolveModel(ctx)).rejects.toThrow(/No chat model is currently served/);
   });
 
   it('falls back past an unloaded vision default like llava:7b on vLLM', async () => {
@@ -164,6 +164,113 @@ describe('OllamaService.resolveModel uses the loaded backend model', () => {
     });
 
     expect(resolved.model).toBe('llava:13b');
+  });
+});
+
+describe('OllamaService.resolveModel only offers tools to a model that has them', () => {
+  // `POST /llm/generate` defaults `enableTools` to TRUE, and the compiled-in
+  // default chat model (`gemma3:1b`) has no tools. A client that did not check
+  // got a 400 from the backend and an empty turn — or a model told, in its
+  // prompt, to use tools it could not call.
+  const TEXT = [{ role: 'user' as const, content: 'hello' }];
+
+  function buildWithCapabilities(capabilities: (model: string) => Promise<string[]>) {
+    const service = buildNativeService(['gemma3:1b', 'qwen3:14b'], []);
+    const probe = jest
+      .spyOn(
+        service as unknown as { fetchModelCapabilities: (id: string) => Promise<string[]> },
+        'fetchModelCapabilities',
+      )
+      .mockImplementation(capabilities);
+
+    return { service, probe };
+  }
+
+  it('turns tools off for a model whose capabilities do not include them', async () => {
+    const { service } = buildWithCapabilities(async (model) =>
+      model === 'gemma3:1b' ? ['completion'] : ['completion', 'tools'],
+    );
+
+    const resolved = await service.resolveModel(ctx, {
+      requestedModel: 'gemma3:1b',
+      messages: TEXT,
+      enableTools: true,
+    });
+
+    expect(resolved.model).toBe('gemma3:1b');
+    expect(resolved.enableTools).toBe(false);
+  });
+
+  it('keeps tools on for a model that reports them', async () => {
+    const { service } = buildWithCapabilities(async () => ['completion', 'tools', 'thinking']);
+
+    const resolved = await service.resolveModel(ctx, {
+      requestedModel: 'qwen3:14b',
+      messages: TEXT,
+      enableTools: true,
+    });
+
+    expect(resolved.enableTools).toBe(true);
+  });
+
+  it('never turns tools ON: a caller that asked for none gets none from a model that has them', async () => {
+    const { service } = buildWithCapabilities(async () => ['completion', 'tools']);
+
+    const resolved = await service.resolveModel(ctx, { requestedModel: 'qwen3:14b', messages: TEXT });
+
+    expect(resolved.enableTools).toBe(false);
+  });
+
+  it('judges the model the turn actually runs on, not the one that was asked for', async () => {
+    // Not served, so resolution falls back to the first served model.
+    const { service, probe } = buildWithCapabilities(async (model) =>
+      model === 'gemma3:1b' ? ['completion'] : ['completion', 'tools'],
+    );
+
+    const resolved = await service.resolveModel(ctx, {
+      requestedModel: 'not-served:7b',
+      messages: TEXT,
+      enableTools: true,
+    });
+
+    expect(resolved.model).toBe('gemma3:1b');
+    expect(resolved.enableTools).toBe(false);
+    expect(probe).toHaveBeenCalledWith('gemma3:1b');
+  });
+
+  it('does not read "no capabilities reported" as "no tools" (an Ollama too old to report any)', async () => {
+    const { service } = buildWithCapabilities(async () => []);
+
+    const resolved = await service.resolveModel(ctx, {
+      requestedModel: 'gemma3:1b',
+      messages: TEXT,
+      enableTools: true,
+    });
+
+    expect(resolved.enableTools).toBe(true);
+  });
+
+  it('keeps the caller’s request when the capability probe itself fails', async () => {
+    const { service } = buildWithCapabilities(async () => {
+      throw new Error('ollama show: connection refused');
+    });
+
+    const resolved = await service.resolveModel(ctx, {
+      requestedModel: 'gemma3:1b',
+      messages: TEXT,
+      enableTools: true,
+    });
+
+    expect(resolved.enableTools).toBe(true);
+  });
+
+  it('does not probe at all on an OpenAI-compatible backend, which advertises tools for every model', async () => {
+    const { service, driver } = buildService(['Qwen3-8B']);
+
+    const resolved = await service.resolveModel(ctx, { messages: TEXT, enableTools: true });
+
+    expect(resolved.enableTools).toBe(true);
+    expect(driver.listModels).toHaveBeenCalled();
   });
 });
 

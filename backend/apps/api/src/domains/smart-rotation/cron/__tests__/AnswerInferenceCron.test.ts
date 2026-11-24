@@ -1,8 +1,10 @@
 import type { FeatureService } from '@ci/common/feature';
 import type { LoggerService } from '@ci/common/logging';
+import config from '@ci/configuration';
 import { Events, type EventService } from '@ci/domains/events';
 import type { QuestionService } from '@ci/domains/intelligence';
 
+import { INFERENCE_QUEUE_RETENTION_MINUTES } from '../../listeners/SmartRotationListener';
 import { AnswerInferenceCron } from '../AnswerInferenceCron';
 
 /** smart.rotation off + scheduled.answer.inferencing on — the only combination that reaches the dispatch loop. */
@@ -53,6 +55,9 @@ describe('AnswerInferenceCron with smart.rotation', () => {
       queue: 'llm-background',
       eventName: Events.INFER_QUESTION_ANSWER,
       cooldownHours: 6,
+      // The per-owner cadence and backlog cap ride on the selection itself,
+      // so the per-minute tick is no longer the dispatch rate.
+      intervalMinutes: config.llm.answerInferenceIntervalMinutes,
     });
   });
 });
@@ -80,19 +85,19 @@ describe('AnswerInferenceCron dispatch loop', () => {
       1,
       Events.INFER_QUESTION_ANSWER,
       { ownerId: 'user-1', questionId: 'q-1' },
-      { singletonKey: 'infer:user-1:q-1' },
+      { singletonKey: 'infer:user-1:q-1', retentionMinutes: INFERENCE_QUEUE_RETENTION_MINUTES },
     );
     expect(eventService.send).toHaveBeenNthCalledWith(
       2,
       Events.INFER_QUESTION_ANSWER,
       { ownerId: 'user-1', questionId: 'q-2' },
-      { singletonKey: 'infer:user-1:q-2' },
+      { singletonKey: 'infer:user-1:q-2', retentionMinutes: INFERENCE_QUEUE_RETENTION_MINUTES },
     );
     expect(eventService.send).toHaveBeenNthCalledWith(
       3,
       Events.INFER_QUESTION_ANSWER,
       { ownerId: 'user-2', questionId: 'q-3' },
-      { singletonKey: 'infer:user-2:q-3' },
+      { singletonKey: 'infer:user-2:q-3', retentionMinutes: INFERENCE_QUEUE_RETENTION_MINUTES },
     );
   });
 
@@ -117,7 +122,7 @@ describe('AnswerInferenceCron dispatch loop', () => {
     expect(eventService.send).toHaveBeenCalledWith(
       Events.INFER_QUESTION_ANSWER,
       { ownerId: 'user-1', questionId: 'q-1' },
-      { singletonKey: 'infer:user-1:q-1' },
+      { singletonKey: 'infer:user-1:q-1', retentionMinutes: INFERENCE_QUEUE_RETENTION_MINUTES },
     );
   });
 

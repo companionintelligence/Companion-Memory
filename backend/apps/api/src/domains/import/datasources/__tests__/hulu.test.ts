@@ -5,7 +5,8 @@ import path from 'node:path';
 
 import { cellValue, joinWrapped, parseHuluReport, parseHuluTimestamp, splitCells } from '../_hulu_report';
 import { resetPdftotextProbe } from '../_pdftotext';
-import { composeWatchTitle, HuluFileImporter } from '../hulu';
+import { composeWatchTitle } from '../_watch';
+import { HuluFileImporter } from '../hulu';
 import type { ImportParams } from '../timeline';
 
 import type { EmittedGraph } from './support/emitted';

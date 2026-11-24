@@ -8,14 +8,83 @@
  */
 import type { StackPorts } from './ports';
 
+/**
+ * The address the host-run API listens on. DEV_LISTEN_HOST (from .env or the
+ * shell) wins; it is the same switch Vite reads, for testing from a phone on the
+ * LAN or over the tailnet.
+ *
+ * Otherwise loopback, except on Linux. The HBPE and Summary containers call the
+ * API back at `host.docker.internal` (docker-compose.local.yml), and on native
+ * Linux Docker that name is the docker bridge gateway, not this machine's
+ * loopback, so an API on 127.0.0.1 would never see those callbacks. Docker
+ * Desktop on macOS forwards it to the host's loopback, so there loopback is
+ * enough. The API used to listen on 0.0.0.0 everywhere.
+ */
+export function apiListenHost(base: NodeJS.ProcessEnv, platform: NodeJS.Platform): string {
+  if (base.DEV_LISTEN_HOST) {
+    return base.DEV_LISTEN_HOST;
+  }
+
+  return platform === 'linux' ? '0.0.0.0' : '127.0.0.1';
+}
+
+/**
+ * Whether this stack runs the PowerSync service: the root .env names a
+ * POWERSYNC_URL. The same value is what makes the api's token endpoint answer
+ * instead of 503, so one switch turns on the server, the service and the client.
+ */
+export function powersyncEnabled(base: NodeJS.ProcessEnv): boolean {
+  return Boolean(base.POWERSYNC_URL?.trim());
+}
+
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+/**
+ * The POWERSYNC_URL the api hands to clients. A loopback URL in .env is the dev
+ * service, and its port is the one THIS stack published (./ports) — a sibling
+ * worktree may hold the conventional 18080, and the client would otherwise be
+ * sent to the sibling's replicator with a token it rejects. Anything else (a
+ * LAN or tailnet address, a tunnel) is the user's business and passes through.
+ */
+export function powersyncUrl(
+  base: NodeJS.ProcessEnv,
+  ports: Pick<StackPorts, 'powersyncPort'>,
+): string | undefined {
+  const raw = base.POWERSYNC_URL?.trim();
+
+  if (!raw) {
+    return undefined;
+  }
+
+  let url: URL;
+
+  try {
+    url = new URL(raw);
+  } catch {
+    return raw;
+  }
+
+  if (!LOOPBACK_HOSTS.has(url.hostname)) {
+    return raw;
+  }
+
+  url.port = String(ports.powersyncPort);
+
+  // `new URL` keeps a trailing slash the SDK would double up on; hand back the
+  // origin form the value was written in.
+  return url.toString().replace(/\/$/, '');
+}
+
 export function buildOvermindEnv(
   base: NodeJS.ProcessEnv,
   ports: StackPorts,
-  { host, socket }: { host: string; socket: string },
+  { host, socket, platform = process.platform }: { host: string; socket: string; platform?: NodeJS.Platform },
 ): NodeJS.ProcessEnv {
   return {
     ...base,
     PORT: String(ports.apiPort),
+    // Mapped to the API's `host` by config/custom-environment-variables.json.
+    API_LISTEN_HOST: apiListenHost(base, platform),
     API_PORT: String(ports.apiPort),
     WEB_PORT: String(ports.webPort),
     DATABASE_PORT: String(ports.dbPort),
@@ -37,7 +106,8 @@ export function buildOvermindEnv(
     // 404 that reads like "not signed in"), no GraphQL, and an OAuth link that
     // lands on a blank page.
     //
-    // 127.0.0.1, not `localhost`: the API binds IPv4 (`0.0.0.0`), while
+    // 127.0.0.1, not `localhost`: the API binds IPv4 (API_LISTEN_HOST above,
+    // `127.0.0.1` or `0.0.0.0` unless DEV_LISTEN_HOST names another), while
     // `localhost` resolves to ::1 first on a dual-stack host. curl falls back
     // to IPv4; Node's proxy agent reports the AggregateError instead.
     API_PROXY_TARGET: `http://127.0.0.1:${ports.apiPort}`,
@@ -52,6 +122,8 @@ export function buildOvermindEnv(
     // port Caddy's `/static` route dials, so the two proxies cannot disagree.
     // 127.0.0.1 as above; compose publishes the object store on IPv4 loopback.
     STATIC_PROXY_TARGET: `http://127.0.0.1:${ports.objPort}`,
+    // Only when enabled: an unset value stays unset, so the api keeps its 503.
+    ...(powersyncEnabled(base) ? { POWERSYNC_URL: powersyncUrl(base, ports) } : {}),
     OVERMIND_SOCKET: socket,
     // Overmind reloads .env over the environment we hand it, which would
     // overwrite the dynamic per-worktree ports set above. `base` already

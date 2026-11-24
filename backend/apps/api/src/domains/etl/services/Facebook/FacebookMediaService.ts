@@ -9,6 +9,8 @@ import {
   SOURCE_NATIVE_EXTERNAL_ID_KIND,
 } from '@ci/domains/memory';
 
+import { type CdnFetch, downloadFacebookCdnFile } from './facebookCdnDownload';
+
 /** Provenance triple every Facebook connector row carries. */
 export const FACEBOOK_SOURCE_TYPE = 'ETL';
 export const FACEBOOK_SOURCE_SYSTEM = 'facebook';
@@ -117,6 +119,12 @@ function extensionFor(mimetype: string): string {
  */
 @Injectable()
 export class FacebookMediaService {
+  /**
+   * The single hop the CDN download goes through: the guarded fetcher in production (left
+   * undefined), a fake in unit tests, which is the only reason this is a field.
+   */
+  cdnFetch: CdnFetch | undefined = undefined;
+
   constructor(
     private readonly contentService: ContentService,
     private readonly fileService: FileService,
@@ -212,25 +220,15 @@ export class FacebookMediaService {
     }
 
     try {
-      // Plain fetch, deliberately not the OAuth client: the CDN URL is
-      // self-authorizing (signed) and our bearer token has no business there.
-      const response = await fetch(media.cdnUrl);
-
-      if (!response.ok) {
-        throw new Error(`CDN responded ${response.status} ${response.statusText}`);
-      }
-
-      const declared = Number(response.headers.get('content-length') ?? 0);
-
-      if (declared > MAX_FACEBOOK_MEDIA_BYTES) {
-        throw new Error(`file is ${declared} bytes, over the ${MAX_FACEBOOK_MEDIA_BYTES}-byte limit`);
-      }
-
-      const buffer = Buffer.from(await response.arrayBuffer());
-
-      if (buffer.length > MAX_FACEBOOK_MEDIA_BYTES) {
-        throw new Error(`file is ${buffer.length} bytes, over the ${MAX_FACEBOOK_MEDIA_BYTES}-byte limit`);
-      }
+      // Not the OAuth client: the CDN URL is self-authorizing (signed) and our
+      // bearer token has no business there. Not a plain `fetch` either: the URL
+      // comes out of a sync payload, so it goes through the same address rules
+      // as a link preview, plus a host allow-list (Facebook's CDN, https only,
+      // every redirect re-checked). See facebookCdnDownload.ts.
+      const buffer = await downloadFacebookCdnFile(media.cdnUrl, {
+        maxBytes: MAX_FACEBOOK_MEDIA_BYTES,
+        fetchImpl: this.cdnFetch,
+      });
 
       const { file } = await this.fileService.uploadWithDedupInfo(
         { userId },

@@ -1,6 +1,10 @@
 import { WebPlugin } from '@capacitor/core';
 
 import type {
+  BackgroundUploadState,
+  CompanionWidgetAction,
+  CompanionWidgetSnapshot,
+  DiscoverLanAppliancesResult,
   LocalHubPlugin,
   LocalHubSecureGetResult,
   LocalHubStartResult,
@@ -17,6 +21,16 @@ import type {
  * of a clear, intentional error.
  */
 export class LocalHubWeb extends WebPlugin implements LocalHubPlugin {
+  async publishWidgetSnapshot(_options: { snapshot: CompanionWidgetSnapshot }): Promise<void> {}
+
+  async readWidgetActions(): Promise<{ actions: CompanionWidgetAction[] }> {
+    return { actions: [] };
+  }
+
+  async acknowledgeWidgetActions(_options: { ids: string[] }): Promise<void> {}
+
+  async clearWidgetSnapshot(): Promise<void> {}
+
   async start(): Promise<LocalHubStartResult> {
     throw this.unavailable('LocalHub is only available in the native app.');
   }
@@ -70,5 +84,38 @@ export class LocalHubWeb extends WebPlugin implements LocalHubPlugin {
 
   async requestLocationAuthorization(): Promise<{ status: NativeLocationAuthorization }> {
     return { status: 'unsupported' };
+  }
+
+  async startSignificantLocationUpdates(): Promise<void> {
+    // Browsers have no significant-change service. The web watcher uses geolocation.
+  }
+
+  async stopSignificantLocationUpdates(): Promise<void> {
+    // Nothing started on web.
+  }
+
+  async getBackgroundUpload(): Promise<BackgroundUploadState> {
+    return { enabled: false, supported: false };
+  }
+
+  async setBackgroundUpload(): Promise<BackgroundUploadState> {
+    // No queue of native fixes to upload in a browser.
+    return { enabled: false, supported: false };
+  }
+
+  // A browser keeps no replica, so there is nothing to sync in the background.
+  async configureBackgroundSync(): Promise<void> {}
+
+  async claimReplica(): Promise<{ free: boolean }> {
+    return { free: true };
+  }
+
+  async releaseReplica(): Promise<void> {}
+
+  async clearBackgroundSync(): Promise<void> {}
+
+  async discoverLanAppliances(): Promise<DiscoverLanAppliancesResult> {
+    // Browsers cannot perform raw UDP mDNS discovery; callers fall back to manual URL entry.
+    return { appliances: [], supported: false };
   }
 }

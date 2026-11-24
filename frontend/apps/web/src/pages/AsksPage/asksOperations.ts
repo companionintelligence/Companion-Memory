@@ -38,6 +38,27 @@ export const ASK_INBOX = gql(`
   }
 `);
 
+/**
+ * Which inbox asks had characters that render as nothing removed before they
+ * were stored. Read through `useHiddenCharacterFlags`, never on its own.
+ *
+ * Its own document, for the reason `GetUserTimeFormat` is one: the phone apps
+ * ship this web build and talk to whichever Memory the person runs, which can be
+ * older than the field. Selected inside {@link ASK_INBOX}, an older server fails
+ * validation for the whole inbox, and the owner sees no asks at all. Here only
+ * the note goes missing.
+ */
+export const ASK_INBOX_HIDDEN_CHARACTERS = gql(`
+  query AskInboxHiddenCharacters {
+    askInbox {
+      id
+      query {
+        promptHiddenCharactersRemoved
+      }
+    }
+  }
+`);
+
 export const ASK_OUTBOX = gql(`
   query AskOutbox {
     askOutbox {
@@ -302,6 +323,20 @@ export const ASK_DISCLOSURE_HISTORY = gql(`
   }
 `);
 
+/** {@link ASK_INBOX_HIDDEN_CHARACTERS} for {@link ASK_DISCLOSURE_HISTORY}'s rows, same variables. */
+export const ASK_DISCLOSURE_HISTORY_HIDDEN_CHARACTERS = gql(`
+  query AskDisclosureHistoryHiddenCharacters($input: AskDisclosureHistoryInput) {
+    askDisclosureHistory(input: $input) {
+      rows {
+        id
+        query {
+          promptHiddenCharactersRemoved
+        }
+      }
+    }
+  }
+`);
+
 /**
  * The same record, folded BY RELATIONSHIP — the unit an owner actually arrives
  * with.
@@ -441,6 +476,8 @@ export const MY_PEER_LINKS = gql(`
       status
       revokedAt
       createdAt
+      linkedByKey
+      safetyCode
     }
   }
 `);
@@ -536,6 +573,150 @@ export const MY_HOUSEHOLD_TIERS = gql(`
       memberId
       trustTier
       updatedAt
+    }
+  }
+`);
+
+/**
+ * Cryptographic provenance for ONE disclosure row, loaded lazily inside the receipt modal:
+ * CESR `I`-prefixed SAID + ISO/IEC TS 27560 + DPV v2 consent receipt.
+ */
+export const ASK_AUDIT_RECEIPT = gql(`
+  query AskAuditReceipt($id: ID!) {
+    askAuditReceipt(id: $id) {
+      auditId
+      askId
+      auditSaid
+      receipt {
+        d
+        schemaVersion
+        recordId
+        piiPrincipalId
+        recipient
+        legalBasis
+        purposes
+        processing
+        consentBasis
+        outcome
+        disclosedCount
+        issuedAt
+      }
+    }
+  }
+`);
+
+/**
+ * Ask a person on another Companion. Sent with no Portal token: the server
+ * signs it with the sender's own key, which is what the other side checks.
+ */
+export const SEND_PEER_ASK = gql(`
+  mutation SendPeerAsk($input: SendPeerAskInput!) {
+    sendPeerAsk(input: $input) {
+      success
+      status
+      reason
+      ask {
+        id
+        status
+      }
+    }
+  }
+`);
+
+/** Fetch the answer to one of the owner's sent asks now, instead of waiting for the next automatic check. */
+export const COLLECT_PEER_ANSWER = gql(`
+  mutation CollectPeerAnswer($askId: ID!) {
+    collectPeerAnswer(askId: $askId) {
+      success
+      status
+      reason
+      ask {
+        id
+        status
+      }
+    }
+  }
+`);
+
+/** The owner's invites. The codes themselves are not here: each is shown once, when made. */
+export const MY_PEER_INVITES = gql(`
+  query MyPeerInvites {
+    myPeerInvites {
+      id
+      label
+      inviterName
+      status
+      createdAt
+      expiresAt
+      usedAt
+    }
+  }
+`);
+
+export const CREATE_PEER_INVITE = gql(`
+  mutation CreatePeerInvite($input: CreatePeerInviteInput) {
+    createPeerInvite(input: $input) {
+      success
+      code
+      invite {
+        id
+        label
+        inviterName
+        status
+        createdAt
+        expiresAt
+        usedAt
+      }
+    }
+  }
+`);
+
+export const REVOKE_PEER_INVITE = gql(`
+  mutation RevokePeerInvite($id: ID!) {
+    revokePeerInvite(id: $id) {
+      success
+      invite {
+        id
+        status
+      }
+    }
+  }
+`);
+
+export const ACCEPT_PEER_INVITE = gql(`
+  mutation AcceptPeerInvite($input: AcceptPeerInviteInput!) {
+    acceptPeerInvite(input: $input) {
+      success
+      peerLink {
+        id
+        peerHandle
+        displayName
+        trustTier
+        linkedByKey
+        safetyCode
+      }
+    }
+  }
+`);
+
+/** Retire the owner's peer key and make a new one; everyone linked by key is told. */
+export const ROTATE_PEER_KEY = gql(`
+  mutation RotatePeerKey {
+    rotatePeerKey {
+      success
+      notified
+      unreachable
+    }
+  }
+`);
+
+/** Tell everyone about the last key change again, for those who could not be reached. */
+export const RESEND_PEER_KEY_ROTATION = gql(`
+  mutation ResendPeerKeyRotation {
+    resendPeerKeyRotation {
+      success
+      notified
+      unreachable
     }
   }
 `);

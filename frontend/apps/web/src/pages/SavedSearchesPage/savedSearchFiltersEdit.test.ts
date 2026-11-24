@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   addListValue,
   applySortPreset,
+  describeBbox,
+  removeArea,
   removeListValue,
   sortPresetOf,
   toFiltersInput,
@@ -80,6 +82,75 @@ describe('savedSearchFiltersEdit', () => {
 
     it('keeps a rolling datePreset so editing a seed does not drop When', () => {
       expect(toFiltersInput({ datePreset: 'last-week' })).toEqual({ datePreset: 'last-week' });
+    });
+
+    it('carries the map areas, view and file kinds through an edit instead of stripping them', () => {
+      expect(
+        toFiltersInput({ areas: [[165.5, -47.5, 179.5, -33.5]], view: 'map', fileKinds: ['image'] }),
+      ).toEqual({
+        areas: [[165.5, -47.5, 179.5, -33.5]],
+        view: 'map',
+        fileKinds: ['image'],
+      });
+    });
+
+    it('does not make a search drawn with a map area located-only, since the area is ORed with the place names', () => {
+      expect(toFiltersInput({ areas: [[165.5, -47.5, 179.5, -33.5]] })?.hasLocation).toBeUndefined();
+      expect(toFiltersInput({ areas: [[165.5, -47.5, 179.5, -33.5]], hasLocation: true })?.hasLocation).toBe(
+        true,
+      );
+      expect(toFiltersInput({ places: ['Paris'] })?.hasLocation).toBeUndefined();
+    });
+
+    it('rewrites a legacy single bbox as a one-entry areas list and never writes bbox back', () => {
+      expect(toFiltersInput({ bbox: [165.5, -47.5, 179.5, -33.5] })).toEqual({
+        areas: [[165.5, -47.5, 179.5, -33.5]],
+      });
+    });
+
+    it('drops a map area that is not four finite numbers', () => {
+      expect(toFiltersInput({ areas: [[1, 2, 3]] })).toBeNull();
+      expect(toFiltersInput({ areas: null, bbox: null, places: ['Paris'] })).toEqual({ places: ['Paris'] });
+    });
+
+    it('removes one area by position', () => {
+      const london: [number, number, number, number] = [-0.5, 51.3, 0.3, 51.7];
+      const paris: [number, number, number, number] = [2.2, 48.8, 2.5, 48.9];
+
+      expect(removeArea({ areas: [london, paris] }, 0)).toEqual({ areas: [paris], bbox: undefined });
+      expect(removeArea({ bbox: london }, 0)).toEqual({ areas: [], bbox: undefined });
+    });
+  });
+
+  describe('describeBbox', () => {
+    it('reads as latitudes then longitudes with hemisphere letters', () => {
+      expect(describeBbox([165.5, -47.5, 179.5, -33.5])).toBe('47.5°S–33.5°S, 165.5°E–179.5°E');
+      expect(describeBbox([-161, 18.5, -154.5, 22.5])).toBe('18.5°N–22.5°N, 161.0°W–154.5°W');
+    });
+
+    it('keeps enough decimals that a small area’s two ends stay apart', () => {
+      // A few blocks around the Ferry Building, as "Search events in this area" writes it.
+      expect(describeBbox([-122.398869, 37.793681, -122.391461, 37.796492])).toBe(
+        '37.7937°N–37.7965°N, 122.3989°W–122.3915°W',
+      );
+      // A city-sized area gets two.
+      expect(describeBbox([-122.52, 37.7, -122.35, 37.83])).toBe('37.70°N–37.83°N, 122.52°W–122.35°W');
+      // A single point has no span to size against, so it shows what the URL keeps.
+      expect(describeBbox([2.3522, 48.8566, 2.3522, 48.8566])).toBe(
+        '48.856600°N–48.856600°N, 2.352200°E–2.352200°E',
+      );
+      // The same 0.1° span gets the same decimals wherever it sits, despite 1.2 - 1.1 < 0.1.
+      expect(describeBbox([0, 1.1, 1, 1.2])).toBe('1.10°N–1.20°N, 0.0°E–1.0°E');
+    });
+
+    it('wraps a world-copy longitude back into range', () => {
+      expect(describeBbox([170, -20, 190, -10])).toBe('20.0°S–10.0°S, 170.0°E–170.0°W');
+      expect(describeBbox([362.25, 48.8, 362.45, 48.9])).toBe('48.80°N–48.90°N, 2.25°E–2.45°E');
+      expect(describeBbox([-200, -60, 560, 60])).toBe('60.0°S–60.0°N, 180.0°W–180.0°E');
+    });
+
+    it('names no hemisphere for a coordinate that rounds to zero', () => {
+      expect(describeBbox([-0.00003, -0.00003, 0.002, 0.002])).toBe('0.0000°N–0.0020°N, 0.0000°E–0.0020°E');
     });
   });
 });

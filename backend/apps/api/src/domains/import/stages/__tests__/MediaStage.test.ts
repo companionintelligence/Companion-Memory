@@ -23,6 +23,7 @@ const USER_ID = '33333333-3333-4333-8333-333333333333';
 interface AttachmentStub {
   id: string;
   dataSource: string;
+  classification?: string;
   contentHash: string;
   metadata: Record<string, unknown>;
 }
@@ -42,6 +43,8 @@ function makeStage(
     upload?: jest.Mock;
     attachments?: AttachmentStub[];
     createContents?: jest.Mock;
+    /** `ContentService.rekeySourceSystem`; by default nothing is waiting under an old key. */
+    rekey?: jest.Mock;
     /** Answer the reclaim's "does another unsettled row need this file?" probe with yes. */
     sharedPathStillPending?: boolean;
     /** Paths the attachment pass still has to be able to read, so the reclaim defers. */
@@ -164,6 +167,7 @@ function makeStage(
       jest.fn(async (_ctx: unknown, inputs: unknown[]) =>
         inputs.map((_input, i) => ({ entity: { id: `content-${i + 1}` } })),
       ),
+    rekeySourceSystem: options.rekey ?? jest.fn(async () => [] as string[]),
   };
 
   const logger = {
@@ -180,6 +184,7 @@ function makeStage(
     settled,
     files,
     contents,
+    logger,
   };
 }
 
@@ -565,6 +570,218 @@ describe('MediaStage', () => {
         source_system: 'twitter',
         source_id: `attachment:twitter:dm:9:${sha256}`,
       });
+    });
+
+    it('catalogues a Messenger attachment under facebook_messenger, the system its message lands under', async () => {
+      // toFacebookMessengerCommunicationInput keys the message on
+      // facebook_messenger, not on the `facebook` data source. Keyed on the
+      // data source, 2,471 chat attachments answered the explorer's Facebook
+      // source filter while their own messages did not.
+      const sha256 = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+      const messenger: AttachmentStub = {
+        ...messageWith(scratchDir, [{ name: 'a.jpg' }], { AttachmentContent: true }),
+        dataSource: 'facebook',
+        classification: 'message',
+        contentHash: 'facebook:msg:v2:182be1e9',
+      };
+      const { stage, contents } = makeStage([], {
+        attachments: [messenger],
+        upload: jest.fn(async () => ({ file: { id: 'file-1', hash: sha256 }, deduped: false })),
+      });
+
+      await stage.run(contextFor(scratchDir));
+
+      const [, inputs] = contents.createManyDetailed.mock.calls[0];
+      expect(inputs[0]).toMatchObject({
+        source_system: 'facebook_messenger',
+        source_id: `attachment:facebook:msg:v2:182be1e9:${sha256}`,
+      });
+    });
+
+    describe('a Messenger attachment catalogued before #2912', () => {
+      // #2912 moved Messenger attachments from `facebook` to `facebook_messenger`
+      // and kept their source_id. A row still under `facebook` (restored from a
+      // portability archive exported before migration 20261002005332, say)
+      // would otherwise get a twin: content_source_identity_uniq is
+      // (user_id, source_system, source_id), so the insert does not see it.
+      const SHA_A = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+      const SHA_B = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+
+      /** The store's answer: a file per name, hashed unless `hashed` is false. */
+      function storing(hashed = true): jest.Mock {
+        return jest.fn(async (_ctx: unknown, upload: { filename: string }) => ({
+          file: {
+            id: `file-${upload.filename}`,
+            ...(hashed ? { hash: upload.filename === 'a.jpg' ? SHA_A : SHA_B } : {}),
+          },
+          deduped: false,
+        }));
+      }
+
+      function messengerRow(extra: Record<string, unknown> = { AttachmentContent: true }): AttachmentStub {
+        return {
+          ...messageWith(scratchDir, [{ name: 'a.jpg' }, { name: 'b.jpg' }], extra),
+          dataSource: 'facebook',
+          classification: 'message',
+          contentHash: 'facebook:msg:v2:182be1e9',
+        };
+      }
+
+      it('moves the rows under the old key before inserting, so the insert finds them', async () => {
+        const order: string[] = [];
+        const rekey = jest.fn(async () => {
+          order.push('rekey');
+
+          return ['legacy-content-1'];
+        });
+        const createContents = jest.fn(async (_ctx: unknown, inputs: unknown[]) => {
+          order.push('insert');
+
+          return inputs.map((_input, i) => ({ entity: { id: `content-${i + 1}` } }));
+        });
+        const { stage } = makeStage([], {
+          attachments: [messengerRow()],
+          upload: storing(),
+          rekey,
+          createContents,
+        });
+
+        await stage.run(contextFor(scratchDir));
+
+        // Exactly the ids the insert then writes, under the system it writes them.
+        const [, inputs] = createContents.mock.calls[0] as [
+          unknown,
+          Array<{ source_system: string; source_id: string }>,
+        ];
+        expect(inputs.map((input) => input.source_system)).toEqual([
+          'facebook_messenger',
+          'facebook_messenger',
+        ]);
+        expect(rekey).toHaveBeenCalledTimes(1);
+        expect(rekey).toHaveBeenCalledWith(
+          { userId: USER_ID },
+          {
+            from: 'facebook',
+            to: 'facebook_messenger',
+            sourceIds: inputs.map((input) => input.source_id),
+          },
+        );
+        expect(inputs.map((input) => input.source_id)).toEqual([
+          `attachment:facebook:msg:v2:182be1e9:${SHA_A}`,
+          `attachment:facebook:msg:v2:182be1e9:${SHA_B}`,
+        ]);
+        expect(order).toEqual(['rekey', 'insert']);
+      });
+
+      it('moves the index-keyed rows a store with no hash wrote', async () => {
+        const rekey = jest.fn(async () => [] as string[]);
+        const { stage, contents } = makeStage([], {
+          attachments: [messengerRow()],
+          upload: storing(false),
+          rekey,
+        });
+
+        await stage.run(contextFor(scratchDir));
+
+        expect(rekey).toHaveBeenCalledWith(
+          { userId: USER_ID },
+          {
+            from: 'facebook',
+            to: 'facebook_messenger',
+            sourceIds: ['facebook:msg:v2:182be1e9:attachment:0', 'facebook:msg:v2:182be1e9:attachment:1'],
+          },
+        );
+
+        const [, inputs] = contents.createManyDetailed.mock.calls[0];
+        expect(inputs.map((input: { source_id: string }) => input.source_id)).toEqual([
+          'facebook:msg:v2:182be1e9:attachment:0',
+          'facebook:msg:v2:182be1e9:attachment:1',
+        ]);
+      });
+
+      it('still inserts, and declines nothing, when the move fails', async () => {
+        const rekey = jest.fn(async () => {
+          throw new Error('deadlock detected');
+        });
+        const { stage, contents, settled, logger } = makeStage([], {
+          attachments: [messengerRow()],
+          upload: storing(),
+          rekey,
+        });
+
+        const outcome = await stage.run(contextFor(scratchDir));
+
+        expect(contents.createManyDetailed).toHaveBeenCalledTimes(1);
+        expect(settled.get('msg-1')).toMatchObject({ AttachmentContentIds: ['content-1', 'content-2'] });
+        expect(settled.get('msg-1')).not.toHaveProperty('AttachmentDrops');
+        expect(outcome.partial).toBe(false);
+        expect(logger.warn).toHaveBeenCalledWith(
+          expect.stringContaining('inserting as before'),
+          expect.objectContaining({ from: 'facebook', to: 'facebook_messenger', error: 'deadlock detected' }),
+        );
+      });
+
+      it('asks nothing of a source whose key #2912 did not change', async () => {
+        // A Facebook post, a twitter DM and a mail message all key their
+        // attachments exactly as they did before.
+        const post: AttachmentStub = { ...messengerRow(), id: 'post-1', classification: 'post' };
+        const dm: AttachmentStub = {
+          ...messageWith(scratchDir, [{ name: 'dm.jpg' }], { AttachmentContent: true }),
+          id: 'dm-1',
+        };
+        const mail: AttachmentStub = {
+          ...messageWith(scratchDir, [{ name: 'invoice.pdf', type: 'file' }], {
+            AttachmentContent: true,
+            MessageID: 'CAF+QMz-AbC@mail.gmail.com',
+          }),
+          id: 'mail-1',
+          dataSource: 'gmail',
+        };
+        const rekey = jest.fn(async () => [] as string[]);
+        const { stage, contents } = makeStage([], {
+          attachments: [post, dm, mail],
+          upload: storing(),
+          rekey,
+        });
+
+        await stage.run(contextFor(scratchDir));
+
+        expect(contents.createManyDetailed).toHaveBeenCalledTimes(3);
+        expect(rekey).not.toHaveBeenCalled();
+      });
+
+      it('asks nothing for a Messenger message that writes no content rows', async () => {
+        const rekey = jest.fn(async () => [] as string[]);
+        const { stage, contents } = makeStage([], {
+          attachments: [messengerRow({})],
+          upload: storing(),
+          rekey,
+        });
+
+        await stage.run(contextFor(scratchDir));
+
+        expect(contents.createManyDetailed).not.toHaveBeenCalled();
+        expect(rekey).not.toHaveBeenCalled();
+      });
+    });
+
+    it('leaves a Facebook row that is not a message on the facebook system', async () => {
+      const sha256 = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+      const post: AttachmentStub = {
+        ...messageWith(scratchDir, [{ name: 'a.jpg' }], { AttachmentContent: true }),
+        dataSource: 'facebook',
+        classification: 'post',
+        contentHash: 'facebook:post:1',
+      };
+      const { stage, contents } = makeStage([], {
+        attachments: [post],
+        upload: jest.fn(async () => ({ file: { id: 'file-1', hash: sha256 }, deduped: false })),
+      });
+
+      await stage.run(contextFor(scratchDir));
+
+      const [, inputs] = contents.createManyDetailed.mock.calls[0];
+      expect(inputs[0]).toMatchObject({ source_system: 'facebook' });
     });
 
     it('hangs a mail attachment off the federated (email, <Message-ID>) identity the message itself lands under', async () => {

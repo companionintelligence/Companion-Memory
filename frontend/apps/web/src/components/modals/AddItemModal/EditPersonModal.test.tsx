@@ -7,6 +7,7 @@
  */
 import type { MockedResponse } from '@apollo/client/testing';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { GraphQLError } from 'graphql';
 import { describe, expect, it, vi } from 'vitest';
 
 import { gql } from '@/graphql';
@@ -78,8 +79,10 @@ function updateSuccessMock(
   person: ReturnType<typeof personRecord>,
 ): MockedResponse {
   return {
-    request: { query: UPDATE_PERSON },
-    variableMatcher: (variables: { input: unknown }) => matchInput(variables.input),
+    request: {
+      query: UPDATE_PERSON,
+      variables: (variables: { input: unknown }) => matchInput(variables.input),
+    },
     result: { data: { updatePerson: { success: true, person } } },
   } as unknown as MockedResponse;
 }
@@ -157,8 +160,7 @@ describe('EditPersonModal — saving', () => {
   it('shows a real error and stays open when the resolver reports a rejected write', async () => {
     const { onSaved, onClose } = await renderModal(personRecord(), [
       {
-        request: { query: UPDATE_PERSON },
-        variableMatcher: () => true,
+        request: { query: UPDATE_PERSON, variables: () => true },
         result: { data: { updatePerson: { success: false, person: null } } },
       } as unknown as MockedResponse,
     ]);
@@ -173,8 +175,7 @@ describe('EditPersonModal — saving', () => {
   it('shows a real error when the request itself fails', async () => {
     const { onSaved, onClose } = await renderModal(personRecord(), [
       {
-        request: { query: UPDATE_PERSON },
-        variableMatcher: () => true,
+        request: { query: UPDATE_PERSON, variables: () => true },
         error: new Error('network down'),
       } as unknown as MockedResponse,
     ]);
@@ -193,5 +194,82 @@ describe('EditPersonModal — saving', () => {
 
     expect(onClose).toHaveBeenCalledWith(false);
     expect(onSaved).not.toHaveBeenCalled();
+  });
+});
+
+describe('EditPersonModal — a number the server will not store', () => {
+  const EXTENSION = '212-555-0148 x31';
+  const MESSAGE =
+    `"${EXTENSION}" includes an extension, so it can't be used to match this person to calls and ` +
+    'messages. Keep it in a note instead.';
+
+  type Input = { contacts?: Array<{ value: string }>; description?: string };
+
+  /** What `updatePerson` answers with: a BAD_USER_INPUT naming the value, as `formatError` passes it on. */
+  function refusedMock(): MockedResponse {
+    return {
+      request: {
+        query: UPDATE_PERSON,
+        variables: (variables: { input: Input }) =>
+          (variables.input.contacts ?? []).some((contact) => contact.value === EXTENSION),
+      },
+      result: {
+        errors: [
+          new GraphQLError(MESSAGE, {
+            extensions: {
+              code: 'BAD_USER_INPUT',
+              details: {
+                refusedContacts: [{ kind: 'phone', value: EXTENSION, label: 'work', reason: 'extension' }],
+              },
+            },
+          }),
+        ],
+      },
+    } as unknown as MockedResponse;
+  }
+
+  async function addExtensionNumber() {
+    fireEvent.click(screen.getByRole('button', { name: /Add phone/ }));
+    fireEvent.change(screen.getByLabelText('Phone number'), { target: { value: EXTENSION } });
+    fireEvent.change(screen.getAllByLabelText('Label').at(-1)!, { target: { value: 'work' } });
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await screen.findByRole('alert');
+  }
+
+  it('stays open, says why, and points at the row', async () => {
+    const { onSaved, onClose } = await renderModal(personRecord(), [refusedMock()]);
+
+    await addExtensionNumber();
+
+    expect(screen.getByRole('alert')).toHaveTextContent('includes an extension');
+    expect(screen.getByLabelText('Phone number')).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByRole('button', { name: /Keep it in a note/ })).toBeInTheDocument();
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('saves once the number is kept in a note instead', async () => {
+    const saved = personRecord({ description: 'Work phone: 212-555-0148 x31' });
+    const { onSaved } = await renderModal(personRecord(), [
+      refusedMock(),
+      updateSuccessMock((input) => {
+        const { contacts = [], description } = input as Input;
+
+        return contacts.length === 0 && description === 'Work phone: 212-555-0148 x31';
+      }, saved),
+    ]);
+
+    await addExtensionNumber();
+    fireEvent.click(screen.getByRole('button', { name: /Keep it in a note/ }));
+
+    // The row is gone into the notes, and the error that named it goes with it.
+    expect(screen.queryByLabelText('Phone number')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Description')).toHaveValue('Work phone: 212-555-0148 x31');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
   });
 });

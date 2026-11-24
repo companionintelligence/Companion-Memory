@@ -31,7 +31,9 @@ import {
   CalendarEventService,
   CommunicationService,
   ContentService,
+  type CreateCommunicationDto,
   type CreateContentDto,
+  type CreateEventDto,
   ItemService,
   ObjectObservationService,
   ProductModelService,
@@ -47,6 +49,7 @@ import {
   edgeProjectionSourcesFor,
   isRepresentedElsewhere,
   toCanonical,
+  withOrigin,
   type CanonicalRecord,
   type Destination,
 } from '../push/canonical';
@@ -76,15 +79,21 @@ import {
   productModelIdentifiers,
   type ReceiptEntityLinks,
 } from '../push/inputs';
+import { claimedCoordinates, legacyKeyClaims, planLegacyKeyMoves } from '../push/legacyKeys';
 import {
   type IsSelf,
+  isOwnerContact,
   makeIsSelf,
-  matchOwner,
   NOBODY_IS_SELF,
   readSelfIdentity,
-  shouldMapContactToSelf,
+  readSentLabelSenders,
   type SelfIdentity,
 } from '../push/self';
+import {
+  repairTruncatedPhoneKeys,
+  truncatedPhoneKeyFor,
+  type TruncatedPhoneRepair,
+} from '../push/truncatedPhoneKeys';
 import {
   DATABASE_FREE_FLOOR_BYTES,
   DatabaseVolumeFullError,
@@ -105,6 +114,12 @@ type TrustMode = 'cautious' | 'balanced' | 'hands_off';
 const PUSH_BATCH = 500;
 
 /** The `staged_items` columns a {@link StagedItem} is built from, camel-cased. */
+/** What a batch row carries about its run's origin — see `withOrigin`. */
+interface RunOrigin {
+  originPlatform?: string | null;
+  originConnectionId?: string | null;
+}
+
 const STAGED_ITEM_COLUMNS = `id, run_id AS "runId", user_id AS "userId", data_source AS "dataSource",
               classification, content_hash AS "contentHash", occurred_at AS "occurredAt",
               timespan_end AS "timespanEnd", latitude, longitude, filename,
@@ -279,6 +294,82 @@ export const DESTINATION_ORDER: readonly Destination[] = [
  */
 const PRODUCT_IDENTIFIER_SOURCE = 'import';
 
+/**
+ * A mail's direction once its sender is known.
+ *
+ * The email parsers read a message with no receiving-MTA headers as outbound
+ * (`DirectionBasis: 'no_delivery_trace'`, email_direction.ts): on a real export
+ * that is the owner's sent copy. It is only an absence, though, and the parser
+ * cannot know who the owner is. Here the push does: when the sender resolved to
+ * somebody other than the owner, the From carries an address (so it is that
+ * person's, not the owner's: an owner address maps to the self Person), and the
+ * owner is among the To/Cc, it is mail somebody sent the owner, so inbound.
+ *
+ * A Gmail Sent label (`sent_label`) and delivery headers (`delivery_trace`) are
+ * the parser's own evidence and are never overruled. Mail the owner sent from
+ * an address Memory does not know to a third party stays outbound: the owner is
+ * not a recipient.
+ */
+export function directionAfterSender<D extends string | undefined>(
+  direction: D,
+  record: CanonicalRecord,
+  participants: Map<string, string[]>,
+  from: string | undefined,
+  selfEntityId: string | null,
+): D | 'inbound' {
+  const metadata = (record.metadata ?? {}) as Record<string, unknown>;
+
+  if (direction !== 'outbound' || metadata.DirectionBasis !== 'no_delivery_trace' || selfEntityId == null) {
+    return direction;
+  }
+
+  const sender = typeof metadata.From === 'string' ? metadata.From : '';
+  const senderIsSomeoneElse = from != null && from !== selfEntityId && /[^\s<>"]+@[^\s<>"]+/.test(sender);
+  const ownerIsRecipient = [...(participants.get('to') ?? []), ...(participants.get('cc') ?? [])].includes(
+    selfEntityId,
+  );
+
+  return senderIsSomeoneElse && ownerIsRecipient ? 'inbound' : direction;
+}
+
+/**
+ * The links between two staged items that the push writes as graph edges, and
+ * the edge each becomes between the two items' content rows. `reverse` when
+ * the staged link points from the original to what was made from it, which the
+ * graph reads the other way round.
+ */
+const ITEM_LINKS: Record<string, { type: 'PART_OF' | 'DERIVED_FROM'; reverse: boolean }> = {
+  // A photo `in_collection` its album (Google Photos, Flickr): the photo is PART_OF the album.
+  in_collection: { type: 'PART_OF', reverse: false },
+  // An original's `edit` (Google Photos `-edited` copy): the copy is DERIVED_FROM the original.
+  edit: { type: 'DERIVED_FROM', reverse: true },
+  // A motion photo's `motion_photo` clip (Live Photo video): the clip is DERIVED_FROM the still.
+  motion_photo: { type: 'DERIVED_FROM', reverse: true },
+};
+
+/**
+ * The participants-map key for the people a record DEPICTS: an `includes` edge
+ * to a `person` entity, which is how the photo importers stage a face tagged in
+ * a picture (Google Photos `people`, Flickr `people`). Kept apart from plain
+ * `includes` because other parsers use that relation for things that are not
+ * people (an Uber Eats order `includes` its dishes). Those must not become an
+ * event's participants. Not a relation any parser stages.
+ */
+const DEPICTED_PEOPLE = 'includes:person';
+
+/**
+ * The event with the people its record depicts as participants. Before this the
+ * events lane never read the participants it was handed, so a photo's tagged
+ * people were staged, resolved to Persons and then left off the photo: the
+ * graph projection turns `participant_entity_ids` into Person -PARTICIPATED_IN->
+ * Event. That column was always empty for photos.
+ */
+function withDepictedPeople(input: CreateEventDto, participants: Map<string, string[]>): CreateEventDto {
+  const people = participants.get(DEPICTED_PEOPLE);
+
+  return people?.length ? { ...input, participant_entity_ids: [...new Set(people)] } : input;
+}
+
 /** One staged row's journey through a batch: what it is, where it goes, what happened. */
 interface RowPlan {
   row: StagedItem;
@@ -440,6 +531,19 @@ type DestinationCounts = Partial<Record<Destination, number>>;
  * crashes per poison row, failed to isolate it at all when recovery took more
  * than a minute, and quarantined good rows when every write crashed the server.
  */
+/** One staged entity's terminal state for this push, written by `markEntities`. */
+interface EntityOutcome {
+  stagedEntityId: string;
+  status: 'pushed' | 'failed' | 'skipped';
+  error: string | null;
+}
+
+/** Which graph entity a staged entity resolved to, written by `recordEntityMappings`. */
+interface EntityMapping {
+  stagedEntityId: string;
+  serverEntityId: string;
+}
+
 @Injectable()
 export class PushStage implements ImportStageRunner {
   readonly kind = 'push' as const;
@@ -547,10 +651,18 @@ export class PushStage implements ImportStageRunner {
     // (see push/self), and a run is hundreds of thousands of records — this
     // cannot be a per-record, or even a per-batch, lookup. Also drives owner
     // contact → self Person redirect during entity push.
-    const isSelf = await this.resolveIsSelf(context);
+    //
+    // The owner's self Person comes FIRST, and is made here when the account has
+    // none: onboarding is what creates it, and an import can run before then.
+    // Without it `selfEntityId` is null for the whole run, so mail the owner
+    // sent from their account address is filed under a Person of its own and a
+    // header-less mail to the owner keeps the parser's `outbound` (see
+    // {@link directionAfterSender}). It also has to precede `resolveIsSelf`,
+    // which reads the names and addresses the Person holds.
     const selfEntityId = await this.retrying(context, 'reading the owner', () =>
-      this.resolveSelfEntityId(context.userId),
+      this.resolveSelfEntityId(context),
     );
+    const isSelf = await this.resolveIsSelf(context);
     const trustMode = await this.retrying(context, 'reading the owner’s trust mode', () =>
       this.resolveTrustMode(context.userId),
     );
@@ -660,6 +772,10 @@ export class PushStage implements ImportStageRunner {
       );
     }
 
+    // Every row is in ci.*, so the links the parser staged between two of them
+    // can be written: a photo and its album, an edited copy and its original.
+    const itemLinks = await this.linkStagedItems(context);
+
     // Everything is in ci.* now; make it searchable. Bulk-pushed rows emit no
     // per-row *CreatedEvent, so without this kick they wait for the pipeline's
     // hourly index sweeps.
@@ -750,6 +866,9 @@ export class PushStage implements ImportStageRunner {
         // Same, for link previews. Absent when no content rows were written.
         ...(unfurl ? { unfurl } : {}),
         ...(personStubs ? { personStubs } : {}),
+        // Graph edges written between staged items (albums, edits, motion
+        // photos). Absent when the run staged no such links.
+        ...(itemLinks > 0 ? { itemLinks } : {}),
         // Additive. `pushed`, `deduped`, `failed`, `destinations` and
         // `entities` above are read by RunPipeline and ImportRunService and
         // keep their exact meaning; this is the per-data-source, reconciled
@@ -1224,16 +1343,32 @@ export class PushStage implements ImportStageRunner {
     trustMode: TrustMode,
     selfEntityId: string | null,
   ): Promise<{ resolved: number; skipped: number; unresolved: number; failed: number }> {
-    // Every ledger write below is by row id and idempotent, so each is safe to
-    // repeat across a database restart. See `retrying`.
-    const mark = (stagedEntityId: string, status: 'pushed' | 'failed' | 'skipped', error: string | null) =>
-      this.retrying(context, 'recording an entity outcome', () =>
-        this.markEntity(stagedEntityId, status, error),
+    // Outcomes and mappings are collected as the pass goes and written as two
+    // set-based statements (`flush`), where there used to be two single-row
+    // statements per entity — an archive stages five figures of them. Both
+    // writes are by row id and idempotent, so a flush is safe to repeat across
+    // a database restart (see `retrying`), and one that never happens leaves
+    // every row pending for the next attempt, which re-resolves them.
+    const outcomes: EntityOutcome[] = [];
+    const mappings: EntityMapping[] = [];
+    const mark = (stagedEntityId: string, status: EntityOutcome['status'], error: string | null): void => {
+      outcomes.push({ stagedEntityId, status, error });
+    };
+
+    const map = (stagedEntityId: string, serverEntityId: string): void => {
+      mappings.push({ stagedEntityId, serverEntityId });
+    };
+
+    const flush = async (): Promise<void> => {
+      // Taken out before the retry loop, so a repeated attempt writes the same rows.
+      const pendingMappings = mappings.splice(0);
+      const pendingOutcomes = outcomes.splice(0);
+
+      await this.retrying(context, 'recording entity mappings', () =>
+        this.recordEntityMappings(context.userId, pendingMappings),
       );
-    const map = (stagedEntityId: string, serverEntityId: string) =>
-      this.retrying(context, 'recording an entity mapping', () =>
-        this.recordEntityMapping(stagedEntityId, context.userId, serverEntityId),
-      );
+      await this.retrying(context, 'recording entity outcomes', () => this.markEntities(pendingOutcomes));
+    };
 
     await this.retrying(context, 'recording progress', () =>
       context.progress({ processed: 0, total: null, phase: 'resolving people' }),
@@ -1242,7 +1377,8 @@ export class PushStage implements ImportStageRunner {
     const staged = await this.retrying(context, 'reading the staged entities', () =>
       this.dataSource.query<StagedEntity[]>(
         `SELECT id, run_id AS "runId", user_id AS "userId", type, name, metadata,
-                identity_key AS "identityKey", data_source AS "dataSource"
+                identity_key AS "identityKey", data_source AS "dataSource",
+                legacy_identity_key AS "legacyIdentityKey", accumulate
            FROM ci_import.staged_entities
           WHERE run_id = $1::uuid AND push_status = 'pending'
           ORDER BY id`,
@@ -1262,6 +1398,18 @@ export class PushStage implements ImportStageRunner {
         return { names: [], email: null, phones: [] };
       }),
     );
+    // The addresses the owner's own Sent mail in this run went out from. Fail-safe
+    // to none, as the identity above is: they only add owner addresses.
+    const sentFrom = await this.retrying(context, 'reading the owner’s sent addresses', () =>
+      readSentLabelSenders(this.dataSource, context.runId).catch((err: unknown): string[] => {
+        if (isTransientDatabaseError(err)) {
+          throw err;
+        }
+
+        return [];
+      }),
+    );
+    identity.emails = [...new Set([...(identity.emails ?? []), ...sentFrom])];
 
     // Several staged rows can share a natural key — the same artist reached by
     // two parsers in one archive — so the key maps to a LIST. Ingest is given
@@ -1281,7 +1429,7 @@ export class PushStage implements ImportStageRunner {
       // and a resumed push does not reconsider it.
       if (isGraphExcluded(row)) {
         skipped += 1;
-        await mark(row.id, 'skipped', null);
+        mark(row.id, 'skipped', null);
         continue;
       }
 
@@ -1294,7 +1442,7 @@ export class PushStage implements ImportStageRunner {
         // graph, and `unresolved` is what rolls the run up to `partial` for it.
         skipped += 1;
         unresolved += 1;
-        await mark(row.id, 'skipped', UNRESOLVED_ENTITY_REASON);
+        mark(row.id, 'skipped', UNRESOLVED_ENTITY_REASON);
         continue;
       }
 
@@ -1305,8 +1453,8 @@ export class PushStage implements ImportStageRunner {
         input.entityType === 'Person' &&
         this.isOwnerContactInput(identity, input, trustMode)
       ) {
-        await map(row.id, selfEntityId);
-        await mark(row.id, 'pushed', null);
+        map(row.id, selfEntityId);
+        mark(row.id, 'pushed', null);
         resolved += 1;
         continue;
       }
@@ -1330,9 +1478,13 @@ export class PushStage implements ImportStageRunner {
         unresolved,
         failed: 0,
       });
+      await flush();
 
       return { resolved, skipped, unresolved, failed: 0 };
     }
+
+    await this.moveLegacyKeys(context, inputs, byKey);
+    await this.repairTruncatedPhoneKeys(context, inputs, byKey);
 
     // Keys ingest refused for a reason that was about the ENTITY. The rest of
     // what ingest does not echo back — the database being away — is never
@@ -1353,8 +1505,8 @@ export class PushStage implements ImportStageRunner {
 
       for (const mapping of result.entities) {
         for (const row of byKey.get(mapping.key) ?? []) {
-          await map(row.id, mapping.entityId);
-          await mark(row.id, 'pushed', null);
+          map(row.id, mapping.entityId);
+          mark(row.id, 'pushed', null);
           resolved += 1;
         }
 
@@ -1427,7 +1579,7 @@ export class PushStage implements ImportStageRunner {
 
     for (const [key, reason] of refused) {
       for (const row of byKey.get(key) ?? []) {
-        await mark(row.id, 'failed', reason);
+        mark(row.id, 'failed', reason);
         failed += 1;
 
         // Logged, not just recorded: an entity that will not resolve costs every
@@ -1442,6 +1594,8 @@ export class PushStage implements ImportStageRunner {
       }
     }
 
+    await flush();
+
     this.logger.log('Resolved staged entities', {
       runId: context.runId,
       resolved,
@@ -1453,36 +1607,176 @@ export class PushStage implements ImportStageRunner {
     return { resolved, skipped, unresolved, failed };
   }
 
-  private async recordEntityMapping(
-    stagedEntityId: string,
-    userId: string,
-    serverEntityId: string,
+  /**
+   * Move the `ci.entities` rows minted under contacts' OLD keys onto their new
+   * ones, before ingest looks them up.
+   *
+   * The re-key half of `entityIdentityKey` passing over shared handles: a
+   * contact whose smallest handle was an office line or a fax now resolves
+   * under another key, and ingest finds rows by key alone, so without this
+   * every such contact would be minted a second time beside its old row on the
+   * next import of the same export. Moving the row keeps its id, and the
+   * ingest right after rewrites it with what the card now says — which is also
+   * what takes the other colleagues' names off a Person that had collapsed
+   * several of them. See `push/legacyKeys.ts` for who inherits a row.
+   *
+   * Idempotent: a row moves only while it still sits on the old key and the
+   * new one is free, so a retried push, or the next import, finds nothing left
+   * to do.
+   */
+  private async moveLegacyKeys(
+    context: StageRunContext,
+    inputs: GraphEntityInputDto[],
+    byKey: Map<string, StagedEntity[]>,
   ): Promise<void> {
+    const claims = legacyKeyClaims(inputs.map((input) => ({ input, rows: byKey.get(input.key) ?? [] })));
+
+    if (claims.length === 0) {
+      return;
+    }
+
+    const scope = { userId: context.userId };
+    const found = await this.retrying(context, 'reading entities under their old keys', () =>
+      this.graph.findImportedEntities(scope, claimedCoordinates(claims)),
+    );
+    const plan = planLegacyKeyMoves(claims, found);
+    const moved =
+      plan.moves.length > 0
+        ? await this.retrying(context, 'moving entities onto their new keys', () =>
+            this.graph.rekeyImportedEntities(scope, plan.moves),
+          )
+        : [];
+
+    this.logger.log('Moved entities onto their new keys', {
+      runId: context.runId,
+      claimed: claims.length,
+      moved: moved.length,
+      kept: plan.kept,
+      // Rows merged into a collapsed Person that were a colleague, not its
+      // heir: the reset dropped their values, and the merges still stand.
+      mergesOfSomeoneElse: moved.reduce((count, move) => count + (move.dropMergedFrom?.length ?? 0), 0),
+    });
+  }
+
+  /**
+   * Undo what a contact's TRUNCATED phone key had reached, now that its row
+   * sits under the card's own key — see `push/truncatedPhoneKeys.ts`.
+   *
+   * `moveLegacyKeys` just above put the row there. This is the half a key moved
+   * by the phone-extension fix needs and one moved by shared handles does not:
+   * a shared line is somebody's real number, while `(212) 555-0147;229` keyed as
+   * `5550147229` belongs to nobody on the card — and its identifier, self claim
+   * and every call matched to it came along with the row.
+   *
+   * Best effort. A failure that is about the rows rather than the database is
+   * logged and the push goes on, the row keeping what it had, as before this
+   * existed. A database that is away fails here the way it would fail the
+   * ingest a line later.
+   */
+  private async repairTruncatedPhoneKeys(
+    context: StageRunContext,
+    inputs: GraphEntityInputDto[],
+    byKey: Map<string, StagedEntity[]>,
+  ): Promise<void> {
+    const repairs: TruncatedPhoneRepair[] = [];
+
+    for (const input of inputs) {
+      if (input.entityType !== 'Person') {
+        continue;
+      }
+
+      for (const row of byKey.get(input.key) ?? []) {
+        // A row of another source riding on this input names a coordinate the
+        // ingest never looks at — the rule `legacyKeyClaims` applies too.
+        if ((row.dataSource ?? 'unknown') !== input.sourceSystem) {
+          continue;
+        }
+
+        const proof = truncatedPhoneKeyFor(row);
+
+        if (proof != null) {
+          repairs.push({ input, stagedType: row.type, dataSource: row.dataSource, proof });
+        }
+      }
+    }
+
+    if (repairs.length === 0) {
+      return;
+    }
+
+    try {
+      const result = await this.retrying(context, 'undoing what truncated phone keys reached', () =>
+        repairTruncatedPhoneKeys(this.dataSource, context, repairs),
+      );
+
+      this.logger.log('Undid what truncated phone keys had reached', {
+        runId: context.runId,
+        candidates: repairs.length,
+        repaired: result.repaired.length,
+        repairedEntityIds: result.repaired,
+        skipped: result.skipped,
+        rewritten: result.rewritten,
+        identifiersDeleted: result.identifiersDeleted,
+        selfClaimsDeleted: result.selfClaimsDeleted,
+        linksWithdrawn: result.linksWithdrawn,
+        edgesDeleted: result.edgesDeleted,
+        freedIdentifiersIndexed: result.freedIdentifiersIndexed,
+      });
+    } catch (err) {
+      // Every verdict class (not ready, unavailable, crashed) and every coded
+      // absence: the database being away is the stage's to handle, not ours.
+      if (isTransientDatabaseError(err)) {
+        throw err;
+      }
+
+      this.logger.warn('Could not undo what truncated phone keys had reached; the rows keep it', {
+        runId: context.runId,
+        candidates: repairs.length,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
+   * Where each staged entity went, for a whole pass at once. `ON CONFLICT`
+   * cannot touch one row twice in a statement, so the last mapping offered for
+   * a row is the one written.
+   */
+  private async recordEntityMappings(userId: string, mappings: EntityMapping[]): Promise<void> {
+    const latest = new Map(mappings.map((mapping) => [mapping.stagedEntityId, mapping.serverEntityId]));
+
+    if (latest.size === 0) {
+      return;
+    }
+
     await this.dataSource.query(
       `INSERT INTO ci_import.entity_mappings (staged_entity_id, user_id, server_entity_id)
-            VALUES ($1::uuid, $2::uuid, $3::uuid)
+       SELECT t.staged_entity_id, $2::uuid, t.server_entity_id
+         FROM unnest($1::uuid[], $3::uuid[]) AS t(staged_entity_id, server_entity_id)
        ON CONFLICT (staged_entity_id) DO UPDATE
             SET server_entity_id = EXCLUDED.server_entity_id, synced_at = now()`,
-      [stagedEntityId, userId, serverEntityId],
+      [[...latest.keys()], userId, [...latest.values()]],
     );
   }
 
-  private async markEntity(
-    stagedEntityId: string,
-    status: 'pushed' | 'failed' | 'skipped',
-    error: string | null,
-  ): Promise<void> {
+  /** Each staged entity's outcome, for a whole pass at once; the last outcome offered for a row wins. */
+  private async markEntities(outcomes: EntityOutcome[]): Promise<void> {
+    const latest = new Map(outcomes.map((outcome) => [outcome.stagedEntityId, outcome]));
+
+    if (latest.size === 0) {
+      return;
+    }
+
+    const rows = [...latest.values()];
+
     await this.dataSource.query(
-      // `$2` is used twice. It deduces today because both uses are text, but
-      // that is luck, not design — the identical shape in `recordProgress` threw
-      // "inconsistent types deduced" because one use was numeric. Cast at both
-      // sites so a future change to the status type cannot resurrect it.
-      `UPDATE ci_import.staged_entities
-          SET push_status = $2::text,
-              push_error = $3::text,
-              pushed_at = CASE WHEN $2::text = 'pushed' THEN now() END
-        WHERE id = $1::uuid`,
-      [stagedEntityId, status, error],
+      `UPDATE ci_import.staged_entities AS se
+          SET push_status = t.status,
+              push_error = t.error,
+              pushed_at = CASE WHEN t.status = 'pushed' THEN now() END
+         FROM unnest($1::uuid[], $2::text[], $3::text[]) AS t(id, status, error)
+        WHERE se.id = t.id`,
+      [rows.map((row) => row.stagedEntityId), rows.map((row) => row.status), rows.map((row) => row.error)],
     );
   }
 
@@ -1628,17 +1922,19 @@ export class PushStage implements ImportStageRunner {
     }
 
     const rows = await this.dataSource.query<
-      Array<{ item_id: string; relation: string | null; server_entity_id: string }>
+      Array<{ item_id: string; relation: string | null; server_entity_id: string; depicts?: boolean }>
     >(
-      `SELECT r.item_id, r.relation, m.server_entity_id
+      `SELECT r.item_id, r.relation, m.server_entity_id,
+              (r.relation = 'includes' AND s.type = 'person') AS depicts
          FROM ci_import.staged_relationships r
          JOIN ci_import.entity_mappings m ON m.staged_entity_id = r.entity_id
+         JOIN ci_import.staged_entities s ON s.id = r.entity_id
         WHERE r.item_id = ANY($1::uuid[])`,
       [stagedItemIds],
     );
 
     for (const row of rows) {
-      const relation = row.relation ?? 'participant';
+      const relations = [row.relation ?? 'participant', ...(row.depicts ? [DEPICTED_PEOPLE] : [])];
       let byRelation = byItem.get(row.item_id);
 
       if (!byRelation) {
@@ -1646,12 +1942,14 @@ export class PushStage implements ImportStageRunner {
         byItem.set(row.item_id, byRelation);
       }
 
-      const existing = byRelation.get(relation);
+      for (const relation of relations) {
+        const existing = byRelation.get(relation);
 
-      if (existing) {
-        existing.push(row.server_entity_id);
-      } else {
-        byRelation.set(relation, [row.server_entity_id]);
+        if (existing) {
+          existing.push(row.server_entity_id);
+        } else {
+          byRelation.set(relation, [row.server_entity_id]);
+        }
       }
     }
 
@@ -1800,9 +2098,19 @@ export class PushStage implements ImportStageRunner {
    * parser staged it, and a record's participants and its edges stay near each
    * other rather than being scattered across batches.
    */
-  private async nextBatch(runId: string): Promise<StagedItem[]> {
-    return this.dataSource.query<StagedItem[]>(
-      `SELECT ${STAGED_ITEM_COLUMNS}
+  /**
+   * The next rows to push, each carrying its run's `origin_platform` — the
+   * platform a connection fetched the run's bytes from, if one did (see
+   * `withOrigin`). Read with the batch rather than in a query of its
+   * own so it shares the batch read's retry and adds no round trip.
+   */
+  private async nextBatch(runId: string): Promise<Array<StagedItem & RunOrigin>> {
+    return this.dataSource.query<Array<StagedItem & RunOrigin>>(
+      `SELECT ${STAGED_ITEM_COLUMNS},
+              (SELECT r.origin_platform FROM ci_import.import_runs r
+                WHERE r.id = staged_items.run_id) AS "originPlatform",
+              (SELECT r.origin_connection_id FROM ci_import.import_runs r
+                WHERE r.id = staged_items.run_id) AS "originConnectionId"
          FROM ci_import.staged_items
         WHERE run_id = $1::uuid AND push_status = 'pending'
         ORDER BY id
@@ -1930,13 +2238,57 @@ export class PushStage implements ImportStageRunner {
     }
   }
 
-  private async resolveSelfEntityId(userId: string): Promise<string | null> {
+  /**
+   * The owner's self Person, made first when the account has none yet.
+   *
+   * `ci.users.entity_id` stays NULL until onboarding finishes (or something
+   * self-anchored is ingested), and an import can start before that. Left
+   * NULL, the whole run treats the owner as nobody — see the call in `run`.
+   * {@link GraphIngestService.ensureSelfEntityForOwner} is the one place the
+   * server makes that Person: a set-based upsert on a stable key, a pointer only
+   * set while still NULL, and a re-read so a concurrent winner is honoured, so
+   * the several workers of one import end on ONE Person, and onboarding
+   * finishing afterwards finds the pointer and reuses that Person
+   * (`OnboardingService.createPersonForUser`). Onboarding running at the same
+   * time creates its self Person under the same key, so it is handed that same
+   * row rather than making a second; and an account left with an `is_self`
+   * Person but no pointer has that Person adopted, not joined by another. An
+   * account that already has a pointer is returned as it is, untouched: nothing
+   * is provisioned, claimed or re-marked for it.
+   *
+   * Fail-soft on anything but the database being away: a provisioning error
+   * leaves the run on the null-owner behaviour it always had, logged, rather
+   * than stranding an import that is otherwise fine. The outage case is
+   * rethrown for {@link retrying} to wait out.
+   */
+  private async resolveSelfEntityId(context: StageRunContext): Promise<string | null> {
     const rows: Array<{ entity_id: string | null }> = await this.dataSource.query(
       `SELECT entity_id FROM ci.users WHERE id = $1::uuid`,
-      [userId],
+      [context.userId],
     );
+    const existing = rows[0]?.entity_id ?? null;
 
-    return rows[0]?.entity_id ?? null;
+    if (existing != null) {
+      return existing;
+    }
+
+    try {
+      const provisioned = await this.graph.ensureSelfEntityForOwner({ userId: context.userId });
+
+      return provisioned?.id ?? null;
+    } catch (err) {
+      if (isTransientDatabaseError(err)) {
+        throw err;
+      }
+
+      this.logger.warn('Could not provision the owner; mail from their own address stays unattributed', {
+        runId: context.runId,
+        userId: context.userId,
+        error: (err as Error).message,
+      });
+
+      return null;
+    }
   }
 
   /**
@@ -1965,41 +2317,20 @@ export class PushStage implements ImportStageRunner {
     trustMode: TrustMode,
   ): boolean {
     const props = input.properties ?? {};
-    const candidates: string[] = [];
-    if (typeof input.name === 'string') {
-      candidates.push(input.name);
-    }
+    const strings = (single: unknown, list: unknown): string[] =>
+      [single, ...(Array.isArray(list) ? list : [])].filter(
+        (value): value is string => typeof value === 'string' && value.trim().length > 0,
+      );
 
-    if (typeof props.email === 'string') {
-      candidates.push(props.email);
-    }
-
-    for (const email of Array.isArray(props.emails) ? props.emails : []) {
-      if (typeof email === 'string') {
-        candidates.push(email);
-      }
-    }
-
-    if (typeof props.phone === 'string') {
-      candidates.push(props.phone);
-    }
-
-    for (const phone of Array.isArray(props.phones) ? props.phones : []) {
-      if (typeof phone === 'string') {
-        candidates.push(phone);
-      }
-    }
-
-    const ownerPhones = identity.phones;
-
-    for (const candidate of candidates) {
-      const match = matchOwner(identity, candidate, { phones: ownerPhones });
-      if (shouldMapContactToSelf(match, trustMode)) {
-        return true;
-      }
-    }
-
-    return false;
+    return isOwnerContact(
+      identity,
+      {
+        name: typeof input.name === 'string' ? input.name : null,
+        emails: strings(props.email, props.emails),
+        phones: strings(props.phone, props.phones),
+      },
+      trustMode,
+    );
   }
 
   /**
@@ -2013,7 +2344,7 @@ export class PushStage implements ImportStageRunner {
    */
   private async pushBatch(
     context: StageRunContext,
-    batch: StagedItem[],
+    batch: Array<StagedItem & RunOrigin>,
     counts: DestinationCounts,
     isSelf: IsSelf,
     selfEntityId: string | null,
@@ -2028,7 +2359,10 @@ export class PushStage implements ImportStageRunner {
     );
 
     const plans: RowPlan[] = batch.map((row) => {
-      const record = toCanonical(row);
+      const record = withOrigin(toCanonical(row), {
+        platform: row.originPlatform,
+        connectionId: row.originConnectionId,
+      });
 
       return {
         row,
@@ -2104,8 +2438,45 @@ export class PushStage implements ImportStageRunner {
       return;
     }
 
-    const operation = `linking ${relationships.length} shared content row(s) to their events`;
+    await this.ingestEdges(
+      ctx,
+      context,
+      relationships,
+      `linking ${relationships.length} shared content row(s) to their events`,
+      'Linking shared content rows to their events failed; the edge sweep will retry',
+    );
+  }
+
+  /**
+   * Write graph edges between rows this push already wrote, fail-soft except
+   * for a database that crashed under the write (see {@link linkSharedContent}
+   * for why that one fails the stage). Returns how many edges ingest reports
+   * processed; 0 when the write failed softly.
+   *
+   * Ingest catches a failed edge write and reports it per edge as text rather
+   * than throwing, so a refusal that is not a crash (a constraint, a server
+   * that was not ready) arrives in `errors`. Those are logged with the same
+   * message as a thrown failure: read alone, they would leave the edges
+   * missing with nothing in the log to say so.
+   */
+  private async ingestEdges(
+    ctx: { userId: string; importRunId?: string },
+    context: StageRunContext,
+    relationships: Array<{
+      fromKey: string;
+      toKey: string;
+      fromEntityId: string;
+      fromEntityType: string;
+      toEntityId: string;
+      toEntityType: string;
+      type: string;
+      properties: Record<string, unknown>;
+    }>,
+    operation: string,
+    softFailure: string,
+  ): Promise<number> {
     let crashed: unknown = null;
+    let processed = 0;
 
     try {
       const result = await this.graph.ingest(ctx, { entities: [], relationships });
@@ -2115,12 +2486,21 @@ export class PushStage implements ImportStageRunner {
 
       if (message != null) {
         crashed = new Error(message);
+      } else if (result.errors.length > 0) {
+        this.logger.warn(softFailure, {
+          runId: context.runId,
+          edges: relationships.length,
+          failed: result.errors.length,
+          error: result.errors[0],
+        });
       }
+
+      processed = result.relationshipsProcessed ?? 0;
     } catch (err) {
       if (isDatabaseCrashError(err)) {
         crashed = err;
       } else {
-        this.logger.warn('Linking shared content rows to their events failed; the edge sweep will retry', {
+        this.logger.warn(softFailure, {
           runId: context.runId,
           edges: relationships.length,
           error: (err as Error).message,
@@ -2131,6 +2511,150 @@ export class PushStage implements ImportStageRunner {
     if (crashed != null) {
       throw new DatabaseCrashedDuringPushError(context.runId, operation, crashed);
     }
+
+    return processed;
+  }
+
+  /**
+   * The links a parser staged between two ITEMS, written as graph edges between
+   * the content rows the two became: a photo `PART_OF` its album, an edited copy
+   * `DERIVED_FROM` its original, a motion photo's clip `DERIVED_FROM` its still
+   * ({@link ITEM_LINKS}).
+   *
+   * The photo importers have always staged these. Nothing read them back:
+   * {@link participantsForMany} joins only the edges that point at an entity, so
+   * every album membership, edit and Live Photo pair stopped in staging.
+   *
+   * Run once after the last batch, because the two ends of a link can be pushed
+   * in different batches (an album is staged once, beside the first of its
+   * photos). Each end is found under the identity its content row is written
+   * with ({@link toContentInput}), so an end that an earlier import already
+   * wrote (and this push deduped) is found too. An end with no content row
+   * (failed, or routed nowhere) leaves its link out. Keyset-paged by edge id.
+   */
+  private async linkStagedItems(context: StageRunContext): Promise<number> {
+    const ctx = { userId: context.userId, importRunId: context.runId };
+    let after = '00000000-0000-0000-0000-000000000000';
+    let linked = 0;
+
+    for (;;) {
+      const cursor = after;
+      const edges = await this.retrying(context, 'reading the links between staged items', () =>
+        this.dataSource.query<Array<{ id: string; itemId: string; relatedItemId: string; relation: string }>>(
+          `SELECT id, item_id AS "itemId", related_item_id AS "relatedItemId", relation
+             FROM ci_import.staged_relationships
+            WHERE run_id = $1::uuid AND related_item_id IS NOT NULL AND relation = ANY($2::text[])
+              AND id > $3::uuid
+            ORDER BY id
+            LIMIT $4`,
+          [context.runId, Object.keys(ITEM_LINKS), cursor, PUSH_BATCH],
+        ),
+      );
+
+      const linkable = edges.filter((edge) => edge.itemId && edge.relatedItemId && ITEM_LINKS[edge.relation]);
+
+      if (linkable.length > 0) {
+        const contentIds = await this.contentRowsFor(context, [
+          ...new Set(linkable.flatMap((edge) => [edge.itemId, edge.relatedItemId])),
+        ]);
+        const relationships = linkable.flatMap((edge) => {
+          const link = ITEM_LINKS[edge.relation];
+          const [from, to] = link.reverse
+            ? [edge.relatedItemId, edge.itemId]
+            : [edge.itemId, edge.relatedItemId];
+          const fromId = contentIds.get(from);
+          const toId = contentIds.get(to);
+
+          // A content row keys on its file's hash, so two ends with the same
+          // bytes are one row. Ingest refuses a self-edge, which the log would
+          // then report as a failed write.
+          return fromId && toId && fromId !== toId
+            ? [
+                {
+                  fromKey: `content:${fromId}`,
+                  toKey: `content:${toId}`,
+                  fromEntityId: fromId,
+                  fromEntityType: 'Content',
+                  toEntityId: toId,
+                  toEntityType: 'Content',
+                  type: link.type,
+                  properties: { derived_from: 'import_push', relation: edge.relation },
+                },
+              ]
+            : [];
+        });
+
+        if (relationships.length > 0) {
+          linked += await this.ingestEdges(
+            ctx,
+            context,
+            relationships,
+            `linking ${relationships.length} staged item(s) to the items they belong to`,
+            'Linking staged items to each other failed; importing the export again writes the links',
+          );
+        }
+      }
+
+      if (edges.length < PUSH_BATCH) {
+        break;
+      }
+
+      after = edges[edges.length - 1].id;
+    }
+
+    return linked;
+  }
+
+  /**
+   * The `ci.content` row each staged item became, by staged item id. Rows that
+   * reached no content row (failed, routed nowhere, or routed elsewhere) are
+   * absent.
+   */
+  private async contentRowsFor(
+    context: StageRunContext,
+    stagedItemIds: string[],
+  ): Promise<Map<string, string>> {
+    const rows = await this.retrying(context, 'reading the linked staged items', () =>
+      this.dataSource.query<StagedItem[]>(
+        `SELECT ${STAGED_ITEM_COLUMNS}
+           FROM ci_import.staged_items
+          WHERE run_id = $1::uuid AND id = ANY($2::uuid[]) AND push_status IN ('pushed', 'skipped')`,
+        [context.runId, stagedItemIds],
+      ),
+    );
+
+    const identities = rows.flatMap((row) => {
+      const record = toCanonical(row);
+
+      if (!destinationsFor(record).includes('content')) {
+        return [];
+      }
+
+      const { source_system: system, source_id: sourceId } = toContentInput(record);
+
+      return system && sourceId ? [{ stagedId: row.id, system, sourceId }] : [];
+    });
+
+    if (identities.length === 0) {
+      return new Map();
+    }
+
+    const found = await this.retrying(context, 'finding the linked content rows', () =>
+      this.dataSource.query<Array<{ staged_id: string; content_id: string }>>(
+        `SELECT t.staged_id, c.id AS content_id
+           FROM unnest($2::text[], $3::text[], $4::text[]) AS t(staged_id, source_system, source_id)
+           JOIN ci.content c
+             ON c.user_id = $1::uuid AND c.source_system = t.source_system AND c.source_id = t.source_id`,
+        [
+          context.userId,
+          identities.map((identity) => identity.stagedId),
+          identities.map((identity) => identity.system),
+          identities.map((identity) => identity.sourceId),
+        ],
+      ),
+    );
+
+    return new Map(found.map((row) => [row.staged_id, row.content_id]));
   }
 
   /**
@@ -2457,6 +2981,31 @@ export class PushStage implements ImportStageRunner {
   }
 
   /**
+   * Put a communication's sender and recipients on it, and correct the
+   * direction of header-less mail once the sender is known
+   * ({@link directionAfterSender}). The one place `sendMany` and its per-row
+   * retry `send` decide this, so a retried row cannot come out different.
+   */
+  private applyCorrespondents(
+    input: CreateCommunicationDto,
+    record: CanonicalRecord,
+    participants: Map<string, string[]>,
+    selfEntityId: string | null,
+  ): void {
+    const { from, to } = this.resolveCorrespondents(participants, input.direction, selfEntityId);
+
+    input.direction = directionAfterSender(input.direction, record, participants, from, selfEntityId);
+
+    if (from) {
+      input.from_entity_id = from;
+    }
+
+    if (to.length) {
+      input.to_entity_ids = to;
+    }
+  }
+
+  /**
    * Catalogue the attachments a message LINKS to rather than carries.
    *
    * The other shape of the communication-attachment lane. Sources whose export
@@ -2606,15 +3155,7 @@ export class PushStage implements ImportStageRunner {
               ? toFacebookMessengerCommunicationInput(plan.record, isSelf)
               : toCommunicationInput(plan.record);
 
-          const { from, to } = this.resolveCorrespondents(plan.participants, input.direction, selfEntityId);
-
-          if (from) {
-            input.from_entity_id = from;
-          }
-
-          if (to.length) {
-            input.to_entity_ids = to;
-          }
+          this.applyCorrespondents(input, plan.record, plan.participants, selfEntityId);
 
           return input;
         });
@@ -2638,7 +3179,7 @@ export class PushStage implements ImportStageRunner {
       case 'events': {
         const results = await this.events.createDetailed(
           ctx,
-          group.map((plan) => toEventInput(plan.record)),
+          group.map((plan) => withDepictedPeople(toEventInput(plan.record), plan.participants)),
         );
         group.forEach((plan, index) => {
           plan.eventId = results[index]?.entity?.id;
@@ -2856,15 +3397,7 @@ export class PushStage implements ImportStageRunner {
         // group chat kept the owner's own entity in `to_entity_ids` because
         // `stripSelf` had nothing to strip. A retried batch produced quietly
         // different rows from a batch that happened to succeed.
-        const { from, to } = this.resolveCorrespondents(participants, input.direction, selfEntityId);
-
-        if (from) {
-          input.from_entity_id = from;
-        }
-
-        if (to.length) {
-          input.to_entity_ids = to;
-        }
+        this.applyCorrespondents(input, record, participants, selfEntityId);
 
         return wroteAnything(await this.communications.createManyDetailed(ctx, [input]));
       }
@@ -2877,7 +3410,9 @@ export class PushStage implements ImportStageRunner {
         // An ARRAY, deliberately: `createDetailed` is the batched path, and only
         // the batched path is idempotent. A bare object takes `createOne`, which
         // inserts unconditionally.
-        return wroteAnything(await this.events.createDetailed(ctx, [toEventInput(record)]));
+        return wroteAnything(
+          await this.events.createDetailed(ctx, [withDepictedPeople(toEventInput(record), participants)]),
+        );
       case 'things':
         return wroteAnything(await this.items.createManyDetailed(ctx, [toThingInput(record)]));
       case 'product_models': {

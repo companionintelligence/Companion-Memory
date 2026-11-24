@@ -44,10 +44,10 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Node.js + Corepack (Yarn 4)
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
       - run: corepack enable
@@ -61,12 +61,12 @@ jobs:
         run: yarn workspace @ci/fe-web build
 
       - name: JDK 21 (Temurin)
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '21'
       - name: Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
         with:
           # v3 defaults `packages` to `tools platform-tools`, and Google has
           # REMOVED the obsolete `tools` package from the SDK repository, so the
@@ -97,6 +97,16 @@ jobs:
         working-directory: frontend/apps/android/android
         run: ./gradlew assembleDebug --no-daemon
 
+      # Play requires every app that targets Android 15+ to support 16 KB memory pages, and a
+      # native dependency bump can quietly break that. This reads the APK that was just built,
+      # before anything is uploaded: every arm64-v8a and x86_64 library needs ELF p_align >=
+      # 0x4000, and a stored one has to start on a 16 KiB boundary (what `zipalign -c -P 16 4`
+      # verifies). Node only, which setup-node above already installed. mobile-release.yml runs
+      # the same script on the .aab it uploads to Play. Locally:
+      # node scripts/check-android-16kb.mjs <file.apk>
+      - name: Check 16 KB page-size support (APK)
+        run: node scripts/check-android-16kb.mjs frontend/apps/android/android/app/build/outputs/apk/debug/app-debug.apk
+
       # The JVM unit suites for the four modules this repo owns — :app plus the
       # three :ci-capacitor-* plugins (Robolectric, no emulator, no device). They
       # cost well under a minute on top of a toolchain and a Gradle cache the
@@ -119,7 +129,7 @@ jobs:
       # build over `portal:` symlinks from frontend/packages), so both are listed.
       - name: Upload unit test reports
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           retention-days: 7
           name: android-unit-test-reports
@@ -131,7 +141,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           retention-days: 7
           name: companion-android-apk
@@ -144,10 +154,10 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Node.js + Corepack (Yarn 4)
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
       - run: corepack enable
@@ -211,7 +221,7 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent "$APP" "$GITHUB_WORKSPACE/companion-ios-simulator.app.zip"
 
       - name: Upload iOS app
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           retention-days: 7
           name: companion-ios-simulator-app

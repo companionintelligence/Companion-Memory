@@ -1,9 +1,9 @@
 import { BadRequestException } from '@nestjs/common';
 
 import { ASK_ARCHETYPES, type AskArchetype } from './askGrammar';
-import { canonicalQueryType, normalizeText } from './canonical';
+import { canonicalQueryType, hasInvisibleCharacters, normalizeText } from './canonical';
 import { DISCLOSURE_RUNGS } from './policy';
-import type { AskActor, AskActorKind, AskQuery, DisclosureRung } from './types';
+import type { AskActor, AskActorKind, AskQuery, DisclosureRung, GrantMode } from './types';
 
 /**
  * The boundary where an asker's raw strings become an {@link AskQuery}.
@@ -230,6 +230,9 @@ export function parseAskQueryInput(raw: {
   return {
     queryType,
     prompt,
+    // `parseAskPrompt` strips these, and the owner is owed being told that the
+    // text they are consenting on was altered on the way in.
+    ...(hasInvisibleCharacters(raw.prompt) ? { promptHiddenCharactersRemoved: true } : {}),
     ...(dataClass == null ? {} : { dataClass }),
     ...(actor == null ? {} : { actor }),
   };
@@ -315,4 +318,157 @@ export function parseDisclosureRung(raw: unknown, field = 'maxDisclosure'): Disc
   }
 
   return canonical as DisclosureRung;
+}
+
+export interface ParsedNaturalLanguageGrant {
+  grantee: string;
+  queryType: AskArchetype;
+  dataClass?: string;
+  mode: GrantMode;
+  maxDisclosure?: DisclosureRung;
+  expiresAt?: string;
+  purpose?: string;
+}
+
+const DATA_CLASS_ARCHETYPE_MAP: Readonly<Record<string, { queryType: AskArchetype; dataClass: string }>> = {
+  photos: { queryType: 'content', dataClass: 'photos' },
+  photo: { queryType: 'content', dataClass: 'photos' },
+  pictures: { queryType: 'content', dataClass: 'photos' },
+  files: { queryType: 'content', dataClass: 'files' },
+  documents: { queryType: 'content', dataClass: 'documents' },
+  notes: { queryType: 'content', dataClass: 'notes' },
+  messages: { queryType: 'content', dataClass: 'messages' },
+  emails: { queryType: 'content', dataClass: 'emails' },
+  availability: { queryType: 'availability', dataClass: 'calendar' },
+  calendar: { queryType: 'availability', dataClass: 'calendar' },
+  schedule: { queryType: 'availability', dataClass: 'calendar' },
+  freebusy: { queryType: 'availability', dataClass: 'calendar' },
+  contacts: { queryType: 'relationship', dataClass: 'contacts' },
+  relationships: { queryType: 'relationship', dataClass: 'contacts' },
+  friends: { queryType: 'relationship', dataClass: 'contacts' },
+  people: { queryType: 'relationship', dataClass: 'contacts' },
+  location: { queryType: 'attribute', dataClass: 'location' },
+  places: { queryType: 'attribute', dataClass: 'location' },
+  health: { queryType: 'attribute', dataClass: 'health' },
+  medical: { queryType: 'attribute', dataClass: 'medical' },
+  finance: { queryType: 'attribute', dataClass: 'finance' },
+  financial: { queryType: 'attribute', dataClass: 'financial' },
+  identity: { queryType: 'identity', dataClass: 'identity' },
+};
+
+/**
+ * Parse a natural-language consent instruction (`open-instinct` pattern) into
+ * structured standing-grant parameters.
+ *
+ * Examples:
+ * - `"allow alice@portal.example to ask about photos for 7 days"`
+ * - `"let bob see my availability this week"`
+ * - `"block mallory@portal.example from location"`
+ * - `"review charlie on contacts with summary disclosure for 24 hours"`
+ */
+export function parseNaturalLanguageGrant(
+  rawText: unknown,
+  now: Date = new Date(),
+): ParsedNaturalLanguageGrant {
+  if (typeof rawText !== 'string') {
+    throw new BadRequestException('grant text must be a string');
+  }
+
+  const text = normalizeText(rawText);
+  if (!text) {
+    throw new BadRequestException('grant text must not be empty');
+  }
+
+  // 1. Mode detection: deny/block > review > allow/let/auto
+  let mode: GrantMode = 'review';
+  if (/^\s*(?:block|deny|forbid|disallow|prevent|never\s+let|never\s+allow)\b/i.test(text)) {
+    mode = 'block';
+  } else if (/^\s*(?:review|ask\s+me\s+(?:first|before)|require\s+review)\b/i.test(text)) {
+    mode = 'review';
+  } else if (/^\s*(?:allow|let|permit|grant|auto[- ]?allow|auto[- ]?answer)\b/i.test(text)) {
+    mode = 'auto';
+  }
+
+  // 2. Grantee extraction: handle/email (`alice@portal.example`) or first identifier after verb
+  const handleMatch = text.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/);
+  let grantee = handleMatch?.[1] ?? '';
+
+  if (!grantee) {
+    const verbGranteeMatch = text.match(
+      /^\s*(?:allow|let|permit|grant|block|deny|forbid|disallow|prevent|review|ask\s+me\s+(?:first|before)\s+for)\s+(?:asks\s+from\s+|user\s+|peer\s+)?([a-zA-Z0-9_.-]+)/i,
+    );
+    grantee = verbGranteeMatch?.[1] ?? '';
+  }
+
+  if (!grantee) {
+    throw new BadRequestException('Could not identify grantee handle or user ID in natural-language grant');
+  }
+
+  // 3. Archetype & dataClass detection
+  const lower = text.toLowerCase();
+  let queryType: AskArchetype | null = null;
+  let dataClass: string | undefined;
+
+  for (const [keyword, mapping] of Object.entries(DATA_CLASS_ARCHETYPE_MAP)) {
+    const re = new RegExp(`\\b${keyword}\\b`, 'i');
+    if (re.test(lower)) {
+      queryType = mapping.queryType;
+      dataClass = mapping.dataClass;
+      break;
+    }
+  }
+
+  if (!queryType) {
+    for (const archetype of ASK_ARCHETYPES) {
+      const re = new RegExp(`\\b${archetype}\\b`, 'i');
+      if (re.test(lower)) {
+        queryType = archetype;
+        break;
+      }
+    }
+  }
+
+  if (!queryType) {
+    queryType = 'content';
+  }
+
+  // 4. Optional explicit disclosure rung (e.g. "summary only", "with boolean disclosure", "at most count")
+  let maxDisclosure: DisclosureRung | undefined;
+  if (mode === 'block') {
+    maxDisclosure = 'none';
+  } else {
+    for (const rung of DISCLOSURE_RUNGS) {
+      const rungRe = new RegExp(
+        `\\b(?:at\\s+most\\s+${rung}|${rung}\\s+(?:only|disclosure|ceiling|level)|max(?:imum)?\\s+disclosure\\s+${rung})\\b`,
+        'i',
+      );
+      if (rungRe.test(lower)) {
+        maxDisclosure = rung;
+        break;
+      }
+    }
+  }
+
+  // 5. Optional relative duration / expiry ("for 7 days", "for 24 hours", "this week", "today")
+  let expiresAt: string | undefined;
+  const durationMatch = lower.match(/\bfor\s+(\d+)\s*(hour|hours|hr|hrs|day|days|week|weeks)\b/i);
+  if (durationMatch) {
+    const amount = Number.parseInt(durationMatch[1], 10);
+    const unit = durationMatch[2].toLowerCase();
+    const multiplierMs = unit.startsWith('h') ? 3600_000 : unit.startsWith('w') ? 7 * 86_400_000 : 86_400_000;
+    expiresAt = new Date(now.getTime() + amount * multiplierMs).toISOString();
+  } else if (/\bthis\s+week\b/i.test(lower)) {
+    expiresAt = new Date(now.getTime() + 7 * 86_400_000).toISOString();
+  } else if (/\b(?:today|tonight|for\s+a\s+day)\b/i.test(lower)) {
+    expiresAt = new Date(now.getTime() + 86_400_000).toISOString();
+  }
+
+  return {
+    grantee,
+    queryType,
+    ...(dataClass ? { dataClass } : {}),
+    mode,
+    ...(maxDisclosure ? { maxDisclosure } : {}),
+    ...(expiresAt ? { expiresAt } : {}),
+  };
 }

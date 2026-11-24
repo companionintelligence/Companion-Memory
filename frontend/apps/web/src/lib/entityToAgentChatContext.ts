@@ -1,5 +1,7 @@
 import type { AgentChatContext } from '@/lib/agentChat';
+import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
 import { formatMinor } from '@/lib/money';
+import { threadNodeLabel } from '@/pages/ChatPage/useRecentThreads';
 import { eventDisplayTitle } from '@/pages/MemoryPage/Components/utils';
 import { getFileChunkTitle } from '@/pages/MemoryPage/fileChunks';
 import type { MemoryEntity } from '@/pages/MemoryPage/useEntityService';
@@ -50,18 +52,15 @@ function humanize(value: string): string {
   return value.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-function formatWhen(value: unknown): string | null {
+function formatWhen(value: unknown, fmt: DateTimeFormatter): string | null {
   if (value == null) {
     return null;
   }
 
-  const date = value instanceof Date ? value : new Date(String(value));
-
-  if (Number.isNaN(date.getTime())) {
-    return null;
-  }
-
-  return date.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  return fmt.tryDateTime(value instanceof Date ? value : String(value), {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  });
 }
 
 function readTags(record: Record<string, unknown>): string | null {
@@ -97,7 +96,7 @@ function readUrl(record: Record<string, unknown>): string | null {
   );
 }
 
-function readWhen(record: Record<string, unknown>): string | null {
+function readWhen(record: Record<string, unknown>, fmt: DateTimeFormatter): string | null {
   const timeSource = readString(record, 'bucketTimeSource', 'timeSource');
 
   // Import wall-clock, not a real event time — skip so chat doesn't cite it.
@@ -107,6 +106,7 @@ function readWhen(record: Record<string, unknown>): string | null {
 
   return formatWhen(
     record.startTime ?? record.bucketStartTime ?? record.time ?? record.bucketTime ?? record.bucketAppearedAt,
+    fmt,
   );
 }
 
@@ -140,13 +140,13 @@ function joinBody(prose: string | null, facts: Array<[string, string | null | un
  * tags, eventType, …) — those go into the draft so chat is specific even
  * when the spread fragment's `description` is hidden.
  */
-export function entityToAgentChatContext(entity: MemoryEntity): AgentChatContext {
+export function entityToAgentChatContext(entity: MemoryEntity, fmt: DateTimeFormatter): AgentChatContext {
   const record = asRecord(entity);
   const sourceKind = entity.__typename;
   const sourceId = typeof entity.id === 'string' ? entity.id : undefined;
 
-  let title: string | null = null;
-  let prose: string | null = null;
+  let title: string | null;
+  let prose: string | null;
 
   switch (entity.__typename) {
     case 'EventType':
@@ -182,9 +182,14 @@ export function entityToAgentChatContext(entity: MemoryEntity): AgentChatContext
     case 'PersonType':
     case 'PlaceType':
     case 'ConceptType':
-    case 'ThreadType':
     case 'ItemType':
       title = readString(record, 'name') ?? fallbackTitle(entity.__typename);
+      prose = readString(record, 'description');
+      break;
+
+    // An untitled chat has the name Chat gives it, as in the explorer and the drawer.
+    case 'ThreadType':
+      title = threadNodeLabel({ id: sourceId ?? '', name: readString(record, 'name') }, fmt);
       prose = readString(record, 'description');
       break;
 
@@ -259,7 +264,7 @@ export function entityToAgentChatContext(entity: MemoryEntity): AgentChatContext
   const uniqueProse = prose && prose.trim() !== resolvedTitle ? prose : null;
 
   const body = joinBody(uniqueProse, [
-    ['When', readWhen(record)],
+    ['When', readWhen(record, fmt)],
     ['Where', readString(record, 'locationName', 'galleryLocationName')],
     ['Kind', eventKind ? humanize(eventKind) : null],
     ['Source', sourceSystem ? humanize(sourceSystem) : null],

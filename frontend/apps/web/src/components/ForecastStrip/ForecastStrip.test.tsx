@@ -1,0 +1,158 @@
+import { describe, expect, it } from 'vitest';
+
+import type { ForecastBucket, ForecastResponse } from '@/api/useForecastService';
+import { classColor, normalizeClass } from '@/lib/activityPalette';
+import { renderWithProviders } from '@/test/renderWithProviders';
+
+import { ForecastStrip, forecastStatusLabel } from './ForecastStrip';
+
+/**
+ * The strip paints `predictedL0` rather than argmax(l0Probs). The two differ on
+ * purpose — see `displayL0` — so these fix the distinction rather than the
+ * colours, which belong to the shared palette.
+ *
+ * The tooltip's "Showing <class>" line is not covered here: it lives inside a
+ * Radix Tooltip.Content that only mounts on a real hover, and driving that in
+ * jsdom needs pointer-event plumbing brittle enough to be worse than no test.
+ */
+
+function bucket(overrides: Partial<ForecastBucket> = {}): ForecastBucket {
+  return {
+    bucketIndex: 0,
+    startTime: '2026-09-03T00:00:00.000Z',
+    l0Probs: [
+      { label: 'UNKNOWN', probability: 0.84 },
+      { label: 'EXERCISE', probability: 0.16 },
+    ],
+    l1Probs: [],
+    l2Probs: null,
+    q10: 0.1,
+    q50: 0.9,
+    q90: 0.99,
+    ...overrides,
+  };
+}
+
+function renderStrip(
+  buckets: ForecastBucket[],
+  overrides: Partial<Pick<ForecastResponse, 'systemStatus' | 'modelVersion' | 'stillLearning'>> = {},
+) {
+  const forecast: Pick<ForecastResponse, 'generatedAt' | 'systemStatus' | 'modelVersion' | 'stillLearning'> =
+    {
+      generatedAt: '2026-09-02T16:55:37.000Z',
+      systemStatus: 'READY',
+      modelVersion: 'logit',
+      stillLearning: false,
+      ...overrides,
+    };
+
+  return renderWithProviders(
+    <ForecastStrip
+      buckets={buckets}
+      generatedAt={forecast.generatedAt}
+      systemStatus={forecast.systemStatus}
+      stalled={false}
+      stillLearning={forecast.stillLearning}
+      modelVersion={forecast.modelVersion}
+      pipelineEtaSeconds={null}
+      pipelineDetail={null}
+    />,
+  );
+}
+
+function slotColors(container: HTMLElement): string[] {
+  return Array.from(container.querySelectorAll<HTMLElement>('[style*="background-color"]')).map(
+    (el) => el.style.backgroundColor,
+  );
+}
+
+describe('ForecastStrip class selection', () => {
+  it('paints the class HBPE chose, not the most probable one', () => {
+    // The posterior prefers UNKNOWN 0.84; the server's floored prior correction
+    // promoted EXERCISE. The strip must follow the server.
+    const { container } = renderStrip([bucket({ predictedL0: 'EXERCISE' })]);
+
+    expect(slotColors(container)).toContain(classColor(normalizeClass('EXERCISE')));
+  });
+
+  it('falls back to the most probable class when HBPE does not send one', () => {
+    // An HBPE predating predictedL0 must render exactly as it used to.
+    const { container } = renderStrip([bucket({ predictedL0: null })]);
+
+    expect(slotColors(container)).toContain(classColor(normalizeClass('UNKNOWN')));
+  });
+
+  it('treats an absent field the same as an explicit null', () => {
+    const withoutField = bucket();
+    delete (withoutField as Partial<ForecastBucket>).predictedL0;
+    const { container } = renderStrip([withoutField]);
+
+    expect(slotColors(container)).toContain(classColor(normalizeClass('UNKNOWN')));
+  });
+});
+
+// Until the account has history the service serves its starter prior, which
+// names the same class for every slot. During a first run the strip painted
+// all of them that colour.
+describe('ForecastStrip before the forecast is built', () => {
+  const starterPrior = bucket({
+    predictedL0: 'WORK',
+    l0Probs: [{ label: 'WORK', probability: 0.125 }],
+    q50: 0,
+  });
+
+  it('paints no class while the first run labels', () => {
+    const { container, queryByText, getByText } = renderStrip([starterPrior], {
+      systemStatus: 'BOOTSTRAP:label',
+      modelVersion: 'b2',
+      stillLearning: true,
+    });
+
+    expect(slotColors(container)).toEqual([]);
+    expect(queryByText('WORK')).not.toBeInTheDocument();
+    expect(getByText(/Labeling your events and content/)).toBeInTheDocument();
+  });
+
+  // A checkpoint with no history days left to read still gets the starter prior.
+  it('paints no class for the starter prior on READY', () => {
+    const { container, queryByText } = renderStrip([starterPrior], {
+      systemStatus: 'READY',
+      modelVersion: 'b2',
+      stillLearning: true,
+    });
+
+    expect(slotColors(container)).toEqual([]);
+    expect(queryByText('WORK')).not.toBeInTheDocument();
+  });
+
+  it('paints the classes during a later run over a forecast that is still learning', () => {
+    const { container } = renderStrip([bucket({ predictedL0: 'EXERCISE' })], {
+      systemStatus: 'NIGHTLY:label',
+      modelVersion: 'b1',
+      stillLearning: true,
+    });
+
+    expect(slotColors(container)).toContain(classColor(normalizeClass('EXERCISE')));
+  });
+});
+
+describe('forecastStatusLabel', () => {
+  it('has nothing to add for READY', () => {
+    expect(forecastStatusLabel('READY')).toBeNull();
+  });
+
+  it('puts a known status or step into words', () => {
+    expect(forecastStatusLabel('COLD_START')).toBe('Waiting to initialize...');
+    expect(forecastStatusLabel('NIGHTLY:label')).toBe('Labeling new events...');
+  });
+
+  it('reads a step it does not know as an update, and drops anything else rather than print it raw', () => {
+    expect(forecastStatusLabel('NIGHTLY:some_new_step')).toBe('Updating your predictions...');
+    expect(forecastStatusLabel('UNKNOWN')).toBeNull();
+  });
+
+  it('does not read a status named like an Object.prototype member off the prototype', () => {
+    expect(forecastStatusLabel('constructor')).toBeNull();
+    expect(forecastStatusLabel('__proto__')).toBeNull();
+  });
+});

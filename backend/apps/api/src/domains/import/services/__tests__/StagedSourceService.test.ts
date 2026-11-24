@@ -65,7 +65,7 @@ function build(rows: Array<Record<string, unknown>> = []) {
       affected: 1,
     })),
     delete: jest.fn(async () => ({ affected: 1 })),
-    exist: jest.fn<Promise<boolean>, [{ where: { dropId: string } }]>(async () => false),
+    exists: jest.fn<Promise<boolean>, [{ where: { dropId: string } }]>(async () => false),
     // `dropDirIsLive` falls through to a raw EXISTS over the run join when no
     // row is in a live status; unfinished runs are opt-in per test.
     query: jest.fn(async () => [{ live: false }]),
@@ -169,7 +169,7 @@ describe('sweepUploadOrphans', () => {
 
     const { service, repo } = build();
 
-    repo.exist.mockImplementation(
+    repo.exists.mockImplementation(
       async (query: { where: { dropId: string } }) => query.where.dropId === 'live-drop',
     );
 
@@ -209,7 +209,7 @@ describe('sweepUploadOrphans', () => {
     const { service, repo } = build();
 
     // No row in a live STATUS...
-    repo.exist.mockResolvedValue(false as never);
+    repo.exists.mockResolvedValue(false as never);
     // ...but the run behind it is unfinished.
     repo.query.mockResolvedValue([{ live: true }] as never);
 

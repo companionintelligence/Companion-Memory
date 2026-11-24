@@ -6,6 +6,13 @@ function makeListener(communication: Record<string, unknown> | null = null) {
   const communicationService = { findById: jest.fn().mockResolvedValue(communication) };
   const embeddingGenerationService = { generateEmbedding: jest.fn().mockResolvedValue([0.1, 0.2]) };
   const embeddingService = {
+    upsertDocument: jest.fn(
+      async (_ctx: unknown, data: { text: string }, generate: (text: string) => Promise<number[]>) => {
+        await generate(data.text);
+
+        return 'embedded';
+      },
+    ),
     upsert: jest.fn().mockResolvedValue(null),
     remove: jest.fn().mockResolvedValue(true),
   };
@@ -92,7 +99,7 @@ describe('CommunicationSearchIndexListener.indexCreate skip markers', () => {
 
     await listener.indexCreate({ communicationId: 'comm-1' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(indexSkipService.clearSkip).not.toHaveBeenCalled();
     expect(indexSkipService.recordSkip).toHaveBeenCalledTimes(1);
     expect(indexSkipService.recordSkip).toHaveBeenCalledWith({
@@ -113,7 +120,7 @@ describe('CommunicationSearchIndexListener.indexCreate skip markers', () => {
 
     await listener.indexCreate({ communicationId: 'comm-2' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(vectorService.upsert).not.toHaveBeenCalled();
     expect(indexSkipService.recordSkip).toHaveBeenCalledWith({
       entityType: 'communication',
@@ -133,10 +140,11 @@ describe('CommunicationSearchIndexListener.indexCreate skip markers', () => {
 
     await listener.indexCreate({ communicationId: 'comm-3' } as never);
 
-    expect(embeddingService.upsert).toHaveBeenCalledTimes(1);
-    expect(embeddingService.upsert).toHaveBeenCalledWith(
+    expect(embeddingService.upsertDocument).toHaveBeenCalledTimes(1);
+    expect(embeddingService.upsertDocument).toHaveBeenCalledWith(
       { userId: 'user-1' },
       expect.objectContaining({ entityType: 'communication', entityId: 'comm-3' }),
+      expect.any(Function),
     );
     expect(indexSkipService.recordSkip).not.toHaveBeenCalled();
     expect(indexSkipService.clearSkip).toHaveBeenCalledWith({

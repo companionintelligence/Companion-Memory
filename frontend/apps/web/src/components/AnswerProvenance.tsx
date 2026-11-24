@@ -48,8 +48,11 @@ export { confidenceLabel, isInferred };
 type ProvenanceState = 'unanswered' | 'inferred' | 'manual';
 
 /**
- * The status light, on a traffic-light mapping the user asked for: red nothing
- * here yet, amber the appliance guessed, green a person confirmed it.
+ * The status light: an empty ring for nothing here yet, amber the appliance
+ * guessed, green a person confirmed it. Unanswered used to be red, on a
+ * traffic-light mapping; on a phone, where a row stacks, that put a red dot under
+ * every empty field and read as a validation error, so "not yet" is a neutral
+ * ring instead.
  *
  * The dot is NOT graded by confidence band — it answers "where did this come
  * from?", and the word beside it answers "how sure was it?". `aria-hidden`
@@ -59,12 +62,37 @@ function ProvenanceDot({ state }: { state: ProvenanceState }) {
   return (
     <span
       className={cn('inline-block size-1.5 shrink-0 rounded-full', {
-        'bg-red-500': state === 'unanswered',
+        'border border-muted-foreground/70': state === 'unanswered',
         'bg-amber-500': state === 'inferred',
         'bg-emerald-500': state === 'manual',
       })}
       aria-hidden="true"
     />
+  );
+}
+
+/**
+ * The dots' meaning in words, shown once above a list of them. Touch screens
+ * cannot hover, so a dot's own tooltip never appears there; this is the only way
+ * a phone learns what the colours mean. The "no answer yet" entry shows only
+ * where unanswered rows carry the ring (from `sm` up).
+ */
+export function ProvenanceLegend({ className }: { className?: string }) {
+  return (
+    <p className={cn('flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground', className)}>
+      <span className="inline-flex items-center gap-1.5">
+        <ProvenanceDot state="manual" />
+        Answered by you
+      </span>
+      <span className="inline-flex items-center gap-1.5">
+        <ProvenanceDot state="inferred" />
+        Inferred by Memory
+      </span>
+      <span className="hidden items-center gap-1.5 sm:inline-flex">
+        <ProvenanceDot state="unanswered" />
+        No answer yet
+      </span>
+    </p>
   );
 }
 
@@ -78,9 +106,17 @@ const BASE_CLASS = 'inline-flex items-center gap-1.5 text-xs text-muted-foregrou
  * owes a keyboard: a hit area a touch bigger than the 6px dot, a hover tint, a
  * visible focus ring in the ring token every other control on the page uses,
  * and a pointer cursor.
+ *
+ * On a touch screen that hit area was still ~14 x 10 pt (REFL-08: found only by
+ * tapping exact coordinates), so there the button grows to ~44 pt square — the
+ * size Apple asks of a tap target. The growth is padding cancelled by an equal
+ * negative margin, so a row keeps its shape. It is taken upward, downward and to
+ * the LEFT only: the dot sits at the right edge of its row, where more than the
+ * page's own gutter would overflow the scroller and make it pan sideways.
  */
 const BUTTON_CLASS = cn(
   '-mx-1 -my-0.5 cursor-pointer rounded-sm px-1 py-0.5 transition-colors',
+  'pointer-coarse:-my-4.5 pointer-coarse:-ml-8 pointer-coarse:py-4.5 pointer-coarse:pl-8',
   'hover:bg-muted/60 hover:text-foreground',
   'focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50',
 );

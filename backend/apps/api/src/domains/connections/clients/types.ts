@@ -12,6 +12,16 @@ export interface TokenResponse {
   expires_in?: number;
 }
 
+/**
+ * The date range a `calendarView/delta` round was opened with — its
+ * `startDateTime` and `endDateTime`, as ISO instants. Graph encodes both into
+ * every link of the round, so they hold for as long as its links are followed.
+ */
+export interface CalendarViewWindow {
+  startDateTime: string;
+  endDateTime: string;
+}
+
 export interface Calendar {
   id: string;
   name: string;
@@ -22,6 +32,12 @@ export interface Calendar {
     address: string;
   };
   events?: unknown[];
+  /**
+   * Set by the incremental sync only: the range of the delta round `events`
+   * came from. The transform needs it to read an `@removed` entry, which Graph
+   * also sends for events OUTSIDE the range that were merely edited.
+   */
+  deltaWindow?: CalendarViewWindow;
 }
 
 export interface CalendarEvent {

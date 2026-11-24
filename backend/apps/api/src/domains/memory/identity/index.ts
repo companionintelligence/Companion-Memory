@@ -11,6 +11,7 @@ export {
   PLATFORM_SYSTEMS,
   SYSTEM_ALIASES,
   adoptIngestIdentity,
+  agentTurnSourceSystem,
   attachmentIdentity,
   canonicalSystem,
   fallbackId,
@@ -42,8 +43,13 @@ export {
   unixMsFromMicros,
   type BrowserSystem,
 } from './browser';
-export { calendarEventIdentity, icsRecurrenceInstant, normalizeIcsRecurrenceId } from './calendar';
-export { facebookPostIdentity } from './facebook';
+export {
+  calendarEventIdentity,
+  icsRecurrenceInstant,
+  normalizeIcsRecurrenceId,
+  utcInstantOfZonedTime,
+} from './calendar';
+export { facebookPageLikeId, facebookPageLikeIdentity, facebookPostIdentity } from './facebook';
 export { fileIdentity } from './file';
 export {
   isRedditCommentFullname,

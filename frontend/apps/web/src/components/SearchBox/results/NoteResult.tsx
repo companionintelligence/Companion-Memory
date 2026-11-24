@@ -1,6 +1,8 @@
 import { NoteIcon } from '@/components/icons';
 import { gql, useFragment, type FragmentType } from '@/graphql';
 
+import { SearchResultRow } from './SearchResultRow';
+
 export const NOTE_FRAGMENT = gql(`
   fragment SearchResultNoteData on NoteType {
     id
@@ -15,13 +17,5 @@ interface Props {
 export function NoteResult({ note }: Props) {
   const data = useFragment(NOTE_FRAGMENT, note);
 
-  return (
-    <div className="flex items-center justify-between gap-2">
-      <div className="flex items-center gap-2">
-        <NoteIcon />
-        <div className="font-medium">{data.title}</div>
-      </div>
-      <div className="text-muted-foreground">Note</div>
-    </div>
-  );
+  return <SearchResultRow icon={<NoteIcon />} title={data.title} kind="Note" />;
 }

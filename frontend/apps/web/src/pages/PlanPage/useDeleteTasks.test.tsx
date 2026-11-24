@@ -1,12 +1,21 @@
-import { gql as apolloGql, useQuery } from '@apollo/client';
+import { gql as apolloGql } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
+import {
+  GET_PLAN_BADGE_COUNT,
+  usePlanBadgeCount,
+} from '@/layouts/Main/SecondaryNavigation/usePlanBadgeCount';
 import { renderWithProviders } from '@/test/renderWithProviders';
 
 import { DELETE_TASK, useDeleteTasks } from './useDeleteTasks';
 
 const toastError = vi.hoisted(() => vi.fn());
+
+// The badge also re-reads on the live task stream, which needs a signed-in
+// session this harness does not have; this file is about the delete path.
+vi.mock('@/hooks/useLiveChanges', () => ({ useLiveChanges: vi.fn() }));
 
 vi.mock('@ci/shadcn', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -55,6 +64,36 @@ function deleteMock(id: string, deletedId: string | null = id) {
   };
 }
 
+function badgeMock(openIds: string[]) {
+  return {
+    request: { query: GET_PLAN_BADGE_COUNT, variables: { first: 200 } },
+    result: {
+      data: {
+        tasks: {
+          edges: openIds.map((id) => ({
+            node: { __typename: 'TaskType', id, status: 'open' },
+          })),
+        },
+        taskPendingChanges: [],
+      },
+    },
+  };
+}
+
+function BadgeAndDelete() {
+  const count = usePlanBadgeCount();
+  const { deleteTasks } = useDeleteTasks();
+
+  return (
+    <>
+      <p>open:{count}</p>
+      <button type="button" onClick={() => void deleteTasks(['t1'])}>
+        Delete
+      </button>
+    </>
+  );
+}
+
 function ListAndDelete({ taskIds }: { taskIds: string[] }) {
   const { data } = useQuery<{ tasks: { edges: { node: ListNode }[] } }>(LIST_TASKS);
   const { deleteTasks, deleting } = useDeleteTasks();
@@ -75,6 +114,18 @@ function ListAndDelete({ taskIds }: { taskIds: string[] }) {
 }
 
 describe('useDeleteTasks', () => {
+  it('refreshes the sidebar count after a delete', async () => {
+    renderWithProviders(<BadgeAndDelete />, {
+      mocks: [badgeMock(['t1', 't2']), deleteMock('t1'), badgeMock(['t2'])],
+    });
+
+    expect(await screen.findByText('open:2')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
+
+    expect(await screen.findByText('open:1')).toBeInTheDocument();
+  });
+
   it('deletes immediately and evicts the row from a cached list, leaving the others', async () => {
     renderWithProviders(<ListAndDelete taskIds={['t1']} />, {
       mocks: [
@@ -99,7 +150,9 @@ describe('useDeleteTasks', () => {
       mocks: [listMock([{ id: 't1', title: 'Write the migration' }]), deleteMock('t1', null)],
     });
 
-    fireEvent.click(await screen.findByRole('button', { name: /^delete$/i }));
+    // The row first, so "leaves the row" checks a row that was there, not a list still loading.
+    await screen.findByText('Write the migration');
+    fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
 
     await waitFor(() =>
       expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/could not delete this task/i)),

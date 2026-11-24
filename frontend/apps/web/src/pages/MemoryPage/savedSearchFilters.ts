@@ -5,7 +5,9 @@
  */
 import { readMessageDirection } from '@/components/SearchBox/DirectionToggle';
 
+import { readAreasParam } from './bbox';
 import { isRollingDatePreset } from './Components/ExplorerToolbar/datePresets';
+import { readListParam } from './Components/ExplorerToolbar/filterParams';
 export interface SavedSearchFiltersInput {
   eventTypes?: string[];
   datePreset?: string;
@@ -19,6 +21,10 @@ export interface SavedSearchFiltersInput {
   hasLocation?: boolean;
   semantic?: boolean;
   direction?: string;
+  fileKinds?: string[];
+  view?: string;
+  /** The map's searched areas, each `[minLon, minLat, maxLon, maxLat]`, ORed; see `bbox.ts`. */
+  areas?: number[][];
 }
 
 /**
@@ -34,14 +40,22 @@ export function buildSavedSearchFilters(params: URLSearchParams): SavedSearchFil
     return value && value.length > 0 ? value : undefined;
   };
 
+  // Who / Where carry one value per param occurrence (a place can be a full
+  // street address, commas and all); see readListParam.
+  const list = (key: string) => {
+    const value = readListParam(params, key);
+
+    return value.length > 0 ? value : undefined;
+  };
+
   const when = params.get('when');
   const rollingPreset = isRollingDatePreset(when) ? when : undefined;
 
   const filters: SavedSearchFiltersInput = {
     eventTypes: csv('eventTypes'),
     connectors: csv('connectors'),
-    people: csv('people'),
-    places: csv('places'),
+    people: list('people'),
+    places: list('places'),
     datePreset: rollingPreset,
     startTime: rollingPreset ? undefined : params.get('from') || undefined,
     endTime: rollingPreset ? undefined : params.get('to') || undefined,
@@ -50,6 +64,14 @@ export function buildSavedSearchFilters(params: URLSearchParams): SavedSearchFil
     hasLocation: params.get('hasLocation') === '1' ? true : undefined,
     semantic: params.get('semantic') === '1' ? true : undefined,
     direction: readMessageDirection(params.get('direction')) ?? undefined,
+    fileKinds: csv('fileKinds'),
+    // The view is part of the search as the person built it: a Where search
+    // saved from the map comes back on the map. The list is the default, so it
+    // is not worth remembering and does not make an otherwise empty search one.
+    view: params.get('view') && params.get('view') !== 'list' ? params.get('view')! : undefined,
+    // The rectangles drawn on the map are part of the search: they are what
+    // make a trip a place on the globe rather than a place name.
+    areas: readAreasParam(params),
   };
 
   return Object.values(filters).some((value) => value !== undefined) ? filters : undefined;

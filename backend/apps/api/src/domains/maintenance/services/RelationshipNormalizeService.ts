@@ -3,6 +3,7 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
 import { LoggerService } from '@ci/common/logging';
+import { countAffected } from '@ci/common/persistence';
 
 /**
  * #1947 stage A — normalise historical `ci.relationships` rows to the
@@ -28,11 +29,24 @@ export class RelationshipNormalizeService {
     bidirectionalStamped: number;
   }> {
     return this.dataSource.transaction(async (manager) => {
-      // Rename aliases in place (same endpoints). When a canonical twin already
-      // exists, deactivate the alias instead of colliding on the directed uniq.
-      const renamed = await manager.query(
+      // Rename aliases in place (same endpoints). relationships_unique_directed_idx
+      // allows one ACTIVE row per (from, to, type), so of the aliases that map
+      // one pair onto one canonical type (PARTNER and ROMANTIC_PARTNER,
+      // HAPPENED_AT and AT_LOCATION) only the oldest is renamed — and none when a
+      // row of that type already joins the pair, active or not (an inactive one
+      // was retired on purpose; renaming its alias would revive it). The rest are
+      // deactivated as duplicates. Renaming both used to abort the normalize.
+      //
+      // Active rows only, like the swap and IS passes: an inactive row cannot
+      // collide, and selecting them re-deactivated (and re-counted) this pass's
+      // own duplicates on every replay. Keyed on `is_active`, not on the
+      // `normalized_duplicate_of` stamp: createOrUpdateRelationship re-activates
+      // a re-asserted row with its properties kept, and a stamped row that is
+      // active again has to be folded again, not skipped.
+      const renamed = await countAffected(
+        manager,
         `WITH aliases AS (
-           SELECT relationship_id, from_entity_id, to_entity_id, relationship_type,
+           SELECT relationship_id, from_entity_id, to_entity_id, created_at,
                   CASE relationship_type
                     WHEN 'HAPPENED_AT' THEN 'LOCATED_AT'
                     WHEN 'AT_LOCATION' THEN 'LOCATED_AT'
@@ -46,17 +60,20 @@ export class RelationshipNormalizeService {
              FROM ci.relationships
             WHERE owner_user_id = $1
               AND relationship_type = ANY($2::text[])
+              AND is_active = TRUE
          ),
-         colliding AS (
-           SELECT a.relationship_id
+         survivors AS (
+           SELECT DISTINCT ON (a.from_entity_id, a.to_entity_id, a.new_type)
+                  a.relationship_id, a.new_type
              FROM aliases a
-            WHERE EXISTS (
+            WHERE NOT EXISTS (
               SELECT 1 FROM ci.relationships r
                WHERE r.from_entity_id = a.from_entity_id
                  AND r.to_entity_id = a.to_entity_id
                  AND r.relationship_type = a.new_type
                  AND r.relationship_id <> a.relationship_id
             )
+            ORDER BY a.from_entity_id, a.to_entity_id, a.new_type, a.created_at, a.relationship_id
          ),
          deactivated AS (
            UPDATE ci.relationships r
@@ -65,24 +82,21 @@ export class RelationshipNormalizeService {
                   properties = COALESCE(r.properties, '{}'::jsonb)
                     || jsonb_build_object('normalized_duplicate_of', a.new_type)
              FROM aliases a
-             JOIN colliding c ON c.relationship_id = a.relationship_id
             WHERE r.relationship_id = a.relationship_id
-           RETURNING r.relationship_id
+              AND NOT EXISTS (
+                SELECT 1 FROM survivors s WHERE s.relationship_id = a.relationship_id
+              )
+           RETURNING 1
          ),
          rewritten AS (
            UPDATE ci.relationships r
-              SET relationship_type = a.new_type,
+              SET relationship_type = s.new_type,
                   updated_at = NOW()
-             FROM aliases a
-            WHERE r.relationship_id = a.relationship_id
-              AND NOT EXISTS (
-                SELECT 1 FROM colliding c WHERE c.relationship_id = a.relationship_id
-              )
-           RETURNING r.relationship_id
+             FROM survivors s
+            WHERE r.relationship_id = s.relationship_id
+           RETURNING 1
          )
-         SELECT relationship_id FROM rewritten
-         UNION ALL
-         SELECT relationship_id FROM deactivated`,
+         SELECT ((SELECT count(*) FROM rewritten) + (SELECT count(*) FROM deactivated))::int AS count`,
         [
           userId,
           ['HAPPENED_AT', 'AT_LOCATION', 'RELATED_TO', 'FRIEND', 'COLLEAGUE', 'PARTNER', 'ROMANTIC_PARTNER'],
@@ -90,7 +104,10 @@ export class RelationshipNormalizeService {
       );
 
       // Content −PART_OF→ Event → DOCUMENTS (same endpoints; matrix gen 4).
-      const documents = await manager.query(
+      // Active rows only, as above. There is no survivor to elect: the directed
+      // uniq already allows just one active PART_OF per pair.
+      const documents = await countAffected(
+        manager,
         `WITH victims AS (
            SELECT relationship_id, from_entity_id, to_entity_id
              FROM ci.relationships
@@ -98,6 +115,7 @@ export class RelationshipNormalizeService {
               AND relationship_type = 'PART_OF'
               AND from_entity_type = 'Content'
               AND to_entity_type = 'Event'
+              AND is_active = TRUE
          ),
          colliding AS (
            SELECT v.relationship_id
@@ -118,7 +136,7 @@ export class RelationshipNormalizeService {
                     || jsonb_build_object('normalized_duplicate_of', 'DOCUMENTS')
              FROM colliding c
             WHERE r.relationship_id = c.relationship_id
-           RETURNING r.relationship_id
+           RETURNING 1
          ),
          rewritten AS (
            UPDATE ci.relationships r
@@ -129,11 +147,9 @@ export class RelationshipNormalizeService {
               AND NOT EXISTS (
                 SELECT 1 FROM colliding c WHERE c.relationship_id = v.relationship_id
               )
-           RETURNING r.relationship_id
+           RETURNING 1
          )
-         SELECT relationship_id FROM rewritten
-         UNION ALL
-         SELECT relationship_id FROM deactivated`,
+         SELECT ((SELECT count(*) FROM rewritten) + (SELECT count(*) FROM deactivated))::int AS count`,
         [userId],
       );
 
@@ -146,9 +162,15 @@ export class RelationshipNormalizeService {
         { from: 'RECEIVED_EMAIL_FROM', to: 'EMAILED' },
       ];
 
+      // Every count below is a CTE ending in `SELECT count(*)`, never
+      // `.length` of a statement whose OUTER command is UPDATE: TypeORM hands
+      // that back as the pair `[rows, rowCount]`, so `swapped`, `deletedIs` and
+      // `bidirectionalStamped` used to report 6, 2 and 2 on every run — the
+      // replay of an already-normalized graph included.
       let swapped = 0;
       for (const spec of swapSpecs) {
-        const inserted: Array<{ relationship_id: string }> = await manager.query(
+        swapped += await countAffected(
+          manager,
           `WITH victims AS (
              SELECT *
                FROM ci.relationships
@@ -168,36 +190,46 @@ export class RelationshipNormalizeService {
                FROM victims v
              ON CONFLICT DO NOTHING
              RETURNING relationship_id
+           ),
+           retired AS (
+             UPDATE ci.relationships r
+                SET is_active = FALSE, updated_at = NOW()
+               FROM victims v
+              WHERE r.relationship_id = v.relationship_id
+             RETURNING 1
            )
-           UPDATE ci.relationships r
-              SET is_active = FALSE, updated_at = NOW()
-             FROM victims v
-            WHERE r.relationship_id = v.relationship_id
-           RETURNING r.relationship_id`,
+           SELECT count(*)::int AS count FROM retired`,
           [userId, spec.from, spec.to],
         );
-        swapped += inserted.length;
       }
 
       // Reject IS — deactivate (identity belongs in entity_identifiers + merge).
-      const deletedIs = await manager.query(
-        `UPDATE ci.relationships
-            SET is_active = FALSE, updated_at = NOW(),
-                properties = COALESCE(properties, '{}'::jsonb) || jsonb_build_object('rejected', 'IS')
-          WHERE owner_user_id = $1
-            AND relationship_type = 'IS'
-            AND is_active = TRUE
-          RETURNING relationship_id`,
+      const deletedIs = await countAffected(
+        manager,
+        `WITH rejected AS (
+           UPDATE ci.relationships
+              SET is_active = FALSE, updated_at = NOW(),
+                  properties = COALESCE(properties, '{}'::jsonb) || jsonb_build_object('rejected', 'IS')
+            WHERE owner_user_id = $1
+              AND relationship_type = 'IS'
+              AND is_active = TRUE
+           RETURNING 1
+         )
+         SELECT count(*)::int AS count FROM rejected`,
         [userId],
       );
 
-      const bidirectionalStamped = await manager.query(
-        `UPDATE ci.relationships
-            SET is_bidirectional = TRUE, updated_at = NOW()
-          WHERE owner_user_id = $1
-            AND is_bidirectional = FALSE
-            AND relationship_type = ANY($2::text[])
-          RETURNING relationship_id`,
+      const bidirectionalStamped = await countAffected(
+        manager,
+        `WITH stamped AS (
+           UPDATE ci.relationships
+              SET is_bidirectional = TRUE, updated_at = NOW()
+            WHERE owner_user_id = $1
+              AND is_bidirectional = FALSE
+              AND relationship_type = ANY($2::text[])
+           RETURNING 1
+         )
+         SELECT count(*)::int AS count FROM stamped`,
         [
           userId,
           [
@@ -222,10 +254,10 @@ export class RelationshipNormalizeService {
       );
 
       const result = {
-        renamed: renamed.length + documents.length,
+        renamed: renamed + documents,
         swapped,
-        deletedIs: deletedIs.length,
-        bidirectionalStamped: bidirectionalStamped.length,
+        deletedIs,
+        bidirectionalStamped,
       };
 
       this.logger.log('Relationship normalize complete', { userId, ...result });

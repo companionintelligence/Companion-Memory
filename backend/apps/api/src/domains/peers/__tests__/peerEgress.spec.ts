@@ -139,7 +139,12 @@ describe('peerEgressFetch — a peer that answers with a redirect', () => {
     const cancel = jest.fn().mockResolvedValue(undefined);
     mockFetch.mockResolvedValue(respond({ status, cancel }));
 
-    await expect(peerEgressFetch(PEER, INIT)).rejects.toBeInstanceOf(EgressBlockedError);
+    const error = await peerEgressFetch(PEER, INIT).catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(EgressBlockedError);
+    // Said in the error itself, not guessed from its text: a lookup tells a host that answered with a
+    // redirect (Local.Pub's "redirect" domain mode) from one the policy refused.
+    expect((error as EgressBlockedError).redirected).toBe(true);
 
     // THE WHOLE POINT: exactly one request left this box. The second hop — the
     // one aimed at 127.0.0.1:11434 with the ask body attached — never happened.
@@ -163,6 +168,31 @@ describe('peerEgressFetch — a peer that answers with a redirect', () => {
     expect(error).toBeInstanceOf(EgressBlockedError);
     expect(error?.reason).not.toContain('127.0.0.1');
     expect(error?.reason).toContain('307');
+  });
+});
+
+describe('peerEgressFetch — a refusal that is not a redirect says so', () => {
+  it('marks a URL the policy refuses as not redirected', async () => {
+    const error = await peerEgressFetch('http://devon.example.com/agent/v1/ask', INIT).catch(
+      (thrown: unknown) => thrown,
+    );
+
+    expect(error).toBeInstanceOf(EgressBlockedError);
+    expect((error as EgressBlockedError).redirected).toBe(false);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('marks a block at connect time as not redirected', async () => {
+    mockFetch.mockRejectedValue(
+      Object.assign(new TypeError('fetch failed'), {
+        cause: new EgressBlockedError('peer.example.com resolves to a blocked address'),
+      }),
+    );
+
+    const error = await peerEgressFetch(PEER, INIT).catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(EgressBlockedError);
+    expect((error as EgressBlockedError).redirected).toBe(false);
   });
 });
 

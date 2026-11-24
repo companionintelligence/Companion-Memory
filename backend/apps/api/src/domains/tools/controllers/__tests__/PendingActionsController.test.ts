@@ -57,7 +57,14 @@ describe('PendingActionsController', () => {
 
     await controller.approve('pa-1', { userId: 'user-1' }, REQ);
 
-    expect(confirmations.confirm).toHaveBeenCalledWith('user-1', 'pa-1', READ_CAPABILITY);
+    // The request rides along for a GraphQL-plane row, which replays as the confirming request.
+    expect(confirmations.confirm).toHaveBeenCalledWith(
+      'user-1',
+      'pa-1',
+      READ_CAPABILITY,
+      expect.any(Date),
+      REQ,
+    );
   });
 
   it('refuses an installed app the owner\u2019s decision, on both verbs', async () => {
@@ -69,12 +76,12 @@ describe('PendingActionsController', () => {
     const { controller } = harness();
     const managedApp = { ...REQ, apiKeyManagedBy: 'connect' as const };
 
-    await expect(
-      controller.approve('pa-1', { userId: 'user-1' }, managedApp),
-    ).rejects.toBeInstanceOf(ForbiddenException);
-    await expect(
-      controller.decline('pa-1', { userId: 'user-1' }, managedApp),
-    ).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(controller.approve('pa-1', { userId: 'user-1' }, managedApp)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+    await expect(controller.decline('pa-1', { userId: 'user-1' }, managedApp)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
   });
 
   it('declines through the same owner scope', async () => {

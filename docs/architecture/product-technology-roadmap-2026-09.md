@@ -1,6 +1,5 @@
 # Companion Memory — product and technology roadmap (September 2026)
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
 >
 > **Status:** point-in-time review of `main` at `a9f5ce116` (2026-09-03), written to be re-verified rather than trusted. **A first remediation pass has landed as [#2584](https://github.com/companionintelligence/CI-Server/pull/2584) — see §9 for what changed and what did not.** Every finding cites the file, doc, issue or screenshot it came from. Sizes are **S** (under a day), **M** (about a week), **L** (multi-week). Horizons are **Now** (to mid-October), **Next** (to the December freeze) and **Later** (2027). Nothing here is a commitment; it is the sequence the evidence argues for.
 >

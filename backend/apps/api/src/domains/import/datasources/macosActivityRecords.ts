@@ -83,8 +83,7 @@ export function readMacosRows(db: Database.Database, source: MacosSource): Itera
 }
 
 export type MacosRecordResult =
-  | { item: Item }
-  | { drop: 'invalid_timestamp' | 'empty_after_parse' | 'macos_unsupported_stream' };
+  { item: Item } | { drop: 'invalid_timestamp' | 'empty_after_parse' | 'macos_unsupported_stream' };
 
 /** Preserve source identity across snapshot paths and repeated imports. */
 export function macosItem(row: Row, source: MacosSource, deviceId: string): MacosRecordResult {

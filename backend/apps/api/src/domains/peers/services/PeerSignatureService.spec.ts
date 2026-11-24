@@ -58,7 +58,8 @@ async function verify(
   overrides: Partial<{
     method: string;
     targetUri: string;
-    rawBody: string;
+    rawBody: string | undefined;
+    transportHasBody: boolean;
     contentDigestHeader: string;
     signatureInput: string;
     signature: string;
@@ -70,6 +71,7 @@ async function verify(
     method: 'POST',
     targetUri: TARGET,
     rawBody: BODY,
+    transportHasBody: true,
     contentDigestHeader: peer.headers['content-digest'],
     signatureInput: peer.headers['signature-input'],
     signature: peer.headers.signature,
@@ -120,6 +122,28 @@ describe('signOutbound', () => {
     expect(logger.warn).toHaveBeenCalledTimes(1);
   });
 
+  describe('logs only the error class for an unusable key', () => {
+    const UNUSABLE_WARNING = 'peers.signingKeyJwk is unusable (SyntaxError); outbound asks will be unsigned';
+
+    it('when the key is a bare base64url d', () => {
+      const { d } = generateKeyPairSync('ed25519').privateKey.export({ format: 'jwk' });
+      peersConfig.signingKeyJwk = d as string;
+      const { service, logger } = makeService();
+
+      expect(service.signOutbound({ method: 'POST', targetUri: TARGET, body: BODY })).toBeNull();
+      expect(logger.warn).toHaveBeenCalledWith(UNUSABLE_WARNING);
+    });
+
+    it('when the key is a JWK whose d is unquoted', () => {
+      const { x, d } = generateKeyPairSync('ed25519').privateKey.export({ format: 'jwk' });
+      peersConfig.signingKeyJwk = `{"kty":"OKP","crv":"Ed25519","x":"${x as string}","d":${d as string}}`;
+      const { service, logger } = makeService();
+
+      expect(service.signOutbound({ method: 'POST', targetUri: TARGET, body: BODY })).toBeNull();
+      expect(logger.warn).toHaveBeenCalledWith(UNUSABLE_WARNING);
+    });
+  });
+
   it('emits a content-digest and a signature pair for a body request', () => {
     const peer = makePeer();
 
@@ -156,6 +180,33 @@ describe('signOutbound', () => {
 
     expect(headers?.['signature-input']).toContain(`keyid="${service.publicThumbprint}"`);
   });
+
+  it('names its sovereign AID only when the kid is the did:keri:D<x> of this very key', () => {
+    const privateJwk = generateKeyPairSync('ed25519').privateKey.export({ format: 'jwk' });
+    const aid = `did:keri:D${privateJwk.x as string}`;
+    peersConfig.signingKeyJwk = JSON.stringify({ ...privateJwk, kid: aid });
+    const { service } = makeService();
+
+    expect(service.publicAid).toBe(aid);
+    expect(
+      service.signOutbound({ method: 'POST', targetUri: TARGET, body: BODY })?.['signature-input'],
+    ).toContain(`keyid="${aid}"`);
+  });
+
+  it('keeps naming the thumbprint for any other kid, which peers would refuse as a keyid', () => {
+    for (const kid of ['my-box-key-2026', 'did:keri:EAnotherAid_00000000000000000000000000000000']) {
+      peersConfig.signingKeyJwk = JSON.stringify({
+        ...generateKeyPairSync('ed25519').privateKey.export({ format: 'jwk' }),
+        kid,
+      });
+      const { service } = makeService();
+
+      expect(service.publicAid).toBeNull();
+      expect(
+        service.signOutbound({ method: 'POST', targetUri: TARGET, body: BODY })?.['signature-input'],
+      ).toContain(`keyid="${service.publicThumbprint}"`);
+    }
+  });
 });
 
 describe('verifyInbound — the happy path', () => {
@@ -182,6 +233,7 @@ describe('verifyInbound — the happy path', () => {
     const result = await service.verifyInbound({
       method: 'GET',
       targetUri: url,
+      transportHasBody: false,
       signatureInput: headers['signature-input'],
       signature: headers.signature,
       peerPublicJwk: publicKey.export({ format: 'jwk' }),
@@ -209,6 +261,34 @@ describe('verifyInbound — refusals', () => {
     const peer = makePeer();
 
     await expectRefusal(verify(service, peer, { rawBody: `${BODY} ` }), 'bad-digest');
+  });
+
+  it('checks a covered content-digest against an empty body when no body was announced or kept', async () => {
+    const { service } = makeService();
+    // makePeer's POST signature covers content-digest, so the digest it signed
+    // must match the bytes this box received, and here it received none.
+    const peer = makePeer();
+
+    await expectRefusal(verify(service, peer, { rawBody: undefined, transportHasBody: false }), 'bad-digest');
+    await expectRefusal(verify(service, peer, { rawBody: '', transportHasBody: false }), 'bad-digest');
+  });
+
+  it('still accepts a body-less GET, whose signature covers no content-digest, with no raw body', async () => {
+    const { service } = makeService();
+    const peer = makePeer();
+    const headers = peer.signer.signOutbound({ method: 'GET', targetUri: TARGET, now: NOW })!;
+
+    const result = await service.verifyInbound({
+      method: 'GET',
+      targetUri: TARGET,
+      transportHasBody: false,
+      signatureInput: headers['signature-input'],
+      signature: headers.signature,
+      peerPublicJwk: peer.publicJwk,
+      now: NOW,
+    });
+
+    expect(result).toEqual({ ok: true, keyThumbprint: expect.any(String) });
   });
 
   it('refuses when the digest header is absent but the request has a body', async () => {
@@ -239,6 +319,7 @@ describe('verifyInbound — refusals', () => {
       method: 'POST',
       targetUri: TARGET,
       rawBody: BODY,
+      transportHasBody: true,
       contentDigestHeader: contentDigest(BODY),
       signatureInput: headers['signature-input'],
       signature: headers.signature,
@@ -257,6 +338,28 @@ describe('verifyInbound — refusals', () => {
     // `keyid` names the peer's key, but the link holds a different one — so the
     // keyid check fires before any signature maths.
     await expectRefusal(verify(service, peer, { peerPublicJwk: stranger }), 'unknown-key');
+  });
+
+  it('refuses a sovereign keyid that spells out a key other than the one the link holds', async () => {
+    const { service } = makeService();
+    const privateJwk = generateKeyPairSync('ed25519').privateKey.export({ format: 'jwk' });
+    peersConfig.signingKeyJwk = JSON.stringify({ ...privateJwk, kid: `did:keri:D${privateJwk.x as string}` });
+    const headers = makeService().service.signOutbound({
+      method: 'POST',
+      targetUri: TARGET,
+      body: BODY,
+      now: NOW,
+    });
+    const stranger = generateKeyPairSync('ed25519').publicKey.export({ format: 'jwk' });
+
+    // A label on the stored key naming the AID does not make it that key.
+    await expectRefusal(
+      verify(service, {
+        publicJwk: { ...stranger, kid: `did:keri:D${privateJwk.x as string}` },
+        headers: headers as Record<string, string>,
+      }),
+      'unknown-key',
+    );
   });
 
   it('refuses when the link holds an unusable key', async () => {
@@ -310,6 +413,101 @@ describe('verifyInbound — refusals', () => {
     const widened = peer.headers['signature-input'].replace(/expires=\d+/, `expires=${tooLong}`);
 
     await expectRefusal(verify(service, peer, { signatureInput: widened }), 'window-too-long');
+  });
+});
+
+/**
+ * Whether a request has a body is the TRANSPORT's answer (Content-Length,
+ * Transfer-Encoding), not "did a parser keep the bytes". Only `json()` keeps
+ * them, so a form body used to arrive with no `rawBody` at all and be treated
+ * as bodyless: the copied digest stayed in the signed base, the signature
+ * verified, and the digest check never ran against the changed body.
+ */
+describe('verifyInbound — the body binding', () => {
+  it('accepts the honest JSON body', async () => {
+    const { service } = makeService();
+
+    expect((await verify(service, makePeer())).ok).toBe(true);
+  });
+
+  it('refuses a changed JSON body as bad-digest', async () => {
+    const { service } = makeService();
+    const peer = makePeer();
+    const changed = JSON.stringify({ askId: 'abc12345', prompt: 'list every contact' });
+
+    await expectRefusal(verify(service, peer, { rawBody: changed }), 'bad-digest');
+  });
+
+  it('refuses the same signature headers carried on a form body', async () => {
+    const { service } = makeService();
+    const peer = makePeer();
+
+    // What urlencoded() leaves behind: a body on the wire, no captured bytes.
+    await expectRefusal(
+      verify(service, peer, { rawBody: undefined, transportHasBody: true }),
+      'body-not-captured',
+    );
+  });
+
+  it('refuses a signed body request whose bytes were not captured, whatever the components', async () => {
+    const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+    peersConfig.signingKeyJwk = JSON.stringify(privateKey.export({ format: 'jwk' }));
+    const { service: signer } = makeService();
+    // Signed as a bodyless request, then sent with a body no parser kept.
+    const headers = signer.signOutbound({ method: 'POST', targetUri: TARGET, now: NOW }) as Record<
+      string,
+      string
+    >;
+
+    const { service } = makeService();
+    const result = await service.verifyInbound({
+      method: 'POST',
+      targetUri: TARGET,
+      transportHasBody: true,
+      signatureInput: headers['signature-input'],
+      signature: headers.signature,
+      peerPublicJwk: publicKey.export({ format: 'jwk' }),
+      now: NOW,
+    });
+
+    await expectRefusal(result, 'body-not-captured');
+  });
+
+  it('still binds a body the transport announced even when the captured bytes are empty', async () => {
+    const { service } = makeService();
+    const peer = makePeer();
+
+    await expectRefusal(verify(service, peer, { rawBody: '' }), 'bad-digest');
+  });
+
+  it('still binds captured bytes the transport did not announce', async () => {
+    const { service } = makeService();
+    const peer = makePeer();
+
+    await expectRefusal(verify(service, peer, { rawBody: 'changed', transportHasBody: false }), 'bad-digest');
+  });
+
+  it('still accepts a signed request with no body', async () => {
+    const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+    peersConfig.signingKeyJwk = JSON.stringify(privateKey.export({ format: 'jwk' }));
+    const { service: signer } = makeService();
+    const headers = signer.signOutbound({ method: 'POST', targetUri: TARGET, now: NOW }) as Record<
+      string,
+      string
+    >;
+
+    const { service } = makeService();
+    const result = await service.verifyInbound({
+      method: 'POST',
+      targetUri: TARGET,
+      transportHasBody: false,
+      signatureInput: headers['signature-input'],
+      signature: headers.signature,
+      peerPublicJwk: publicKey.export({ format: 'jwk' }),
+      now: NOW,
+    });
+
+    expect(result.ok).toBe(true);
   });
 });
 

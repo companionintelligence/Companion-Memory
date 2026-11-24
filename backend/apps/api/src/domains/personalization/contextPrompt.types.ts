@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 /** Keep in sync with frontend `components/selectors/types.ts`. */
 export const SELECTOR_TYPES = [

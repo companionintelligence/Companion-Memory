@@ -63,7 +63,7 @@ describe('formatExactCoordinate', () => {
 });
 
 describe('applyCurrentLocation', () => {
-  it('writes exact coordinates and fills a blank name from the address', () => {
+  it('writes exact coordinates and keeps the street as the address, not the name or the kind', () => {
     expect(
       applyCurrentLocation(emptyPlaceDraft(), {
         latitude: 37.7823,
@@ -71,9 +71,9 @@ describe('applyCurrentLocation', () => {
         address: '66 Mint St, San Francisco',
       }),
     ).toMatchObject({
-      name: '66 Mint St, San Francisco',
+      name: '',
       address: '66 Mint St, San Francisco',
-      placeKind: 'address',
+      placeKind: '',
       latitude: '37.7823000',
       longitude: '-122.4076000',
     });
@@ -99,14 +99,14 @@ describe('applyCurrentLocation', () => {
     );
   });
 
-  it('replaces a Current location placeholder once an address arrives', () => {
+  it('clears a Current location placeholder once an address arrives so the user can name it', () => {
     expect(
       applyCurrentLocation(draft({ name: 'Current location' }), {
         latitude: 1,
         longitude: 2,
         address: '66 Mint St',
-      }).name,
-    ).toBe('66 Mint St');
+      }),
+    ).toMatchObject({ name: '', address: '66 Mint St', placeKind: '' });
   });
 });
 

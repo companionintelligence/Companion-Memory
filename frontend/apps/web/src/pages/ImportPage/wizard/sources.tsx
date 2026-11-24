@@ -26,18 +26,19 @@ import {
 
 import type { TrackedObject } from '@/components/connect/SourceCard';
 
-import type { CatalogSource, ImportSourceGuide } from '../useImportApi';
+import type { CatalogSource, ImportBundle, ImportSourceGuide } from '../useImportApi';
 
 /**
  * Presentation glue for the import wizard — the FRONTEND half of the catalog.
  *
- * The export instructions themselves are authored in the backend
- * (`sources/guides.ts`, served by `GET /import/sources/catalog`); this module
- * keeps only what presentation needs: brand glyphs, per-service logos, the
- * ecosystem groupings the picker renders as sections, and the two multi-service
- * "bundles" whose single download covers several importers. Both the picker and
- * the export cards read the same normalized {@link ImportSourceGuide} shape, so
- * a source's instructions are authored once and shown identically everywhere.
+ * The export instructions themselves are authored in the backend — the
+ * per-source guides in `sources/guides.ts` (`GET /import/sources/catalog`) and
+ * the multi-service bundles in `sources/bundles.ts` (`GET
+ * /import/sources/bundles`); this module keeps only what presentation needs:
+ * brand glyphs, per-service and per-bundle logos, and the ecosystem groupings
+ * the picker renders as sections. Both the picker and the export cards read
+ * the same normalized {@link ImportSourceGuide} shape, so a source's
+ * instructions are authored once and shown identically everywhere.
  */
 
 // ---------------------------------------------------------------------------
@@ -418,98 +419,19 @@ export function shortTitle(title: string): string {
 
 /**
  * A bundle collapses to a single picker button and a single export card; the
- * drop is one archive and the PARSE detects every member inside it — no
- * fan-out is needed here, detection is the backend's job.
+ * drop is one archive and the PARSE detects every member inside it. Which
+ * bundles exist, and what they say, comes from the backend ({@link
+ * ImportBundle}); the logo is the one thing resolved here, by the bundle's id
+ * — `google.svg`, `meta.svg`, `amazon.svg`.
  */
-export interface Bundle {
-  id: string;
-  ecosystem: string;
-  title: string;
-  blurb: string;
-  url?: string;
-  steps: string[];
-  /** Catalog source ids this single download covers. */
-  members: string[];
-  /** Loose addenda rendered under the steps, like a catalog source's notes. */
-  notes?: string[];
-  logo: string;
+export function bundleLogoUrl(bundle: Pick<ImportBundle, 'id'>): string {
+  return `/import-logos/${bundle.id}.svg`;
 }
 
-export const BUNDLES: readonly Bundle[] = [
-  {
-    id: 'google',
-    ecosystem: 'google',
-    title: 'Google (Takeout)',
-    blurb:
-      'One Takeout export covers Gmail, Photos, Location, Calendar, Contacts, YouTube, Voice, plus My Activity, Maps, Keep, Fit and Purchases.',
-    url: 'https://takeout.google.com/',
-    steps: [
-      'Open Google Takeout and sign in.',
-      'Click “Deselect all”, then tick the products you want: Mail, Google Photos, Location History, Calendar, Contacts, YouTube, Voice, My Activity, Maps, Keep, Fit, and Purchases & Reservations.',
-      '“Next step” → “Export once” → “.zip” → “50 GB” → “Create export”.',
-      'You’ll get an email in 1–48 hours. Download the zip.',
-      'Upload the zip here — every product inside it gets imported.',
-    ],
-    notes: [
-      'Takeout exports any single file larger than your chosen part size — a long video, typically — as a loose file NEXT TO the zip parts, not inside them. A handful of loose files upload fine; for a large Photos library with many of them, prefer the appliance\u2019s import inbox: move the whole Takeout folder into the inbox directory and import it from the Inbox panel as one unit.',
-    ],
-    members: [
-      'gmail',
-      'google_photos',
-      'google_location',
-      'google_calendar',
-      'google_contacts',
-      'youtube',
-      'googlevoice',
-      'google_my_activity',
-      'google_maps_places',
-      'google_keep',
-      'google_purchases',
-      'google_fit',
-    ],
-    logo: 'google.svg',
-  },
-  {
-    id: 'meta',
-    ecosystem: 'meta',
-    title: 'Meta (Facebook, Instagram)',
-    blurb:
-      'Meta Accounts Center exports your Facebook and Instagram data — each profile arrives as its own archive. WhatsApp exports separately.',
-    url: 'https://accountscenter.facebook.com/info_and_permissions/dyi/?entry_point=download_your_information&target_id',
-    steps: [
-      'Open Meta Accounts Center → “Download your information”. Instagram must be linked to the Facebook account you’re signed in with (Accounts Center → Manage Accounts → “Add accounts”).',
-      'Request each profile you want — Facebook and Instagram export as separate archives, one request each.',
-      'Set Date range to “All time”, Format to “JSON”, and Media quality to “High”.',
-      'Click “Create files”. You’ll get an email when each download is ready (minutes to a few hours).',
-      'Upload every archive here — each one imports on its own. (WhatsApp is a separate export.)',
-    ],
-    // WhatsApp is deliberately NOT a member — its export is separate, so it
-    // keeps its own picker button and export card.
-    members: ['facebook', 'instagram'],
-    logo: 'meta.svg',
-  },
-  {
-    id: 'amazon',
-    ecosystem: 'amazon',
-    title: 'Amazon (Privacy Central)',
-    blurb:
-      'One "Request All Your Data" archive covers your orders, Prime Video, Audible, Kindle reading, and Amazon Music. Each is also requestable on its own.',
-    url: 'https://www.amazon.com/hz/privacy-central/data-requests/preview.html',
-    steps: [
-      'Open Amazon Privacy Central (link below) and sign in.',
-      'Click "Request Your Data" and choose "Request All Your Data" — or a single category; a category export imports on its own too.',
-      'Confirm the request by email. A single-category export usually arrives within days; the full archive can take up to 30.',
-      'Download the zip from the email link.',
-      'Upload the zip here — every Amazon source inside it gets imported.',
-    ],
-    members: ['amazon', 'prime_video', 'audible', 'kindle_reading', 'amazon_music'],
-    logo: 'amazon.svg',
-  },
-];
-
-export const BUNDLE_BY_ECO: Record<string, Bundle> = Object.fromEntries(
-  BUNDLES.map((bundle) => [bundle.ecosystem, bundle]),
-);
+/** The bundles by the ecosystem each leads. At most one bundle per ecosystem. */
+function bundlesByEcosystem(bundles: readonly ImportBundle[]): ReadonlyMap<string, ImportBundle> {
+  return new Map(bundles.map((bundle) => [bundle.ecosystem, bundle]));
+}
 
 // ---------------------------------------------------------------------------
 // Selection — pure derivations the picker and the export sequence share.
@@ -667,7 +589,11 @@ const STANDALONE_MEMBERS = new Set(['instagram']);
  * actually import today still outranks a "coming soon" one. Members named in
  * {@link STANDALONE_MEMBERS} get their own button as well.
  */
-export function pickableSections(catalog: readonly CatalogSource[]): PickSection[] {
+export function pickableSections(
+  catalog: readonly CatalogSource[],
+  bundles: readonly ImportBundle[],
+): PickSection[] {
+  const bundleByEco = bundlesByEcosystem(bundles);
   const byEcosystem = new Map<string, CatalogSource[]>();
 
   for (const source of catalog) {
@@ -681,13 +607,13 @@ export function pickableSections(catalog: readonly CatalogSource[]): PickSection
     const items: PickItem[] = [];
 
     for (const eco of ecosystems) {
-      const bundle = BUNDLE_BY_ECO[eco];
+      const bundle = bundleByEco.get(eco);
 
       if (bundle) {
         items.push({
           key: `b:${bundle.id}`,
           label: ECOSYSTEM_LABELS[eco] ?? bundle.title,
-          logo: `/import-logos/${bundle.logo}`,
+          logo: bundleLogoUrl(bundle),
           ecosystem: eco,
           ready: true,
           objects: mergeObjects(
@@ -781,7 +707,7 @@ export function pickableSections(catalog: readonly CatalogSource[]): PickSection
 
 /** One export card: a bundle, or a single picked service. */
 export type ExportEntry =
-  | { kind: 'bundle'; key: string; bundle: Bundle; importers: readonly string[] }
+  | { kind: 'bundle'; key: string; bundle: ImportBundle; importers: readonly string[] }
   | { kind: 'service'; key: string; source: CatalogSource; importers: readonly string[] };
 
 /**
@@ -789,7 +715,12 @@ export type ExportEntry =
  * picked service not covered by a bundle is one card, walked in the same
  * ecosystem order the picker displays.
  */
-export function exportEntries(catalog: readonly CatalogSource[], picked: ReadonlySet<string>): ExportEntry[] {
+export function exportEntries(
+  catalog: readonly CatalogSource[],
+  bundles: readonly ImportBundle[],
+  picked: ReadonlySet<string>,
+): ExportEntry[] {
+  const bundleByEco = bundlesByEcosystem(bundles);
   const byEcosystem = new Map<string, CatalogSource[]>();
 
   for (const source of catalog) {
@@ -802,7 +733,7 @@ export function exportEntries(catalog: readonly CatalogSource[], picked: Readonl
   const entries: ExportEntry[] = [];
 
   for (const eco of new Set([...ORDERED_ECOS, ...byEcosystem.keys()])) {
-    const bundle = BUNDLE_BY_ECO[eco];
+    const bundle = bundleByEco.get(eco);
 
     if (bundle && picked.has(`b:${bundle.id}`)) {
       // Every member importer, deduplicated — what a drop on this card DECLARES
@@ -844,7 +775,7 @@ export function sourceToGuide(source: CatalogSource): ImportSourceGuide {
 }
 
 /** A bundle's combined steps stand alone as its guide. */
-export function bundleToGuide(bundle: Bundle): ImportSourceGuide {
+export function bundleToGuide(bundle: ImportBundle): ImportSourceGuide {
   return {
     title: bundle.title,
     blurb: bundle.blurb,
@@ -854,7 +785,9 @@ export function bundleToGuide(bundle: Bundle): ImportSourceGuide {
     // The whole point of a bundle: every member arrives in the one archive.
     acquisition: 'one-download',
     url: bundle.url,
+    stepsTitle: bundle.stepsTitle,
     steps: bundle.steps,
+    altPath: bundle.altPath,
     notes: bundle.notes,
   };
 }

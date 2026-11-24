@@ -13,10 +13,10 @@
 
 set -euo pipefail
 
-VERSION="0.14.0"
+VERSION="0.18.1"
 URL="https://github.com/google-ai-edge/LiteRT-LM/releases/download/v${VERSION}/CLiteRTLM.xcframework.zip"
 # From LiteRT-LM's Package.swift at this tag — verified against the actual download.
-CHECKSUM="dddac2f6713ed65eaf01c18e115d9fec22184adf575cc7856a21387e8ba937e1"
+CHECKSUM="5c51905e38c77ccc611dc2f8c2af6cf5144621046f1dde6518aab83f78488937"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEST="${SCRIPT_DIR}/CLiteRTLM.xcframework"
@@ -26,8 +26,11 @@ if [ -d "${DEST}" ]; then
   exit 0
 fi
 
-TMP_ZIP="$(mktemp -t clitertlm-xcframework).zip"
-trap 'rm -f "${TMP_ZIP}"' EXIT
+# Download into a mktemp -d directory: appending .zip to a mktemp file writes
+# to a path mktemp never created and leaves its empty file behind.
+TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "${TMP_DIR}"' EXIT
+TMP_ZIP="${TMP_DIR}/CLiteRTLM.xcframework.zip"
 
 echo "Downloading CLiteRTLM.xcframework v${VERSION}..."
 curl -fL --progress-bar -o "${TMP_ZIP}" "${URL}"

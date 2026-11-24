@@ -130,6 +130,50 @@ describe('ApiKeyService.createOrRotate', () => {
   });
 });
 
+/**
+ * App builds before v2026.9.14 mint the phone's key with a name and nothing else, and the app has
+ * asked for `full` since. A `write` key from an old build answers every delete, Edit Person and tag
+ * rename with a 403, so that one request shape gets `full`. Anything that names a level keeps it.
+ */
+describe('ApiKeyService.create capability default', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  const capabilityFor = async (data: {
+    name: string;
+    scopes?: string[];
+    capability?: 'read' | 'write' | 'full';
+  }) => {
+    const repo = makeRepo();
+
+    await makeService(repo).create(ownerCtx, data);
+
+    return (repo.create.mock.calls[0]![0] as { capability: string }).capability;
+  };
+
+  it("gives an old app build's phone key full, as the app asks for since v2026.9.14", async () => {
+    await expect(capabilityFor({ name: 'Companion mobile · 2026-09-02' })).resolves.toBe('full');
+  });
+
+  it('keeps the level a request names, even on the phone key name', async () => {
+    await expect(capabilityFor({ name: 'Companion mobile · 2026-09-02', capability: 'write' })).resolves.toBe(
+      'write',
+    );
+    await expect(capabilityFor({ name: 'Companion mobile · 2026-09-02', capability: 'read' })).resolves.toBe(
+      'read',
+    );
+  });
+
+  it('defaults to write for a scoped key or any other name', async () => {
+    await expect(capabilityFor({ name: 'Companion mobile · 2026-09-02', scopes: ['memory'] })).resolves.toBe(
+      'write',
+    );
+    await expect(capabilityFor({ name: 'my agent' })).resolves.toBe('write');
+    await expect(capabilityFor({ name: 'Companion mobile' })).resolves.toBe('write');
+    await expect(capabilityFor({ name: 'Companion mobile · 2026-09-02 (old)' })).resolves.toBe('write');
+    await expect(capabilityFor({ name: 'companion mobile · 2026-09-02' })).resolves.toBe('write');
+  });
+});
+
 describe('ApiKeyService.removeByName', () => {
   beforeEach(() => jest.clearAllMocks());
 
@@ -178,7 +222,7 @@ describe('ApiKeyService.findUserIdByName', () => {
     expect(await service.findUserIdByName('app:ci-openclaw:ci-marketplace')).toBe('owner-1');
     expect(repo.find).toHaveBeenCalledWith({
       where: { name: 'app:ci-openclaw:ci-marketplace', managed_by: 'connect' },
-      select: ['user_id'],
+      select: { user_id: true },
     });
   });
 
@@ -648,5 +692,93 @@ describe('ApiKeyService tenancy scoping (findAllByUser / findOneByUser / remove)
       expect(await service.remove({ userId: SYSTEM_USER } as ServiceContext, 'key-2')).toBe(true);
       expect(repo.delete).toHaveBeenCalledWith({ id: 'key-2' });
     });
+  });
+});
+
+/**
+ * What a password change and "Sign out everywhere" revoke. A password change takes the keys the
+ * apps minted at sign-in and leaves the ones the person made in Settings; "Sign out everywhere"
+ * takes those too. Neither touches a key CI-Hub minted for an installed app, whose lifecycle is
+ * the Hub's.
+ */
+describe('ApiKeyService — revoking at sign-out', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it("revokes only the user's sign-in keys on a password change", async () => {
+    const repo = makeRepo();
+    repo.delete.mockResolvedValue({ affected: 2 });
+
+    await expect(makeService(repo).revokeSignInKeys('owner-1')).resolves.toBe(2);
+    expect(repo.delete).toHaveBeenCalledWith({ user_id: 'owner-1', managed_by: 'sign_in' });
+  });
+
+  it("revokes every key of the user's except the Hub's on sign-out everywhere", async () => {
+    interface Builder {
+      delete: jest.Mock<Builder>;
+      from: jest.Mock<Builder>;
+      where: jest.Mock<Builder>;
+      andWhere: jest.Mock<Builder>;
+      execute: jest.Mock<Promise<{ affected: number }>>;
+    }
+    const builder: Builder = {
+      delete: jest.fn((): Builder => builder),
+      from: jest.fn((): Builder => builder),
+      where: jest.fn((): Builder => builder),
+      andWhere: jest.fn((): Builder => builder),
+      execute: jest.fn(async () => ({ affected: 5 })),
+    };
+    const repo = { ...makeRepo(), createQueryBuilder: jest.fn(() => builder) };
+
+    await expect(makeService(repo).revokeAllExceptConnect('owner-1')).resolves.toBe(5);
+    expect(builder.where).toHaveBeenCalledWith('user_id = :userId', { userId: 'owner-1' });
+    // IS DISTINCT FROM, not <>: a user's own key has a NULL provenance, which <> would skip.
+    expect(builder.andWhere).toHaveBeenCalledWith('managed_by IS DISTINCT FROM :connect', {
+      connect: 'connect',
+    });
+  });
+});
+
+describe('ApiKeyService: telling open live-update streams', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  function withLiveChanges(repo: ReturnType<typeof makeRepo>) {
+    const liveChanges = { publishRevoked: jest.fn().mockResolvedValue(undefined) };
+
+    return {
+      service: new ApiKeyService(repo as never, makeLogger() as never, liveChanges as never),
+      liveChanges,
+    };
+  }
+
+  it("announces a revoke once the owner's key is gone", async () => {
+    const repo = makeRepo();
+    const { service, liveChanges } = withLiveChanges(repo);
+
+    await expect(service.remove(ownerCtx, 'key-1')).resolves.toBe(true);
+
+    expect(liveChanges.publishRevoked).toHaveBeenCalledWith('owner-1');
+    expect(repo.delete.mock.invocationCallOrder[0]).toBeLessThan(
+      liveChanges.publishRevoked.mock.invocationCallOrder[0] ?? 0,
+    );
+  });
+
+  it('announces nothing when no key went, or when a system revoke does not know the owner', async () => {
+    const repo = makeRepo();
+    const { service, liveChanges } = withLiveChanges(repo);
+
+    repo.delete.mockResolvedValueOnce({ affected: 0 });
+    await service.remove(ownerCtx, 'key-gone');
+    await service.remove({ userId: SYSTEM_USER } as ServiceContext, 'key-1');
+
+    expect(liveChanges.publishRevoked).not.toHaveBeenCalled();
+  });
+
+  it('announces the sign-in keys a password change revokes', async () => {
+    const repo = makeRepo();
+    const { service, liveChanges } = withLiveChanges(repo);
+
+    await service.revokeSignInKeys('owner-1');
+
+    expect(liveChanges.publishRevoked).toHaveBeenCalledWith('owner-1');
   });
 });

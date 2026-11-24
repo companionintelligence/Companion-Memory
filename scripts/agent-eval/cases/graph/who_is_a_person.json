@@ -1,0 +1,15 @@
+{
+  "id": "graph_who_is_a_person",
+  "capability": "graph",
+  "title": "Asking who someone is searches people, not the messaging outbox",
+  "conversation": [
+    {
+      "role": "user",
+      "content": "Who in my memory is named Sarah? If there is more than one, list them. If there is nobody, say you don't have that."
+    }
+  ],
+  "expected": {
+    "should_use": ["graph"],
+    "must_not_use": ["messaging", "import"]
+  }
+}

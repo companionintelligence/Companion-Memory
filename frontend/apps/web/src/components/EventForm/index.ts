@@ -1,4 +1,4 @@
-export { EventForm } from './EventForm';
+export { EventForm, PROBLEM_MESSAGES as EVENT_DRAFT_PROBLEM_MESSAGES } from './EventForm';
 export {
   combineDateAndClock,
   emptyEventDraft,

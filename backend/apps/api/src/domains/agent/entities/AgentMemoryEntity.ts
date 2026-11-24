@@ -1,5 +1,22 @@
 import { Column, CreateDateColumn, Entity, PrimaryColumn, UpdateDateColumn } from 'typeorm';
 
+export const AGENT_MEMORY_CATEGORIES = [
+  'fact',
+  'decision',
+  'goal',
+  'constraint',
+  'architecture',
+  'state',
+  'preference',
+  'observation',
+] as const;
+
+export type AgentMemoryCategory = (typeof AGENT_MEMORY_CATEGORIES)[number];
+
+export const AGENT_MEMORY_STATUSES = ['active', 'superseded', 'conflicted'] as const;
+
+export type AgentMemoryStatus = (typeof AGENT_MEMORY_STATUSES)[number];
+
 @Entity({ schema: 'ci', name: 'agent_memories' })
 export class AgentMemoryEntity {
   @PrimaryColumn('uuid')
@@ -22,6 +39,26 @@ export class AgentMemoryEntity {
 
   @Column({ type: 'text' })
   content!: string;
+
+  /** Governed atom category (`knowl` pattern). Defaults to `'fact'`. */
+  @Column({ type: 'text', default: 'fact' })
+  category!: AgentMemoryCategory;
+
+  /** Lifecycle status (`active`, `superseded`, `conflicted`). Defaults to `'active'`. */
+  @Column({ type: 'text', default: 'active' })
+  status!: AgentMemoryStatus;
+
+  /** Points to the newer memory fragment that superseded this one. */
+  @Column({ type: 'uuid', nullable: true, name: 'superseded_by_id' })
+  supersededById!: string | null;
+
+  /** Optional start of the memory's temporal validity window. */
+  @Column({ type: 'timestamptz', nullable: true, name: 'valid_from' })
+  validFrom!: Date | null;
+
+  /** Optional end of the memory's temporal validity window (set on supersession). */
+  @Column({ type: 'timestamptz', nullable: true, name: 'valid_until' })
+  validUntil!: Date | null;
 
   /** Stamped by the compaction cron after LLM extraction. Null = unprocessed. */
   @Column({ type: 'timestamptz', nullable: true, name: 'processed_at' })

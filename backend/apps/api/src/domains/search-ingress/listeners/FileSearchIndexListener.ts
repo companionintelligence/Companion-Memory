@@ -108,17 +108,10 @@ export class FileSearchIndexListener {
     if (searchDocument == null) {
       this.logger.log('File has no search document, skipping embedding');
     } else {
-      const embedding = await this.embeddingGenerationService.generateEmbedding(searchDocument);
-
-      await this.embeddingService.upsert(
-        {
-          userId: file.userId,
-        },
-        {
-          entityType: 'file',
-          entityId: file.id,
-          embedding,
-        },
+      await this.embeddingService.upsertDocument(
+        { userId: file.userId },
+        { entityType: 'file', entityId: file.id, text: searchDocument },
+        (text) => this.embeddingGenerationService.generateEmbedding(text),
       );
 
       this.logger.log('Generated embedding for file');

@@ -3,6 +3,7 @@ import { Args, ID, Int, Parent, Query, ResolveField, Resolver } from '@nestjs/gr
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { decodeKeysetCursor, encodeKeysetCursor } from '@ci/common/pagination/keysetCursor';
 import { type FindReceiptsFilter, type ReceiptExtractionState, ReceiptService } from '@ci/domains/memory';
 
 import { ReceiptLineItemsLoader } from '../loaders/ItemAcquisitionLoader';
@@ -22,30 +23,19 @@ import { ReceiptExtractionStateEnum, ReceiptType } from '../types/ReceiptType';
  * cursor refusing to encode.
  */
 function encodeReceiptCursor(cursor: { purchasedAt: Date | null; id: string }): string {
-  return Buffer.from(`${cursor.purchasedAt?.toISOString() ?? ''}|${cursor.id}`).toString('base64');
+  return encodeKeysetCursor([cursor.purchasedAt?.toISOString() ?? '', cursor.id]);
 }
 
 function decodeReceiptCursor(
   raw: string | null | undefined,
 ): { purchasedAt: Date | null; id: string } | null {
-  if (raw == null || raw === '') {
+  const parts = decodeKeysetCursor(raw, 2);
+
+  if (parts == null) {
     return null;
   }
 
-  let decoded: string;
-  try {
-    decoded = Buffer.from(raw, 'base64').toString('utf-8');
-  } catch {
-    return null;
-  }
-
-  const separator = decoded.indexOf('|');
-  if (separator < 0) {
-    return null;
-  }
-
-  const rawDate = decoded.slice(0, separator);
-  const id = decoded.slice(separator + 1);
+  const [rawDate, id] = parts;
   if (id === '') {
     return null;
   }

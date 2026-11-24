@@ -72,6 +72,47 @@ describe('google_photos importer', () => {
     expect(collection?.to?.item?.content?.filename).toBe('Photos from 2020');
   });
 
+  it('dates an -edited copy and a motion clip with their original, and links both to it', async () => {
+    const importer = getImporter('google_photos');
+    const root = await fs.promises.mkdtemp(path.join(tmpdir(), 'gp-edited-'));
+    const gp = path.join(root, 'Google Photos');
+    const album = path.join(gp, 'Photos from 2026');
+    await fs.promises.mkdir(album, { recursive: true });
+    // Takeout writes no sidecar for the -edited copy or for the clip of a
+    // Live/motion photo; the still's sidecar is the only date either has.
+    for (const name of ['PXL_20261003_154211234.jpg', 'PXL_20261003_154211234-edited.jpg']) {
+      await fs.promises.writeFile(path.join(album, name), Buffer.from([0xff, 0xd8, 0xff]));
+    }
+
+    await fs.promises.writeFile(path.join(album, 'IMG_4821.JPG'), Buffer.from([0xff, 0xd8, 0xff]));
+    await fs.promises.writeFile(path.join(album, 'IMG_4821.MP4'), Buffer.from([0x00, 0x00, 0x00]));
+    // 1791042131 = 2026-10-03T15:42:11Z, 1791774900 = 2026-10-12T03:15:00Z
+    await fs.promises.writeFile(
+      path.join(album, 'PXL_20261003_154211234.jpg.supplemental-metadata.json'),
+      JSON.stringify({ title: 'PXL_20261003_154211234.jpg', photoTakenTime: { timestamp: '1791042131' } }),
+    );
+    await fs.promises.writeFile(
+      path.join(album, 'IMG_4821.JPG.supplemental-metadata.json'),
+      JSON.stringify({ title: 'IMG_4821.JPG', photoTakenTime: { timestamp: '1791774900' } }),
+    );
+    const pipeline: EmittedGraph[] = [];
+    await importer.fileImport(
+      {},
+      { filename: gp, fullPath: gp } as DirEntry,
+      { pipeline, timeframe: {}, log: () => {} } as unknown as ImportParams,
+    );
+
+    const original = pipeline.find((p) => p.item?.content?.filename === 'PXL_20261003_154211234.jpg');
+    const edit = original!.edges!.find((e: Relationship) => e.relation === 'edit');
+    expect(edit?.to?.item?.content?.filename).toBe('PXL_20261003_154211234-edited.jpg');
+    expect(edit?.to?.item?.timestamp?.getTime()).toBe(1791042131 * 1000);
+
+    const still = pipeline.find((p) => p.item?.content?.filename === 'IMG_4821.JPG');
+    const motion = still!.edges!.find((e: Relationship) => e.relation === 'motion_photo');
+    expect(motion?.to?.item?.content?.filename).toBe('IMG_4821.MP4');
+    expect(motion?.to?.item?.timestamp?.getTime()).toBe(1791774900 * 1000);
+  });
+
   it('pairs a duplicate-counter photo with its (N) sidecar', async () => {
     const importer = getImporter('google_photos');
     const root = await fs.promises.mkdtemp(path.join(tmpdir(), 'gp-dup-'));

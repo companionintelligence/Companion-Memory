@@ -4,6 +4,8 @@ import {
   renderBatchedNull,
   renderDeleteUser,
   renderScope,
+  renderUnbatchedDelete,
+  renderUnbatchedNull,
 } from '../purgeSql';
 
 const NOTES = { schema: 'ci', table: 'notes' };
@@ -67,6 +69,28 @@ describe('purge SQL', () => {
       expect(() => renderBatchedDelete(NOTES, { kind: 'owned', column: 'user_id' }, 1_000_000)).toThrow(
         /Invalid purge batch size/,
       );
+    });
+  });
+
+  describe('statements for a compressed chunk', () => {
+    const CHUNK = { schema: '_timescaledb_internal', table: '_hyper_1_2_chunk' };
+
+    it('deletes without ctid, which a compressed chunk refuses', () => {
+      const sql = renderUnbatchedDelete(CHUNK, { kind: 'owned', column: 'user_id' });
+
+      expect(sql).toBe(
+        'WITH purge_batch AS (DELETE FROM "_timescaledb_internal"."_hyper_1_2_chunk" WHERE "user_id" = $1 RETURNING 1) SELECT count(*)::int AS count FROM purge_batch',
+      );
+      expect(sql).not.toContain('ctid');
+    });
+
+    it('nulls without ctid and still skips rows already nulled', () => {
+      const sql = renderUnbatchedNull(CHUNK, 'reference_entity_id', { kind: 'owned', column: 'user_id' });
+
+      expect(sql).toContain(
+        'UPDATE "_timescaledb_internal"."_hyper_1_2_chunk" SET "reference_entity_id" = NULL WHERE "user_id" = $1 AND "reference_entity_id" IS NOT NULL',
+      );
+      expect(sql).not.toContain('ctid');
     });
   });
 

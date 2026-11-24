@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 
-import { useMutation } from '@apollo/client';
+import { useApolloClient, useMutation } from '@apollo/client/react';
 import { EmptyState, LoadingPage, useDeviceLayout, usePageTitle } from '@ci/common';
 import { AlertDialog, Button, cn, useToast } from '@ci/shadcn';
 import { ListTodo } from '@ci/shadcn/icons';
@@ -11,6 +11,8 @@ import { resolveTimeZone } from '@/components/HorizonGrid/zonedClock';
 import { PageContent } from '@/components/layout';
 import { gql } from '@/graphql';
 import { useCurrentUser } from '@/hooks';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+import { GET_PLAN_BADGE_COUNT } from '@/layouts/Main/SecondaryNavigation/usePlanBadgeCount';
 
 import { EditTaskModal, UPDATE_TASK, type EditableTask } from './EditTaskModal';
 import { NewTaskForm } from './NewTaskForm';
@@ -85,7 +87,9 @@ export function PlanPage() {
    * draws in. The browser zone is only the fallback. See `pendingRationale`.
    */
   const timeZone = resolveTimeZone(user?.timezone);
+  const fmt = useDateTimeFormat();
 
+  const client = useApolloClient();
   const { nodes, sections, pendingByTask, loading, error, refetch } = usePlanTasks();
 
   const [completeTask] = useMutation(COMPLETE_TASK);
@@ -105,7 +109,9 @@ export function PlanPage() {
   const { deleteTasks, deleting } = useDeleteTasks();
 
   const handleToggle = (id: string, done: boolean) => {
-    void (done ? completeTask({ variables: { id } }) : reopenTask({ variables: { id } }));
+    void (done ? completeTask({ variables: { id } }) : reopenTask({ variables: { id } })).finally(() => {
+      void client.refetchQueries({ include: [GET_PLAN_BADGE_COUNT] });
+    });
   };
 
   const handleDelete = (id: string) => {
@@ -146,6 +152,7 @@ export function PlanPage() {
 
   const refresh = () => {
     void refetch();
+    void client.refetchQueries({ include: [GET_PLAN_BADGE_COUNT] });
   };
 
   /**
@@ -336,7 +343,7 @@ export function PlanPage() {
         onSchedule={handleSchedule}
         onReschedule={handleReschedule}
         pendingChangeId={pending?.id}
-        pendingRationale={pending ? describePendingChange(pending, timeZone) : null}
+        pendingRationale={pending ? describePendingChange(pending, timeZone, fmt) : null}
         pendingKind={pending?.kind}
         onAcceptPending={(changeId) => void acceptPending({ variables: { id: changeId } }).then(refresh)}
         onDeclinePending={(changeId) => void declinePending({ variables: { id: changeId } }).then(refresh)}
@@ -424,7 +431,9 @@ export function PlanPage() {
       <PageContent>
         <div className={cn('flex h-full min-h-0 w-full flex-col', isMobile ? 'gap-2' : 'gap-6')}>
           <div className="mx-auto w-full max-w-3xl shrink-0">
-            <NewTaskForm onCreated={() => void refetch()} />
+            {/* `refresh` re-reads the rail badge too. The live stream also moves
+                it, but not on the phone, which has no token to open the stream. */}
+            <NewTaskForm onCreated={refresh} />
           </div>
 
           {selectedIds.length > 0 ? (

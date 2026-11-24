@@ -12,6 +12,7 @@ import { FilesModule } from '@ci/domains/files';
 import { GeocodeModule } from '@ci/domains/geocode';
 import { IntelligenceModule } from '@ci/domains/intelligence';
 import { MemoryModule } from '@ci/domains/memory';
+import { ParsingModule } from '@ci/domains/parsing';
 import { PlanningModule } from '@ci/domains/planning';
 import { PositionModule } from '@ci/domains/position';
 import { PredictionsModule } from '@ci/domains/predictions';
@@ -53,6 +54,8 @@ import { VisionRenditionService } from './services/VisionRenditionService';
     IntelligenceModule,
     ImageDescriptionPreferenceModule,
     MemoryModule,
+    // Where ChatTurnService reads the text of an attached PDF or Office document.
+    ParsingModule,
     PlanningModule,
     PositionModule,
     PredictionsModule,
@@ -80,8 +83,26 @@ import { VisionRenditionService } from './services/VisionRenditionService';
 export class LLMModule {}
 
 export { LlmCoreModule } from './core.module';
+export {
+  ChatModelPreferenceModule,
+  ChatModelPreferenceService,
+  type DecisionEnginePreferences,
+  type MemoryGovernancePreferences,
+} from './chat-model-preference.module';
 export { OllamaService } from './services/OllamaService';
+export {
+  DESKTOP_APP_CLOSED_CODE,
+  DESKTOP_APP_CLOSED_MESSAGE,
+  DesktopAppService,
+} from './services/DesktopAppService';
+export { OpenAiCompatChatDriver } from './services/OpenAiCompatChatDriver';
 export { PROMPT_MODEL, UTILITY_MODEL, type ChatRequestContext } from './services/OllamaService';
+export {
+  OllamaPriorityQueue,
+  type OllamaPriority,
+  type OllamaQueueSnapshot,
+  type PriorityBucketTelemetry,
+} from './services/OllamaPriorityQueue';
 export { ResidencyPlannerService, type ResidencyReport } from './services/ResidencyPlannerService';
 export { type UtilityModelChoice, type UtilityPlan } from './residency/footprint';
 export {

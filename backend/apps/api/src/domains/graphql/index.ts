@@ -20,6 +20,7 @@ import { EtlModule } from '@ci/domains/etl';
 import { FilesModule } from '@ci/domains/files';
 import { GeocodeModule } from '@ci/domains/geocode';
 import { GraphModule } from '@ci/domains/graph';
+import { JsonObjectScalar } from '@ci/domains/graphql/scalars/JsonObjectScalar';
 import { IntelligenceModule } from '@ci/domains/intelligence';
 import { MemoryModule, ObjectObservationEntity, ReceiptLineItemEntity } from '@ci/domains/memory';
 import { NotesModule } from '@ci/domains/notes';
@@ -61,12 +62,16 @@ import { PreviewLoader } from './loaders/PreviewLoader';
 import { ProviderKeyLoader } from './loaders/ProviderKeyLoader';
 import { ProviderLoader } from './loaders/ProviderLoader';
 import { QuestionLoader } from './loaders/QuestionLoader';
+import { RelationshipsLoader } from './loaders/RelationshipsLoader';
 import { TagAssignmentCountLoader } from './loaders/TagAssignmentCountLoader';
 import { TagLoader } from './loaders/TagLoader';
+import { TagTaxonomyLoader } from './loaders/TagTaxonomyLoader';
+import { TaskChildrenLoader } from './loaders/TaskChildrenLoader';
 import { ThreadLoader } from './loaders/ThreadLoader';
 import { ThreadMessagesLoader } from './loaders/ThreadMessagesLoader';
 import { UnfurlLoader } from './loaders/UnfurlLoader';
 import { ComplexityPlugin } from './plugins/ComplexityPlugin';
+import { GRAPHQL_LIMITS } from './requestLimits';
 import { ActionResolver } from './resolvers/ActionResolver';
 import { ActivityResolver } from './resolvers/ActivityResolver';
 import { AnswerResolver } from './resolvers/AnswerResolver';
@@ -89,9 +94,11 @@ import { GraphResolver } from './resolvers/GraphResolver';
 import { ItemRelationshipResolver } from './resolvers/ItemRelationshipResolver';
 import { ItemResolver } from './resolvers/ItemResolver';
 import { KnownPlacesResolver } from './resolvers/KnownPlacesResolver';
+import { LocalPubPeerResolver } from './resolvers/LocalPubPeerResolver';
 import { NodeResolver } from './resolvers/NodeResolver';
 import { NoteResolver } from './resolvers/NoteResolver';
 import { ObjectObservationResolver } from './resolvers/ObjectObservationResolver';
+import { PeerInviteResolver } from './resolvers/PeerInviteResolver';
 import { PeerLinkResolver } from './resolvers/PeerLinkResolver';
 import { PersonResolver } from './resolvers/PersonResolver';
 import { PlaceResolver } from './resolvers/PlaceResolver';
@@ -146,6 +153,12 @@ import { UserResolver } from './resolvers/UserResolver';
       // selects; nothing bounded how deep it nests. The deepest document the
       // web app ships measures 8, so the default 12 leaves real headroom.
       validationRules: [createDepthLimitRule(config.graphql.maxDepth)],
+      // Neither rule above runs until graphql-js has validated the whole
+      // document with its built-in rules, which costs quadratic time in the
+      // number of same-named fields. The token limit makes the parser refuse
+      // an oversized document outright; breadth is measured before Apollo by
+      // GraphqlRequestLimitsMiddleware. Both are sized in ./requestLimits.ts.
+      parseOptions: { maxTokens: GRAPHQL_LIMITS.maxTokens },
     }),
     AsksModule,
     AgentModule,
@@ -177,6 +190,8 @@ import { UserResolver } from './resolvers/UserResolver';
     UserModule,
   ],
   providers: [
+    // NestJS discovers @Scalar classes through module providers.
+    JsonObjectScalar,
     ActionResolver,
     ActivityResolver,
     AskResolver,
@@ -218,10 +233,12 @@ import { UserResolver } from './resolvers/UserResolver';
     ItemRelationshipResolver,
     ItemResolver,
     KnownPlacesResolver,
+    LocalPubPeerResolver,
     ObjectObservationResolver,
     PersonIdentifiersLoader,
     PersonInteractionStatsLoader,
     PersonLoader,
+    PeerInviteResolver,
     PeerLinkResolver,
     PersonResolver,
     PlaceLoader,
@@ -238,6 +255,7 @@ import { UserResolver } from './resolvers/UserResolver';
     ProviderLoader,
     QuestionLoader,
     QuestionResolver,
+    RelationshipsLoader,
     ReceiptLineItemsLoader,
     ReceiptResolver,
     RelationshipResolver,
@@ -247,6 +265,8 @@ import { UserResolver } from './resolvers/UserResolver';
     SummaryResolver,
     TagAssignmentCountLoader,
     TagLoader,
+    TagTaxonomyLoader,
+    TaskChildrenLoader,
     UnfurlLoader,
     TagResolver,
     ThreadLoader,
@@ -258,3 +278,5 @@ import { UserResolver } from './resolvers/UserResolver';
   exports: [NestGraphQLModule],
 })
 export class GraphQLModule {}
+
+export { GraphqlRequestLimitsMiddleware } from './GraphqlRequestLimitsMiddleware';

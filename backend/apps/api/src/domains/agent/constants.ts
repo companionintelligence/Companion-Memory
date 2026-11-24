@@ -4,6 +4,16 @@ import type { QueueOptions } from '@ci/domains/events';
 export const OPENCLAW_APP_URN = 'ci-openclaw:ci-marketplace';
 
 /**
+ * The installed app that works a job, per `ci.agent_jobs.harness_id`. Only that
+ * app's connect key may fetch a job's packet or checkpoint it: those two routes
+ * ARE the harness, and a checkpoint writes turns stamped `openclaw` and can
+ * complete the owner's task.
+ */
+export const HARNESS_CONNECT_APP: Readonly<Record<string, string>> = {
+  openclaw: OPENCLAW_APP_URN.split(':')[0],
+};
+
+/**
  * Per-user chat-turn distillation. One queue, one event
  * (`AgentTurnFragmentsEvent`), one producer (`TurnFragmentCron`).
  *
@@ -35,6 +45,13 @@ export const DISPATCH_QUEUED_STALE_MS = 2 * 60 * 1000;
 
 /** Running this long with no terminal checkpoint: treat as hung. */
 export const DISPATCH_RUNNING_STALE_MS = 15 * 60 * 1000;
+
+/**
+ * Most stale jobs one `AgentDispatchService.failStale` tick closes. The sweep
+ * runs every minute, so a backlog larger than this drains over a few ticks
+ * rather than holding one tick open for all of it.
+ */
+export const STALE_SWEEP_BATCH = 100;
 
 export const AGENT_MEMORY_QUEUE = 'agent-memory';
 

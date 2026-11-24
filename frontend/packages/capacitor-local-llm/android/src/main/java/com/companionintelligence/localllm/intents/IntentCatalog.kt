@@ -22,6 +22,8 @@ data class ManifestIntent(
     /** Raw JSON Schema for the arguments, handed to the model verbatim. */
     val parameters: JSONObject,
     val dispatch: DispatchRuling?,
+    /** The intent's domain key (`memory`, `planning`, ...); the priority order for a tight window keys on it. */
+    val domain: String = "",
 )
 
 /** The server's ruling for a tier. Mirrors `DispatchRuling` in `dispatchPolicy.ts`. */
@@ -80,6 +82,7 @@ data class IntentManifest(
                                     explanation = it.optString("explanation"),
                                 )
                             },
+                            domain = entry.optString("domain"),
                         ),
                     )
                 }

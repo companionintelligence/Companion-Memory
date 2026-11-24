@@ -9,15 +9,16 @@ import {
   useState,
 } from 'react';
 
-import { useApolloClient } from '@apollo/client';
+import { useApolloClient } from '@apollo/client/react';
 import { GlobalUID } from '@ci/common';
 import { Button, Card, IconButton, Label, Sheet, Tooltip, cn, useToast } from '@ci/shadcn';
-import { FileSymlink, ImageOff, Loader2, Pencil, Trash2 } from '@ci/shadcn/icons';
+import { Download, FileSymlink, ImageOff, Loader2, Pencil, Play, Trash2 } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 import { Link, useInRouterContext } from 'react-router-dom';
 
 import { useTagEntityService } from '@/api';
 import { ChatWithAgentMenu } from '@/components/ChatWithAgent';
+import { isSameOriginUrl, resolveMediaUrl } from '@/components/entities/resolveMediaUrl';
 import {
   EntityFields,
   EntityMetaList,
@@ -30,7 +31,8 @@ import {
   toGlobalResourceType,
   type RelatedEntityOpenTarget,
 } from '@/components/EntityRelationshipCards/EntityRelationshipCards';
-import { TagInput } from '@/components/TagInput';
+import { TagInput, useTagSuggestions } from '@/components/TagInput';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 import { entityToAgentChatContext } from '@/lib/entityToAgentChatContext';
 
 import type { GenericEntity, MemoryEntity } from '../../../MemoryPage/useEntityService';
@@ -39,6 +41,7 @@ import { DeleteEntityDialog } from './DeleteEntityDialog';
 import { DELETE_TARGETS } from './deleteTargets';
 import { useEntityDrawerHost } from './drawerHost';
 import { GET_DRAWER_NODE, genericEntityGlobalId, isDetailNode } from './drawerNode';
+import { ignoreHistoryMouseButtons } from './historyMouseButtons';
 import { useReadOnly } from './readOnly';
 
 // The field/meta contract now lives with the shared editor so the full-page
@@ -49,9 +52,11 @@ export type { EditField, MetaItem };
  * The standalone page for each resource type the drawer can show, by raw id.
  * Types absent here (a file, a browser visit, a thread) have no page and get no
  * link. Kept in step with the routes in App.tsx and with `ITEM_PAGES` in the
- * API's DatabaseSearchTool, which hands the chat the same paths.
+ * API's DatabaseSearchTool, which hands the chat the same paths. Exported for
+ * the phone header's Back row (`EntityBackBar`), which must cover every page
+ * listed here.
  */
-const FULL_PAGE_PATHS: Readonly<Record<string, string>> = {
+export const FULL_PAGE_PATHS: Readonly<Record<string, string>> = {
   communication: '/communications',
   concept: '/concepts',
   content: '/content',
@@ -84,7 +89,7 @@ export function fullPagePath(resourceType: string | null, rawId: string | null):
 function FullPageLink({ to, label }: { to: string; label: string }) {
   const inRouter = useInRouterContext();
   const className =
-    '-mt-1 inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground';
+    'inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground sm:-mt-1';
   const link = inRouter ? (
     <Link to={to} aria-label={label} className={className}>
       <FileSymlink className="size-4" />
@@ -215,13 +220,14 @@ function readTags(entity: MemoryEntity): string[] {
   return tags.map((tag) => tag?.label?.trim() ?? '').filter((label): label is string => label.length > 0);
 }
 
-/** Prefix relative storage paths with `/static`; pass absolute/data URLs through. */
+/**
+ * Prefix relative storage paths with `/static` (and, on the native shells, the
+ * Memory origin); pass absolute/data URLs through. One implementation with
+ * {@link resolveMediaUrl} — a second copy is how a drawer ended up loading from
+ * the WebView's own `capacitor://localhost` origin.
+ */
 export function resolveStaticUrl(value?: string | null): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-
-  return /^https?:\/\//.test(value) || value.startsWith('data:') ? value : `/static${value}`;
+  return resolveMediaUrl(value);
 }
 
 /**
@@ -268,12 +274,12 @@ function useProgressiveSrc(src?: string | null, previewSrc?: string | null): str
  * Re-fetches the drawer's node from the server so its media links are fresh.
  *
  * Every media URL the drawer shows is a signed object-store link that expires
- * an hour after it was minted (`staticfiles.auth.signatureTTL`). The links
+ * five minutes after it was minted (`staticfiles.auth.signatureTTL`). The links
  * ride in whatever query put the entity in the cache — the search page, the
  * timeline — and stay there for as long as the tab does. A photo hides this:
  * its preview was fetched (and browser-cached) when the list rendered, and
  * the original's failure leaves the preview in place. A video is fetched
- * only when its drawer opens, so an hour after the search the object store
+ * only when its drawer opens, so minutes after the search the object store
  * answers 403 and the element reports an error — "media couldn't be loaded"
  * for a file that is fine. Measured 2026-09-22: a tampered or expired
  * signature returns 403 through the gateway; nothing else about the file
@@ -341,6 +347,10 @@ export function EntityMedia({
   // otherwise leave a broken-image glyph. Remember which source failed so the
   // block degrades to a link instead; keyed by src so a new entity retries.
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  // A phone clip's poster has to be a real image. The video element's poster
+  // stays blank in the webview until the stream decodes, which a `.mov` often
+  // never does. The still stays up until Play.
+  const [playing, setPlaying] = useState(false);
   const shownSrc = isVideo ? src : imageSrc;
   // At most ONE refresh per mount, and only for a failure a fresh link can
   // cure: a network error (MediaError 2 — the object store answered 403 for an
@@ -452,14 +462,42 @@ export function EntityMedia({
   // toward zero on a short window (dev tools open, a small laptop). Floored
   // at 16rem, so the media stays readable at any window height while tall
   // screens keep the exact old behaviour.
+  //
+  // The download saves the ORIGINAL where the caller named one: a video's
+  // `src` may be its playback rendition, with the original in `fallbackHref`.
+  // Only a file in our own store is offered (see isSameOriginUrl) — an
+  // external original already has "Open original" in the unavailable state.
+  const downloadHref = [fallbackHref, src].find((href) => !!href && isSameOriginUrl(href));
+
   return (
-    <div className="flex shrink-0 items-center justify-center overflow-hidden rounded-md border bg-muted/40">
-      {isVideo ? (
+    <div className="relative flex shrink-0 items-center justify-center overflow-hidden rounded-md border bg-muted/40">
+      {downloadHref && (
+        <a
+          href={downloadHref}
+          download={alt || true}
+          aria-label="Download"
+          title="Download"
+          className="absolute right-2 top-2 z-10 rounded-md bg-black/50 p-1.5 text-white transition hover:bg-black/70"
+        >
+          <Download className="size-4" aria-hidden />
+        </a>
+      )}
+      {isVideo && previewSrc && !playing ? (
+        <button type="button" aria-label="Play" onClick={() => setPlaying(true)} className="relative w-full">
+          <img src={previewSrc} alt={alt ?? ''} className="max-h-[max(45vh,16rem)] w-full object-contain" />
+          <span className="absolute inset-0 flex items-center justify-center">
+            <span className="rounded-full bg-black/50 p-3 text-white">
+              <Play className="size-6" aria-hidden />
+            </span>
+          </span>
+        </button>
+      ) : isVideo ? (
         <video
           key={attempt}
           src={shownSrc}
           poster={previewSrc ?? undefined}
           controls
+          autoPlay={playing}
           className="max-h-[max(45vh,16rem)] w-full object-contain"
           onError={(event) => handleError(shownSrc, event.currentTarget.error)}
         />
@@ -493,7 +531,7 @@ function RawDataDetails({ data }: { data: unknown }) {
 
   return (
     <details className="rounded-xl border border-border/60 bg-card/45 shadow-sm backdrop-blur">
-      <summary className="cursor-pointer px-4 py-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+      <summary className="cursor-pointer px-4 py-3 text-xs font-semibold text-muted-foreground">
         Raw data
       </summary>
       <pre className="max-h-72 overflow-auto px-4 pb-4 text-xs leading-relaxed text-foreground/85">
@@ -637,6 +675,7 @@ export function EntityDetailScaffold({
   const entityKey = ref.globalId ?? ref.rawId ?? '';
   const [editing, setEditing] = useState(false);
   const [activeKey, setActiveKey] = useState(entityKey);
+  const tagSuggestions = useTagSuggestions(undefined, editing && taggable);
 
   if (activeKey !== entityKey) {
     setActiveKey(entityKey);
@@ -668,7 +707,8 @@ export function EntityDetailScaffold({
     setEditing(false);
   };
 
-  const chatContext = useMemo(() => entityToAgentChatContext(entity), [entity]);
+  const fmt = useDateTimeFormat();
+  const chatContext = useMemo(() => entityToAgentChatContext(entity, fmt), [entity, fmt]);
 
   const visibleMeta = (metaItems ?? []).filter(
     (item) => item.value !== null && item.value !== undefined && item.value !== '',
@@ -677,6 +717,7 @@ export function EntityDetailScaffold({
   return (
     <Sheet.Content
       data-testid="entity-detail-sheet"
+      onPointerDownOutside={ignoreHistoryMouseButtons}
       className="z-[1000] w-full gap-0 overflow-hidden border-l border-white/10 bg-background/75 p-0 shadow-2xl backdrop-blur-2xl supports-[backdrop-filter]:bg-background/65 sm:max-w-xl pt-[var(--safe-area-top)] pb-[var(--safe-area-bottom)] [&>button]:top-[calc(var(--safe-area-top)+1rem)]"
       // Radix's default open-autofocus lands on the first tabbable descendant —
       // here that is always the header's ChatWithAgentMenu IconButton, whose
@@ -692,51 +733,64 @@ export function EntityDetailScaffold({
         (event.currentTarget as HTMLElement | null)?.focus();
       }}
     >
-      <Sheet.Header className="gap-2 border-b border-border/60 bg-background/45 p-5 pr-12 backdrop-blur-xl">
-        <div className="flex items-start justify-between gap-2">
-          <Sheet.Title className="text-xl leading-tight tracking-tight">{title}</Sheet.Title>
-          <div className="flex shrink-0 items-center gap-1">
-            {fullPage != null && <FullPageLink to={fullPage} label={t('ENTITY_DETAILS_OPEN_PAGE')} />}
-            {!readOnly && <ChatWithAgentMenu context={chatContext} className="-mt-1 size-8 shrink-0" />}
-            {canEnterEditMode && !editing && (
-              <IconButton
-                variant="ghost"
-                className="-mt-1 size-8 shrink-0"
-                label={t('ENTITY_DETAILS_EDIT')}
-                onClick={startEditing}
-              >
-                <Pencil className="size-4" />
-              </IconButton>
-            )}
-            {canDelete && !editing && (
-              <IconButton
-                variant="ghost"
-                className="-mt-1 size-8 shrink-0 text-muted-foreground hover:text-destructive"
-                label={`Delete ${deleteTarget?.noun ?? 'entity'}`}
-                onClick={() => setConfirmingDelete(true)}
-              >
-                <Trash2 className="size-4" />
-              </IconButton>
-            )}
-          </div>
+      <Sheet.Header className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-2 gap-y-2 border-b border-border/60 bg-background/45 p-3 pr-12 backdrop-blur-xl sm:p-5 sm:pr-12">
+        {/* The title spans both content columns on a phone, so the action
+            controls below cannot squeeze a long name. The sheet's own Close
+            remains absolutely positioned at top-right. Desktop restores the
+            title/actions first row. */}
+        <Sheet.Title className="col-span-2 col-start-1 row-start-1 min-w-0 break-words text-xl leading-tight tracking-tight sm:col-span-1">
+          {title}
+        </Sheet.Title>
+
+        <div
+          data-testid="entity-detail-actions"
+          className="col-start-2 row-start-2 flex shrink-0 items-center gap-1 justify-self-end sm:row-start-1"
+        >
+          {fullPage != null && <FullPageLink to={fullPage} label={t('ENTITY_DETAILS_OPEN_PAGE')} />}
+          {!readOnly && <ChatWithAgentMenu context={chatContext} className="size-8 shrink-0 sm:-mt-1" />}
+          {canEnterEditMode && !editing && (
+            <IconButton
+              variant="ghost"
+              className="size-8 shrink-0 sm:-mt-1"
+              label={t('ENTITY_DETAILS_EDIT')}
+              onClick={startEditing}
+            >
+              <Pencil className="size-4" />
+            </IconButton>
+          )}
+          {canDelete && !editing && (
+            <IconButton
+              variant="ghost"
+              className="size-8 shrink-0 text-muted-foreground hover:text-destructive sm:-mt-1"
+              label={`Delete ${deleteTarget?.noun ?? 'entity'}`}
+              onClick={() => setConfirmingDelete(true)}
+            >
+              <Trash2 className="size-4" />
+            </IconButton>
+          )}
         </div>
+
         {/* Always render a description so Radix has an accessible description to
             point `aria-describedby` at (otherwise it logs a console warning). */}
         {subtitle != null && subtitle !== '' ? (
           <Sheet.Description
             className={cn(
-              'text-xs text-muted-foreground',
-              subtitleKind === 'label' ? 'font-medium uppercase tracking-wide' : 'break-words',
+              'col-start-1 row-start-2 min-w-0 self-center text-xs text-muted-foreground sm:col-span-2',
+              subtitleKind === 'label'
+                ? 'truncate font-medium'
+                : 'line-clamp-2 break-words sm:line-clamp-none',
             )}
           >
             {subtitle}
           </Sheet.Description>
         ) : (
-          <Sheet.Description className="sr-only">{`Details for ${title}`}</Sheet.Description>
+          <Sheet.Description className="sr-only col-start-1 row-start-2 sm:col-span-2">
+            {`Details for ${title}`}
+          </Sheet.Description>
         )}
       </Sheet.Header>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-5">
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-3 sm:p-5">
         {/* Keyed per entity: a related card swaps the entity under the same
             *Details body, and EntityMedia's once-per-mount refresh must not
             carry over to the next entity's media. */}
@@ -771,6 +825,8 @@ export function EntityDetailScaffold({
             <TagInput
               key={ref.globalId}
               tags={currentTags}
+              suggestions={tagSuggestions}
+              inputAriaLabel={`Tags for ${title}`}
               readOnly={!editing}
               onTagAdded={async (label) => {
                 try {
@@ -821,7 +877,7 @@ export function EntityDetailScaffold({
       </div>
 
       {editing && (
-        <Sheet.Footer className="gap-2 border-t border-border/60 bg-background/55 backdrop-blur-xl">
+        <Sheet.Footer className="gap-2 border-t border-border/60 bg-background/55 p-3 backdrop-blur-xl sm:p-4">
           {saveError && (
             <p role="alert" className="text-sm text-destructive">
               {saveError}

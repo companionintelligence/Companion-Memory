@@ -30,6 +30,11 @@ const CONNECTOR_LABELS: Readonly<Record<string, string>> = {
   chromium: 'Chrome',
   claude: 'Claude',
   chatgpt: 'ChatGPT',
+  // Agents that store their conversations with the owner (POST /memory/turn). Hidden from the
+  // explorer until How names one of these.
+  openclaw: 'OpenClaw',
+  hermes: 'Hermes',
+  agent: 'Agent',
   github_events: 'GitHub',
   reddit: 'Reddit',
   reddit_posts: 'Reddit',
@@ -37,6 +42,7 @@ const CONNECTOR_LABELS: Readonly<Record<string, string>> = {
   reddit_saved: 'Reddit',
   signal: 'Signal',
   slack: 'Slack',
+  dropbox: 'Dropbox',
   // Communication `type` values (CommunicationType.type, not a connector).
   email: 'Email',
   sms: 'SMS',
@@ -75,4 +81,36 @@ export function titleCaseSourceKey(source: string): string {
  */
 export function labelForSource(source: string): string {
   return CONNECTOR_LABELS[source.toLowerCase()] ?? titleCaseSourceKey(source);
+}
+
+/**
+ * How an exact-match filter value (a `source_system`, an event type) is SHOWN
+ * in the How and Activity pickers: each word capitalised, underscores as
+ * spaces — `amazon_music` → `Amazon Music`. Display only: the raw value is
+ * what the URL carries and what the backend matches, so nothing that sends or
+ * compares a value may go through this.
+ *
+ * Deliberately not {@link labelForSource}: that names a connector for a
+ * badge (`google_photos` → `Photos`, four reddit endpoints → `Reddit`), and a
+ * picker listing distinct values cannot show two of them under one name.
+ */
+export function filterValueLabel(value: string): string {
+  return value
+    .split(/[_\s]+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
+/**
+ * {@link filterValueLabel} for a source, spelled the brand's way where that
+ * is only a difference in letter case (`youtube` → `YouTube`, `imessage` →
+ * `iMessage`). A known label that says something else (`chromium` → `Chrome`)
+ * is not used, so every source keeps a label of its own.
+ */
+export function sourceFilterLabel(source: string): string {
+  const label = filterValueLabel(source);
+  const known = CONNECTOR_LABELS[source.toLowerCase()];
+
+  return known != null && known.toLowerCase() === label.toLowerCase() ? known : label;
 }

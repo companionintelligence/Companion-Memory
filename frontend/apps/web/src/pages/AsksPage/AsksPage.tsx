@@ -1,6 +1,6 @@
-import { type ReactNode, useState } from 'react';
+import { type ReactNode, useCallback, useState } from 'react';
 
-import { useMutation, useQuery } from '@apollo/client';
+import { useApolloClient, useMutation, useQuery } from '@apollo/client/react';
 import { EmptyState, LoadingPage, usePageTitle } from '@ci/common';
 import { Badge, Button, Card } from '@ci/shadcn';
 
@@ -15,7 +15,6 @@ import {
   partyAvatar,
   partyLabel,
   peerLinksByHandle,
-  scopeSummary,
   searchBreadthNote,
 } from './askBinding';
 import { AskComposer } from './AskComposer';
@@ -32,10 +31,14 @@ import {
 import { AskReviewCard } from './AskReviewCard';
 import {
   APPROVE_ASK,
+  ASK_AUDIT_RECEIPT,
   ASK_DISCLOSURE_HISTORY,
+  ASK_DISCLOSURE_HISTORY_HIDDEN_CHARACTERS,
   ASK_DISCLOSURE_SUMMARY,
   ASK_INBOX,
+  ASK_INBOX_HIDDEN_CHARACTERS,
   ASK_OUTBOX,
+  COLLECT_PEER_ANSWER,
   CREATE_ASK,
   CREATE_ASK_GRANT,
   CREATE_PEER_LINK,
@@ -48,16 +51,19 @@ import {
   SET_HOUSEHOLD_TIER,
   REVOKE_PEER_LINK,
   RUN_ASK,
+  SEND_PEER_ASK,
   UPDATE_ASK_GRANT,
   UPDATE_PEER_LINK,
 } from './asksOperations';
-import { COMPOSER_SHAPES, composeRecipients, unreachablePeers } from './composeRecipients';
+import { COMPOSER_SHAPES, composeRecipients, peerRecipients, unreachablePeers } from './composeRecipients';
 import { DisclosureHistory } from './DisclosureHistory';
 import { DisclosureRelationships } from './DisclosureRelationships';
 import { GrantManager, type GranteeGroup } from './GrantManager';
 import { NewGrantForm } from './NewGrantForm';
+import { PeerInvites } from './PeerInvites';
 import { PeerManager } from './PeerManager';
 import type { RelationshipSummary } from './relationshipPresentation';
+import { type HiddenCharacterRow, useHiddenCharacterFlags } from './useHiddenCharacterFlags';
 
 /**
  * The recency window the relationship fold reports against, and the cap the
@@ -81,6 +87,11 @@ const LAPSE_HORIZON_DAYS = 30;
 const MAX_COUNTED_DISCLOSURES = 5_000;
 
 type Tab = 'inbox' | 'compose' | 'outbox' | 'grants' | 'peers' | 'history';
+
+/** Rows of the two `*_HIDDEN_CHARACTERS` answers, for {@link useHiddenCharacterFlags}. */
+const inboxHiddenRows = (data: { askInbox: readonly HiddenCharacterRow[] }) => data.askInbox;
+const historyHiddenRows = (data: { askDisclosureHistory: { rows: readonly HiddenCharacterRow[] } }) =>
+  data.askDisclosureHistory.rows;
 
 /**
  * The asks surface.
@@ -117,6 +128,20 @@ type Tab = 'inbox' | 'compose' | 'outbox' | 'grants' | 'peers' | 'history';
 export function AsksPage() {
   usePageTitle('Asks');
 
+  const apolloClient = useApolloClient();
+  const loadAuditReceipt = useCallback(
+    async (auditId: string) => {
+      const { data } = await apolloClient.query({
+        query: ASK_AUDIT_RECEIPT,
+        variables: { id: auditId },
+        fetchPolicy: 'cache-first',
+      });
+
+      return data?.askAuditReceipt ?? null;
+    },
+    [apolloClient],
+  );
+
   const [tab, setTab] = useState<Tab>('inbox');
   /** Whether the Grants tab is showing the write form rather than the matrix. */
   const [addingGrant, setAddingGrant] = useState(false);
@@ -129,6 +154,7 @@ export function AsksPage() {
   const myAddress = useQuery(MY_ASK_ADDRESS).data?.me?.id ?? null;
   const [openAnswerId, setOpenAnswerId] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
+  const [sentNote, setSentNote] = useState<string | null>(null);
 
   const inbox = useQuery(ASK_INBOX);
   const outbox = useQuery(ASK_OUTBOX);
@@ -143,6 +169,17 @@ export function AsksPage() {
   const history = useQuery(ASK_DISCLOSURE_HISTORY, {
     variables: { input: { counterpartyKey: openRelationship?.key } },
     skip: openRelationship == null,
+  });
+  // Read apart from the inbox and the history, so an older Memory without the
+  // field still shows both: see ASK_INBOX_HIDDEN_CHARACTERS.
+  const inboxHiddenCharacters = useHiddenCharacterFlags(ASK_INBOX_HIDDEN_CHARACTERS, {
+    ids: (inbox.data?.askInbox ?? []).map((ask) => ask.id),
+    rowsOf: inboxHiddenRows,
+  });
+  const historyHiddenCharacters = useHiddenCharacterFlags(ASK_DISCLOSURE_HISTORY_HIDDEN_CHARACTERS, {
+    ids: (history.data?.askDisclosureHistory?.rows ?? []).map((row) => row.id),
+    rowsOf: historyHiddenRows,
+    variables: { input: { counterpartyKey: openRelationship?.key } },
   });
 
   const refetchAll = () => {
@@ -179,11 +216,17 @@ export function AsksPage() {
       void inbox.refetch();
     },
   });
+  const [sendPeerAsk, sendingPeer] = useMutation(SEND_PEER_ASK, { onCompleted: refetchAll });
+  const [collectPeerAnswer, collecting] = useMutation(COLLECT_PEER_ANSWER, { onCompleted: refetchAll });
   const [createAsk, creating] = useMutation(CREATE_ASK, {
     onCompleted: () => void outbox.refetch(),
   });
   const [createPeerLink, linking] = useMutation(CREATE_PEER_LINK, {
-    onCompleted: () => void peers.refetch(),
+    onCompleted: () => {
+      void peers.refetch();
+      // Adding back a peer whose link was ended revokes that link's grants.
+      void grants.refetch();
+    },
   });
   const [updatePeerLink, retiering] = useMutation(UPDATE_PEER_LINK, {
     onCompleted: () => void peers.refetch(),
@@ -312,7 +355,9 @@ export function AsksPage() {
                 tier={knownAskerLabel(ask.consentBasis)}
                 decision={decision}
                 prompt={ask.query.prompt}
-                scopeSummary={scopeSummary(ask.query)}
+                promptHiddenCharactersRemoved={inboxHiddenCharacters.removed.has(ask.id)}
+                hiddenCharacterCheck={inboxHiddenCharacters.checkOf(ask.id)}
+                scope={ask.query}
                 searchBreadth={searchBreadthNote(ask.query)}
                 downgrades={[...OWNER_ANSWER_FORMS]}
                 actor={ask.query.actor}
@@ -348,17 +393,26 @@ export function AsksPage() {
                 It is in “Sent” now. You will not be told whether a person reads it or a standing rule answers
                 it — only whether an answer arrives.
               </p>
+              {sentNote ? (
+                <p className="text-muted-foreground text-sm">
+                  Their Companion did not take it yet ({sentNote}). Answers are checked for again on their
+                  own.
+                </p>
+              ) : null}
             </Card>
           ) : null}
           <AskComposer
-            recipients={composeRecipients({
-              grants: grants.data?.myAskGrants ?? [],
-              inbox: inbox.data?.askInbox ?? [],
-              outbox: outbox.data?.askOutbox ?? [],
-            })}
+            recipients={[
+              ...composeRecipients({
+                grants: grants.data?.myAskGrants ?? [],
+                inbox: inbox.data?.askInbox ?? [],
+                outbox: outbox.data?.askOutbox ?? [],
+              }),
+              ...peerRecipients(peers.data?.myPeerLinks ?? []),
+            ]}
             unreachable={unreachablePeers(peers.data?.myPeerLinks ?? [])}
             shapes={COMPOSER_SHAPES}
-            busy={creating.loading}
+            busy={creating.loading || sendingPeer.loading}
             onSend={(ask) => {
               // Cleared UP FRONT, before the request goes out, and that ordering
               // is the whole control. A green "Sent." belongs to one specific
@@ -369,6 +423,32 @@ export function AsksPage() {
               // send that had not landed yet, which is the same reassuring-lie
               // shape as an error rendered as an empty state.
               setSent(false);
+              setSentNote(null);
+
+              if (ask.peerHandle) {
+                runAction(
+                  sendPeerAsk({
+                    variables: {
+                      input: {
+                        handle: ask.peerHandle,
+                        archetype: ask.queryType,
+                        subject: ask.prompt,
+                        dataClass: ask.dataClass,
+                        prompt: ask.prompt,
+                      },
+                    },
+                  }).then((result) => {
+                    setSent(true);
+                    // Only this box's own words ever arrive here (`PeerAskClient`
+                    // drops whatever the peer said), so it is safe to show.
+                    setSentNote(result.data?.sendPeerAsk?.reason ?? null);
+                  }),
+                  () => undefined,
+                );
+
+                return;
+              }
+
               runAction(
                 createAsk({
                   variables: {
@@ -480,30 +560,33 @@ export function AsksPage() {
       content = <LoadingPage />;
     } else {
       content = (
-        <PeerManager
-          peers={peers.data?.myPeerLinks ?? []}
-          busy={peerBusy}
-          onChangeTier={(id, trustTier) =>
-            runAction(updatePeerLink({ variables: { input: { id, trustTier } } }))
-          }
-          onRevoke={(id) => runAction(revokePeerLink({ variables: { id } }))}
-          onAdd={(input) =>
-            runAction(
-              createPeerLink({
-                variables: {
-                  // No `trustTier`. The resolver defaults an omitted tier to
-                  // `stranger`, and that default is the safety property — see
-                  // CREATE_PEER_LINK.
-                  input: {
-                    peerHandle: input.peerHandle,
-                    memoryEndpoint: input.memoryEndpoint,
-                    displayName: input.displayName,
+        <div className="flex flex-col gap-3">
+          <PeerInvites onLinked={() => void peers.refetch()} />
+          <PeerManager
+            peers={peers.data?.myPeerLinks ?? []}
+            busy={peerBusy}
+            onChangeTier={(id, trustTier) =>
+              runAction(updatePeerLink({ variables: { input: { id, trustTier } } }))
+            }
+            onRevoke={(id) => runAction(revokePeerLink({ variables: { id } }))}
+            onAdd={(input) =>
+              runAction(
+                createPeerLink({
+                  variables: {
+                    // No `trustTier`. The resolver defaults an omitted tier to
+                    // `stranger`, and that default is the safety property — see
+                    // CREATE_PEER_LINK.
+                    input: {
+                      peerHandle: input.peerHandle,
+                      memoryEndpoint: input.memoryEndpoint,
+                      displayName: input.displayName,
+                    },
                   },
-                },
-              }),
-            )
-          }
-        />
+                }),
+              )
+            }
+          />
+        </div>
       );
     }
   } else if (tab === 'history' && openRelationship != null) {
@@ -522,6 +605,7 @@ export function AsksPage() {
           </Button>
 
           <DisclosureHistory
+            onLoadReceipt={loadAuditReceipt}
             rows={rows.map((row) => {
               const asker = partyAvatar(row.peerHandle, row.askerId, peerLinks);
 
@@ -533,7 +617,10 @@ export function AsksPage() {
                 disclosedCount: row.disclosedCount,
                 consentBasis: row.consentBasis,
                 createdAt: row.createdAt as string,
-                query: row.query,
+                query: {
+                  ...row.query,
+                  promptHiddenCharactersRemoved: historyHiddenCharacters.removed.has(row.id),
+                },
               };
             })}
           />
@@ -588,6 +675,18 @@ export function AsksPage() {
                   {ask.query.prompt}
                 </span>
                 <Badge variant="secondary">{askStatusLabel(ask.status as AskStatus)}</Badge>
+                {!answered && ask.peerHandle != null && ask.status === 'delivered' ? (
+                  // Answers from another Companion are collected on their own
+                  // every ten minutes; this is for not waiting.
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={collecting.loading}
+                    onClick={() => runAction(collectPeerAnswer({ variables: { askId: ask.id } }))}
+                  >
+                    Check for an answer
+                  </Button>
+                ) : null}
                 {answered ? (
                   <Button
                     size="sm"
@@ -615,7 +714,7 @@ export function AsksPage() {
         })}
       </div>
     ) : (
-      <EmptyState message="You haven't asked anyone anything yet." />
+      <EmptyState message="You haven’t asked anyone anything yet." />
     );
   }
 
@@ -647,7 +746,7 @@ export function AsksPage() {
               key={key}
               size="sm"
               variant={tab === key ? 'default' : 'outline'}
-              aria-current={tab === key ? 'page' : undefined}
+              aria-pressed={tab === key}
               onClick={() => setTab(key)}
             >
               {label}

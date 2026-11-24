@@ -3,6 +3,7 @@ import { useState } from 'react';
 
 import {
   AuthSessionCancelledError,
+  beginNativeOidcSignIn,
   buildApiUrl,
   isIosPlatform,
   isNativePlatform,
@@ -27,6 +28,12 @@ type ButtonVariant = ComponentProps<typeof Button>['variant'];
  * so the backend callback returns the result via the custom URL scheme
  * (`companion://oidc/callback`) — handled by the deep-link listener in useAuth —
  * instead of setting a browser session cookie.
+ *
+ * The native click also binds the sign-in to this app: it sends the S256
+ * challenge of a PKCE verifier and a state value it keeps to itself
+ * (`beginNativeOidcSignIn`). The appliance will not redeem the one-time code
+ * without the verifier, and useAuth drops any callback whose state is not this
+ * app's, so a `companion://` link from anywhere else signs nobody in.
  */
 export function OidcButton({
   label,
@@ -66,25 +73,31 @@ export function OidcButton({
   // Web: same-origin path, anchor navigates normally (unchanged behavior).
   const webHref = buildApiUrl(`${OIDC_URL_PATH}${params.toString() ? `?${params.toString()}` : ''}`);
 
+  const startNativeSignIn = async () => {
+    const { codeChallenge, appState } = await beginNativeOidcSignIn();
+    const nativeParams = new URLSearchParams(params);
+    nativeParams.set('client', OIDC_NATIVE_CLIENT_FLAG);
+    nativeParams.set('code_challenge', codeChallenge);
+    nativeParams.set('app_state', appState);
+    const oidcPath = `${OIDC_URL_PATH}?${nativeParams.toString()}`;
+    // Capacitor's native bootstrap calls setApiBaseUrl() before the app makes any
+    // request, so buildApiUrl() is already absolute there. Tauri desktop never
+    // calls setApiBaseUrl (nothing does on desktop boot), so buildApiUrl() would
+    // hand the Rust opener a bare relative path — which open_external_url_command
+    // rejects outright since it only accepts http(s) URLs. Resolve against the
+    // page's own origin instead, which is always absolute once the bootstrap page
+    // has navigated to http://127.0.0.1:8642.
+    const oidcUrl = isTauriPlatform() ? `${window.location.origin}${oidcPath}` : buildApiUrl(oidcPath);
+
+    await (isIosPlatform() ? openAuthSession(oidcUrl) : openExternalUrl(oidcUrl));
+  };
+
   const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
     if (isNativePlatform() || isTauriPlatform()) {
       event.preventDefault();
-      const nativeParams = new URLSearchParams(params);
-      nativeParams.set('client', OIDC_NATIVE_CLIENT_FLAG);
-      const oidcPath = `${OIDC_URL_PATH}?${nativeParams.toString()}`;
-      // Capacitor's native bootstrap calls setApiBaseUrl() before the app makes any
-      // request, so buildApiUrl() is already absolute there. Tauri desktop never
-      // calls setApiBaseUrl (nothing does on desktop boot), so buildApiUrl() would
-      // hand the Rust opener a bare relative path — which open_external_url_command
-      // rejects outright since it only accepts http(s) URLs. Resolve against the
-      // page's own origin instead, which is always absolute once the bootstrap page
-      // has navigated to http://127.0.0.1:8642.
-      const oidcUrl = isTauriPlatform() ? `${window.location.origin}${oidcPath}` : buildApiUrl(oidcPath);
-
       setOpenError(null);
-      const open = isIosPlatform() ? openAuthSession(oidcUrl) : openExternalUrl(oidcUrl);
 
-      open.catch((err: unknown) => {
+      startNativeSignIn().catch((err: unknown) => {
         // Dismissing the iOS sheet is a choice, not a broken button.
         if (err instanceof AuthSessionCancelledError) {
           return;

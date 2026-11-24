@@ -1,7 +1,5 @@
 # `ci-import` → `ci`
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 **This page moved to [`ci.md`](ci.md).**
 
 The binary was renamed from `ci-import` to `ci` when it stopped being only about

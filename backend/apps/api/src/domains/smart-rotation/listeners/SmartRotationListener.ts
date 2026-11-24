@@ -4,8 +4,14 @@ import { DataSource } from 'typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import config from '@ci/configuration';
 import { Events, EventService, OnEvent } from '@ci/domains/events';
-import { excludeForkedOriginsSql, QuestionService } from '@ci/domains/intelligence';
+import {
+  excludeForkedOriginsSql,
+  QUESTION_ROTATION_ORDER_SQL,
+  QUESTION_ROTATION_RANK_SQL,
+  QuestionService,
+} from '@ci/domains/intelligence';
 import { LLM_BACKGROUND_QUEUE } from '@ci/domains/llm';
 import { GraphEnrichmentService, MaintenanceOrchestratorService } from '@ci/domains/maintenance';
 import {
@@ -28,8 +34,8 @@ const FEED_QUEUE_LIMIT = 3;
  *
  * Six hours against a 20-minute tick (`SMART_ROTATION_CRONS.answer_infer`), so
  * a question is retried at most four times a day. Short enough that a genuinely
- * transient failure — an Ollama restart, a model reload, the 60s
- * `INFERENCE_TIMEOUT_MS` firing under load — costs the question a few hours
+ * transient failure — an Ollama restart, a model reload, the
+ * `llm.answerInferenceTimeoutMs` budget firing under load — costs the question a few hours
  * rather than its place in the rotation; long enough that re-asking is never
  * what the appliance spends an inference slot on while something untried is
  * waiting.
@@ -46,6 +52,27 @@ const FEED_QUEUE_LIMIT = 3;
  * shorter path re-dispatch inside the longer path's window.
  */
 export const INFERENCE_ATTEMPT_COOLDOWN_HOURS = 6;
+
+/**
+ * How long a dispatched inference may wait UNSTARTED before pg-boss drops it
+ * (`EventSendOptions.retentionMinutes`). An hour: three of the default
+ * per-owner intervals, so an ordinary wait behind a title or a lane sibling
+ * never reaches it.
+ *
+ * The job is only ever a guess at an unanswered question, and the next tick
+ * makes a fresh one, so replaying a stale backlog buys nothing and costs GPU
+ * time. On core-1 (2026-10-17) the queue fell ~4 h behind with 941 of them
+ * waiting, every one due to run, oldest first, long after it was current.
+ * The per-owner cap in `inferenceDispatchGate.ts` is what stops a backlog
+ * FORMING — this clears whatever is left of one if the queue falls behind
+ * with jobs already waiting.
+ *
+ * Per job and not on the queue: `llm-background` also carries thread titles,
+ * which must survive a long wait. A dropped job lands in `pgboss.archive`,
+ * which the selectors read as an attempt, so that question sits out its
+ * cooldown like any other attempt instead of being re-sent straight away.
+ */
+export const INFERENCE_QUEUE_RETENTION_MINUTES = 60;
 
 @Injectable()
 export class SmartRotationListener {
@@ -96,6 +123,25 @@ export class SmartRotationListener {
       }
 
       case 'answer_infer': {
+        // Before the selection, and said separately: "this person's last
+        // inference has not settled, or was only just sent" is a different
+        // situation from "nothing left to ask", and folding the two together is
+        // how a backed-up queue looked like a quiet one.
+        const open = await this.questionService.isInferenceDispatchOpen(userId, {
+          queue: LLM_BACKGROUND_QUEUE,
+          eventName: Events.INFER_QUESTION_ANSWER,
+          intervalMinutes: config.llm.answerInferenceIntervalMinutes,
+        });
+
+        if (!open) {
+          this.logger.log(
+            'Smart rotation answer infer skipped — an inference is still outstanding, or one was sent within the interval',
+            { userId, intervalMinutes: config.llm.answerInferenceIntervalMinutes },
+          );
+
+          return;
+        }
+
         const questionId = await this.findNextUnansweredQuestionId(userId);
 
         if (!questionId) {
@@ -120,6 +166,7 @@ export class SmartRotationListener {
           },
           {
             singletonKey: `infer:${userId}:${questionId}`,
+            retentionMinutes: INFERENCE_QUEUE_RETENTION_MINUTES,
           },
         );
 
@@ -412,6 +459,15 @@ export class SmartRotationListener {
    * letters, and left ci.answers EMPTY. The other 1,278 eligible questions were
    * never offered to the model once.
    *
+   * ═══ WHICH UNTRIED QUESTION GOES FIRST ═══
+   *
+   * The catalogue's rotation order, from questionOrder.ts: tier, then batch
+   * age, then a round-robin across categories in the order the seed files list
+   * them. It is the same definition QuestionService.findUnansweredByUserId
+   * uses, deliberately — this second copy of "next unanswered question" had
+   * drifted from that one before (it skipped the tier rank, and it broke ties
+   * on question_id, which is a different shuffle on every appliance).
+   *
    * ═══ WHERE THE ATTEMPT HISTORY COMES FROM ═══
    *
    * pg-boss's own job rows, which are the durable record of what this listener
@@ -433,8 +489,9 @@ export class SmartRotationListener {
    * The queue name is matched as well as the event name so Postgres can prune
    * to the `llm-background` partition (`AnswerInferenceListener` binds
    * `Events.INFER_QUESTION_ANSWER` to `LLM_BACKGROUND_QUEUE`). If that binding ever moves,
-   * this reads as "no attempt history" and degrades to the old
-   * oldest-unanswered order — which is the safe direction to fail.
+   * this reads as "no attempt history" and degrades to the plain rotation
+   * order, as if nothing had ever been tried — which is the safe direction to
+   * fail.
    *
    * The owner id is bound TWICE, as $1 and $5. Postgres deduces a single type
    * per parameter, and this query compares the owner both to a uuid column
@@ -457,18 +514,14 @@ export class SmartRotationListener {
           WHERE name = $2
             AND data->>'name' = $3
             AND data->>'ownerId' = $5
-          UNION ALL
-          SELECT data, created_on
-          FROM pgboss.archive
-          WHERE name = $2
-            AND data->>'name' = $3
-            AND data->>'ownerId' = $5
         ) dispatched
         GROUP BY 1
-      )
+      ),
+      rotation AS (${QUESTION_ROTATION_RANK_SQL})
       SELECT q.question_id AS id
       FROM ci.questions q
       LEFT JOIN attempts a ON a.question_id = q.question_id::text
+      LEFT JOIN rotation qr ON qr.question_id = q.question_id
       WHERE q.is_active = TRUE
         -- Same guard as QuestionService.findUnansweredByUserId. This is a
         -- SECOND, independent copy of "next unanswered question", and it did
@@ -489,18 +542,17 @@ export class SmartRotationListener {
             AND TRIM(ans.answer_text) <> ''
         )
         AND (a.last_attempt_at IS NULL OR a.last_attempt_at < NOW() - make_interval(hours => $4))
-      -- The whole fix, in one line. NULLS FIRST is what puts every untried
-      -- question ahead of every retry; the created_at tiebreak keeps the
-      -- original oldest-first order WITHIN each of those two groups, so the
-      -- rotation still works the backlog in the order it was seeded.
+      -- The head-of-line fix, in one term: NULLS FIRST puts every untried
+      -- question ahead of every retry. Within those two groups, the
+      -- catalogue's rotation order — the same terms
+      -- QuestionService.findUnansweredByUserId uses.
       --
-      -- question_id last, because created_at alone is not a total order here:
-      -- the seed catalogue was inserted in bulk, so 1,278 of these rows share a
-      -- created_at to the microsecond and Postgres is free to return them in
-      -- any order. Without a deterministic tiebreak the row this returns for a
-      -- tied group could vary run to run, which is the same shape of problem
-      -- the fix is for.
-      ORDER BY a.last_attempt_at ASC NULLS FIRST, q.created_at ASC, q.question_id ASC
+      -- The tie used to fall to q.question_id, on the idea that the ids keep
+      -- seed order. They do not: the seeded catalogue has random v4 ids, and
+      -- most of it shares one created_at to the microsecond, so every
+      -- appliance worked that batch in its own shuffled order. The rotation
+      -- order is total without the id; see questionOrder.ts.
+      ORDER BY a.last_attempt_at ASC NULLS FIRST, ${QUESTION_ROTATION_ORDER_SQL}
       LIMIT 1;
       `,
       [userId, LLM_BACKGROUND_QUEUE, Events.INFER_QUESTION_ANSWER, INFERENCE_ATTEMPT_COOLDOWN_HOURS, userId],

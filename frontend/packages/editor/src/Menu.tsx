@@ -1,4 +1,5 @@
 import { type ReactNode } from 'react';
+import { useOverflowsRight } from '@ci/common';
 import { useEditorState } from '@tiptap/react';
 import { Button, DropdownMenu, Separator } from '@ci/shadcn';
 import {
@@ -29,6 +30,7 @@ interface Props {
 
 export function Menu({ children }: Props) {
   const editor = useEditor();
+  const [rowRef, moreToTheRight] = useOverflowsRight<HTMLDivElement>();
 
   const editorState = useEditorState({
     editor,
@@ -58,12 +60,23 @@ export function Menu({ children }: Props) {
   });
 
   return (
-    <div className="flex gap-1 p-1 items-center border-b border-border bg-muted/10">
-      <div className="flex flex-1 gap-1 items-center">
+    <div className="flex min-w-0 gap-1 p-1 items-center border-b border-border bg-muted/10">
+      {/* The formatting buttons scroll sideways when they do not fit — a phone is
+          about half as wide as the row — so every one stays reachable, and the
+          trailing slot (the note's save status and chat) never scrolls away.
+          `-m-1 p-1` gives focus rings room inside the scroll box without moving
+          anything; the fade marks the edge while buttons are still hidden past it. */}
+      <div
+        ref={rowRef}
+        data-more={moreToTheRight || undefined}
+        className="-m-1 flex min-w-0 flex-1 gap-1 items-center overflow-x-auto overscroll-x-contain p-1 scrollbar-none *:shrink-0 data-[more]:[mask-image:linear-gradient(to_right,black_calc(100%-2rem),transparent)]"
+      >
         <div className="flex gap-1">
           <Button
             variant={editorState.isBold ? 'default' : 'ghost'}
             size="sm"
+            aria-label="Bold"
+            title="Bold"
             onClick={() => editor.chain().focus().toggleBold().run()}
             disabled={!editorState.canBold}
           >
@@ -73,6 +86,8 @@ export function Menu({ children }: Props) {
           <Button
             variant={editorState.isItalic ? 'default' : 'ghost'}
             size="sm"
+            aria-label="Italic"
+            title="Italic"
             onClick={() => editor.chain().focus().toggleItalic().run()}
             disabled={!editorState.canItalic}
           >
@@ -82,6 +97,8 @@ export function Menu({ children }: Props) {
           <Button
             variant={editorState.isStrike ? 'default' : 'ghost'}
             size="sm"
+            aria-label="Strikethrough"
+            title="Strikethrough"
             onClick={() => editor.chain().focus().toggleStrike().run()}
             disabled={!editorState.canStrike}
           >
@@ -94,7 +111,7 @@ export function Menu({ children }: Props) {
         <div className="flex gap-1">
           <DropdownMenu>
             <DropdownMenu.Trigger asChild>
-              <Button variant="ghost" size="sm" className="gap-1">
+              <Button variant="ghost" size="sm" className="gap-1" aria-label="Text style" title="Text style">
                 {editorState.isHeading1 ? (
                   <Heading1 className="h-4 w-4" />
                 ) : editorState.isHeading2 ? (
@@ -152,6 +169,8 @@ export function Menu({ children }: Props) {
           <Button
             variant={editorState.isBulletList ? 'default' : 'ghost'}
             size="sm"
+            aria-label="Bulleted list"
+            title="Bulleted list"
             onClick={() => editor.chain().focus().toggleBulletList().run()}
           >
             <List className="h-4 w-4" />
@@ -160,6 +179,8 @@ export function Menu({ children }: Props) {
           <Button
             variant={editorState.isOrderedList ? 'default' : 'ghost'}
             size="sm"
+            aria-label="Numbered list"
+            title="Numbered list"
             onClick={() => editor.chain().focus().toggleOrderedList().run()}
           >
             <ListOrdered className="h-4 w-4" />
@@ -168,6 +189,8 @@ export function Menu({ children }: Props) {
           <Button
             variant={editorState.isBlockquote ? 'default' : 'ghost'}
             size="sm"
+            aria-label="Quote"
+            title="Quote"
             onClick={() => editor.chain().focus().toggleBlockquote().run()}
           >
             <Quote className="h-4 w-4" />
@@ -180,6 +203,8 @@ export function Menu({ children }: Props) {
           <Button
             variant={editorState.isCode ? 'default' : 'ghost'}
             size="sm"
+            aria-label="Inline code"
+            title="Inline code"
             onClick={() => editor.chain().focus().toggleCode().run()}
             disabled={!editorState.canCode}
           >
@@ -189,6 +214,8 @@ export function Menu({ children }: Props) {
           <Button
             variant={editorState.isCodeBlock ? 'default' : 'ghost'}
             size="sm"
+            aria-label="Code block"
+            title="Code block"
             onClick={() => editor.chain().focus().toggleCodeBlock().run()}
           >
             <Code2 className="h-4 w-4" />
@@ -198,13 +225,19 @@ export function Menu({ children }: Props) {
         <Separator orientation="vertical" className="data-[orientation=vertical]:h-6" />
 
         <div className="flex gap-1">
-          <Button variant="ghost" size="sm" onClick={() => editor.chain().focus().setHorizontalRule().run()}>
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-label="Divider"
+            title="Divider"
+            onClick={() => editor.chain().focus().setHorizontalRule().run()}
+          >
             <Minus className="h-4 w-4" />
           </Button>
         </div>
       </div>
 
-      {children && <div className="flex items-center">{children}</div>}
+      {children && <div className="flex shrink-0 items-center">{children}</div>}
     </div>
   );
 }

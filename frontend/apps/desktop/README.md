@@ -24,7 +24,13 @@ for them to become healthy, then shows the real web UI.
    app, served by the `gateway` container, on a normal same-origin browser
    session (standard cookie auth — no CORS/CSRF wiring needed for this app).
 5. A tray icon lets you show/hide the window, manually start/stop the stack,
-   and view the desktop log, without quitting.
+   and view the desktop log, without quitting. Quit leaves the containers
+   running, as closing the window does. When the app itself serves their
+   model (its own Ollama, the relay in front of one or the Apple bridge), the
+   model stops with it. The app keeps `compose/desktop-app/presence.json` up
+   to date while it runs (`src-tauri/src/presence.rs`) and the overlay mounts
+   that folder into `api`, so the web app and MCP can say that Memory Desktop
+   is closed and that opening it brings chat, search and summaries back.
 
 Images are pulled from `ghcr.io/companionintelligence/companion/*` (see
 `../../../scripts/publish/images.sh`) at a version tag resolved at build time
@@ -42,7 +48,7 @@ Prerequisites:
 
 - [Rust](https://rustup.rs) (stable)
 - [Docker](https://www.docker.com/products/docker-desktop/) (Compose CLI ≥
-  2.24 — see the note on `!reset` below)
+  2.24.4, see the note on `!override` below)
 - Platform Tauri build dependencies:
   - **macOS**: Xcode Command Line Tools (`xcode-select --install`)
   - **Linux** (Ubuntu/Debian): `build-essential pkg-config curl wget file
@@ -95,10 +101,12 @@ in CI where `linuxdeploy` is installed, via `-b deb,rpm,appimage`).
 
 ## Icon
 
-`src-tauri/icons/app-icon-source.png` is the Companion Memory logo from
-`CI-Marketplace/apps/ci-memory/metadata/logo.png` (2048×2048). Every other
-file in `src-tauri/icons/` is generated from it via `yarn icons` (`tauri icon`)
-— re-run that after replacing the source, don't hand-edit the generated sizes.
+`src-tauri/icons/app-icon-source.png` is the Companion Memory store icon (2048×2048) as a
+transparent squircle: Tauri applies no platform mask, so a square source would render as a
+hard square in the macOS Dock and on Windows. The artwork is the same opaque 1024² icon the
+App Store and Play listings show, scaled up and masked with the squircle's alpha. Every other
+file in `src-tauri/icons/` is generated from it via `yarn icons` (`tauri icon`) — re-run that
+after replacing the source, don't hand-edit the generated sizes.
 
 ## Local model (chat + embeddings) without a separate Ollama install
 
@@ -110,7 +118,23 @@ install Ollama and pull a large model just to get chat + RAG embeddings
 working. Resolved once per launch, cheapest option first:
 
 1. **You already run Ollama** (something answers `127.0.0.1:11434`) — used
-   as-is, unchanged. Nothing else in this list applies.
+   as-is. Options 2 and 3 are skipped. Nothing is pulled into it unasked.
+   When it has the default chat model (`gemma4:e4b`, see option 3), Memory uses
+   it wherever it sits in Ollama's list. When it lacks it, Memory uses the
+   first local chat model it lists for chat and background work instead
+   (Ollama Cloud models are skipped). Settings > Model in the app's window then
+   offers "Download recommended model": the app pulls the models of option 3
+   that are missing (`nomic-embed-text` for search too) into that Ollama,
+   showing progress and any failure, then points Memory at `gemma4:e4b` and
+   recreates the containers that read it, as the next launch would.
+   `desktop.log` says which model Memory runs on and how to get the default,
+   by that button or `ollama pull`. On Linux, one part of option 3
+   still applies: when it answers on `127.0.0.1` only (how Ollama's own service
+   binds unless you set `OLLAMA_HOST`), the containers cannot reach it, so the
+   app puts the same bridge relay described under option 3 in front of it while
+   the app runs. The relay holds port 11434 on the bridge gateway address. If
+   you restart your Ollama with `OLLAMA_HOST=0.0.0.0` while the app is running,
+   Ollama fails with "address already in use"; quit the app first.
 2. **Apple on-device (macOS only)** — if Apple Intelligence is available
    (Apple Silicon, macOS 26+, enabled in System Settings), chat is served by
    Apple's on-device `FoundationModels` framework via a small bundled Swift
@@ -151,8 +175,30 @@ working. Resolved once per launch, cheapest option first:
    binding non-loopback additionally disables its own host-header guard. Any
    LAN peer could run inference on your GPU and — more seriously — delete and
    recreate models, which the API's "use whatever model is served" fallback
-   turns into a persistent model-substitution foothold. A single-address bind
-   means the kernel drops anything arriving on the machine's real NICs.
+   turns into a persistent model-substitution foothold.
+
+   A single-address bind does not keep the LAN out by itself: Linux delivers a
+   packet for the bridge gateway address that arrives on a real network
+   interface, and every container on the machine can reach it. So the relay also
+   checks each connection's source address and serves only the subnets of the
+   appliance's own compose networks (`docker network inspect`, filtered on the
+   `com.docker.compose.project` label). Anything else is dropped and logged in
+   `desktop.log`.
+
+   A firewall on the host can still drop the containers' connections. The
+   app cannot see that from the host: its own request to the gateway
+   address goes over loopback, which a firewall always lets through. So once
+   Memory is up, the app runs `curl` inside the `api` container against
+   `host.docker.internal:11434` (`local_model::container_reach`) and logs the
+   outcome in `desktop.log`. A connection that never comes about within five
+   seconds means they are being dropped. With ufw on (its default incoming
+   policy drops them), the warning names the rule to add, usually
+   `sudo ufw allow from 172.16.0.0/12 to 172.17.0.1 port 11434 proto tcp`:
+   Docker's address pool as the source and the bridge gateway, the one
+   address the containers call, as the destination. It doesn't open the port
+   on this computer's LAN address, even on a LAN that also uses
+   172.16.0.0/12. The app never changes the firewall itself. This applies to
+   your own Ollama in option 1 as well, including one bound to `0.0.0.0`.
 
    > **Under rootless Docker** no bridge gateway is discoverable (the
    > `host-gateway` alias resolves inside RootlessKit's namespace, moby#47684).
@@ -204,16 +250,25 @@ This needed two things neither `docker-compose.yml` nor
   `http://127.0.0.1:8642`, and the callback would never arrive. Setting
   `APP_BASE_URL` explicitly skips that derivation.
 
-## A note on the `!reset` compose tag
+The browser hands the result back through the `companion://` scheme
+(`companion://oidc/callback?code=...`), and the OS passes that URL to the app
+as a launch argument. On Linux that only works if the installed launcher's
+`Exec` line ends in `%u`, and Tauri's default launcher doesn't. So the deb and
+rpm use our own template, `src-tauri/linux/companion-memory.desktop`. Without
+it the browser's "Open Companion Memory" starts the app with no URL and sign-in
+never finishes. A test in `src/main.rs` checks both the template and the config
+that points at it.
 
-`docker-compose.desktop.yml` uses the Compose Specification's `!reset` tag to
-clear `hbpe-service`'s ROCm device passthrough (`devices`, `group_add`) that
-`docker-compose.production.yml` unconditionally adds — Compose merges
-list-valued keys across `-f` files by *concatenation*, so a plain override
-can't remove them, and without `!reset` the stack would hard-fail
-(`docker compose up`) on any machine that isn't an AMD ROCm box. This needs
-Docker Compose CLI ≥ 2.24. If `docker compose up` fails with a parse error on
-`!reset`, upgrade Docker/Compose.
+## A note on the `!override` compose tag
+
+`docker-compose.desktop.yml` uses the Compose Specification's `!override` tag
+to replace the gateway's `8642:8642` mapping from `docker-compose.production.yml`
+with `127.0.0.1:8642:8642`, so the appliance answers on this machine only.
+Compose merges list-valued keys across `-f` files by *concatenation*, so a plain
+`ports:` entry would add the loopback mapping beside the all-interfaces one
+instead of replacing it. `!override` first shipped in Docker Compose 2.24.4.
+Older CLIs ignore the tag and concatenate anyway, so the app checks the version
+before it starts the stack and asks you to update Docker/Compose below 2.24.4.
 
 ## Deferred for v1
 
@@ -236,7 +291,8 @@ Not silently missing — just out of scope for this first pass:
   and offers manual Start/Stop only.
 - mDNS discovery of other appliances on the LAN (not applicable — this app
   only ever manages its own local stack).
-- A deep-link URL scheme / pairing flow (not applicable, for the same reason).
+- Deep-link pairing like the Hub's (not applicable, for the same reason). The
+  `companion://` scheme itself is used, for sign-in; see above.
 - Sentry crash reporting for the desktop shell itself.
 - ARM Linux and Windows-ARM build legs (`desktop-build.yml`/
   `desktop-release.yml` currently build x86_64 Linux/Windows and both macOS

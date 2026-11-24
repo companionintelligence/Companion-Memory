@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DataPortabilitySection } from './DataPortabilitySection';
@@ -6,11 +6,17 @@ import { DataPortabilitySection } from './DataPortabilitySection';
 const h = vi.hoisted(() => ({
   authToken: 'jwt-abc' as string | null,
   email: 'jsmith@example.com',
+  native: false,
 }));
 
 vi.mock('@/hooks', () => ({
   useAuth: () => [{ authToken: h.authToken }],
   useCurrentUser: () => ({ user: { id: 'u1', email: h.email }, loading: false, error: undefined }),
+}));
+
+vi.mock('@ci/common', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@ci/common')>()),
+  isNativePlatform: () => h.native,
 }));
 
 const downloadAccountExport = vi.hoisted(() => vi.fn());
@@ -24,7 +30,7 @@ vi.mock('@/lib/accountDataPortability', () => ({
 }));
 
 vi.mock('./WorkingSetSection', () => ({
-  WorkingSetSection: () => null,
+  WorkingSetSection: () => <div data-testid="working-set" />,
 }));
 
 /** The hidden `<input type="file">` — its `<Label>` targets a nonexistent id, so it
@@ -44,6 +50,21 @@ function chooseFile(name: string, contents = '{}') {
   fireEvent.change(fileInput(), { target: { files: [file] } });
 }
 
+/** jsdom never reports a path for a file input: `fireEvent.change` puts `files` on the element
+ *  and `value` stays ''. Give it the value a browser would hold, so a reset can be seen. */
+function chooseFileLikeABrowser(name: string) {
+  let value = `C:\\fakepath\\${name}`;
+
+  Object.defineProperty(fileInput(), 'value', {
+    configurable: true,
+    get: () => value,
+    set: (next: string) => {
+      value = next;
+    },
+  });
+  chooseFile(name);
+}
+
 function openImportDialog() {
   fireEvent.click(screen.getByRole('button', { name: /import from file/i }));
 }
@@ -55,6 +76,7 @@ function replaceButton() {
 describe('DataPortabilitySection', () => {
   beforeEach(() => {
     h.authToken = 'jwt-abc';
+    h.native = false;
     h.email = 'jsmith@example.com';
     downloadAccountExport.mockResolvedValue(undefined);
     uploadAccountImport.mockResolvedValue({
@@ -96,6 +118,19 @@ describe('DataPortabilitySection', () => {
 
     fireEvent.change(screen.getByLabelText(/to confirm/i), { target: { value: h.email } });
     expect(replaceButton()).toBeEnabled();
+  });
+
+  it('keeps iOS from autocorrecting the retyped address, without making it a type=email field', () => {
+    render(<DataPortabilitySection />);
+    openImportDialog();
+
+    const field = screen.getByLabelText(/to confirm/i);
+    expect(field).toHaveAttribute('inputmode', 'email');
+    expect(field).toHaveAttribute('autocapitalize', 'none');
+    expect(field).toHaveAttribute('autocorrect', 'off');
+    expect(field).toHaveAttribute('spellcheck', 'false');
+    expect(field).toHaveAttribute('autocomplete', 'off');
+    expect(field).not.toHaveAttribute('type', 'email');
   });
 
   it('accepts the confirmation email case- and whitespace-insensitively', async () => {
@@ -186,6 +221,10 @@ describe('DataPortabilitySection', () => {
     expect(
       await screen.findByText(/Could not import that archive\. Check the file and confirmation email/i),
     ).toBeInTheDocument();
+    // Inside the dialog: on the page it sits behind the overlay.
+    expect(
+      within(screen.getByRole('dialog')).getByText(/Could not import that archive/i),
+    ).toBeInTheDocument();
 
     // The dialog stays open on failure — a silent close would look like success.
     expect(screen.getByText('Import your data?')).toBeInTheDocument();
@@ -214,21 +253,104 @@ describe('DataPortabilitySection', () => {
     expect(screen.queryByText(/Could not import that archive/i)).not.toBeInTheDocument();
   });
 
-  it('leaves stale file/email/error in place when Cancel is clicked, since only re-opening resets them', async () => {
-    // Real current behavior: the footer's Cancel button only flips `importOpen`
-    // to false directly — it does not run the `onOpenChange` reset. Reopening
-    // via the "Import from file" trigger goes through the same controlled
-    // `open` prop, so the stale draft is still there. Documented here so a
-    // future change to either path has to touch this test on purpose.
+  it('clears the file and confirmation when Cancel is clicked, so reopening starts over', async () => {
     render(<DataPortabilitySection />);
     openImportDialog();
     chooseFile('export.ndjson');
     fireEvent.change(screen.getByLabelText(/to confirm/i), { target: { value: h.email } });
+    expect(replaceButton()).toBeEnabled();
 
     fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
     openImportDialog();
 
+    expect(screen.getByRole('button', { name: /choose export file/i })).toBeInTheDocument();
+    expect(screen.getByLabelText(/to confirm/i)).toHaveValue('');
+    expect(replaceButton()).toBeDisabled();
+  });
+
+  it('empties the file input once it has read the file, so the same file can be chosen again', () => {
+    render(<DataPortabilitySection />);
+    openImportDialog();
+    chooseFileLikeABrowser('export.ndjson');
+
     expect(screen.getByRole('button', { name: 'export.ndjson' })).toBeInTheDocument();
-    expect(screen.getByLabelText(/to confirm/i)).toHaveValue(h.email);
+    expect(fileInput().value).toBe('');
+  });
+
+  it('stays open while the import runs, whichever way it is dismissed', async () => {
+    let finish: (value: unknown) => void = () => {};
+
+    uploadAccountImport.mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+
+    render(<DataPortabilitySection />);
+    openImportDialog();
+    chooseFile('export.ndjson');
+    fireEvent.change(screen.getByLabelText(/to confirm/i), { target: { value: h.email } });
+    fireEvent.click(replaceButton());
+    await screen.findByRole('button', { name: /importing/i });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(screen.getByText('Import your data?')).toBeInTheDocument();
+
+    finish({ tablesImported: 1, rowsImported: 2, filesRestored: 0, format: 'ndjson' });
+    expect(await screen.findByText(/2 rows across 1 tables/)).toBeInTheDocument();
+    expect(screen.queryByText('Import your data?')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * ═══ "EXPORT DOWNLOADED." AND NOTHING WAS SAVED ═══
+ *
+ * On the native shell the export fetched a relative `/api/account/export` — the app's own
+ * `capacitor://localhost` origin, not the Memory server — with no API key, then clicked a
+ * download anchor in the web view. The page said "Export downloaded." and the QA run could find
+ * no file. The shells carry no file-save or share plugin, and a streamed whole-account archive is
+ * not something a phone can hold in memory, so the honest thing is to say it needs the web app.
+ * Import has the same two problems (it can only fail), so both cards give way to one explanation.
+ */
+describe('DataPortabilitySection on the native shell', () => {
+  beforeEach(() => {
+    h.native = true;
+    h.authToken = null;
+    downloadAccountExport.mockReset();
+    uploadAccountImport.mockReset();
+    uploadLegacyAccountImport.mockReset();
+  });
+
+  it('says plainly that a web sign-in is needed, instead of offering buttons that cannot work', () => {
+    render(<DataPortabilitySection />);
+
+    expect(screen.getByText('Needs a web sign-in')).toBeInTheDocument();
+    expect(screen.getByText(/cannot save or open yet/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Export all my data' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /import from file/i })).not.toBeInTheDocument();
+  });
+
+  it('never claims an export was downloaded', () => {
+    render(<DataPortabilitySection />);
+
+    expect(downloadAccountExport).not.toHaveBeenCalled();
+    expect(screen.queryByText('Export downloaded.')).not.toBeInTheDocument();
+  });
+
+  it('keeps the on-device cache controls, which are about this phone', () => {
+    render(<DataPortabilitySection />);
+
+    expect(screen.getByTestId('working-set')).toBeInTheDocument();
+  });
+
+  it('keeps export and import on the web', () => {
+    h.native = false;
+    h.authToken = 'jwt-abc';
+
+    render(<DataPortabilitySection />);
+
+    expect(screen.getByRole('button', { name: 'Export all my data' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /import from file/i })).toBeInTheDocument();
+    expect(screen.queryByText('Needs a web sign-in')).not.toBeInTheDocument();
   });
 });

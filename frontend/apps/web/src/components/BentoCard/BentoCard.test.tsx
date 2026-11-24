@@ -60,6 +60,28 @@ describe('BentoCard', () => {
     expect(document.querySelector('img')).toHaveClass('h-14');
   });
 
+  it('cuts a flex-column description to two lines on a phone and leaves out its full-card parts', async () => {
+    // Insight and summary cards describe themselves as a flex column. The clamp
+    // only counts lines in block flow, so their whole text showed (13 lines).
+    setViewport(true);
+    renderWithProviders(
+      <BentoCard
+        title="Evenings are crowding out the gym"
+        description={
+          <div className="flex flex-col gap-3">
+            <div>Three long evenings this week.</div>
+            <div data-row-extra>Suggested Actions</div>
+          </div>
+        }
+      />,
+    );
+
+    const text = await screen.findByText('Three long evenings this week.');
+    const preview = text.parentElement?.parentElement as HTMLElement;
+
+    expect(preview).toHaveClass('line-clamp-2', '[&>div]:block', '[&_[data-row-extra]]:hidden');
+  });
+
   it('does not reserve an image slot on a phone when there is no image', async () => {
     setViewport(true);
     renderWithProviders(

@@ -1,6 +1,8 @@
 import { Button, Dialog } from '@ci/shadcn';
 
+import { resolveMediaUrl } from '@/components/entities/resolveMediaUrl';
 import { type FragmentType, useFragment } from '@/graphql';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 import { FILE_CHUNK_CARD_FRAGMENT } from '@/pages/MemoryPage/Components/EntityCard/FileChunkCard';
 import { getFileChunkPreview, getFileChunkSubtitle, getFileChunkTitle } from '@/pages/MemoryPage/fileChunks';
 
@@ -11,6 +13,7 @@ interface Props {
 
 export function FileChunkModal({ entity, onClose }: Props) {
   const data = useFragment(FILE_CHUNK_CARD_FRAGMENT, entity);
+  const fmt = useDateTimeFormat();
 
   if (!data) {
     return null;
@@ -18,7 +21,7 @@ export function FileChunkModal({ entity, onClose }: Props) {
 
   const title = getFileChunkTitle(data);
   const subtitle = getFileChunkSubtitle(data);
-  const sourceUrl = data.file?.sourceUrl ? `/static${data.file.sourceUrl}` : null;
+  const sourceUrl = resolveMediaUrl(data.file?.sourceUrl) ?? null;
 
   return (
     <Dialog open={entity != null} onOpenChange={(open) => !open && onClose()}>
@@ -31,22 +34,20 @@ export function FileChunkModal({ entity, onClose }: Props) {
         <div className="space-y-6 overflow-y-auto px-6 py-5">
           {data.file?.filename && (
             <section className="space-y-1">
-              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">File</div>
+              <div className="text-xs font-medium text-muted-foreground">File</div>
               <div className="text-sm">{data.file.filename}</div>
             </section>
           )}
 
           {data.createdAt && (
             <section className="space-y-1">
-              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Indexed at
-              </div>
-              <div className="text-sm">{new Date(data.createdAt).toLocaleString()}</div>
+              <div className="text-xs font-medium text-muted-foreground">Indexed at</div>
+              <div className="text-sm">{fmt.dateTime(data.createdAt)}</div>
             </section>
           )}
 
           <section className="space-y-3">
-            <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Excerpt</div>
+            <div className="text-xs font-medium text-muted-foreground">Excerpt</div>
             <div className="rounded-md border bg-muted/40 p-4 text-sm whitespace-pre-wrap leading-relaxed">
               {getFileChunkPreview(data.chunkContent, data.chunkContent.length)}
             </div>
@@ -55,7 +56,11 @@ export function FileChunkModal({ entity, onClose }: Props) {
 
         {sourceUrl && (
           <Dialog.Footer className="border-t px-6 py-4">
-            <Button type="button" variant="outline" onClick={() => window.open(sourceUrl, '_blank')}>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => window.open(sourceUrl, '_blank', 'noopener,noreferrer')}
+            >
               Open File
             </Button>
           </Dialog.Footer>

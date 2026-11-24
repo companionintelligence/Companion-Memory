@@ -5,7 +5,7 @@ import { Context, type RequestContext, toServiceContext } from '@ci/common/conte
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { NodeService } from '@ci/domains/graph';
 import { PersonService } from '@ci/domains/memory';
-import { UserService } from '@ci/domains/user';
+import { TIME_FORMATS, type TimeFormat, UserService } from '@ci/domains/user';
 
 import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { PersonType } from '../types/PersonType';
@@ -21,6 +21,11 @@ function isValidTimezone(tz: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** True if `value` is one of the `ci.users.time_format` values the column's CHECK accepts. */
+function isTimeFormat(value: unknown): value is TimeFormat {
+  return (TIME_FORMATS as readonly unknown[]).includes(value);
 }
 
 @UseGuards(JwtOrApiKeyAuthGuard)
@@ -42,8 +47,8 @@ export class UserResolver {
   }
 
   @Mutation(() => UserType, { nullable: true })
-  // userService.update() patches only the caller's own timezone field; the account row stays
-  // fully intact. Not account deletion — see UserService.requestDeletion for that path.
+  // userService.update() patches only the caller's own timezone and time-format fields; the
+  // account row stays fully intact. Not account deletion — see UserService.requestDeletion for that path.
   @GraphqlPrivacy({ destructive: false })
   async updateCurrentUser(
     @Context() context: RequestContext,
@@ -53,7 +58,7 @@ export class UserResolver {
       throw new UnauthorizedException();
     }
 
-    const patch: { timezone?: string } = {};
+    const patch: { timezone?: string; timeFormat?: TimeFormat } = {};
 
     if (input.timezone !== undefined) {
       const timezone = input.timezone.trim();
@@ -64,6 +69,17 @@ export class UserResolver {
       }
 
       patch.timezone = timezone;
+    }
+
+    if (input.timeFormat !== undefined) {
+      // The GraphQL enum has already turned away any other string, so what can still get here is
+      // an explicit null — which the NOT NULL column would reject as a 500. Going back to the
+      // device's own hour cycle is spelled 'auto', not null.
+      if (!isTimeFormat(input.timeFormat)) {
+        throw new BadRequestException(`Invalid time format: ${String(input.timeFormat).slice(0, 16)}`);
+      }
+
+      patch.timeFormat = input.timeFormat;
     }
 
     const serviceContext = toServiceContext(context);

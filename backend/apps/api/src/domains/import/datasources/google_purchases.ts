@@ -4,13 +4,15 @@
    tolerantly since Google's shapes vary across accounts. Every field is guarded.
 */
 import fs from 'node:fs';
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { parseFlexibleDate } from './dates';
+import { walkFiles } from './fsWalk';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
-import type { ImportParams, Graph, LineItemRecord } from './timeline';
-import { timeframeContains } from './timeline';
+import type { ImportedEventStatus, ImportParams, Graph, LineItemRecord } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 // action_<digits>.json — the per-record file Google Takeout emits under
 // "Purchases & Reservations".
@@ -20,26 +22,8 @@ function isPurchasesDir(name: string): boolean {
   return /purchases?\s*&?\s*reservations?/i.test(name) || /reservations?/i.test(name);
 }
 
-async function* walkActionFiles(root: string, depth = 0): AsyncGenerator<string> {
-  if (depth > 5) {
-    return;
-  }
-
-  let entries: fs.Dirent[];
-  try {
-    entries = await readdir(root, { withFileTypes: true });
-  } catch {
-    return;
-  }
-
-  for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-    const p = path.join(root, e.name);
-    if (e.isDirectory()) {
-      yield* walkActionFiles(p, depth + 1);
-    } else if (e.isFile() && ACTION_FILE.test(e.name)) {
-      yield p;
-    }
-  }
+function walkActionFiles(root: string): AsyncGenerator<string> {
+  return walkFiles(root, { maxDepth: 5, sorted: true, match: (name) => ACTION_FILE.test(name) });
 }
 
 function str(v: unknown): string | undefined {
@@ -68,17 +52,6 @@ function numVal(v: unknown): number | undefined {
   }
 
   return undefined;
-}
-
-function parseDate(s: unknown): Date | undefined {
-  const v = str(s);
-  if (!v) {
-    return undefined;
-  }
-
-  const d = new Date(v);
-
-  return isNaN(d.getTime()) ? undefined : d;
 }
 
 function obj(v: unknown): Record<string, unknown> | undefined {
@@ -182,7 +155,7 @@ export class GooglePurchasesFileImporter implements FileImporter {
     // filename's action_<id> stem so a malformed record still keeps a distinct
     // id (constant-filename items otherwise collapse in hashItem).
     const uid = str(d.uniqueId) || base.replace(/\.json$/i, '');
-    const lastModified = parseDate(d.lastModifiedTime);
+    const lastModified = parseFlexibleDate(d.lastModifiedTime);
 
     const reservation = obj(d.booking) || obj(d.waitlist);
     if (reservation) {
@@ -207,7 +180,7 @@ export class GooglePurchasesFileImporter implements FileImporter {
     waitlist: boolean,
   ): void {
     // Waitlists carry createdTime instead of startTime.
-    const ts = parseDate(b.startTime) || parseDate(b.createdTime) || lastModified;
+    const ts = parseFlexibleDate(b.startTime) || parseFlexibleDate(b.createdTime) || lastModified;
     if (!timeframeContains(params.timeframe, ts)) {
       return;
     }
@@ -215,17 +188,20 @@ export class GooglePurchasesFileImporter implements FileImporter {
     const name = str(b.name) || (waitlist ? 'Waitlist' : 'Reservation');
     const merchant = str(b.merchantName);
     const title = merchant ? `${name} — ${merchant}` : name;
+    // Google's own flag, a JSON boolean on the booking or the waitlist entry.
+    // It rides verbatim as `Canceled`, and `true` is also stated as the event's
+    // status so the push writes `ci.events.status = 'cancelled'`. `Canceled`
+    // alone left the row 'confirmed', so every reader of the column counted a
+    // cancelled booking as one that happened. `false` (or no flag) states
+    // nothing beyond the column DEFAULT, so it sets no status.
+    const eventStatus: ImportedEventStatus | undefined = b.canceled === true ? 'cancelled' : undefined;
     const g: Graph = {
       item: {
         id: `gpurchase:${uid}`,
         classification: 'event',
         timestamp: ts,
-        timespanEnd: parseDate(b.endTime),
-        content: {
-          filename: 'reservation.txt',
-          mediaType: 'text/plain',
-          data: async () => Buffer.from(title),
-        },
+        timespanEnd: parseFlexibleDate(b.endTime),
+        content: textContent('reservation.txt', title),
         metadata: {
           Title: title,
           Name: name,
@@ -234,6 +210,7 @@ export class GooglePurchasesFileImporter implements FileImporter {
           Service: str(b.service),
           Address: str(b.address),
           Canceled: typeof b.canceled === 'boolean' ? b.canceled : undefined,
+          eventStatus,
           Kind: waitlist ? 'waitlist' : 'reservation',
           Source: 'Google',
         },
@@ -249,11 +226,11 @@ export class GooglePurchasesFileImporter implements FileImporter {
     params: ImportParams,
   ): void {
     const ts =
-      parseDate(p.orderDate) ||
-      parseDate(p.purchaseDate) ||
-      parseDate(p.time) ||
-      parseDate(p.date) ||
-      parseDate(p.creationTime) ||
+      parseFlexibleDate(p.orderDate) ||
+      parseFlexibleDate(p.purchaseDate) ||
+      parseFlexibleDate(p.time) ||
+      parseFlexibleDate(p.date) ||
+      parseFlexibleDate(p.creationTime) ||
       lastModified;
     if (!timeframeContains(params.timeframe, ts)) {
       return;
@@ -282,7 +259,7 @@ export class GooglePurchasesFileImporter implements FileImporter {
         id: `gpurchase:${uid}`,
         classification: 'purchase',
         timestamp: ts,
-        content: { filename: 'purchase.txt', mediaType: 'text/plain', data: async () => Buffer.from(title) },
+        content: textContent('purchase.txt', title),
         metadata: {
           Title: title,
           Product: product,

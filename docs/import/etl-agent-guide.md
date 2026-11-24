@@ -1,7 +1,5 @@
 # The import ETL, for the agent who has to fix it
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 You have been handed a bug in the import system and no context. This document is
 the context. It is written for an AI agent as much as for a person, so it
 optimises for one thing: being able to answer, from a cold start, **what ran, how
@@ -130,7 +128,7 @@ way round.
 | Graph entities + the "is this actually a name" guard | `.../import/push/entities.ts`, `.../graph/utils/participantSanity.ts` |
 | Owner/self resolution (message direction) | `.../import/push/self.ts` |
 | Inbox scan/claim | `.../import/services/ImportInboxService.ts` |
-| **Per-user inbox path, roots containment** | `.../import/sources/importRoots.ts` (`userInboxDir`), `.../import/sources/sanitizeFilename.ts` |
+| **Per-user inbox path, roots containment** | `.../import/sources/importRoots.ts` (`userInboxDir`, keyed on the account id; `resolveWithinImportRoots`, configured roots for the administrator only) |
 | Per-service inbox drop folders | `.../import/sources/inboxFolders.ts`, fed by `.../import/sources/guides.ts` |
 | Acquisition (rename, EXDEV copy fallback, crash recovery) | `.../import/sources/localAcquire.ts` |
 | Scratch tree lifecycle | `.../import/services/ImportScratchService.ts` |
@@ -271,8 +269,11 @@ media and push legs proceed meanwhile; they do not make the parses overlap. So:
 | Constant | Value | Where | Why |
 |---|---|---|---|
 | `PROGRESS_THROTTLE_MS` | 1,000 ms | `ImportStageListener.ts` | A parse ticking per record would write a row per record for the length of a 40GB import |
-| `STAGE_HEARTBEAT_MS` | 30,000 ms | `ImportStageListener.ts` | Keeps the claim fresh through silent stretches (a giant archive mid-extract says nothing for minutes) |
-| `STALE_STAGE_MINUTES` | 10 | `ImportRunService.ts` | A live stage is never silent this long, so silence *is* death — whoever the worker was |
+| `IMPORT_STAGE_HEARTBEAT_SECONDS` | 30 s | `constants.ts` | Keeps the claim fresh through silent stretches (a giant archive mid-extract says nothing for minutes). Every threshold below is a multiple of it |
+| `IMPORT_STAGE_STALLED_SECONDS` | 90 s (3 beats) | `constants.ts` | A `running` stage silent this long is reported **stalled** — on the run detail, the active snapshot, `ci runs` and the import activity panel. A report, never an action |
+| `IMPORT_STAGE_ORPHAN_SECONDS` | 180 s (6 beats) | `constants.ts` | A stage claimed through a pg-boss job and silent this long is taken back, and the job **failed through pg-boss**, which retries it in place (same id, same place in line) or dead-letters it. Short is safe because the reaper never touches a stage its own process is running, and claims are fenced — see below |
+| `ORPHAN_REAP_CRON` | `15 * * * * *` | `ImportStageListener.ts` | The orphan reaper, every minute (and at boot, inside the sweep) |
+| `STALE_STAGE_MINUTES` | 10 | `ImportRunService.ts` | The **backstop**: claims no pg-boss job holds (in-process connector runs, pre-claim-ownership rows) and anything the reaper failed to handle. A live stage is never silent this long |
 | `RESUME_SWEEP_CRON` | `30 */5 * * * *` | `ImportStageListener.ts` | Recovery is periodic, not boot-only, so a crash is picked up without a restart |
 | `STAGE_FAILURE_RECORD_RETRY` | 10 min budget, 1s → 30s | `ImportStageListener.ts` | A failure is recorded through a database that is away (not ready *or* crashed), so the sweep never re-runs a stage whose failure write was lost |
 
@@ -280,13 +281,38 @@ Every recovery gate is a **staleness test on `updated_at`**, never an assumption
 about who else is running. The comment on `resumeInterrupted` records why: the
 first version assumed "at bootstrap, any running stage is orphaned", and a dev
 restart that leaked the old process disproved it — two executors interleaved
-progress writes with different totals on the same stage.
+progress writes with different totals on the same stage. The one thing a
+process does know for certain is what IT is running, so both recovery passes
+take the caller's live stages (`liveStageIds`) and never touch them, however
+silent — a parser blocking the event loop, or a database away, no longer costs
+a stage to the very process running it.
+
+**Claims are fenced.** `claimStage` mints a `claim_token` per claim and records
+the delivering job (`claim_job_id`, `claim_queue`); the listener's heartbeat,
+progress, completion and failure writes all land only while the token still
+matches, and both recovery passes clear it. A worker that was only slow and lost
+its stage therefore finds out at its next beat or progress report, stops, cannot
+complete the stage or advance the run behind its replacement, and acknowledges
+its delivery with `defer` — pg-boss re-issued the job under the same id, so
+completing it would mark the replacement's job done.
+
+**A dead worker is retried, and pg-boss counts the retries.** The orphan
+reaper (`ImportRunService.reclaimOrphanedStages`) fails the dead worker's job
+through pg-boss rather than enqueueing a new one: the retry keeps the job's id
+and `created_on`, so the interrupted run resumes at the head of its kind's queue
+instead of behind every run that queued meanwhile, and nothing is left `active`
+for a twelve-hour lease. It also means the queue's `retryLimit: 3` applies: a
+stage whose worker dies a fourth time is FAILED, with its job dead-lettered and
+a message saying the worker kept dying — where the ten-minute sweep would have
+re-run a worker-killing stage forever. Stage `detail.interrupted` records each
+take (when, how far it had got, which retry is next); `ci runs <id>` prints it.
 
 **Failure is recorded, not retried.** A throw fails the stage and is rethrown so
 pg-boss dead-letters it, but the redelivery is a deliberate no-op: `beginStage`
 only claims a `queued` stage, so a redelivered job for a `failed` stage logs and
-returns (the queue's `retryLimit: 3` with backoff therefore re-runs nothing, and
-neither does the recovery sweep, which leaves a `failed` stage alone). That
+returns (the queue's `retryLimit: 3` with backoff therefore re-runs nothing for a
+*recorded* failure, and neither does the recovery sweep, which leaves a `failed`
+stage alone — the retries it does spend are on workers that died, above). That
 holds only if the failure is actually *recorded* — a stage left `running` is
 exactly what the recovery sweep re-queues after `STALE_STAGE_MINUTES` — so
 `ImportStageListener` records it through an absent database:
@@ -565,6 +591,16 @@ status column to say "this is a credit" with: the lifecycle it carries
 (`extraction_state`) is about the READ of the document, not about the purchase.
 Modelling refunds honestly needs that column and a migration. The amount is not
 dropped on the floor — it stays on the row as `metadata.NegativeTotalRefused`.
+
+**A currency with no ISO code writes no money.** Both `currency` columns CHECK
+`^[A-Z]{3}$`, and one refused row loses the whole purchase (receipts are written
+before things). `toReceiptInput` and `lineFrom` trim and upper-case the code;
+anything still not three letters (Roblox's `Robux`) is written as no currency,
+and every money column on that receipt or line stays empty, because an amount
+with no currency reads as dollars in the web app. The unit is kept as
+`metadata.UnsupportedCurrency` on the receipt (and on a line whose own unit it
+is), and the amounts stay under the parser's own keys. The thing row keeps the
+price and the unit as the source gave them: `ci.objects.currency` has no CHECK.
 
 **WHERE the purchase happened** is `ci.receipts.place_entity_id`, the `place_prior`
 rung `ObjectResolutionService` leans on and the only thing that puts an imported
@@ -985,6 +1021,23 @@ gets missed under time pressure. Two real shapes:
 - **Amazon Appstore entitlements** — the code fix landed first; the 92 existing
   rows would have stayed typed `'media'` forever. Migration `20260818224249`,
   commit `5dafcf14b`, PR #2079.
+- **A contact's natural key** — the phone join key kept the last ten digits of
+  line + extension, so `(212) 555-0147;229` keyed a card as `contact:5550147229`.
+  Fixing the rule MOVES the key, so every affected card re-imports as a
+  duplicate beside its old row. Migration `20260930020117` could only re-key
+  the rows whose own `properties.Phones` still held the typed line (vCard); the
+  Apple Contacts and CSV parsers kept their numbers only in identity
+  ATTRIBUTES, which staging never persists. Two things close the gap: staging
+  records the key the card was minted under (`legacy_identity_key`, read with
+  the pre-fix rule) and the push moves the old row onto the new key
+  (`push/legacyKeys.ts`, PR #2795's mechanism for shared office lines); and
+  those parsers now keep `Phones` / `Emails`, so `push/truncatedPhoneKeys.ts`
+  can prove from the card that the old key was a truncation and undo what it
+  reached. `contactKeyRecomputable.test.ts` fails any contact parser whose key
+  cannot be rebuilt from its own metadata. **The rule for a new parser:** every
+  value its key is derived from must reach `metadata`, and a change to the key
+  rule must keep the OLD rule callable (`legacyEntityIdentityKey`) until every
+  stored row has been re-imported — or no fix can reach rows already stored.
 
 **Why it recurs:** the test suite goes green on the code fix, and green feels
 like done. It is not; the corpus is the deliverable.
@@ -1076,12 +1129,13 @@ already cleared (so the two must be disjoint), a `name` already NULL (so the
 migration is idempotent).
 
 The suite skips legibly when there is no database rather than failing every test
-on a connection error (`domains/__tests__/support/databaseConnection.ts`;
-`databaseAvailability()` prints the reason). Point it at a scratch database with
-the suite's own variable — `IMPORT_TEST_DATABASE_URL` for the import suites,
-`PIPELINE_TEST_DATABASE_URL`, `MEMORY_TEST_DATABASE_URL`, etc. Take the value
-from `make dburl`: the dev stack reallocates ports on every `up`, and a stale
-port reads as "no database".
+on a connection error (`domains/__tests__/support/databaseConnection.ts`; the
+end of the jest run lists every skipped file with its reason). Point it at a
+scratch database with the suite's own variable — `IMPORT_TEST_DATABASE_URL` for
+the import suites, `PIPELINE_TEST_DATABASE_URL`, `MEMORY_TEST_DATABASE_URL`,
+etc. Take the value from `make dburl`: the dev stack reallocates ports on every
+`up`, and a URL you set that nothing answers on now FAILS the suite, naming the
+variable, where it used to skip as "no database".
 
 ### 4.4 The commands
 
@@ -1197,28 +1251,29 @@ in `config/default.json`:
 
 ### 5.3 ⚠️ The inbox is PER USER, and it CONSUMES what it imports
 
-**The layout, since [#2100](https://github.com/companionintelligence/CI-Server/pull/2100)
-(`507c1e2f1`).** `CI_IMPORT_INBOX_DIR` is a root that nothing scans directly.
-Each account owns a subtree named after its email, and units live inside it —
-optionally inside a per-service folder:
+**The layout.** `CI_IMPORT_INBOX_DIR` is a root that nothing scans directly.
+Each account owns a subtree named after its account id (`ci.users.id`), and
+units live inside it, optionally inside a per-service folder:
 
 ```
 $CI_IMPORT_INBOX_DIR/
-└── test_example.com/          ← userInboxDir(user.email)
+└── 0199a1b2-…-7c3d/           ← userInboxDir(user.id)
     ├── amazon/                ← a service folder; the drop DECLARES that source
     │   └── orders.zip         ← the unit
     ├── google-takeout/
     └── some-loose-archive.zip ← also a unit; declares nothing
 ```
 
-The folder name is `sanitizeFilename(email.trim().toLowerCase())`
-(`sources/importRoots.ts` → `sources/sanitizeFilename.ts`): lowercased, then every
-character outside `[A-Za-z0-9._-]` replaced with `_`. So `Test@Example.com`,
-`test@example.com` and `TEST@EXAMPLE.COM` all become **`test_example.com`** — the
-`@` becomes `_`, the dot survives. It is derived from the email because that is
-the one identifier that is both unique and recognizable from the desktop side of
-the mount; without the scoping, any account could import — and thereby consume —
-an archive another account dropped.
+Until the folder was keyed on the id it was `sanitizeFilename(email.trim().toLowerCase())`,
+so `test@example.com` owned `test_example.com`. That name was not unique: `a+b@x.io`
+and `a_b@x.io` both became `a_b_x.io`, as did two case variants of one address, and
+two accounts on one folder could import (and so consume) each other's archives. The
+id cannot collide. On boot, `ImportInboxService.migrateInboxFoldersToUserIds` moves
+each account's old email-named folder onto its id, and rewrites any live claim under
+it, but only when exactly one account maps to the old name and the id folder does
+not exist yet; anything else is left in place and logged. Ask the API for the folder
+rather than computing it: `ci inbox` prints it, and `GET /import/inbox` returns it
+as `inboxDir` (in-container) and `displayDir` (on the host).
 
 > **The trap, and it points at the wrong thing entirely.** Drop a unit in the old
 > flat layout (`$CI_IMPORT_INBOX_DIR/amazon`) and starting it fails with
@@ -1231,8 +1286,8 @@ an archive another account dropped.
 > reads as "you forgot to set `CI_IMPORT_ROOTS`" — which is a different variable
 > for a different purpose (host paths a caller may *name*; the inbox needs none
 > of them). The actual fault is that the path is not under *this caller's*
-> `userInboxDir`. Check the email spelling of the account whose API key you are
-> using before you touch any configuration. This cost real time on the 2026-08-19
+> `userInboxDir`. Check that you dropped into the folder `ci inbox` prints for
+> the account whose API key you are using before you touch any configuration. This cost real time on the 2026-08-19
 > QA pass.
 
 The per-service folders are created for you on every scan
@@ -1255,7 +1310,7 @@ the bytes then live only in the run's scratch tree, which is reclaimed when the 
 finishes. **Never point the inbox at the only copy of a corpus.**
 
 ```bash
-INBOX="$CI_IMPORT_INBOX_DIR/$(printf %s "$EMAIL" | tr 'A-Z' 'a-z' | tr -c 'a-z0-9._-' '_')"
+INBOX="$(curl -fsS -H "x-api-key: $CI_API_KEY" http://localhost:3030/import/inbox | jq -r .inboxDir)"
 mkdir -p "$INBOX"
 cp -Rc /path/to/corpus/* "$INBOX"/           # macOS: -c is an APFS clone — instant, no extra disk
 cp -r --reflink=auto /path/to/corpus/* "$INBOX"/   # Linux equivalent on btrfs/XFS
@@ -1303,7 +1358,9 @@ yarn workspace @ci/cli dev <command>          # or `ci <command>` once installed
 Exit codes: **0** success, **2** a failure you can fix (bad path, missing key,
 unreachable server, an unknown `--check` id), **1** a failure the appliance owns.
 `doctor` also exits **1** when its gate trips — see [§6](#6-what-to-measure--ci-doctor);
-distinguish the two by whether stdout carried a report.
+distinguish the two by whether stdout carried a report. With `--wait`, `import`,
+`inbox --start` and `push` exit **1** when a run they followed ended `failed` or
+`cancelled`, or was deleted mid-wait; a `partial` run exits 0.
 
 `--stages` warns when it omits `media`, because that stage uploads the archive's
 bytes and stamps `metadata.FileId`; a run that parses photos without it leaves
@@ -1366,7 +1423,10 @@ yarn workspace @ci/cli dev doctor --check comms-missing-thread-id --json
 ```
 
 Under it are two GET routes, so an agent holding an api key and no database
-credentials can do the same:
+credentials can do the same. Running the checks is limited to the appliance
+administrator, because every check reads all accounts and returns a sample row:
+use the owner's key, or a non-admin account gets a 403 (`/checks` only lists the
+registry and stays open to any account):
 
 ```bash
 curl -sH "x-api-key: $CI_API_KEY" http://localhost:3030/import/doctor/checks | jq
@@ -2004,7 +2064,7 @@ If you read nothing else:
   Parse is still serial and still dominates, so parse time is still a sum.
   Queued for an hour is normal; `GET /import/runs/active` tells `waiting` from
   `blocked`.
-- **The inbox is per user** — `<inbox>/<email with @ → _>/<unit>`. The old flat
+- **The inbox is per user**, at `<inbox>/<account id>/<unit>`. The old flat
   layout fails with "outside the configured import roots", which names the wrong
   variable.
 - **A full reset drops the DATABASE**, never a hand-typed schema list; a missed

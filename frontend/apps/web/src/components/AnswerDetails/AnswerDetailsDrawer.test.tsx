@@ -1,5 +1,5 @@
-import { fireEvent, screen, within } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, screen, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '@/test/renderWithProviders';
 
@@ -107,6 +107,117 @@ describe('AnswerDetailsDrawer — the panel itself', () => {
     expect(sheet).not.toHaveClass('data-[state=open]:slide-in-from-right');
     // Not the full screen: the row the reader tapped stays visible above it.
     expect(sheet).toHaveClass('max-h-[min(90dvh,var(--vv-height,100dvh))]');
+  });
+});
+
+describe('AnswerDetailsDrawer — swiping the phone sheet down', () => {
+  // REFL-08: the sheet wears a grabber, three swipes down from it left it open,
+  // and only Close dismissed it.
+  const grabber = () => screen.getByTestId('answer-details-grabber');
+  const header = () => document.querySelector<HTMLElement>('[data-slot="sheet-header"]')!;
+
+  /** Put a finger on `handle` at y=100, drag it to `to`, let go a beat later. */
+  function swipe(handle: () => HTMLElement, to: number, onOpenChange: () => void) {
+    renderWithProviders(
+      <AnswerDetailsDrawer
+        open
+        onOpenChange={onOpenChange}
+        details={{ ...INFERRED, onEdit: () => undefined }}
+      />,
+    );
+
+    const pointer = { pointerId: 1, isPrimary: true, button: 0 };
+    fireEvent.pointerDown(handle(), { ...pointer, clientY: 100 });
+    fireEvent.pointerMove(handle(), { ...pointer, clientY: to });
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+    fireEvent.pointerUp(handle(), { ...pointer, clientY: to });
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it.each([
+    ['header', header],
+    ['grabber', grabber],
+  ])('closes when the %s is dragged down far enough', (_name, handle) => {
+    stubViewport(true);
+    const onOpenChange = vi.fn();
+
+    swipe(handle, 260, onOpenChange);
+
+    // It slides off first, then asks to be closed.
+    expect(panel()).toHaveStyle({ transform: 'translateY(100%)' });
+    expect(onOpenChange).not.toHaveBeenCalled();
+
+    act(() => {
+      vi.advanceTimersByTime(180);
+    });
+
+    expect(onOpenChange).toHaveBeenCalledTimes(1);
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it('stays open, and comes back, when the drag is let go short', () => {
+    stubViewport(true);
+    const onOpenChange = vi.fn();
+
+    swipe(header, 140, onOpenChange);
+    act(() => {
+      vi.advanceTimersByTime(180);
+    });
+
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(panel()!.getAttribute('style') ?? '').not.toContain('translateY');
+  });
+
+  it('claims the touch on the grabber and the header only — the body keeps its scroll', () => {
+    stubViewport(true);
+    open();
+
+    expect(grabber().style.touchAction).toBe('none');
+    expect(header().style.touchAction).toBe('none');
+
+    const scroller = panel()!.querySelector<HTMLElement>('.overflow-y-auto')!;
+    expect(scroller.style.touchAction).not.toBe('none');
+    expect((panel() as HTMLElement).style.touchAction).not.toBe('none');
+  });
+
+  it('does not close from a drag that starts in the scrolled body', () => {
+    stubViewport(true);
+    const onOpenChange = vi.fn();
+    renderWithProviders(<AnswerDetailsDrawer open onOpenChange={onOpenChange} details={INFERRED} />);
+
+    const scroller = panel()!.querySelector('.overflow-y-auto')!;
+    const pointer = { pointerId: 1, isPrimary: true, button: 0 };
+    fireEvent.pointerDown(scroller, { ...pointer, clientY: 100 });
+    fireEvent.pointerMove(scroller, { ...pointer, clientY: 400 });
+    fireEvent.pointerUp(scroller, { ...pointer, clientY: 400 });
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
+  it('leaves the desktop panel alone: no grabber, nothing to swipe, nothing claimed', () => {
+    // matchMedia never matches here, which is the desktop layout.
+    const onOpenChange = vi.fn();
+
+    swipe(header, 400, onOpenChange);
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+
+    expect(screen.queryByTestId('answer-details-grabber')).not.toBeInTheDocument();
+    expect(header().style.touchAction).not.toBe('none');
+    expect(onOpenChange).not.toHaveBeenCalled();
   });
 });
 

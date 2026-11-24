@@ -3,10 +3,27 @@ import { join } from 'node:path';
 import { Injectable, OnModuleInit } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
-import config from '@ci/configuration';
+import config, { LLM_API_KEY_PLACEHOLDER } from '@ci/configuration';
 
 import {
+  classifyConnectionError,
+  connectionFailureMessage,
+  containerSourceRange,
+  firstErrorCode,
+  hostIpv4,
+  stalledServerMessage,
+  tcpConnects,
+  ufwAllowCommand,
+  type ConnectionTarget,
+  type LlmConnectionFailureReason,
+  type LookupIpv4,
+  type TcpProbe,
+} from './llmConnectionFailure';
+import {
   containerSharedConfigPath,
+  DEFAULT_OPENAI_BASE_PATH,
+  isHostGatewayName,
+  normalizeBasePath,
   readSharedConfig,
   sharedConfigPath,
   syncAppEnvLlmVars,
@@ -22,6 +39,8 @@ export type { LlmBackendKind };
 export interface LlmEndpointSettings {
   backend: LlmBackendKind;
   port: number;
+  /** OpenAI-compatible only: the server's API root, `/v1` unless the server mounts it elsewhere (Lemonade: `/api/v1`). */
+  basePath?: string;
   apiKey?: string;
 }
 
@@ -29,6 +48,7 @@ export interface LlmEndpointSettings {
 export interface LlmEndpointUpdate {
   backend: LlmBackendKind;
   port: number;
+  basePath?: string;
   /** Replaces the stored credential. It is deliberately write-only. */
   apiKey?: string;
   /** Removes a credential saved by this appliance and falls back to runtime config. */
@@ -39,13 +59,18 @@ export interface LlmEndpointUpdate {
 export interface LlmEndpointView {
   backend: LlmBackendKind;
   port: number;
+  /** The API root in use on an OpenAI-compatible backend; absent on Ollama. */
+  basePath?: string;
   /** Hostname the API container uses to reach an inference server on the host. */
   hostGateway: string;
   /** True when Hub/env injected LLM_* and settings cannot override. */
   locked: boolean;
   /** The normalized endpoint the API container will contact (never carries credentials). */
   endpoint: string;
-  /** Whether a credential is available, without exposing its value. */
+  /**
+   * Whether someone set a credential, without exposing its value. False for the built-in
+   * placeholder ({@link LLM_API_KEY_PLACEHOLDER}), which is still sent as the bearer.
+   */
   apiKeyConfigured: boolean;
 }
 
@@ -59,7 +84,35 @@ export interface LlmEndpointPreflight {
   /** A safe, actionable status for a person or CLI; never includes a credential. */
   message?: string;
   status?: number;
+  /** Set when the request got no HTTP answer at all: what went wrong on the way. */
+  reason?: LlmConnectionFailureReason;
+  /**
+   * A command for the person to run on the computer the containers run on, shown as code after
+   * {@link message}. Only for a server on that computer that did not answer in time: a ufw rule that
+   * lets Memory's containers through. Memory never runs it.
+   */
+  fixCommand?: string;
 }
+
+/** A request to the endpoint that got no HTTP answer, described for a person. */
+export interface LlmEndpointConnectionFailure {
+  reason: LlmConnectionFailureReason;
+  /** The error code that decided {@link reason}, for logs. */
+  code: string;
+  /** The address tried, what happened and the likely cause. Carries no credential and no command. */
+  message: string;
+  /** See {@link LlmEndpointPreflight.fixCommand}. */
+  fixCommand?: string;
+}
+
+/** Ends a preflight message that has a {@link LlmEndpointPreflight.fixCommand} to show after it. */
+const UFW_HINT = 'If that computer runs Linux with ufw, this rule lets them through:';
+
+/** How long Test connection waits for the model list. */
+const PREFLIGHT_TIMEOUT_MS = 5_000;
+
+const GENERIC_UNREACHABLE_MESSAGE =
+  'Could not reach this server from the Memory API. Verify the port is exposed to the API container.';
 
 interface ResolvedLlmEndpoint {
   settings: LlmEndpointSettings;
@@ -133,6 +186,7 @@ function settingsFromEnv(): {
       settings: {
         backend: 'openai_compatible',
         port: portFromUrl(config.llm.apiBase, DEFAULT_OPENAI_PORT),
+        basePath: basePathFromUrl(config.llm.apiBase),
         apiKey: config.llm.apiKey,
       },
       apiBase: config.llm.apiBase?.trim(),
@@ -148,6 +202,15 @@ function settingsFromEnv(): {
       apiKey: config.llm.apiKey,
     },
   };
+}
+
+/** The path of an injected `LLM_API_BASE`, so the view reports Lemonade's `/api/v1` rather than assuming `/v1`. */
+function basePathFromUrl(url: string | undefined): string {
+  try {
+    return normalizeBasePath(url ? new URL(url).pathname : undefined);
+  } catch {
+    return DEFAULT_OPENAI_BASE_PATH;
+  }
 }
 
 function isForeignApiBase(apiBase: string | undefined, ollamaHost: string): boolean {
@@ -185,6 +248,16 @@ function endpointRequestUrl(resolved: ResolvedLlmEndpoint): string {
   }
 
   return `${resolved.apiBase?.replace(/\/$/, '') ?? ''}/models`;
+}
+
+function connectionTarget(url: string): ConnectionTarget | null {
+  try {
+    const { hostname } = new URL(url);
+
+    return { hostname, port: portFromUrl(url, 80), onHost: isHostGatewayName(hostname) };
+  } catch {
+    return null;
+  }
 }
 
 function modelsFromPreflightPayload(backend: LlmBackendKind, payload: unknown): string[] {
@@ -226,7 +299,8 @@ function buildResolved(
   const ollamaHost = `http://${hostGateway}:${settings.backend === 'ollama' ? settings.port : DEFAULT_OLLAMA_PORT}`;
   const apiBase =
     settings.backend === 'openai_compatible'
-      ? managedApiBase?.trim() || `http://${hostGateway}:${settings.port}/v1`
+      ? managedApiBase?.trim() ||
+        `http://${hostGateway}:${settings.port}${normalizeBasePath(settings.basePath)}`
       : undefined;
 
   return {
@@ -264,10 +338,18 @@ export class LlmEndpointService implements OnModuleInit {
     return {
       backend: this.resolved.settings.backend,
       port: this.resolved.settings.port,
+      ...(this.resolved.settings.backend === 'openai_compatible' && {
+        basePath: normalizeBasePath(this.resolved.settings.basePath),
+      }),
       hostGateway: this.resolved.hostGateway,
       locked: this.resolved.locked,
       endpoint: safeEndpoint(this.resolved.apiBase ?? this.resolved.ollamaHost),
-      apiKeyConfigured: this.resolved.apiKey.length > 0,
+      // A key saved here always counts, even the placeholder's own word (Ollama's docs say to
+      // type it, and Settings saved it back for a while): it overrides LLM_API_KEY, so Settings
+      // must keep offering to remove it.
+      apiKeyConfigured:
+        this.persistedApiKey != null ||
+        (this.resolved.apiKey.length > 0 && this.resolved.apiKey !== LLM_API_KEY_PLACEHOLDER),
     };
   }
 
@@ -296,6 +378,7 @@ export class LlmEndpointService implements OnModuleInit {
     const persisted = {
       backend: settings.backend,
       port: settings.port,
+      ...(settings.backend === 'openai_compatible' && { basePath: normalizeBasePath(settings.basePath) }),
       ...(apiKey ? { apiKey } : {}),
       hostGateway,
     };
@@ -312,7 +395,10 @@ export class LlmEndpointService implements OnModuleInit {
    * matters to Memory. A browser or host-side curl can reach localhost while a
    * containerized API cannot, so the check intentionally runs here.
    */
-  async preflight(fetchImpl: typeof fetch = fetch): Promise<LlmEndpointPreflight> {
+  async preflight(
+    fetchImpl: typeof fetch = fetch,
+    network: { lookup?: LookupIpv4; connects?: TcpProbe } = {},
+  ): Promise<LlmEndpointPreflight> {
     const endpoint = safeEndpoint(this.resolved.apiBase ?? this.resolved.ollamaHost);
     const requestUrl = endpointRequestUrl(this.resolved);
     const headers =
@@ -324,7 +410,7 @@ export class LlmEndpointService implements OnModuleInit {
       const response = await fetchImpl(requestUrl, {
         headers,
         redirect: 'error',
-        signal: AbortSignal.timeout(5_000),
+        signal: AbortSignal.timeout(PREFLIGHT_TIMEOUT_MS),
       });
 
       if (!response.ok) {
@@ -365,21 +451,91 @@ export class LlmEndpointService implements OnModuleInit {
             : `Connected. ${models.length} model${models.length === 1 ? '' : 's'} reported.`,
       };
     } catch (error) {
+      // Described against the URL this request went to, not the endpoint as it is now: Settings
+      // can change it during the five seconds this waits.
+      const target = connectionTarget(requestUrl);
+      // The deadline above fires for a server that accepted the connection and then stalled as
+      // much as for one a firewall cut off. A bare TCP connect tells them apart, so a busy server
+      // is not met with firewall advice.
+      const stalled =
+        target != null &&
+        classifyConnectionError(error)?.code === 'TimeoutError' &&
+        (await (network.connects ?? tcpConnects)(target.hostname, target.port)) === true;
+      const failure: LlmEndpointConnectionFailure | null =
+        stalled && target
+          ? {
+              reason: 'timeout',
+              code: 'TimeoutError',
+              message: stalledServerMessage(target, PREFLIGHT_TIMEOUT_MS / 1000),
+            }
+          : await this.describeFailureAt(error, requestUrl, network.lookup);
+
       this.logger.warn('LLM endpoint preflight failed', {
         backend: this.resolved.settings.backend,
         endpoint,
         error: error instanceof Error ? error.name : String(error),
+        reason: failure?.reason ?? 'unknown',
+        code: failure?.code ?? firstErrorCode(error) ?? null,
       });
+
+      if (!failure) {
+        return {
+          backend: this.resolved.settings.backend,
+          endpoint,
+          ok: false,
+          models: [],
+          message: GENERIC_UNREACHABLE_MESSAGE,
+        };
+      }
 
       return {
         backend: this.resolved.settings.backend,
         endpoint,
         ok: false,
         models: [],
-        message:
-          'Could not reach this server from the Memory API. Verify the port is exposed to the API container.',
+        message: failure.fixCommand ? `${failure.message} ${UFW_HINT}` : failure.message,
+        reason: failure.reason,
+        ...(failure.fixCommand && { fixCommand: failure.fixCommand }),
       };
     }
+  }
+
+  /**
+   * Why a request to the endpoint got no HTTP answer, in words that name the address it tried and
+   * the likely cause. Null when `error` is something else (an HTTP error, a bad payload), which the
+   * caller reports its own way.
+   *
+   * A timeout to a server on the containers' own host gets a ufw rule as well. Docker's iptables
+   * rules cover traffic into containers, not from a container to its host, so a host firewall that
+   * drops incoming connections silently eats every one of those. The rule names the address the
+   * gateway name resolves to here, the only one the containers call, so it doesn't open the port on
+   * the host's LAN address to a LAN that shares 172.16.0.0/12. When the name doesn't resolve there
+   * is no rule: the only one left would be for any address.
+   */
+  async describeConnectionFailure(error: unknown): Promise<LlmEndpointConnectionFailure | null> {
+    return this.describeFailureAt(error, endpointRequestUrl(this.resolved));
+  }
+
+  private async describeFailureAt(
+    error: unknown,
+    requestUrl: string,
+    lookupImpl?: LookupIpv4,
+  ): Promise<LlmEndpointConnectionFailure | null> {
+    const kind = classifyConnectionError(error);
+    const target = kind ? connectionTarget(requestUrl) : null;
+
+    if (!kind || !target) {
+      return null;
+    }
+
+    const range = kind.reason === 'timeout' && target.onHost ? containerSourceRange() : undefined;
+    const hostAddress = range ? await hostIpv4(target.hostname, lookupImpl) : undefined;
+
+    return {
+      ...kind,
+      message: connectionFailureMessage(kind, target),
+      ...(range && hostAddress && { fixCommand: ufwAllowCommand(target.port, range, hostAddress) }),
+    };
   }
 
   private reload(): void {
@@ -425,6 +581,7 @@ export class LlmEndpointService implements OnModuleInit {
           backend: resolved.settings.backend,
           hostGateway: resolved.hostGateway,
           port: resolved.settings.port,
+          basePath: resolved.settings.basePath,
           apiKey: resolved.apiKey,
         });
       } catch (error) {
@@ -458,6 +615,7 @@ export class LlmEndpointService implements OnModuleInit {
         settings: {
           backend: parsed.backend,
           port: parsed.port,
+          basePath: parsed.basePath,
           apiKey: parsed.apiKey,
         },
         hostGateway: parsed.hostGateway?.trim() || inferHostGateway(),

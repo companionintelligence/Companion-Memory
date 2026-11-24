@@ -1,5 +1,6 @@
 import { apiKeyHeaders } from './apiAuth';
 import { buildApiUrl, isNativePlatform } from './apiBase';
+import { guardApplianceRequest } from './offlineWrites';
 
 interface Opts extends RequestInit {
   timeout?: number;
@@ -12,7 +13,24 @@ interface Opts extends RequestInit {
    * unexpected `x-api-key` fails the WebView's preflight and the request never goes out.
    */
   skipApiKey?: boolean;
+  /**
+   * Let a write go out while the connection probe says the appliance is unreachable
+   * (`offlineWrites.ts`). Only for writers that queue and retry on their own and so do
+   * not need the person told anything — the Local Hub outbox drain, position uploads,
+   * capture uploads. A user-initiated write leaves it unset and is refused with an
+   * `OfflineWriteError` plus the shared dialog instead of failing on the network.
+   */
+  allowOffline?: boolean;
 }
+
+/** `apiFetch`'s init: a `RequestInit` plus the same opt-out `fetchJson` takes. */
+export type ApiFetchInit = RequestInit & { allowOffline?: boolean };
+
+/**
+ * `streamingFetch`'s init. `bufferedFallback: false` keeps a native request on the
+ * webview fetch: no buffered CapacitorHttp retry when that fetch fails.
+ */
+export type StreamingFetchInit = RequestInit & { bufferedFallback?: boolean };
 
 /**
  * Field-level validation issue reported by the API. Mirrors the zod issue
@@ -278,6 +296,33 @@ function isBinaryBody(body: BodyInit | null | undefined): boolean {
   return typeof ArrayBuffer !== 'undefined' && ArrayBuffer.isView(body);
 }
 
+// Statuses a Response may not carry a body with (the Fetch spec's "null body
+// status"). `new Response(body, { status })` THROWS a TypeError for these when
+// `body` is anything but null — the empty string included.
+const NULL_BODY_STATUSES = new Set([204, 205, 304]);
+
+/**
+ * Wrap a CapacitorHttp result in a Response.
+ *
+ * CapacitorHttp reports an empty body as `data: ''` (or no data at all), and the
+ * wrapper used to hand that straight to `new Response('', { status: 204 })`,
+ * which throws. So every native request the server answered 204 rejected in
+ * here AFTER the server had acted: the caller saw a failure for a delete that
+ * had happened. A deleted chat stayed in the open list (iOS QA, CHAT-03); the
+ * same shape hit account deletion, API-key revoke and MCP-server removal. HEAD
+ * has no body either, so it is built without one too. Every other status keeps
+ * its body exactly as before.
+ */
+function toResponse(
+  result: { status: number; headers?: HeadersInit },
+  body: BodyInit,
+  method: string,
+): Response {
+  const bodyless = NULL_BODY_STATUSES.has(result.status) || method === 'HEAD';
+
+  return new Response(bodyless ? null : body, { status: result.status, headers: result.headers });
+}
+
 /**
  * Native webview `fetch` is CORS-bound and has no Hub cookie. CapacitorHttp
  * goes out as a real origin-less request so Traefik/Memory see the call.
@@ -299,11 +344,12 @@ async function nativeAwareFetch(input: RequestInfo, init: RequestInit, timeout?:
   }
 
   let result: { status: number; data?: unknown; headers?: HeadersInit };
+  const method = (init.method ?? 'GET').toUpperCase();
 
   try {
     result = await cap.request({
       url: input,
-      method: (init.method ?? 'GET').toUpperCase(),
+      method,
       headers: flattenHeaders(init.headers),
       data: requestData(init.body),
       ...(timeout != null ? { connectTimeout: timeout, readTimeout: timeout } : {}),
@@ -312,7 +358,7 @@ async function nativeAwareFetch(input: RequestInfo, init: RequestInit, timeout?:
     const message = err instanceof Error ? err.message : String(err);
 
     if (/unsupported url/i.test(message)) {
-      throw new Error(`Could not request ${input} (${message})`);
+      throw new Error(`Could not request ${input} (${message})`, { cause: err });
     }
 
     throw err;
@@ -320,7 +366,7 @@ async function nativeAwareFetch(input: RequestInfo, init: RequestInit, timeout?:
 
   const body = typeof result.data === 'string' ? result.data : JSON.stringify(result.data ?? {});
 
-  return new Response(body, { status: result.status, headers: result.headers });
+  return toResponse(result, body, method);
 }
 
 /**
@@ -328,16 +374,26 @@ async function nativeAwareFetch(input: RequestInfo, init: RequestInit, timeout?:
  * paths against the current Memory origin. Apollo and other callers that need
  * a Response — not parsed JSON — should use this instead of `window.fetch`.
  */
-export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+export async function apiFetch(input: RequestInfo | URL, init?: ApiFetchInit): Promise<Response> {
+  const { allowOffline, ...rest } = init ?? {};
+
   if (typeof input === 'string') {
-    return nativeAwareFetch(buildApiUrl(input), init ?? {});
+    const url = buildApiUrl(input);
+    guardApplianceRequest(url, rest.method, allowOffline);
+
+    return nativeAwareFetch(url, rest);
   }
 
   if (input instanceof URL) {
-    return nativeAwareFetch(input.toString(), init ?? {});
+    const url = input.toString();
+    guardApplianceRequest(url, rest.method, allowOffline);
+
+    return nativeAwareFetch(url, rest);
   }
 
-  return nativeAwareFetch(input, init ?? {});
+  guardApplianceRequest(input.url, rest.method ?? input.method, allowOffline);
+
+  return nativeAwareFetch(input, rest);
 }
 
 /**
@@ -353,14 +409,25 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
  *
  * On-device LocalLLM is a later opt-in. Do not route this helper through
  * `generateOffline` — `isAvailable()` is a RAM floor, not a loaded model.
+ *
+ * A response that never ends (the live change stream) passes
+ * `bufferedFallback: false`. The buffered request resolves only once the body
+ * is complete and takes no abort signal, so on an endless stream it would never
+ * resolve and would hold a connection to the server for good. Such a caller
+ * gets the webview fetch's own error (an abort included) and retries itself.
+ *
+ * An aborted request is never sent again as a buffered one, whatever the caller
+ * asked. The caller wants nothing more. For a chat POST the retry would run the
+ * whole generation a second time.
  */
-export async function streamingFetch(input: string, init?: RequestInit): Promise<Response> {
+export async function streamingFetch(input: string, init?: StreamingFetchInit): Promise<Response> {
+  const { bufferedFallback = true, ...rest } = init ?? {};
   const url = buildApiUrl(input);
   const headers = {
     ...apiKeyHeaders(),
-    ...flattenHeaders(init?.headers),
+    ...flattenHeaders(rest.headers),
   };
-  const next = { ...init, headers };
+  const next = { ...rest, headers };
 
   if (!isNativePlatform()) {
     return fetch(url, next);
@@ -368,7 +435,11 @@ export async function streamingFetch(input: string, init?: RequestInit): Promise
 
   try {
     return await unpatchedWebFetch()(url, next);
-  } catch {
+  } catch (error) {
+    if (!bufferedFallback || rest.signal?.aborted) {
+      throw error;
+    }
+
     return nativeBinaryFetch(url, next);
   }
 }
@@ -441,22 +512,20 @@ async function nativeBinaryFetch(url: string, init: RequestInit): Promise<Respon
     throw new Error(`Native HTTP needs an absolute http(s) URL (got "${url}"). Pick a Memory Server again.`);
   }
 
+  const method = (init.method ?? 'GET').toUpperCase();
   const result = await cap.request({
     url,
-    method: (init.method ?? 'GET').toUpperCase(),
+    method,
     headers: flattenHeaders(init.headers),
     data: requestData(init.body),
     responseType: 'arraybuffer',
   });
 
-  return new Response(decodeCapacitorBinaryBody(result.data), {
-    status: result.status,
-    headers: result.headers,
-  });
+  return toResponse(result, decodeCapacitorBinaryBody(result.data), method);
 }
 
 export async function fetchJson<T>(input: RequestInfo, init?: Opts): Promise<T | undefined> {
-  const { timeout, skipApiKey, ...rest } = init ?? {};
+  const { timeout, skipApiKey, allowOffline, ...rest } = init ?? {};
 
   // On native, attach the API key (`x-api-key`). No-op on web (returns `{}`), so the
   // request is unchanged. Callers pass plain-object headers, so a shallow merge is
@@ -467,6 +536,17 @@ export async function fetchJson<T>(input: RequestInfo, init?: Opts): Promise<T |
     rest.headers = { ...keyHeaders, ...(rest.headers as Record<string, string> | undefined) };
   }
 
+  // String paths (e.g. `/api/...`) are resolved against the configured API origin.
+  // On web this is a no-op (origin is ''); on native it targets the user's server.
+  const resolved = typeof input === 'string' ? buildApiUrl(input) : input;
+
+  // Refused before the timer below is armed and before anything leaves: see `offlineWrites.ts`.
+  guardApplianceRequest(
+    typeof resolved === 'string' ? resolved : resolved.url,
+    rest.method ?? (typeof resolved === 'string' ? undefined : resolved.method),
+    allowOffline,
+  );
+
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   if (timeout != null && rest.signal == null) {
     const controller = new AbortController();
@@ -474,16 +554,23 @@ export async function fetchJson<T>(input: RequestInfo, init?: Opts): Promise<T |
     rest.signal = controller.signal;
   }
 
-  // String paths (e.g. `/api/...`) are resolved against the configured API origin.
-  // On web this is a no-op (origin is ''); on native it targets the user's server.
-  const resolved = typeof input === 'string' ? buildApiUrl(input) : input;
-
+  // The deadline covers reading a success body too: aborting the signal errors the body
+  // stream, so a server that sends headers and then stalls cannot outlive `timeout`. It also
+  // means a 2xx whose headers arrive in time and whose body arrives after the deadline
+  // rejects with `AbortError`, even when the server has already applied the write. An
+  // error response gives up the deadline at its headers and reads its body under
+  // `ERROR_BODY_TIMEOUT_MS` instead, as before.
   // clear in `finally`: if fetch() rejects (network error, DNS failure) before
   // the timeout fires, skipping the clear would leave the timer pending — it
   // would later abort an already-settled request and keep the event loop alive.
   let res: Response;
+  let text: string | undefined;
   try {
     res = await nativeAwareFetch(resolved, rest, timeout);
+
+    if (res.ok) {
+      text = await res.text();
+    }
   } finally {
     if (timeoutId != null) {
       clearTimeout(timeoutId);
@@ -494,8 +581,6 @@ export async function fetchJson<T>(input: RequestInfo, init?: Opts): Promise<T |
     const { serverMessage, issues } = await parseErrorBody(res);
     throw new FetchJsonError(res.status, res.statusText, serverMessage, issues);
   }
-
-  const text = await res.text();
 
   return text ? (JSON.parse(text) as T) : undefined;
 }

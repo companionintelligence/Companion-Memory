@@ -29,14 +29,24 @@ interface IngestEntityCapture {
   properties?: Record<string, unknown> | null;
 }
 
-function makeIdentifierService(initial: Record<string, string>) {
+function makeIdentifierService(initial: Record<string, string>, forgotten: string[] = []) {
   // The service performs two lookups per run (pre-ingest + post-ingest). The
   // post-ingest lookup must reflect any keys the ingest mock landed, so we
   // expose the map for tests to mutate.
   const indexedByComposite = new Map(Object.entries(initial));
+  const listed = new Set(forgotten);
 
   return {
     indexedByComposite,
+    // `ci.forgotten_identifiers`: the identifiers of people the owner asked memory.forget to erase.
+    findForgottenIdentifiers: jest.fn(
+      async (_userId: string, keys: Array<{ kind: string; valueNormalized: string }>) =>
+        new Set(
+          keys
+            .map((key) => `${key.kind}:${key.valueNormalized}`)
+            .filter((composite) => listed.has(composite)),
+        ),
+    ),
     findEntityIdsByIdentifiers: jest.fn(
       async (_userId: string, keys: Array<{ kind: string; valueNormalized: string }>) => {
         const out = new Map<string, string>();
@@ -91,42 +101,90 @@ function makeIngestService(
   };
 }
 
-function makeDataSource() {
+/** The owner as `readSelfIdentity` and `resolveSelfEntityId` would read them. */
+interface OwnerFixture {
+  selfEntityId: string;
+  name: string;
+  email: string;
+  phones: string[];
+}
+
+function makeDataSource(owner?: OwnerFixture) {
   const calls: Array<{ sql: string; params: unknown[] }> = [];
+  // Statement order across the write's transaction, including the re-open.
+  const order: string[] = [];
+  const query = jest.fn(async (sql: string, params: unknown[]) => {
+    calls.push({ sql, params });
 
-  return {
-    dataSource: {
-      query: jest.fn(async (sql: string, params: unknown[]) => {
-        calls.push({ sql, params });
+    if (sql.includes('UPDATE ci.communications')) {
+      order.push('update');
+    }
 
-        return [];
-      }),
-    },
-    calls,
+    if (owner != null && sql.includes('SELECT entity_id FROM ci.users')) {
+      return [{ entity_id: owner.selfEntityId }];
+    }
+
+    if (owner != null && sql.includes('UNION ALL')) {
+      return [
+        { name: owner.name, email: owner.email, phones_json: null },
+        { name: owner.name, email: null, phones_json: owner.phones },
+      ];
+    }
+
+    return [];
+  });
+  const managers: Array<{ query: typeof query }> = [];
+  const transaction = jest.fn(async (cb: (em: { query: typeof query }) => Promise<unknown>) => {
+    const em = { query };
+    managers.push(em);
+    order.push('begin');
+    const result = await cb(em);
+    order.push('commit');
+
+    return result;
+  });
+
+  return { dataSource: { query, transaction }, calls, order, managers };
+}
+
+/** `EDGE_PROJECTION_REOPENER` as the lazily-resolving ModuleRef returns it. */
+function makeReopener(order?: string[]) {
+  const reopener = {
+    reopen: jest.fn(async (_source: string, ids: readonly string[], _manager: unknown) => {
+      order?.push('reopen');
+
+      return ids.length;
+    }),
   };
+
+  return { reopener, moduleRef: { get: jest.fn(() => reopener) } };
 }
 
 function makeListener(
   comm: FakeCommunication | null,
   initialIndex: Record<string, string>,
   ingestAssigns: Record<string, string> = {},
+  forgotten: string[] = [],
+  options: { owner?: OwnerFixture; trustMode?: 'cautious' | 'balanced' | 'hands_off' } = {},
 ) {
   const communicationService = makeCommunicationService(comm);
-  const identifierService = makeIdentifierService(initialIndex);
+  const identifierService = makeIdentifierService(initialIndex, forgotten);
   const graphIngestService = makeIngestService(identifierService.indexedByComposite, ingestAssigns);
-  const ds = makeDataSource();
+  const ds = makeDataSource(options.owner);
   const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
+  const { reopener, moduleRef } = makeReopener(ds.order);
 
   const listener = new CommunicationParticipantLinkListener(
     communicationService as never,
     identifierService as never,
     graphIngestService as never,
-    { getTrustMode: jest.fn(async () => 'balanced') } as never,
+    { getTrustMode: jest.fn(async () => options.trustMode ?? 'balanced') } as never,
     ds.dataSource as never,
     logger as never,
+    moduleRef as never,
   );
 
-  return { listener, communicationService, identifierService, graphIngestService, ds };
+  return { listener, communicationService, identifierService, graphIngestService, ds, reopener };
 }
 
 function updateCalls(ds: ReturnType<typeof makeDataSource>) {
@@ -172,6 +230,57 @@ describe('CommunicationParticipantLinkListener.handleCreated', () => {
     expect(sql).toContain('id = $2');
     expect(sql).toContain('time = $5');
     expect(params).toEqual([USER, COMM_ID, EXISTING_FROM, [NEW_TO_1], COMM_TIME]);
+  });
+
+  it("re-opens the edge leg's decision for the message in the UPDATE's own transaction", async () => {
+    // Created with an attachment, a message is a candidate for
+    // promote.edge_communication before this job links anyone; if the leg got
+    // there first, only a re-open brings its SENT / RECEIVED edges.
+    const comm: FakeCommunication = {
+      id: COMM_ID,
+      time: COMM_TIME,
+      userId: USER,
+      fromEntityId: null,
+      toEntityIds: null,
+      participantsMetadata: { from: 'sender@example.com' },
+    };
+
+    const { listener, ds, reopener } = makeListener(comm, { 'email:sender@example.com': EXISTING_FROM });
+
+    await listener.handleCreated({ communicationId: COMM_ID });
+
+    expect(reopener.reopen).toHaveBeenCalledTimes(1);
+    expect(reopener.reopen).toHaveBeenCalledWith('communications', [COMM_ID], ds.managers[0]);
+    expect(ds.order).toEqual(['begin', 'update', 'reopen', 'commit']);
+  });
+
+  it('writes nothing, and re-opens nothing, when no re-opener is bound', async () => {
+    const comm: FakeCommunication = {
+      id: COMM_ID,
+      time: COMM_TIME,
+      userId: USER,
+      fromEntityId: null,
+      toEntityIds: null,
+      participantsMetadata: { from: 'sender@example.com' },
+    };
+    const communicationService = makeCommunicationService(comm);
+    const identifierService = makeIdentifierService({ 'email:sender@example.com': EXISTING_FROM });
+    const ds = makeDataSource();
+    const listener = new CommunicationParticipantLinkListener(
+      communicationService as never,
+      identifierService as never,
+      makeIngestService(identifierService.indexedByComposite) as never,
+      { getTrustMode: jest.fn(async () => 'balanced') } as never,
+      ds.dataSource as never,
+      { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() } as never,
+    );
+
+    // Thrown so the people-linking job fails and retries, rather than linking
+    // a message the edge leg may already have decided.
+    await expect(listener.handleCreated({ communicationId: COMM_ID })).rejects.toThrow(
+      /EDGE_PROJECTION_REOPENER/,
+    );
+    expect(updateCalls(ds)).toHaveLength(0);
   });
 
   it('skips stub creation entirely when every identifier is already in the index', async () => {
@@ -361,14 +470,16 @@ describe('CommunicationParticipantLinkListener.handleCreated', () => {
     // The self-identity query is the only one carrying UNION ALL (see self.ts);
     // every other query used by the listener (resolveSelfEntityId, the UPDATE)
     // must keep succeeding so the failure is isolated to readSelfIdentity.
-    const dataSource = {
-      query: jest.fn(async (sql: string, _params: unknown[]) => {
-        if (sql.includes('UNION ALL')) {
-          throw new Error('connection terminated unexpectedly');
-        }
+    const query = jest.fn(async (sql: string, _params: unknown[]) => {
+      if (sql.includes('UNION ALL')) {
+        throw new Error('connection terminated unexpectedly');
+      }
 
-        return [];
-      }),
+      return [];
+    });
+    const dataSource = {
+      query,
+      transaction: jest.fn(async (cb: (em: { query: typeof query }) => Promise<unknown>) => cb({ query })),
     };
 
     const listener = new CommunicationParticipantLinkListener(
@@ -378,6 +489,7 @@ describe('CommunicationParticipantLinkListener.handleCreated', () => {
       { getTrustMode: jest.fn(async () => 'balanced') } as never,
       dataSource as never,
       logger as never,
+      makeReopener().moduleRef as never,
     );
 
     await listener.handleCreated({ communicationId: COMM_ID });
@@ -413,5 +525,234 @@ describe('CommunicationParticipantLinkListener.handleCreated', () => {
 
     expect(updateCalls(ds)).toHaveLength(0);
     expect(graphIngestService.ingest).not.toHaveBeenCalled();
+  });
+
+  describe('a person the owner asked memory.forget to erase', () => {
+    const FORGOTTEN = 'email:dana@example.com';
+
+    it('is not created again by a new message from them, and everyone else on it is still linked', async () => {
+      const comm: FakeCommunication = {
+        id: COMM_ID,
+        time: COMM_TIME,
+        userId: USER,
+        fromEntityId: null,
+        toEntityIds: null,
+        participantsMetadata: { from: 'Dana Quill <dana@example.com>', to: ['unknown@example.com'] },
+      };
+
+      const { listener, graphIngestService, ds } = makeListener(
+        comm,
+        {},
+        { 'email:unknown@example.com': NEW_TO_1 },
+        [FORGOTTEN],
+      );
+
+      await listener.handleCreated({ communicationId: COMM_ID });
+
+      // Only the stranger is minted. The sender is left unresolved: nobody is there to resolve to.
+      expect(graphIngestService.ingest).toHaveBeenCalledTimes(1);
+      expect(graphIngestService.ingest.mock.calls[0][1].entities.map((e: { key: string }) => e.key)).toEqual([
+        'communications:participant:email:unknown@example.com',
+      ]);
+
+      const updates = updateCalls(ds);
+
+      expect(updates).toHaveLength(1);
+      expect(updates[0].params).toEqual([USER, COMM_ID, null, [NEW_TO_1], COMM_TIME]);
+    });
+
+    it('is created again by a new message from them when the owner did not ask for them to be forgotten', async () => {
+      const comm: FakeCommunication = {
+        id: COMM_ID,
+        time: COMM_TIME,
+        userId: USER,
+        fromEntityId: null,
+        toEntityIds: null,
+        participantsMetadata: { from: 'Dana Quill <dana@example.com>' },
+      };
+
+      const { listener, graphIngestService } = makeListener(
+        comm,
+        {},
+        { 'email:dana@example.com': NEW_TO_1 },
+        [],
+      );
+
+      await listener.handleCreated({ communicationId: COMM_ID });
+
+      expect(graphIngestService.ingest).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves the message alone when they are the only person on it', async () => {
+      const comm: FakeCommunication = {
+        id: COMM_ID,
+        time: COMM_TIME,
+        userId: USER,
+        fromEntityId: null,
+        toEntityIds: null,
+        participantsMetadata: { from: 'dana@example.com' },
+      };
+
+      const { listener, graphIngestService, ds } = makeListener(comm, {}, {}, [FORGOTTEN]);
+
+      await listener.handleCreated({ communicationId: COMM_ID });
+
+      expect(graphIngestService.ingest).not.toHaveBeenCalled();
+      expect(updateCalls(ds)).toHaveLength(0);
+    });
+
+    it('asks about every identifier on the message in one query, for the owner whose mail it is', async () => {
+      const comm: FakeCommunication = {
+        id: COMM_ID,
+        time: COMM_TIME,
+        userId: USER,
+        fromEntityId: null,
+        toEntityIds: null,
+        participantsMetadata: { from: 'a@example.com', to: ['b@example.com'], cc: 'c@example.com' },
+      };
+
+      const { listener, identifierService } = makeListener(comm, {});
+
+      await listener.handleCreated({ communicationId: COMM_ID });
+
+      expect(identifierService.findForgottenIdentifiers).toHaveBeenCalledTimes(1);
+
+      const [userArg, keysArg] = identifierService.findForgottenIdentifiers.mock.calls[0];
+
+      expect(userArg).toBe(USER);
+      expect(keysArg.map((key) => `${key.kind}:${key.valueNormalized}`).sort()).toEqual([
+        'email:a@example.com',
+        'email:b@example.com',
+        'email:c@example.com',
+      ]);
+    });
+  });
+  describe('binding a participant to the owner', () => {
+    // Invented throughout. The owner's self Person carries this name, the
+    // account email and one phone.
+    const OWNER: OwnerFixture = {
+      selfEntityId: '00000000-0000-0000-0000-0000000000f1',
+      name: 'Avery Quinn',
+      email: 'avery@owner.example',
+      phones: ['+1 415-555-0100'],
+    };
+
+    const fromOnly = (from: string): FakeCommunication => ({
+      id: COMM_ID,
+      time: COMM_TIME,
+      userId: USER,
+      fromEntityId: null,
+      toEntityIds: null,
+      participantsMetadata: { from },
+    });
+
+    /** The stub Persons the listener asked the graph to mint, by identifier. */
+    function mintedIdentifiers(graphIngestService: ReturnType<typeof makeListener>['graphIngestService']) {
+      return graphIngestService.ingest.mock.calls.flatMap(([, input]) =>
+        input.entities.map((entity) => entity.properties),
+      );
+    }
+
+    it.each(['cautious', 'balanced', 'hands_off'] as const)(
+      "does not file a stranger's address as the owner's because the display name is the owner's (%s)",
+      async (trustMode) => {
+        const { listener, identifierService, graphIngestService } = makeListener(
+          fromOnly('"Avery Quinn" <someone@other.example>'),
+          {},
+          {},
+          [],
+          { owner: OWNER, trustMode },
+        );
+
+        await listener.handleCreated({ communicationId: COMM_ID });
+
+        expect(identifierService.repointToEntity).not.toHaveBeenCalled();
+        expect(identifierService.claimForSelf).not.toHaveBeenCalled();
+        expect(mintedIdentifiers(graphIngestService)).toEqual([
+          expect.objectContaining({ emails: ['someone@other.example'] }),
+        ]);
+      },
+    );
+
+    it("does not read the owner's phone digits out of a display name", async () => {
+      // An address whose display name carries the owner's number, and a chat
+      // display name that does. Neither is the owner's phone.
+      const { listener, identifierService, graphIngestService } = makeListener(
+        {
+          ...fromOnly('"Call 415 555 0100 today" <promo@other.example>'),
+          participantsMetadata: {
+            from: '"Call 415 555 0100 today" <promo@other.example>',
+            to: ['Support 415 555 0100'],
+          },
+        },
+        {},
+        {},
+        [],
+        { owner: OWNER, trustMode: 'cautious' },
+      );
+
+      await listener.handleCreated({ communicationId: COMM_ID });
+
+      expect(identifierService.repointToEntity).not.toHaveBeenCalled();
+      expect(identifierService.claimForSelf).not.toHaveBeenCalled();
+      expect(mintedIdentifiers(graphIngestService)).toEqual([
+        expect.objectContaining({ emails: ['promo@other.example'] }),
+        expect.objectContaining({ names: ['support 415 555 0100'] }),
+      ]);
+    });
+
+    it("files the owner's own address as the owner's, whatever display name is in front of it", async () => {
+      const { listener, identifierService, graphIngestService } = makeListener(
+        fromOnly('"Work" <Avery@Owner.example>'),
+        {},
+        {},
+        [],
+        { owner: OWNER, trustMode: 'cautious' },
+      );
+
+      await listener.handleCreated({ communicationId: COMM_ID });
+
+      expect(identifierService.repointToEntity).toHaveBeenCalledWith(
+        USER,
+        OWNER.selfEntityId,
+        'email',
+        '"Work" <Avery@Owner.example>',
+        'self_collation',
+      );
+      expect(graphIngestService.ingest).not.toHaveBeenCalled();
+    });
+
+    it("files the owner's own number as the owner's", async () => {
+      const { listener, identifierService } = makeListener(fromOnly('(415) 555-0100'), {}, {}, [], {
+        owner: OWNER,
+        trustMode: 'cautious',
+      });
+
+      await listener.handleCreated({ communicationId: COMM_ID });
+
+      expect(identifierService.repointToEntity).toHaveBeenCalledWith(
+        USER,
+        OWNER.selfEntityId,
+        'phone',
+        '(415) 555-0100',
+        'self_collation',
+      );
+    });
+
+    it('still matches a chat display name to the owner by name outside cautious mode', async () => {
+      // Messenger and WhatsApp give a display name and nothing else, so the
+      // name is the only evidence there is. Unchanged.
+      const { listener, identifierService } = makeListener(fromOnly('Avery Quinn'), {}, {}, [], {
+        owner: OWNER,
+        trustMode: 'balanced',
+      });
+
+      await listener.handleCreated({ communicationId: COMM_ID });
+
+      expect(identifierService.claimForSelf).toHaveBeenCalledWith(USER, OWNER.selfEntityId, {
+        names: ['Avery Quinn'],
+      });
+      expect(identifierService.repointToEntity).not.toHaveBeenCalled();
+    });
   });
 });

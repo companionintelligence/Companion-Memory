@@ -34,14 +34,68 @@ import { LoggerService } from '../services/LoggerService';
 const SECRET_PATH_SEGMENTS: readonly RegExp[] = [/^((?:\/api)?\/bluebubbles\/webhook\/)[^/?#]+/];
 
 /**
+ * Routes whose QUERY carries a credential, and the parameters that do.
+ *
+ * A Companion sign-in passes through `/authenticate/oidc` twice. The start
+ * carries the invitation (`signup_code`) and the native client's PKCE challenge
+ * and state (`code_challenge`, `app_state`); the callback carries the Portal's
+ * authorization code and the OAuth `state`. They are single-use and short-lived,
+ * but the log outlives them, and logs get pasted into bug reports. The `/api`
+ * prefix is optional for the reason given above. Case-insensitive because
+ * Express routes are: `/Authenticate/OIDC/callback` reaches the same handler.
+ */
+const SECRET_QUERY_PATHS: readonly RegExp[] = [/^(?:\/api)?\/authenticate\/oidc(?:\/|$)/i];
+
+const SECRET_QUERY_PARAMS: ReadonlySet<string> = new Set([
+  'code',
+  'state',
+  'signup_code',
+  'code_challenge',
+  'code_verifier',
+  'app_state',
+]);
+
+function decodedName(name: string): string {
+  try {
+    return decodeURIComponent(name);
+  } catch {
+    return name;
+  }
+}
+
+/** `url` with the value of each credential parameter replaced, on the routes that take them. */
+function redactQuery(url: string): string {
+  const start = url.indexOf('?');
+
+  if (start === -1 || !SECRET_QUERY_PATHS.some((pattern) => pattern.test(url.slice(0, start)))) {
+    return url;
+  }
+
+  const query = url
+    .slice(start + 1)
+    .split('&')
+    .map((pair) => {
+      const name = pair.split('=', 1)[0];
+
+      return SECRET_QUERY_PARAMS.has(decodedName(name)) ? `${name}=REDACTED` : pair;
+    })
+    .join('&');
+
+  return `${url.slice(0, start)}?${query}`;
+}
+
+/**
  * The request path as it is safe to write down.
  *
  * Redacts rather than drops the segment: "a webhook was delivered" is the fact
  * the log line exists for, and a bare `/api/bluebubbles/webhook` would be
- * indistinguishable from a request that never named a secret at all.
+ * indistinguishable from a request that never named a secret at all. Query
+ * parameters are redacted the same way, keeping their names: a callback that
+ * arrived with a `code` and a `state` reads differently from one that arrived
+ * with an `error`.
  */
 export function redactRequestPath(url: string): string {
-  let redacted = url;
+  let redacted = redactQuery(url);
 
   for (const pattern of SECRET_PATH_SEGMENTS) {
     redacted = redacted.replace(pattern, '$1REDACTED');

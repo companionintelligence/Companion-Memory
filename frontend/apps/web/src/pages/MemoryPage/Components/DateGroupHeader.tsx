@@ -34,7 +34,7 @@ export function DateGroupHeader({ label, count, className, align = 'left' }: Dat
     >
       {rightAligned && rule}
       <div className="flex shrink-0 items-center gap-1.5">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</h3>
+        <h3 className="text-xs font-semibold text-muted-foreground">{label}</h3>
         {count != null && <span className="text-xs tabular-nums text-muted-foreground/70">{count}</span>}
       </div>
       {!rightAligned && rule}

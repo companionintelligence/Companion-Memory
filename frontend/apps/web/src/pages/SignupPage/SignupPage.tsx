@@ -23,7 +23,7 @@ export function SignupPage() {
     <div className="w-full max-w-sm">
       <Card>
         <Card.Header>
-          <Card.Title>Create an Account</Card.Title>
+          <Card.Title>Create an account</Card.Title>
           <Card.Description>Enter your information to create an account</Card.Description>
         </Card.Header>
 
@@ -34,7 +34,7 @@ export function SignupPage() {
             <div className="absolute inset-0 flex items-center">
               <Separator className="w-full" />
             </div>
-            <div className="relative flex justify-center text-xs uppercase">
+            <div className="relative flex justify-center text-xs ">
               <span className="bg-card text-muted-foreground px-2">Or</span>
             </div>
           </div>

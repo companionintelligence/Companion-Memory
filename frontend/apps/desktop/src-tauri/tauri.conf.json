@@ -53,6 +53,9 @@
       "desktop": {
         "schemes": ["companion"]
       }
+    },
+    "ci-auth": {
+      "service": "computer.ci.app.server"
     }
   }
 }

@@ -3,11 +3,14 @@
 //! `http://host.docker.internal:11434`, i.e. whatever's on the HOST's port
 //! 11434) for users who don't already run Ollama themselves. This module
 //! never writes that config or stack_manager's `.env` itself — it only makes
-//! sure port 11434 is answering, in one of three ways, cheapest first (the
-//! one value it exports into `.env` is DEFAULT_CHAT_MODEL, which
-//! stack_manager::write_env_file reads; see that constant's comment):
+//! sure port 11434 is answering, in one of three ways, cheapest first. What
+//! reaches `.env` from here is a chat model name: DEFAULT_CHAT_MODEL, which
+//! stack_manager::write_env_file reads (see that constant's comment), or on
+//! the first branch host_ollama_chat_model's pick, which
+//! stack_manager::apply_llm_env_override writes over it:
 //!
-//!   1. Already running (the user's own Ollama) → nothing to do.
+//!   1. Already running (the user's own Ollama) → nothing to start. On Linux
+//!      it may still get a bridge relay in front of it; see reach_host_ollama.
 //!   2. `ollama` is installed but not running → launch it with its own
 //!      default `OLLAMA_MODELS`, so any models the user already pulled are
 //!      reused rather than duplicated.
@@ -72,6 +75,12 @@ pub const DEFAULT_CHAT_MODEL: &str = "gemma4:e4b";
 /// only; FoundationModels has no embeddings API — see mod.rs).
 pub const DEFAULT_EMBED_MODEL: &str = "nomic-embed-text";
 
+/// The models this app pulls into an Ollama it runs itself, in the order
+/// ensure_available pulls them. A user's own Ollama gets none of them pulled
+/// unasked: Settings > Model offers "Download recommended model" for the ones
+/// it lacks (see local_model::recommended).
+pub const RECOMMENDED_MODELS: [&str; 2] = [DEFAULT_EMBED_MODEL, DEFAULT_CHAT_MODEL];
+
 const OLLAMA_VERSION: &str = "v0.32.15";
 
 struct ReleaseAsset {
@@ -128,15 +137,31 @@ pub struct RunningInstance {
 /// loopback reaches a server however widely it is bound. Container-side
 /// reachability is a separate property, owned by bridge_relay, not by this.
 pub fn is_running(port: u16) -> bool {
+    is_running_on(std::net::Ipv4Addr::LOCALHOST, port)
+}
+
+/// [`is_running`] at another of this host's addresses: the docker bridge
+/// gateway, to tell whether a server answering on loopback also listens on
+/// that address, so needs no relay.
+///
+/// It cannot tell whether the containers reach that server. This host's request
+/// to its own gateway address goes over loopback, which a host firewall always
+/// lets through, while the containers' packets go through its incoming rules.
+/// container_reach checks that from inside the appliance once it is up.
+fn is_running_on(host: std::net::Ipv4Addr, port: u16) -> bool {
+    // No proxy: both addresses are this host's own. reqwest otherwise follows
+    // HTTP_PROXY. A NO_PROXY that lists loopback rarely lists the bridge
+    // gateway, so the proxy would answer for an address only this host has.
     let client = match reqwest::blocking::Client::builder()
         .timeout(Duration::from_millis(800))
+        .no_proxy()
         .build()
     {
         Ok(client) => client,
         Err(_) => return false,
     };
     client
-        .get(format!("http://127.0.0.1:{port}/api/version"))
+        .get(format!("http://{host}:{port}/api/version"))
         .send()
         .map(|response| response.status().is_success())
         .unwrap_or(false)
@@ -169,12 +194,12 @@ pub fn ensure_available(
     handles: &crate::local_model::LocalModelHandles,
 ) -> Result<RunningInstance, String> {
     if is_running(OLLAMA_PORT) {
-        // Somebody else's Ollama, bound however they chose. No relay: this
-        // function has never bound anything on that path, and standing one up
-        // would be this app making a reachability decision about a service it
-        // does not own. If their instance is loopback-only, the containers
-        // cannot reach it — the same as before this relay existed. (The
-        // caller logs this case explicitly — see resolve_and_start.)
+        // Somebody else's Ollama, which began answering after
+        // resolve_and_start's own probe missed it (a service still starting,
+        // or one too busy to answer within the timeout). Nothing to start, but
+        // the containers need to reach it just as on the path where
+        // resolve_and_start found it first.
+        reach_host_ollama(handles);
         return Ok(RunningInstance { port: OLLAMA_PORT });
     }
 
@@ -213,40 +238,135 @@ pub fn ensure_available(
         return Err("The local model server did not become ready within 30s — check ollama-sidecar.log.".to_string());
     }
 
-    pull_model(OLLAMA_PORT, DEFAULT_EMBED_MODEL)?;
-    if need_chat_model {
-        pull_model(OLLAMA_PORT, DEFAULT_CHAT_MODEL)?;
+    // The same list "Download recommended model" offers a person's own Ollama,
+    // so the two cannot drift apart.
+    for model in RECOMMENDED_MODELS {
+        if need_chat_model || model != DEFAULT_CHAT_MODEL {
+            pull_model(OLLAMA_PORT, model)?;
+        }
     }
 
     // After the pulls, not before: the relay only matters to the containers,
     // which cannot ask for a model until the stack is up, and a failure here
     // must not cost the user a re-download.
-    if let Some(relay) = start_bridge_relay(OLLAMA_PORT) {
-        let mut guard = handles.ollama_relay_slot().lock().unwrap_or_else(|p| p.into_inner());
-        if let Some(previous) = guard.take() {
-            previous.shutdown();
-        }
-        *guard = Some(relay);
-    }
+    start_bridge_relay(handles, OLLAMA_PORT);
 
     Ok(RunningInstance { port: OLLAMA_PORT })
+}
+
+/// Linux: makes the user's own Ollama reachable from the appliance's
+/// containers when it answers on loopback only. That is how Ollama's own Linux
+/// service binds unless OLLAMA_HOST is changed. The containers arrive at the
+/// docker bridge gateway, where nothing then listens: the app reported the
+/// model resolved while chat said "Chat can't reach a model".
+///
+/// It is the relay this app already puts in front of its own sidecar, with the
+/// same limits: bound to the bridge gateway address only, serving only the
+/// appliance's own compose networks and gone when the app quits. The user's
+/// Ollama itself is not touched. One that already answers on the gateway
+/// address (bound to 0.0.0.0, say) is left alone and gets no relay.
+///
+/// Either way the containers' reach is then checked from inside them once the
+/// stack is up (see container_reach): answering on the gateway address from
+/// this host says nothing about a firewall dropping the containers' packets.
+pub fn reach_host_ollama(handles: &crate::local_model::LocalModelHandles) {
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = handles;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let gateway = match crate::local_model::bridge_relay::discover_host_gateway() {
+            Ok(gateway) => gateway,
+            Err(e) => {
+                log::warn!(
+                    "Your Ollama answers on 127.0.0.1:{OLLAMA_PORT}, but no docker bridge gateway could \
+                     be discovered ({e}), so no relay was started. If the appliance reports model errors, \
+                     check `docker network inspect bridge`."
+                );
+                expect_container_check(handles, OLLAMA_PORT, None, false);
+                return;
+            }
+        };
+
+        if is_running_on(gateway, OLLAMA_PORT) {
+            log::info!(
+                "Your Ollama also listens on the docker bridge gateway address ({gateway}:{OLLAMA_PORT}), \
+                 so no relay is needed. Whether the appliance's containers reach it there is checked from \
+                 inside them once they are running."
+            );
+            expect_container_check(handles, OLLAMA_PORT, Some(gateway), false);
+            return;
+        }
+
+        relay_and_check(handles, gateway, OLLAMA_PORT);
+    }
+}
+
+/// Linux: has the containers' reach checked from inside them once the stack is
+/// up. See LocalModelHandles::check_container_reach.
+#[cfg(target_os = "linux")]
+fn expect_container_check(
+    handles: &crate::local_model::LocalModelHandles,
+    port: u16,
+    gateway: Option<std::net::Ipv4Addr>,
+    relayed: bool,
+) {
+    handles.expect_container_check(crate::local_model::container_reach::Target {
+        port,
+        gateway,
+        relayed,
+    });
+}
+
+/// Puts the relay on the gateway in front of the loopback Ollama on `port`
+/// and has the containers' reach checked. The check is recorded even when the
+/// relay could not start: it then says what the containers get instead.
+#[cfg(target_os = "linux")]
+fn relay_and_check(
+    handles: &crate::local_model::LocalModelHandles,
+    gateway: std::net::Ipv4Addr,
+    port: u16,
+) {
+    let relay = relay_on_gateway(gateway, port);
+    let relayed = relay.is_some();
+    register_relay(handles, relay);
+    expect_container_check(handles, port, Some(gateway), relayed);
+}
+
+#[cfg(target_os = "linux")]
+fn register_relay(
+    handles: &crate::local_model::LocalModelHandles,
+    relay: Option<crate::local_model::bridge_relay::RelayHandle>,
+) {
+    let Some(relay) = relay else {
+        return;
+    };
+    // Swapped in under the lock and shut down after it is released, for the
+    // reason LocalModelHandles::shutdown gives: shutdown() blocks on a connect
+    // and a thread join.
+    let previous = handles.ollama_relay_slot().lock().unwrap_or_else(|p| p.into_inner()).replace(relay);
+    if let Some(previous) = previous {
+        previous.shutdown();
+    }
 }
 
 /// Linux: publish the loopback sidecar on the one address containers arrive
 /// from. A no-op everywhere else, where Docker Desktop already tunnels
 /// `host.docker.internal` to the host's loopback.
 ///
-/// Every failure is non-fatal and returns `None`. That is the deliberate
+/// Every failure is non-fatal and leaves no relay. That is the deliberate
 /// trade: the app still runs, the sidecar still answers everything on this
 /// host, and the log says exactly what the containers will not be able to
 /// reach and why — which is strictly better than the `0.0.0.0` bind this
 /// replaced, where the same situations silently exposed an unauthenticated GPU
-/// to the LAN instead.
-fn start_bridge_relay(port: u16) -> Option<crate::local_model::bridge_relay::RelayHandle> {
+/// to the LAN instead. The relay is registered in `handles` and the containers'
+/// reach is checked once the stack is up, relay or not.
+fn start_bridge_relay(handles: &crate::local_model::LocalModelHandles, port: u16) {
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = port;
-        None
+        let _ = (handles, port);
     }
 
     #[cfg(target_os = "linux")]
@@ -267,38 +387,141 @@ fn start_bridge_relay(port: u16) -> Option<crate::local_model::bridge_relay::Rel
                      `docker network inspect bridge` — under rootless Docker the containers \
                      should still reach the host on loopback."
                 );
-                return None;
+                expect_container_check(handles, port, None, false);
+                return;
             }
         };
 
-        match bridge_relay::spawn(gateway, port) {
-            Ok(handle) => {
-                log::info!("Local model server reachable by containers at {} (relayed to 127.0.0.1:{port})", handle.bind_addr);
-                Some(handle)
-            }
-            Err(e) => {
-                log::error!(
-                    "Local model server is bound to 127.0.0.1:{port} but the bridge-gateway relay \
-                     on {gateway}:{port} could not start ({e}). The appliance's containers will \
-                     not be able to reach it."
-                );
-                None
+        relay_and_check(handles, gateway, port);
+    }
+}
+
+/// The relay half of [`relay_and_check`]. Shared by start_bridge_relay and
+/// reach_host_ollama, which have already asked Docker for the gateway.
+#[cfg(target_os = "linux")]
+fn relay_on_gateway(
+    gateway: std::net::Ipv4Addr,
+    port: u16,
+) -> Option<crate::local_model::bridge_relay::RelayHandle> {
+    match crate::local_model::bridge_relay::spawn(gateway, port) {
+        Ok(handle) => {
+            log::info!(
+                "Relaying {} to the local model server on 127.0.0.1:{port} for the appliance's containers",
+                handle.bind_addr
+            );
+            Some(handle)
+        }
+        Err(e) => {
+            log::error!(
+                "Local model server is bound to 127.0.0.1:{port} but the bridge-gateway relay \
+                 on {gateway}:{port} could not start ({e}). The appliance's containers will \
+                 not be able to reach it."
+            );
+            None
+        }
+    }
+}
+
+/// Where an unpacked release archive keeps the program. The macOS `.tgz` and
+/// the Windows `.zip` put it at the top, next to their libraries. The Linux
+/// `.tar.zst` puts it in `bin/` with its libraries in `lib/ollama/`. Ollama
+/// finds those relative to its own path, so it runs from `bin/` where it was
+/// unpacked rather than being moved.
+fn unpacked_binary(dest_dir: &Path) -> Option<PathBuf> {
+    [dest_dir.join(binary_name()), dest_dir.join("bin").join(binary_name())]
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+}
+
+/// Written into the runtime folder once an archive has been unpacked in full.
+/// The Linux archive lists `bin/ollama` first and about 2 GB of libraries
+/// after it, so an unpack cut short (the app quit during the first start, a
+/// full disk) leaves a program that starts but has nothing to run a model
+/// with. Finding the program alone would take that for a finished download at
+/// every later launch, so only this marker does. Named after the release, so
+/// a newer OLLAMA_VERSION is downloaded rather than the old one reused.
+fn unpacked_marker(dest_dir: &Path, asset_name: &str) -> PathBuf {
+    dest_dir.join(format!(".{asset_name}-{OLLAMA_VERSION}.unpacked"))
+}
+
+/// The program from an earlier unpack of this release that finished.
+fn previously_unpacked(dest_dir: &Path, asset_name: &str) -> Option<PathBuf> {
+    if !unpacked_marker(dest_dir, asset_name).is_file() {
+        return None;
+    }
+    unpacked_binary(dest_dir)
+}
+
+/// Removes the folders an earlier unpack put in `dest_dir`. One cut short may
+/// hold entries the tar crate will not write over (it refuses a hard link
+/// whose name exists). One from an older OLLAMA_VERSION would leave that
+/// release's GPU backends in `lib/ollama/` for the new program to load beside
+/// its own. `models/`, the archive and the markers stay where they are.
+fn clear_earlier_unpack(dest_dir: &Path) {
+    for folder in ["bin", "lib"] {
+        let path = dest_dir.join(folder);
+        if path.is_dir() {
+            if let Err(e) = std::fs::remove_dir_all(&path) {
+                log::warn!("Could not remove {} before unpacking: {e}", path.display());
             }
         }
     }
+}
+
+/// Unpacks a verified archive into `dest_dir` once what an earlier unpack left
+/// there is cleared. Returns the program in it. The marker is written
+/// once the program has been found. The archive goes last, so an unpack cut
+/// short leaves it for the next launch to unpack again without a download.
+fn unpack(archive_path: &Path, asset_name: &str, dest_dir: &Path) -> Result<PathBuf, String> {
+    clear_earlier_unpack(dest_dir);
+    extract_archive(archive_path, asset_name, dest_dir)?;
+
+    let Some(binary_path) = unpacked_binary(dest_dir) else {
+        let _ = std::fs::remove_file(archive_path);
+        return Err(format!("{asset_name} did not contain {}", binary_name()));
+    };
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(&binary_path) {
+            let mut perms = meta.permissions();
+            perms.set_mode(perms.mode() | 0o111);
+            let _ = std::fs::set_permissions(&binary_path, perms);
+        }
+    }
+
+    let marker = unpacked_marker(dest_dir, asset_name);
+    if let Err(e) = std::fs::write(&marker, b"") {
+        // Costs a second download at the next launch, nothing more.
+        log::warn!("Could not write {}: {e}", marker.display());
+    }
+    let _ = std::fs::remove_file(archive_path);
+
+    Ok(binary_path)
 }
 
 fn download_and_extract(dest_dir: &Path) -> Result<PathBuf, String> {
     let asset = release_asset()
         .ok_or_else(|| format!("No prebuilt Ollama release for {}/{}", std::env::consts::OS, std::env::consts::ARCH))?;
 
-    let binary_path = dest_dir.join(binary_name());
-    if binary_path.is_file() {
+    if let Some(binary_path) = previously_unpacked(dest_dir, asset.name) {
         // Fetched by a previous run of this app — no need to re-download.
         return Ok(binary_path);
     }
 
     std::fs::create_dir_all(dest_dir).map_err(|e| format!("Failed to create {}: {e}", dest_dir.display()))?;
+
+    // The app quitting during an unpack leaves the verified archive behind.
+    // Unpacking that again beats fetching another 1 GB. A download cut short
+    // fails the checksum and is fetched again.
+    let archive_path = dest_dir.join(asset.name);
+    if archive_path.is_file() {
+        if verify_checksum(&archive_path, asset.sha256).is_ok() {
+            return unpack(&archive_path, asset.name, dest_dir);
+        }
+        let _ = std::fs::remove_file(&archive_path);
+    }
 
     let url = format!("https://github.com/ollama/ollama/releases/download/{OLLAMA_VERSION}/{}", asset.name);
     let client = reqwest::blocking::Client::builder()
@@ -310,7 +533,6 @@ fn download_and_extract(dest_dir: &Path) -> Result<PathBuf, String> {
         return Err(format!("Failed to download {url}: HTTP {}", response.status()));
     }
 
-    let archive_path = dest_dir.join(asset.name);
     {
         let mut file = std::fs::File::create(&archive_path)
             .map_err(|e| format!("Failed to create {}: {e}", archive_path.display()))?;
@@ -323,23 +545,13 @@ fn download_and_extract(dest_dir: &Path) -> Result<PathBuf, String> {
         return Err(e);
     }
 
-    extract_archive(&archive_path, asset.name, dest_dir)?;
-    let _ = std::fs::remove_file(&archive_path);
+    unpack(&archive_path, asset.name, dest_dir)
+}
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Ok(meta) = std::fs::metadata(&binary_path) {
-            let mut perms = meta.permissions();
-            perms.set_mode(perms.mode() | 0o111);
-            let _ = std::fs::set_permissions(&binary_path, perms);
-        }
-    }
-
-    if !binary_path.is_file() {
-        return Err(format!("{} did not contain {}", asset.name, binary_name()));
-    }
-    Ok(binary_path)
+/// Lowercase hex of a digest. sha2 0.11 returns a `hybrid_array::Array`, which has no `LowerHex`
+/// impl, so `format!("{:x}", hasher.finalize())` no longer compiles.
+fn hex_lower(digest: &[u8]) -> String {
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn verify_checksum(path: &Path, expected_hex: &str) -> Result<(), String> {
@@ -353,7 +565,7 @@ fn verify_checksum(path: &Path, expected_hex: &str) -> Result<(), String> {
         }
         hasher.update(&buf[..n]);
     }
-    let actual = format!("{:x}", hasher.finalize());
+    let actual = hex_lower(&hasher.finalize());
     if actual != expected_hex {
         return Err(format!("Checksum mismatch for {}: expected {expected_hex}, got {actual}", path.display()));
     }
@@ -459,9 +671,30 @@ fn wait_until_ready(port: u16, timeout: Duration) -> bool {
     false
 }
 
+/// One line of Ollama's `/api/pull` progress stream. Every field is optional:
+/// the stream mixes `{"status":"pulling manifest"}`, per-layer
+/// `{"status":"pulling <digest>","digest":…,"total":…,"completed":…}` records
+/// and, when the pull fails after it has started, `{"error":"…"}` with no
+/// status at all (the HTTP status is already 200 by then).
 #[derive(Debug, Deserialize)]
 struct PullProgressLine {
-    status: String,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
+    #[serde(default)]
+    digest: Option<String>,
+    #[serde(default)]
+    total: Option<u64>,
+    #[serde(default)]
+    completed: Option<u64>,
+}
+
+/// How far a pull has got, over every layer Ollama has reported so far.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PullProgress {
+    pub completed_bytes: u64,
+    pub total_bytes: u64,
 }
 
 /// Blocks until the pull completes (or errors) — this can take a while on a
@@ -470,8 +703,20 @@ struct PullProgressLine {
 /// async executor via spawn_blocking, matching stack_manager's own
 /// docker-compose calls.
 fn pull_model(port: u16, model: &str) -> Result<(), String> {
+    pull_model_reporting(port, model, |_| {})
+}
+
+/// [`pull_model`], calling `on_progress` whenever a layer's byte count moves.
+///
+/// Only Ollama's closing `{"status":"success"}` counts as done. A stream that
+/// ends without it (Ollama stopped, the connection dropped) or that carries an
+/// `{"error":…}` line is a failed pull. Both used to read as finished: an error
+/// line has no `status`, so it was skipped as progress noise.
+pub fn pull_model_reporting(port: u16, model: &str, mut on_progress: impl FnMut(PullProgress)) -> Result<(), String> {
+    // No proxy: this is the host's own Ollama on loopback (see is_running_on).
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(60 * 60))
+        .no_proxy()
         .build()
         .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
 
@@ -482,9 +727,18 @@ fn pull_model(port: u16, model: &str) -> Result<(), String> {
         .map_err(|e| format!("Failed to request pull of {model}: {e}"))?;
 
     if !response.status().is_success() {
-        return Err(format!("Pull of {model} failed: HTTP {}", response.status()));
+        let status = response.status();
+        let said = response
+            .json::<PullProgressLine>()
+            .ok()
+            .and_then(|line| line.error)
+            .map(|error| format!(": {error}"))
+            .unwrap_or_default();
+        return Err(format!("Pull of {model} failed: HTTP {status}{said}"));
     }
 
+    let mut layers: std::collections::HashMap<String, (u64, u64)> = std::collections::HashMap::new();
+    let mut finished = false;
     let mut reader = std::io::BufReader::new(response);
     let mut line = String::new();
     loop {
@@ -499,14 +753,221 @@ fn pull_model(port: u16, model: &str) -> Result<(), String> {
         if trimmed.is_empty() {
             continue;
         }
-        if let Ok(progress) = serde_json::from_str::<PullProgressLine>(trimmed) {
-            log::info!("ollama pull {model}: {}", progress.status);
-            if progress.status.eq_ignore_ascii_case("error") {
-                return Err(format!("Pull of {model} reported an error"));
+        let Ok(progress) = serde_json::from_str::<PullProgressLine>(trimmed) else {
+            continue;
+        };
+        if let Some(error) = progress.error {
+            return Err(format!("Pull of {model} failed: {error}"));
+        }
+        let status = progress.status.unwrap_or_default();
+        if status.eq_ignore_ascii_case("error") {
+            return Err(format!("Pull of {model} reported an error"));
+        }
+        if let (Some(digest), Some(total)) = (progress.digest, progress.total) {
+            let entry = layers.entry(digest).or_default();
+            let next = (progress.completed.unwrap_or(entry.0), total);
+            if *entry != next {
+                *entry = next;
+                on_progress(PullProgress {
+                    completed_bytes: layers.values().map(|(completed, _)| completed).sum(),
+                    total_bytes: layers.values().map(|(_, total)| total).sum(),
+                });
             }
+            continue;
+        }
+        if !status.is_empty() {
+            log::info!("ollama pull {model}: {status}");
+        }
+        if status.eq_ignore_ascii_case("success") {
+            finished = true;
         }
     }
+
+    if !finished {
+        return Err(format!("Pull of {model} stopped before it finished"));
+    }
     Ok(())
+}
+
+/// A failed pull in words the person who pressed "Download recommended model"
+/// can act on. `detail` is what pull_model_reporting returned; it still goes
+/// to the log as it is.
+pub fn describe_pull_failure(model: &str, detail: &str) -> String {
+    let lower = detail.to_ascii_lowercase();
+    let has = |needles: &[&str]| needles.iter().any(|needle| lower.contains(needle));
+
+    if has(&["no space left", "disk full", "not enough space"]) {
+        format!("There is not enough free disk space for {model}. Free up some space, then try again.")
+    } else if has(&["requires a newer version of ollama"]) {
+        // The registry's 412 for a model an older Ollama cannot run. A person's
+        // own Ollama is often older than the one this app ships.
+        format!("Your Ollama is too old for {model}. Update Ollama from ollama.com/download, then try again.")
+    } else if has(&[
+        "no such host",
+        "dial tcp",
+        "i/o timeout",
+        "tls handshake",
+        "registry.ollama.ai",
+        "network is unreachable",
+    ]) {
+        format!("Your Ollama could not reach ollama.com to download {model}. Check your internet connection, then try again.")
+    } else if has(&["failed to request pull", "failed to read pull progress", "stopped before it finished"]) {
+        format!("Your Ollama stopped answering while it was downloading {model}. Check that Ollama is running, then try again.")
+    } else if has(&["file does not exist", "manifest unknown"]) {
+        format!("Ollama's library has no model called {model}.")
+    } else {
+        let said = detail.strip_prefix(&format!("Pull of {model} failed: ")).unwrap_or(detail);
+        format!("Your Ollama could not download {model}. It said: {said}")
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct TagsResponse {
+    #[serde(default)]
+    models: Vec<TagsModel>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TagsModel {
+    name: String,
+    /// Set on an Ollama Cloud model (`gpt-oss:120b-cloud` and the like): a
+    /// stub that forwards every prompt to ollama.com.
+    #[serde(default)]
+    remote_host: Option<String>,
+    #[serde(default)]
+    remote_model: Option<String>,
+}
+
+impl TagsModel {
+    /// Runs on this machine. The desktop app writes CI_LOCAL_ONLY=true, so a
+    /// cloud model is never named for chat or background work: every job
+    /// would send the user's data to ollama.com.
+    fn is_local(&self) -> bool {
+        let remote = |field: &Option<String>| field.as_deref().is_some_and(|value| !value.is_empty());
+        let tag = self.name.rsplit_once(':').map_or("", |(_, tag)| tag);
+
+        !remote(&self.remote_host) && !remote(&self.remote_model) && tag != "cloud" && !tag.ends_with("-cloud")
+    }
+}
+
+/// The models an Ollama runs locally, in the order `/api/tags` lists them.
+/// Cloud models are left out; see TagsModel::is_local.
+fn served_model_names(port: u16) -> Result<Vec<String>, String> {
+    // No proxy, for the same reason as pull_model_reporting.
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .no_proxy()
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+    let response = client
+        .get(format!("http://127.0.0.1:{port}/api/tags"))
+        .send()
+        .map_err(|e| format!("Failed to list models: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("Listing models failed: HTTP {}", response.status()));
+    }
+    let tags: TagsResponse = response.json().map_err(|e| format!("Unreadable model list: {e}"))?;
+
+    Ok(tags.models.into_iter().filter(TagsModel::is_local).map(|model| model.name).collect())
+}
+
+/// Ollama reads a bare name as its `:latest` tag. Compares with the suffix
+/// stripped, like the api's sameBaseModel (servedModels.ts), so a registry
+/// host with a port (`localhost:5000/model`) is not mistaken for a tag.
+fn same_model(served: &str, wanted: &str) -> bool {
+    let base = |name: &str| name.strip_suffix(":latest").unwrap_or(name).to_string();
+
+    base(served) == base(wanted)
+}
+
+/// Mirrors the name rule the api uses to keep embedders and other non-chat
+/// models out of chat (backend/apps/api/src/domains/llm/services/
+/// servedModels.ts, NON_CHAT_NAME). Ollama publishes no labels, so the name
+/// is all there is.
+fn is_chat_model_name(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    if ["embed", "rerank", "whisper", "kokoro", "minilm"].iter().any(|part| name.contains(part)) {
+        return false;
+    }
+
+    !name.split(|c: char| !c.is_ascii_alphanumeric()).any(|word| word == "tts" || word == "bge")
+}
+
+/// The chat model to ask a user's own Ollama for, when it is not
+/// DEFAULT_CHAT_MODEL: None when it serves the default (nothing to change)
+/// or serves no local chat model at all (nothing better to name). Otherwise
+/// the first local chat model it lists, so chat and background work end up
+/// on the same model the user already has on disk.
+///
+/// The default wins wherever it sits in the list. `/api/tags` lists the most
+/// recently pulled model first, which on a machine that also runs large models
+/// is often one far too slow for background work.
+fn choose_host_chat_model(served: &[String]) -> Option<String> {
+    if served.iter().any(|name| same_model(name, DEFAULT_CHAT_MODEL)) {
+        return None;
+    }
+
+    served.iter().find(|name| is_chat_model_name(name)).cloned()
+}
+
+/// The models of RECOMMENDED_MODELS that `served` lacks, in that order.
+fn missing_recommended_models(served: &[String]) -> Vec<String> {
+    RECOMMENDED_MODELS
+        .iter()
+        .filter(|wanted| !served.iter().any(|name| same_model(name, wanted)))
+        .map(|wanted| wanted.to_string())
+        .collect()
+}
+
+/// The recommended models a user's own Ollama on `port` does not have.
+pub fn host_ollama_missing_models(port: u16) -> Result<Vec<String>, String> {
+    served_model_names(port).map(|served| missing_recommended_models(&served))
+}
+
+/// What to write as the chat model when reusing the user's own Ollama.
+///
+/// This app pulls nothing into an Ollama it does not own unless the person
+/// asks for it in Settings > Model. It used to name DEFAULT_CHAT_MODEL
+/// regardless, so where that Ollama lacked it chat quietly ran on whatever it
+/// listed first while every background job failed with "Invalid model
+/// specified: gemma4:e4b". Logged either way, with where to get the default
+/// model. The embedding model search needs is logged the same way and has no
+/// substitute: the index is built with it.
+pub fn host_ollama_chat_model(port: u16) -> Option<String> {
+    let served = match served_model_names(port) {
+        Ok(served) => served,
+        Err(e) => {
+            log::warn!("Could not ask your Ollama which models it has ({e}); asking it for {DEFAULT_CHAT_MODEL}.");
+            return None;
+        }
+    };
+
+    if !served.iter().any(|name| same_model(name, DEFAULT_EMBED_MODEL)) {
+        log::warn!(
+            "Your Ollama does not have {DEFAULT_EMBED_MODEL}, which search needs. \
+             Download it with \"Download recommended model\" in Settings > Model, \
+             or run `ollama pull {DEFAULT_EMBED_MODEL}`."
+        );
+    }
+
+    let chosen = choose_host_chat_model(&served);
+    match &chosen {
+        None if served.iter().any(|name| same_model(name, DEFAULT_CHAT_MODEL)) => log::info!(
+            "Your Ollama has {DEFAULT_CHAT_MODEL}, the recommended model; chat and background work use it."
+        ),
+        Some(model) => log::warn!(
+            "Your Ollama does not have {DEFAULT_CHAT_MODEL}; chat and background work will use {model}, \
+             the first local chat model it lists. Download the recommended model with \
+             \"Download recommended model\" in Settings > Model, or run `ollama pull {DEFAULT_CHAT_MODEL}`."
+        ),
+        None => log::warn!(
+            "Your Ollama has no local chat model; background work will fail until it has one. \
+             Download the recommended model with \"Download recommended model\" in Settings > Model, \
+             or run `ollama pull {DEFAULT_CHAT_MODEL}`."
+        ),
+    }
+
+    chosen
 }
 
 #[cfg(test)]
@@ -553,7 +1014,7 @@ mod tests {
         let actual = {
             let mut hasher = Sha256::new();
             hasher.update(b"hello world");
-            format!("{:x}", hasher.finalize())
+            hex_lower(&hasher.finalize())
         };
         let wrong = format!("{}f", &actual[..actual.len() - 1]);
 
@@ -568,7 +1029,11 @@ mod tests {
     /// newline-framed NDJSON body Ollama streams back. A stub that returned a
     /// canned `Result` would test nothing that has ever broken here.
     fn serve(handler: impl Fn(tiny_http::Request) + Send + 'static) -> u16 {
-        let server = tiny_http::Server::http(("127.0.0.1", 0)).expect("bind a loopback test server");
+        serve_at("127.0.0.1", handler)
+    }
+
+    fn serve_at(address: &str, handler: impl Fn(tiny_http::Request) + Send + 'static) -> u16 {
+        let server = tiny_http::Server::http((address, 0)).expect("bind a test server");
         let port = server.server_addr().to_ip().expect("an IP address").port();
         std::thread::spawn(move || {
             for request in server.incoming_requests() {
@@ -599,6 +1064,113 @@ mod tests {
 
         let nobody = crate::port_check::find_free_port().expect("a free port");
         assert!(!is_running(nobody));
+    }
+
+    /// The probe reach_host_ollama decides with: it relays the user's own
+    /// Ollama only when it does not already listen on the docker bridge
+    /// gateway address, which it finds out by asking there. Modelled here on
+    /// loopback, which Linux spans across 127.0.0.0/8. A server bound to
+    /// 127.0.0.1 alone (Ollama's own Linux service, as the gateway sees it)
+    /// does not answer at 127.0.0.2. One bound to every address does.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn only_a_server_bound_beyond_loopback_answers_at_another_address() {
+        use std::net::Ipv4Addr;
+
+        let elsewhere = Ipv4Addr::new(127, 0, 0, 2);
+        let version = |request: tiny_http::Request| respond(request, 200, r#"{"version":"0.34.0"}"#);
+
+        let loopback_only = serve_at("127.0.0.1", version);
+        assert!(is_running_on(Ipv4Addr::LOCALHOST, loopback_only));
+        assert!(!is_running_on(elsewhere, loopback_only));
+
+        let every_address = serve_at("0.0.0.0", version);
+        assert!(is_running_on(elsewhere, every_address));
+    }
+
+    /// A user's own Ollama gets nothing pulled into it, so the app names a
+    /// model it has. The default stays when it is there (bare or `:latest`
+    /// spellings included). Embedders are never picked for chat. An Ollama
+    /// with no chat model leaves the default in place rather than naming an
+    /// embedder.
+    #[test]
+    fn a_users_own_ollama_is_asked_for_a_chat_model_it_has() {
+        let names = |list: &[&str]| list.iter().map(|name| name.to_string()).collect::<Vec<_>>();
+
+        assert_eq!(choose_host_chat_model(&names(&["qwen3.5:122b", DEFAULT_CHAT_MODEL])), None);
+        assert_eq!(
+            choose_host_chat_model(&names(&["nomic-embed-text:latest", "qwen3.5:122b", "qwen3.5:4b"])),
+            Some("qwen3.5:122b".to_string()),
+        );
+        assert_eq!(
+            choose_host_chat_model(&names(&["bge-m3:latest", "mxbai-embed-large:latest", "llama3.2:latest"])),
+            Some("llama3.2:latest".to_string()),
+        );
+        assert_eq!(choose_host_chat_model(&names(&["nomic-embed-text:latest"])), None);
+        assert_eq!(choose_host_chat_model(&[]), None);
+
+        assert!(same_model("nomic-embed-text:latest", DEFAULT_EMBED_MODEL));
+        assert!(same_model("nomic-embed-text", "nomic-embed-text:latest"));
+        assert!(same_model("localhost:5000/team/model", "localhost:5000/team/model:latest"));
+        assert!(!same_model("nomic-embed-text:v1.5", DEFAULT_EMBED_MODEL));
+        assert!(!same_model("gemma4:e2b", DEFAULT_CHAT_MODEL));
+        assert!(is_chat_model_name("gemma4:e4b"));
+        assert!(!is_chat_model_name("snowflake-arctic-embed2:latest"));
+        assert!(!is_chat_model_name("kokoro-tts:latest"));
+    }
+
+    /// `/api/tags` lists the newest model first. A person who pulled a 122B
+    /// model after the recommended one still gets the recommended one, and
+    /// Settings > Model offers only the models that are missing.
+    #[test]
+    fn the_recommended_model_wins_wherever_it_is_listed_and_only_missing_ones_are_offered() {
+        let names = |list: &[&str]| list.iter().map(|name| name.to_string()).collect::<Vec<_>>();
+
+        let has_both = names(&["qwen3.5:122b", "qwen3.6:35b", "nomic-embed-text:latest", DEFAULT_CHAT_MODEL]);
+        assert_eq!(choose_host_chat_model(&has_both), None);
+        assert!(missing_recommended_models(&has_both).is_empty());
+
+        let no_chat = names(&["qwen3.5:122b", "nomic-embed-text:latest"]);
+        assert_eq!(choose_host_chat_model(&no_chat), Some("qwen3.5:122b".to_string()));
+        assert_eq!(missing_recommended_models(&no_chat), vec![DEFAULT_CHAT_MODEL.to_string()]);
+
+        let neither = names(&["qwen3.5:122b"]);
+        assert_eq!(
+            missing_recommended_models(&neither),
+            vec![DEFAULT_EMBED_MODEL.to_string(), DEFAULT_CHAT_MODEL.to_string()],
+            "in the order the app pulls them into its own Ollama"
+        );
+        assert_eq!(missing_recommended_models(&names(&["gemma4:e4b", "nomic-embed-text"])), Vec::<String>::new());
+    }
+
+    /// The model list comes from Ollama's own `/api/tags` (every model on
+    /// disk, not `/api/ps`'s loaded few), in its order. Cloud models are left
+    /// out: the app runs with CI_LOCAL_ONLY=true, so naming one would send
+    /// every chat and background job to ollama.com.
+    #[test]
+    fn served_model_names_reads_ollamas_tag_list() {
+        let port = serve(|request| {
+            if request.url() != "/api/tags" {
+                return respond(request, 404, "not found");
+            }
+            respond(
+                request,
+                200,
+                r#"{"models":[
+                    {"name":"gpt-oss:120b-cloud","remote_model":"gpt-oss:120b","remote_host":"https://ollama.com:443","size":384},
+                    {"name":"glm-4.6:cloud","size":384},
+                    {"name":"qwen3.5:122b","size":1},
+                    {"name":"nomic-embed-text:latest","size":2}
+                ]}"#,
+            )
+        });
+        assert_eq!(
+            served_model_names(port).unwrap(),
+            vec!["qwen3.5:122b".to_string(), "nomic-embed-text:latest".to_string()]
+        );
+
+        let broken = serve(|request| respond(request, 500, "internal server error"));
+        assert!(served_model_names(broken).is_err());
     }
 
     /// The wire shape Ollama's own `/api/pull` expects. `model` is the current
@@ -670,6 +1242,109 @@ mod tests {
         assert!(err.contains("reported an error"), "{err}");
     }
 
+    /// What Settings > Model's progress bar is built from: every layer's bytes
+    /// added up, reported as they move. Ollama sends the layer list a piece at
+    /// a time, so the total grows as layers appear.
+    #[test]
+    fn a_pull_reports_its_bytes_over_every_layer() {
+        let port = serve(|request| {
+            respond(
+                request,
+                200,
+                "{\"status\":\"pulling manifest\"}\n\
+                 {\"status\":\"pulling aaa\",\"digest\":\"sha256:aaa\",\"total\":1000}\n\
+                 {\"status\":\"pulling aaa\",\"digest\":\"sha256:aaa\",\"total\":1000,\"completed\":400}\n\
+                 {\"status\":\"pulling bbb\",\"digest\":\"sha256:bbb\",\"total\":10,\"completed\":10}\n\
+                 {\"status\":\"pulling aaa\",\"digest\":\"sha256:aaa\",\"total\":1000,\"completed\":1000}\n\
+                 {\"status\":\"verifying sha256 digest\"}\n\
+                 {\"status\":\"success\"}\n",
+            )
+        });
+        let mut seen = Vec::new();
+
+        pull_model_reporting(port, DEFAULT_CHAT_MODEL, |progress| seen.push(progress)).expect("a finished pull");
+
+        let at = |completed_bytes, total_bytes| PullProgress {
+            completed_bytes,
+            total_bytes,
+        };
+        assert_eq!(seen, vec![at(0, 1000), at(400, 1000), at(410, 1010), at(1010, 1010)]);
+    }
+
+    /// Ollama reports a pull that fails once it has started as an `error` line
+    /// in a 200 stream. A pull cut short (Ollama stopped) just ends. Both
+    /// used to read as a finished download: the error line has no `status`, so
+    /// it was skipped like progress noise.
+    #[test]
+    fn a_pull_that_errors_or_stops_part_way_is_not_a_finished_one() {
+        let erroring = serve(|request| {
+            respond(
+                request,
+                200,
+                "{\"status\":\"pulling manifest\"}\n\
+                 {\"error\":\"write /models/blobs/sha256-aaa-partial: no space left on device\"}\n",
+            )
+        });
+        let err = pull_model(erroring, DEFAULT_CHAT_MODEL).expect_err("an error line fails the pull");
+        assert!(err.contains("no space left on device"), "Ollama's own words reach the log: {err}");
+
+        let cut_short = serve(|request| {
+            respond(
+                request,
+                200,
+                "{\"status\":\"pulling aaa\",\"digest\":\"sha256:aaa\",\"total\":1000,\"completed\":400}\n",
+            )
+        });
+        let err = pull_model(cut_short, DEFAULT_CHAT_MODEL).expect_err("no success line, no finished pull");
+        assert!(err.contains("stopped before it finished"), "{err}");
+
+        let refused = serve(|request| respond(request, 500, r#"{"error":"pull model manifest: file does not exist"}"#));
+        let err = pull_model(refused, DEFAULT_CHAT_MODEL).expect_err("HTTP 500");
+        assert!(err.contains("500") && err.contains("file does not exist"), "{err}");
+    }
+
+    /// The person who pressed "Download recommended model" reads these, not the
+    /// log. Each says what happened and what to do, without Ollama's internals.
+    #[test]
+    fn a_failed_pull_is_described_in_plain_words() {
+        let model = DEFAULT_CHAT_MODEL;
+        let said = |detail: &str| describe_pull_failure(model, detail);
+
+        assert_eq!(
+            said("Pull of gemma4:e4b failed: write /x-partial: no space left on device"),
+            "There is not enough free disk space for gemma4:e4b. Free up some space, then try again."
+        );
+        assert_eq!(
+            said(
+                "Pull of gemma4:e4b failed: pull model manifest: Get \"https://registry.ollama.ai/v2/library/gemma4/manifests/e4b\": \
+                 dial tcp: lookup registry.ollama.ai: no such host"
+            ),
+            "Your Ollama could not reach ollama.com to download gemma4:e4b. Check your internet connection, then try again."
+        );
+        for stopped in [
+            "Pull of gemma4:e4b stopped before it finished",
+            "Failed to read pull progress for gemma4:e4b: connection reset by peer",
+            "Failed to request pull of gemma4:e4b: error sending request: Connection refused",
+        ] {
+            assert_eq!(
+                said(stopped),
+                "Your Ollama stopped answering while it was downloading gemma4:e4b. Check that Ollama is running, then try again.",
+                "{stopped}"
+            );
+        }
+        assert_eq!(
+            said(
+                "Pull of gemma4:e4b failed: pull model manifest: 412: \n\nThe model you are attempting to pull \
+                 requires a newer version of Ollama.\n\nPlease download the latest version at:\n\n\thttps://ollama.com/download\n\n"
+            ),
+            "Your Ollama is too old for gemma4:e4b. Update Ollama from ollama.com/download, then try again."
+        );
+        assert_eq!(
+            said("Pull of gemma4:e4b failed: HTTP 500 Internal Server Error: something new"),
+            "Your Ollama could not download gemma4:e4b. It said: HTTP 500 Internal Server Error: something new"
+        );
+    }
+
     /// Which decompressor runs is chosen purely from the asset filename, and
     /// the filenames come from release_asset() above — so a bad suffix match
     /// shows up as "ollama-darwin.tgz did not contain ollama", blaming the
@@ -703,6 +1378,106 @@ mod tests {
         let err = extract_archive(&tgz_path, "ollama-linux-amd64.deb", &dest)
             .expect_err("an unhandled archive format must be an error");
         assert!(err.contains("Unrecognized archive format"), "{err}");
+    }
+
+    /// A `.tar.zst` in the Linux release's layout and order: the program in
+    /// `bin/` first, then its libraries in `lib/ollama/`.
+    fn write_linux_layout_archive(path: &Path, program: &[u8]) {
+        let file = std::fs::File::create(path).unwrap();
+        let encoder = zstd::stream::write::Encoder::new(file, 1).unwrap().auto_finish();
+        let mut builder = tar::Builder::new(encoder);
+        let entries = [
+            (format!("bin/{}", binary_name()), program),
+            ("lib/ollama/libggml-base.so".to_string(), &b"not really a library"[..]),
+        ];
+        for (path, body) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(body.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            builder.append_data(&mut header, path, body).unwrap();
+        }
+        builder.into_inner().unwrap();
+    }
+
+    /// Ollama's Linux archive keeps the program in `bin/` with its libraries
+    /// in `lib/ollama/`; the macOS and Windows archives keep it at the top.
+    /// Looking only at the top is how every Linux machine without Ollama
+    /// downloaded about 1 GB, unpacked it and then logged "did not contain
+    /// ollama", at every launch. The Linux layout is built here as a real
+    /// .tar.zst; the top-level one only needs the file in place.
+    #[test]
+    fn the_program_is_found_where_each_release_archive_keeps_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let program = b"#!/bin/sh\necho ollama\n";
+
+        let linux_archive = dir.path().join("ollama-linux-amd64.tar.zst");
+        write_linux_layout_archive(&linux_archive, program);
+
+        let linux = dir.path().join("linux");
+        std::fs::create_dir_all(&linux).unwrap();
+        extract_archive(&linux_archive, "ollama-linux-amd64.tar.zst", &linux).expect("a .tar.zst should unpack");
+        let found = unpacked_binary(&linux).expect("the Linux layout keeps the program in bin/");
+        assert_eq!(found, linux.join("bin").join(binary_name()));
+        assert_eq!(std::fs::read(&found).unwrap(), program);
+
+        let top_level = dir.path().join("top-level");
+        std::fs::create_dir_all(&top_level).unwrap();
+        std::fs::write(top_level.join(binary_name()), program).unwrap();
+        assert_eq!(unpacked_binary(&top_level), Some(top_level.join(binary_name())));
+
+        let empty = dir.path().join("empty");
+        std::fs::create_dir_all(empty.join("bin")).unwrap();
+        assert_eq!(unpacked_binary(&empty), None, "a directory named bin is not the program");
+    }
+
+    /// The Linux archive lists `bin/ollama` before its libraries, so an unpack
+    /// cut short leaves the program without them. Only a finished unpack may
+    /// be reused at the next launch. One cut short is unpacked again from
+    /// scratch and only then marked finished.
+    #[test]
+    fn only_a_finished_unpack_is_reused() {
+        let dir = tempfile::tempdir().unwrap();
+        let asset = "ollama-linux-amd64.tar.zst";
+        let archive = dir.path().join(asset);
+        write_linux_layout_archive(&archive, b"#!/bin/sh\necho ollama\n");
+
+        // What an unpack cut short after its first entry leaves behind.
+        let runtime = dir.path().join("ollama-runtime");
+        std::fs::create_dir_all(runtime.join("bin")).unwrap();
+        std::fs::write(runtime.join("bin").join(binary_name()), b"#!/bin/sh\n").unwrap();
+        assert_eq!(previously_unpacked(&runtime, asset), None, "a cut-short unpack is not a finished one");
+
+        let found = unpack(&archive, asset, &runtime).expect("the archive should unpack over the partial one");
+        assert_eq!(found, runtime.join("bin").join(binary_name()));
+        assert!(runtime.join("lib/ollama/libggml-base.so").is_file(), "the libraries are there now");
+        assert!(!archive.exists(), "the archive is removed once unpacked");
+        assert_eq!(previously_unpacked(&runtime, asset), Some(found));
+    }
+
+    /// A newer OLLAMA_VERSION is unpacked where the older one was. Its GPU
+    /// backends in `lib/ollama/` must not sit beside the new ones, where the
+    /// new program would load them, while the pulled models stay put.
+    #[test]
+    fn an_unpack_clears_the_earlier_releases_libraries_but_keeps_the_models() {
+        let dir = tempfile::tempdir().unwrap();
+        let asset = "ollama-linux-amd64.tar.zst";
+        let archive = dir.path().join(asset);
+        write_linux_layout_archive(&archive, b"#!/bin/sh\necho ollama\n");
+
+        let runtime = dir.path().join("ollama-runtime");
+        let old_backend = runtime.join("lib/ollama/cuda_v11/libggml-cuda.so");
+        std::fs::create_dir_all(old_backend.parent().unwrap()).unwrap();
+        std::fs::write(&old_backend, b"an older release's backend").unwrap();
+        let model = runtime.join("models/blobs/sha256-abc");
+        std::fs::create_dir_all(model.parent().unwrap()).unwrap();
+        std::fs::write(&model, b"weights").unwrap();
+
+        unpack(&archive, asset, &runtime).expect("the archive should unpack");
+
+        assert!(!old_backend.exists(), "the older release's backend should be gone");
+        assert!(runtime.join("lib/ollama/libggml-base.so").is_file());
+        assert_eq!(std::fs::read(&model).unwrap(), b"weights", "the models are not the unpack's to clear");
     }
 
     /// Exercises real process spawning against whatever `ollama` binary is

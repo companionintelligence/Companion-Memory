@@ -109,6 +109,10 @@ export class FileEntity {
   @Column({ type: 'uuid', name: 'capture_tick_id', nullable: true })
   captureTickId!: string | null;
 
+  /** The connection whose sync wrote this pointer row; NULL for everything else. */
+  @Column({ type: 'uuid', name: 'connection_id', nullable: true })
+  connectionId!: string | null;
+
   static toEgressType(entity: FileEntity): File {
     return {
       id: entity.id,
@@ -131,6 +135,7 @@ export class FileEntity {
       deletedAt: entity.deletedAt,
       externalCreatedAt: entity.externalCreatedAt,
       externalUpdatedAt: entity.externalUpdatedAt,
+      connectionId: entity.connectionId,
       parseStatus: entity.parseStatus,
       parseError: entity.parseError,
       parsedAt: entity.parsedAt,

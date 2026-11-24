@@ -8,6 +8,7 @@ import { PageContent } from '@/components/layout';
 import { MemoryHubShell } from '@/components/MemoryHub';
 import { FileChunkModal } from '@/components/modals/FileChunkModal/FileChunkModal';
 import { PullToRefresh } from '@/components/PullToRefresh';
+import { useBackClosesSheet } from '@/hooks/useBackClosesSheet';
 
 import { useEntityService } from '../MemoryPage/useEntityService';
 
@@ -99,6 +100,10 @@ export default function MobileMemoryPage() {
   useEffect(() => {
     setDetailsOpen(activeEntity != null);
   }, [activeEntity]);
+
+  // Back (browser button, or the Android hardware button via useNativeShell)
+  // closes the open drawer instead of leaving the page.
+  useBackClosesSheet(detailsOpen && activeSheetEntity != null, () => toggleactiveEntity(false));
 
   return (
     <>

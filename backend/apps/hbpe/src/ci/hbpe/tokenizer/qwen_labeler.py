@@ -29,7 +29,9 @@ from ci.hbpe.tokenizer.vocab_registry import (
     get_or_create_l2,
     normalise_l0,
     write_content_label,
+    write_content_labels,
     write_event_label,
+    write_event_labels,
 )
 
 log = logging.getLogger(__name__)
@@ -97,12 +99,7 @@ class QwenLabeler:
         title = (title or "(no title)")[:200]
 
         # Stage 1: L0
-        l0_raw = get_qwen().generate(
-            _build_l0_message(title, description),
-            system_message=_SYSTEM,
-            max_new_tokens=256,
-        )
-        l0 = normalise_l0(_parse_json(l0_raw).get("l0", "UNKNOWN"))
+        l0 = self._resolve_l0(title, description)
 
         # Stage 2: L1 given locked L0
         l1_vocab = self._all_l1_by_l0(user_id).get(l0, [])
@@ -147,12 +144,7 @@ class QwenLabeler:
         title = (title or "(no title)")[:200]
 
         # Stage 1: L0
-        l0_raw = get_qwen().generate(
-            _build_l0_message(title, None),
-            system_message=_SYSTEM,
-            max_new_tokens=256,
-        )
-        l0 = normalise_l0(_parse_json(l0_raw).get("l0", "UNKNOWN"))
+        l0 = self._resolve_l0(title, None)
 
         # Stage 2: L1 + L2 given locked L0
         all_l1 = self._all_l1_by_l0(user_id)
@@ -220,15 +212,9 @@ class QwenLabeler:
 
         titles = [(item.get("title") or "(no title)")[:200] for item in items]
 
-        # Stage 1: L0 classification — no vocab, clean signal
-        l0_prompts = [
-            (_build_l0_message(title, item.get("description")), _SYSTEM)
-            for title, item in zip(titles, items, strict=True)
-        ]
-        l0_raws = get_qwen().batch_generate(l0_prompts, max_new_tokens=256)
-        l0_results = [
-            normalise_l0(_parse_json(raw).get("l0", "UNKNOWN")) for raw in l0_raws
-        ]
+        # Stage 1: L0 classification — decision fast-path with LLM fallback
+        descriptions = [item.get("description") for item in items]
+        l0_results = self._batch_resolve_l0(titles, descriptions)
 
         # Stage 2: L1 given locked L0
         all_l1 = self._all_l1_by_l0(user_id)
@@ -247,16 +233,30 @@ class QwenLabeler:
         ]
         l1_raws = get_qwen().batch_generate(l1_prompts, max_new_tokens=256)
 
+        # Each distinct (l0, label) the batch produced is resolved against the
+        # vocabulary ONCE — a batch of forty events holds a handful of labels,
+        # and resolving is up to four reads and a mint each — and the batch's
+        # assignments are written together. `is_new_l1` stays what it was per
+        # event: true for the event whose label was minted, false for the rest
+        # that share it, which is what the nightly runner counts.
+        resolved: dict[tuple[str, str], str] = {}
         results = []
+        assignments: list[tuple[str, str]] = []
         for item, l0, raw in zip(items, l0_results, l1_raws, strict=True):
             l1_raw = _clean_label(_parse_json(raw).get("l1", "General"))
-            l1_id, is_new_l1 = get_or_create_l1(user_id, l0, l1_raw)
-            if is_new_l1:
-                self._l1_cache.pop((user_id, l0), None)
-            write_event_label(item["event_id"], user_id, l0, l1_id)
+            key = (l0, l1_raw)
+            is_new_l1 = False
+            if key not in resolved:
+                resolved[key], is_new_l1 = get_or_create_l1(user_id, l0, l1_raw)
+                if is_new_l1:
+                    self._l1_cache.pop((user_id, l0), None)
+            l1_id = resolved[key]
+            assignments.append((item["event_id"], l1_id))
             results.append(
                 {"l0": l0, "l1": l1_raw, "l1_id": l1_id, "is_new_l1": is_new_l1}
             )
+
+        write_event_labels(assignments)
 
         return results
 
@@ -281,12 +281,9 @@ class QwenLabeler:
 
         titles = [(item.get("title") or "(no title)")[:200] for item in items]
 
-        # Stage 1: L0 classification
-        l0_prompts = [(_build_l0_message(title, None), _SYSTEM) for title in titles]
-        l0_raws = get_qwen().batch_generate(l0_prompts, max_new_tokens=256)
-        l0_results = [
-            normalise_l0(_parse_json(raw).get("l0", "UNKNOWN")) for raw in l0_raws
-        ]
+        # Stage 1: L0 classification — decision fast-path with LLM fallback
+        descriptions = [None] * len(titles)
+        l0_results = self._batch_resolve_l0(titles, descriptions)
 
         # Stage 2: L1 + L2 given locked L0
         all_l1 = self._all_l1_by_l0(user_id)
@@ -310,18 +307,33 @@ class QwenLabeler:
         ]
         l1l2_raws = get_qwen().batch_generate(l1l2_prompts, max_new_tokens=256)
 
+        # As in label_events_batch: each distinct label resolved once, the
+        # batch's assignments written together, the mint flags kept per item.
+        resolved_l1: dict[tuple[str, str], str] = {}
+        resolved_l2: dict[tuple[str, str, str], str] = {}
         results = []
+        assignments: list[tuple[str, str, str, str, str]] = []
         for item, l0, raw in zip(items, l0_results, l1l2_raws, strict=True):
             parsed = _parse_json(raw)
             l1_raw = _clean_label(parsed.get("l1", "General"))
             l2_raw = _clean_label(parsed.get("l2", "General"))
-            l1_id, is_new_l1 = get_or_create_l1(user_id, l0, l1_raw)
-            l2_id, is_new_l2 = get_or_create_l2(user_id, l0, l1_id, l2_raw)
-            if is_new_l1:
-                self._l1_cache.pop((user_id, l0), None)
-            if is_new_l2:
-                self._l2_cache.pop((user_id, l0, l1_id), None)
-            write_content_label(item["content_id"], user_id, l0, l1_id, l2_id)
+            l1_key = (l0, l1_raw)
+            is_new_l1 = False
+            if l1_key not in resolved_l1:
+                resolved_l1[l1_key], is_new_l1 = get_or_create_l1(user_id, l0, l1_raw)
+                if is_new_l1:
+                    self._l1_cache.pop((user_id, l0), None)
+            l1_id = resolved_l1[l1_key]
+            l2_key = (l0, l1_id, l2_raw)
+            is_new_l2 = False
+            if l2_key not in resolved_l2:
+                resolved_l2[l2_key], is_new_l2 = get_or_create_l2(
+                    user_id, l0, l1_id, l2_raw
+                )
+                if is_new_l2:
+                    self._l2_cache.pop((user_id, l0, l1_id), None)
+            l2_id = resolved_l2[l2_key]
+            assignments.append((item["content_id"], user_id, l0, l1_id, l2_id))
             results.append(
                 {
                     "l0": l0,
@@ -333,6 +345,8 @@ class QwenLabeler:
                     "is_new_l2": is_new_l2,
                 }
             )
+
+        write_content_labels(assignments)
 
         return results
 
@@ -361,6 +375,103 @@ class QwenLabeler:
                     self._l2_cache[key] = get_l2_vocab(user_id, l0, cid)
                 result[cid] = self._l2_cache[key]
         return result
+
+    def _resolve_l0(self, title: str, description: str | None = None) -> str:
+        """
+        Resolve L0 classification using Fast Decision Model (System 1) if enabled,
+        falling back to Qwen generation (System 2).
+        """
+        from ci.hbpe.config import settings
+
+        if settings.enable_decision_models:
+            try:
+                from ci.hbpe.inference.decision_model import (
+                    L0_EVENT_QUESTIONS,
+                    DecisionModelClient,
+                )
+
+                client = DecisionModelClient(
+                    base_url=settings.decision_model_endpoint,
+                    enable_local_fallback=True,
+                )
+                text_to_eval = f"{title}. {description or ''}".strip()
+                decision_res = client.evaluate(text_to_eval, L0_EVENT_QUESTIONS)
+                l0_choice = decision_res.get("l0_class")
+                if (
+                    l0_choice
+                    and l0_choice.probability >= settings.decision_confidence_threshold
+                    and l0_choice.value in L0_CLASSES
+                    and l0_choice.value != "UNKNOWN"
+                ):
+                    return normalise_l0(str(l0_choice.value))
+            except Exception as e:
+                log.warning(
+                    "Decision model L0 evaluation failed, falling back to LLM: %s", e
+                )
+
+        from ci.hbpe.inference.qwen import get_qwen
+
+        l0_raw = get_qwen().generate(
+            _build_l0_message(title, description),
+            system_message=_SYSTEM,
+            max_new_tokens=256,
+        )
+        return normalise_l0(_parse_json(l0_raw).get("l0", "UNKNOWN"))
+
+    def _batch_resolve_l0(
+        self,
+        titles: list[str],
+        descriptions: list[str | None],
+    ) -> list[str]:
+        """
+        Batch resolve L0 classifications, using Fast Decision Model for all items first
+        and delegating only low-confidence or failed items to Qwen batch generation.
+        """
+        from ci.hbpe.config import settings
+        from ci.hbpe.inference.qwen import get_qwen
+
+        n = len(titles)
+        resolved: list[str | None] = [None] * n
+
+        if settings.enable_decision_models:
+            try:
+                from ci.hbpe.inference.decision_model import (
+                    L0_EVENT_QUESTIONS,
+                    DecisionModelClient,
+                )
+
+                client = DecisionModelClient(
+                    base_url=settings.decision_model_endpoint,
+                    enable_local_fallback=True,
+                )
+                for i in range(n):
+                    text_to_eval = f"{titles[i]}. {descriptions[i] or ''}".strip()
+                    res = client.evaluate(text_to_eval, L0_EVENT_QUESTIONS)
+                    choice = res.get("l0_class")
+                    if (
+                        choice
+                        and choice.probability >= settings.decision_confidence_threshold
+                        and choice.value in L0_CLASSES
+                        and choice.value != "UNKNOWN"
+                    ):
+                        resolved[i] = normalise_l0(str(choice.value))
+            except Exception as e:
+                log.warning(
+                    "Batch decision model evaluation failed, falling back to LLM: %s", e
+                )
+
+        # Gather remaining indices that need Qwen generation
+        unresolved_indices = [i for i, r in enumerate(resolved) if r is None]
+        if unresolved_indices:
+            l0_prompts = [
+                (_build_l0_message(titles[i], descriptions[i]), _SYSTEM)
+                for i in unresolved_indices
+            ]
+            l0_raws = get_qwen().batch_generate(l0_prompts, max_new_tokens=256)
+            for i, raw in zip(unresolved_indices, l0_raws, strict=True):
+                resolved[i] = normalise_l0(_parse_json(raw).get("l0", "UNKNOWN"))
+
+        return [r or "UNKNOWN" for r in resolved]
 
 
 # ── Message builders ───────────────────────────────────────────────────────────

@@ -3,9 +3,9 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 
 import { type ServiceContext } from '@ci/common/context';
-import config from '@ci/configuration';
 
 import { ProviderEntity, type Provider } from '../entities/ProviderEntity';
+import { type CallbackRequestOrigin, oauthCallbackUrl } from '../utils/callbackUrls';
 
 @Injectable()
 export class ProviderService {
@@ -43,11 +43,8 @@ export class ProviderService {
     return ids.map((id) => map.get(id) ?? null);
   }
 
-  getOAuthCallbackUrl(): string {
-    return (
-      config.auth.oauth.callbackUrl ||
-      `${process.env.APP_PUBLIC_URL}/oauth/callback` ||
-      `https://${config.hostname}/oauth/callback`
-    );
+  /** The address the OAuth Setup dialog asks people to register; `request` is the dialog's own. */
+  getOAuthCallbackUrl(request?: CallbackRequestOrigin): string {
+    return oauthCallbackUrl(request);
   }
 }

@@ -73,7 +73,7 @@ export function DropdownContent({ onSave, saveSupported = true }: Props) {
   return (
     <div className="flex items-start justify-between gap-4 p-4">
       <div className="flex flex-col gap-3">
-        <h3 className="text-xs font-bold uppercase">Filters</h3>
+        <h3 className="text-xs font-bold ">Filters</h3>
 
         <div className="flex flex-wrap items-center gap-2">
           <EntityTypeFilter modal={false} />

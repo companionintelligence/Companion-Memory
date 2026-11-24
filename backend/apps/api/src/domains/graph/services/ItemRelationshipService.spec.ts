@@ -6,7 +6,7 @@ const USER = '00000000-0000-0000-0000-0000000000aa';
  * A fake ItemRelationshipEntity repository that simulates the set-based
  * `INSERT ... ON CONFLICT (edge tuple) DO NOTHING RETURNING id`: an in-memory
  * store keyed by (user_id, from-triple, to-triple, relation) drops any row whose
- * key is already present, so `.execute()`'s `raw` carries ONLY the rows that
+ * key is already present, so the query runner's result carries ONLY the rows that
  * actually inserted — exactly what the service counts as `inserted`.
  */
 function makeFakeRepo() {
@@ -40,21 +40,27 @@ function makeFakeRepo() {
 
           return qb;
         },
-        onConflict: () => qb,
         returning: () => qb,
-        execute: async () => {
-          const raw: Array<{ id: string }> = [];
-          for (const row of rows) {
-            const k = key(row);
-            if (store.has(k)) {
-              continue;
-            } // ON CONFLICT DO NOTHING
+        getQuery: () => 'INSERT INTO "item_relationships" RETURNING "id"',
+        getParameters: () => ({}),
+        connection: {
+          driver: { escapeQueryWithParameters: (sql: string, params: unknown) => [sql, params] },
+        },
+        queryRunner: {
+          query: async () => {
+            const raw: Array<{ id: string }> = [];
+            for (const row of rows) {
+              const k = key(row);
+              if (store.has(k)) {
+                continue;
+              } // ON CONFLICT DO NOTHING
 
-            store.add(k);
-            raw.push({ id: row.id });
-          }
+              store.add(k);
+              raw.push({ id: row.id });
+            }
 
-          return { raw };
+            return raw;
+          },
         },
       });
 

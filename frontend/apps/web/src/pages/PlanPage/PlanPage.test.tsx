@@ -2,9 +2,14 @@ import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { gql } from '@/graphql';
+import {
+  GET_PLAN_BADGE_COUNT,
+  usePlanBadgeCount,
+} from '@/layouts/Main/SecondaryNavigation/usePlanBadgeCount';
 import { renderWithProviders } from '@/test/renderWithProviders';
 
 import { UPDATE_TASK } from './EditTaskModal';
+import { CREATE_TASK } from './NewTaskForm';
 import { PlanPage } from './PlanPage';
 import { SELECT_HOLD_MS } from './Task';
 import { addLocalDays, dueAtFromLocalDate, localDateOf } from './taskSections';
@@ -80,6 +85,13 @@ vi.mock('@/components/ChatWithAgent/AgentActionItems', async (importOriginal) =>
   AgentActionItems: () => null,
 }));
 
+// Same trap, second route: #3046 subscribed usePlanTasks to the live-changes
+// stream, and useLiveChanges reads useSessionAuth, so every test threw the
+// Provider error again. The board's refetch-on-change is covered in
+// usePlanTasks.test.ts, which mocks these two the same way.
+vi.mock('@/hooks/useLiveChanges', () => ({ useLiveChanges: vi.fn() }));
+vi.mock('@/hooks/useRefetchOnReturn', () => ({ useRefetchOnReturn: vi.fn() }));
+
 vi.mock('@/common/feature', () => ({
   useFeatures: () => ({
     isFeatureEnabled: (name: string) => (name === 'planning.emptyState' ? featureState.emptyState : false),
@@ -103,6 +115,29 @@ const DECLINE_PENDING = gql(`
     }
   }
 `);
+
+function badgeMock(statuses: string[]) {
+  return {
+    request: { query: GET_PLAN_BADGE_COUNT, variables: { first: 200 } },
+    result: {
+      data: {
+        tasks: {
+          __typename: 'TaskConnection',
+          edges: statuses.map((status, index) => ({
+            __typename: 'TaskEdge',
+            node: { __typename: 'TaskType', id: `badge-${index}`, status },
+          })),
+        },
+        taskPendingChanges: [],
+      },
+    },
+  };
+}
+
+/** The rail's Tasks count, mounted beside the page the way the layout does. */
+function BadgeProbe() {
+  return <output data-testid="plan-badge">{usePlanBadgeCount()}</output>;
+}
 
 function node(overrides: Record<string, unknown> = {}) {
   return {
@@ -191,7 +226,7 @@ describe('PlanPage', () => {
   it('shows the four columns even with nothing planned', async () => {
     renderWithProviders(<PlanPage />, { mocks: [tasksMock([])] });
 
-    for (const column of ['Proposed', 'Unscheduled', 'Scheduled on calendar', 'Done']) {
+    for (const column of ['Proposed', 'Unscheduled', 'Scheduled', 'Done']) {
       expect(await screen.findByText(column)).toBeInTheDocument();
     }
   });
@@ -302,9 +337,10 @@ describe('PlanPage', () => {
     expect(await screen.findByText('Overdue thing')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /^unscheduled/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /^overdue/i })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /^proposed \d/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /^proposed\s*\d/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /^done/i })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /^scheduled on calendar/i })).toBeInTheDocument();
+    // Anchored at the start: "Unscheduled" contains "scheduled" too.
+    expect(screen.getByRole('heading', { name: /^scheduled\d/i })).toBeInTheDocument();
     expect(screen.getByText('Someday thing')).toBeInTheDocument();
     expect(screen.getByText('Proposed thing')).toBeInTheDocument();
     expect(screen.getByText('Finished thing')).toBeInTheDocument();
@@ -398,6 +434,42 @@ describe('PlanPage', () => {
     expect(screen.getByRole('button', { name: /add/i })).toBeDisabled();
   });
 
+  // The form used to refetch only the board, so the rail badge kept its old
+  // number. The live stream covers it on the desktop, but the phone has no
+  // token to open that stream: the page has to re-read the badge itself.
+  it('re-reads the rail badge after adding a task', async () => {
+    renderWithProviders(
+      <>
+        <PlanPage />
+        <BadgeProbe />
+      </>,
+      {
+        mocks: [
+          tasksMock([]),
+          badgeMock(['open']),
+          {
+            request: { query: CREATE_TASK, variables: { input: { title: 'Badge probe' } } },
+            result: { data: { createTask: { __typename: 'CreateTaskPayload', success: true, task: null } } },
+          },
+          badgeMock(['open', 'open']),
+        ],
+      },
+    );
+
+    await screen.findByLabelText(/new task title/i);
+    // The badge shows 0 while its first answer is loading, so the first answer
+    // must not be 0: waiting for "1" is what makes sure it has arrived. If the
+    // task were added before it arrived, the page's refetch would join that
+    // request still in flight and get its answer. The second one would never
+    // be asked for.
+    await waitFor(() => expect(screen.getByTestId('plan-badge')).toHaveTextContent('1'));
+
+    fireEvent.change(screen.getByLabelText(/new task title/i), { target: { value: 'Badge probe' } });
+    fireEvent.click(screen.getByRole('button', { name: /add/i }));
+
+    await waitFor(() => expect(screen.getByTestId('plan-badge')).toHaveTextContent('2'));
+  });
+
   it('shows a Schedule button on open work', async () => {
     renderWithProviders(<PlanPage />, { mocks: [tasksMock([node()])] });
 
@@ -405,7 +477,7 @@ describe('PlanPage', () => {
     expect(schedule).toBeInTheDocument();
     expect(schedule).toHaveClass('ci-primary-surface');
     expect(screen.getByRole('button', { name: /edit write the migration/i })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /^scheduled on calendar 0$/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /^scheduled\s*0$/i })).toBeInTheDocument();
   });
 
   // ═══ THE PAYLOAD USED TO BE DISCARDED HERE ═══
@@ -575,7 +647,7 @@ describe('PlanPage', () => {
     });
 
     // The board is refetched after the move, and that read is what the user
-    // ends up looking at — `newData` is the refetch's answer, so the fixture
+    // ends up looking at — `result` is the refetch's answer, so the fixture
     // has to move with the task rather than answering "still overdue" forever.
     const board = (task: ReturnType<typeof node>) => ({
       data: {
@@ -594,7 +666,6 @@ describe('PlanPage', () => {
           request: { query: GET_TASKS, variables: { first: 200 } },
           maxUsageCount: Number.POSITIVE_INFINITY,
           result: () => board(afterMove ? rescheduled : stillOverdue),
-          newData: () => board(afterMove ? rescheduled : stillOverdue),
         },
         {
           request: {
@@ -717,9 +788,6 @@ describe('PlanPage', () => {
           result: () => ({
             data: afterPlan ? board([planned]) : board([dated], [pendingChange()]),
           }),
-          newData: () => ({
-            data: afterPlan ? board([planned]) : board([dated], [pendingChange()]),
-          }),
         },
         {
           request: { query: PLAN_TASK, variables: { id: dated.id } },
@@ -781,9 +849,6 @@ describe('PlanPage', () => {
           request: { query: GET_TASKS, variables: { first: 200 } },
           maxUsageCount: Number.POSITIVE_INFINITY,
           result: () => ({
-            data: afterPlan ? board([planned]) : board([proposed]),
-          }),
-          newData: () => ({
             data: afterPlan ? board([planned]) : board([proposed]),
           }),
         },
@@ -1018,7 +1083,7 @@ describe('PlanPage', () => {
     });
 
     expect(await screen.findByText('Child thing')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /^unscheduled 2/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /^unscheduled\s*2/i })).toBeInTheDocument();
     expect(screen.getByText('1 overdue')).toBeInTheDocument();
   });
 
@@ -1095,7 +1160,7 @@ describe('PlanPage mobile tabs', () => {
     expect(await screen.findByRole('tablist')).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /^proposed/i })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('tab', { name: /unscheduled/i })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /scheduled on calendar/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /^scheduled\d/i })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /^done/i })).toBeInTheDocument();
     expect(screen.getByText('Proposed thing')).toBeInTheDocument();
     expect(screen.queryByText('Someday thing')).not.toBeInTheDocument();
@@ -1111,7 +1176,35 @@ describe('PlanPage mobile tabs', () => {
     expect(screen.getByRole('heading', { name: /^overdue/i })).toBeInTheDocument();
     expect(screen.getByText('1 overdue')).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /unscheduled/i })).not.toHaveTextContent(/overdue/i);
-    expect(screen.getByRole('tab', { name: /scheduled on calendar/i })).not.toHaveTextContent(/overdue/i);
+    expect(screen.getByRole('tab', { name: /^scheduled\d/i })).not.toHaveTextContent(/overdue/i);
+  });
+
+  // ═══ THE FOURTH TAB USED TO SIT OFF THE EDGE OF THE PHONE ═══
+  //
+  // The strip was one non-wrapping row that scrolled sideways, and four tabs
+  // were wider than a 390pt phone: "Scheduled on calendar" was clipped at the
+  // edge and Done was out of sight behind a swipe nothing hinted at. The label
+  // is now just "Scheduled", which helps but still leaves four tabs a little
+  // wider than that row — so the strip also wraps instead of scrolling. jsdom
+  // lays nothing out, so this pins the classes that decide it (`h-auto` on the
+  // triggers is what keeps WebKit from stretching the first row over the
+  // second), and that all four tabs under their short names are there to show.
+  it('names the third tab Scheduled and wraps the strip so no tab is scrolled out of sight', async () => {
+    setViewport(true);
+
+    renderWithProviders(<PlanPage />, { mocks: [tasksMock([node({ id: 'b', title: 'Someday thing' })])] });
+
+    const list = await screen.findByRole('tablist');
+
+    const tabs = within(list).getAllByRole('tab');
+
+    expect(list).toHaveClass('flex-wrap');
+    expect(list).not.toHaveClass('overflow-x-auto');
+    expect(tabs.map((tab) => tab.textContent)).toEqual(['Proposed0', 'Unscheduled1', 'Scheduled0', 'Done0']);
+
+    for (const tab of tabs) {
+      expect(tab).toHaveClass('h-auto');
+    }
   });
 
   it('keeps every category tab even when some columns are empty', async () => {
@@ -1125,13 +1218,13 @@ describe('PlanPage mobile tabs', () => {
     });
 
     expect(await screen.findByRole('tab', { name: /unscheduled/i })).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByRole('tab', { name: /^proposed 0$/i })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /scheduled on calendar 0/i })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /^done 0$/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /^proposed\s*0$/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /^scheduled\s*0$/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /^done\s*0$/i })).toBeInTheDocument();
 
-    fireEvent.mouseDown(screen.getByRole('tab', { name: /^proposed 0$/i }), { button: 0 });
+    fireEvent.mouseDown(screen.getByRole('tab', { name: /^proposed\s*0$/i }), { button: 0 });
 
-    expect(await screen.findByRole('tab', { name: /^proposed 0$/i })).toHaveAttribute(
+    expect(await screen.findByRole('tab', { name: /^proposed\s*0$/i })).toHaveAttribute(
       'aria-selected',
       'true',
     );
@@ -1166,7 +1259,6 @@ describe('PlanPage mobile tabs', () => {
           request: { query: GET_TASKS, variables: { first: 200 } },
           maxUsageCount: Number.POSITIVE_INFINITY,
           result: () => ({ data: board(dismissed ? [other] : [proposed, other]) }),
-          newData: () => ({ data: board(dismissed ? [other] : [proposed, other]) }),
         },
         {
           request: { query: DECLINE_PROPOSED, variables: { id: 'p' } },
@@ -1179,15 +1271,15 @@ describe('PlanPage mobile tabs', () => {
       ],
     });
 
-    expect(await screen.findByRole('tab', { name: /^proposed 1$/i })).toHaveAttribute(
+    expect(await screen.findByRole('tab', { name: /^proposed\s*1$/i })).toHaveAttribute(
       'aria-selected',
       'true',
     );
 
     fireEvent.click(screen.getByRole('button', { name: /^dismiss$/i }));
 
-    await waitFor(() => expect(screen.getByRole('tab', { name: /^proposed 0$/i })).toBeInTheDocument());
-    expect(screen.getByRole('tab', { name: /^proposed 0$/i })).toHaveAttribute('aria-selected', 'true');
+    await waitFor(() => expect(screen.getByRole('tab', { name: /^proposed\s*0$/i })).toBeInTheDocument());
+    expect(screen.getByRole('tab', { name: /^proposed\s*0$/i })).toHaveAttribute('aria-selected', 'true');
     expect(screen.queryByText('Someday thing')).not.toBeInTheDocument();
   });
 
@@ -1214,7 +1306,7 @@ describe('PlanPage mobile tabs', () => {
       expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/could not move that task/i)),
     );
     expect(screen.getByRole('tab', { name: /^unscheduled/i })).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByRole('tab', { name: /^proposed 1$/i })).toHaveAttribute('aria-selected', 'false');
+    expect(screen.getByRole('tab', { name: /^proposed\s*1$/i })).toHaveAttribute('aria-selected', 'false');
   });
 
   it('keeps edit and delete off the title row, and opens edit from the card body', async () => {

@@ -38,6 +38,12 @@ export interface UserContext {
     entityId: string;
     name: string;
     relationship: string;
+    /**
+     * Which way `relationship` points: `outgoing` is "the user PARENT_OF this
+     * person" (they are the user's child), `incoming` is "this person
+     * PARENT_OF the user" (their parent). Only the asymmetric types need it.
+     */
+    direction?: 'outgoing' | 'incoming';
     age?: number;
     properties?: Record<string, unknown>;
   }>;
@@ -50,7 +56,12 @@ export interface UserContext {
     relationship: 'PREFERS' | 'DISLIKES';
   }>;
   quickStats: {
-    totalEntities: number;
+    /**
+     * `null` when the caller asked `getUserContextForLLM` to skip the count:
+     * the number moves with every ingested row, and a prompt that carries it
+     * cannot be prefix-cached across turns (see `ChatTurnService`).
+     */
+    totalEntities: number | null;
     totalPreferences: number;
     totalDislikes: number;
     familySize: number;
@@ -93,9 +104,17 @@ export class UserContextService {
    * Get comprehensive user context for LLM system prompt injection
    *
    * @param userId - The user ID to get context for
+   * @param options.includeQuickStats - `false` skips the `COUNT(*)` over the
+   *   user's entities. Pair it with `formatContextForSystemPrompt(ctx, {
+   *   includeQuickStats: false })`: the count changes whenever anything is
+   *   ingested, so a per-turn system prompt that carries it is never
+   *   byte-identical to the previous turn's and never hits the KV prefix cache.
    * @returns UserContext object ready for system prompt
    */
-  async getUserContextForLLM(userId: string): Promise<UserContext | null> {
+  async getUserContextForLLM(
+    userId: string,
+    { includeQuickStats = true }: { includeQuickStats?: boolean } = {},
+  ): Promise<UserContext | null> {
     try {
       // 1. Get user's entity
       const userEntity = await this.resolveUserEntity(userId);
@@ -105,22 +124,22 @@ export class UserContextService {
         return null;
       }
 
-      // 2. Get family members (1-hop family relationships)
-      const familyMembers = await this.getFamilyMembers(userId, userEntity.entity_id);
-
-      // 3. Get top preferences and dislikes
-      const preferences = await this.getTopPreferences(userId, userEntity.entity_id, 10);
-      const dislikes = await this.getTopDislikes(userId, userEntity.entity_id, 5);
-
-      // 4. Get quick stats
-      const stats = await this.getQuickStats(userId);
+      // 2-4. Family (1-hop), top preferences and dislikes, graph count and
+      // username are independent reads; run them together.
+      const [familyMembers, preferences, dislikes, stats, username] = await Promise.all([
+        this.getFamilyMembers(userId, userEntity.entity_id),
+        this.getTopPreferences(userId, userEntity.entity_id, 10),
+        this.getTopDislikes(userId, userEntity.entity_id, 5),
+        includeQuickStats ? this.getQuickStats(userId) : Promise.resolve({ totalEntities: null }),
+        this.getUsernameFromUsersTable(userId),
+      ]);
 
       // 5. Format for LLM
       return {
         currentUser: {
           entityId: userEntity.entity_id,
           name: userEntity.name ?? 'User',
-          username: await this.getUsernameFromUsersTable(userId),
+          username,
           properties: this.pickImportantProperties(userEntity.properties ?? {}),
           // The free-text "about you" the Self page writes. It is an entity
           // COLUMN, not a property, so the allowlist above could never have
@@ -134,6 +153,7 @@ export class UserContextService {
           entityId: member.entityId,
           name: member.name,
           relationship: member.relationship,
+          direction: member.direction,
           age: member.age,
           properties: this.pickImportantProperties(member.properties ?? {}),
         })),
@@ -262,7 +282,7 @@ export class UserContextService {
     if (context.familyMembers.length > 0) {
       lines.push('', '## Family Members');
       context.familyMembers.forEach((member) => {
-        const label = `${fenceUntrusted(member.name)} (${fenceUntrusted(member.relationship)})`;
+        const label = `${fenceUntrusted(member.name)} (${fenceUntrusted(familyRoleLabel(member))})`;
 
         lines.push(`- ${label}${member.age ? `, age ${member.age}` : ''}`);
         lines.push(`  - Entity ID: ${fenceUntrusted(member.entityId)}`);
@@ -296,7 +316,10 @@ export class UserContextService {
 
     if (includeQuickStats) {
       lines.push('', '## Quick Stats');
-      lines.push(`- Total entities in graph: ${context.quickStats.totalEntities}`);
+      if (context.quickStats.totalEntities !== null) {
+        lines.push(`- Total entities in graph: ${context.quickStats.totalEntities}`);
+      }
+
       lines.push(`- Total preferences: ${context.quickStats.totalPreferences}`);
       lines.push(`- Total dislikes: ${context.quickStats.totalDislikes}`);
       lines.push(`- Family members: ${context.quickStats.familySize}`);
@@ -387,9 +410,11 @@ export class UserContextService {
 
     // Safe to cache: an is_self row is an identity claim, not a guess. Still
     // only written when the pointer is empty, so a deliberate reassignment is
-    // never overwritten.
+    // never overwritten — checked again in the UPDATE itself, because onboarding
+    // or an import can point the account at its self Person between the read
+    // above and this write.
     if (userResult.length > 0 && !userResult[0].entity_id) {
-      await this.dataSource.query(`UPDATE ci.users SET entity_id = $2 WHERE id = $1`, [
+      await this.dataSource.query(`UPDATE ci.users SET entity_id = $2 WHERE id = $1 AND entity_id IS NULL`, [
         userId,
         selfRow.entity_id,
       ]);
@@ -423,6 +448,7 @@ export class UserContextService {
       entityId: string;
       name: string;
       relationship: string;
+      direction: 'outgoing' | 'incoming';
       age?: number;
       properties?: Record<string, unknown>;
     }>
@@ -439,6 +465,7 @@ export class UserContextService {
       entityId: string;
       name: string;
       relationship: string;
+      direction: 'outgoing' | 'incoming';
       age?: number;
       properties?: Record<string, unknown>;
     }> = [];
@@ -452,6 +479,9 @@ export class UserContextService {
           entityId: relatedNode.entity_id,
           name: relatedNode.name ?? 'Unknown',
           relationship: edge.relationship_type,
+          // Kept because `relationship` alone cannot tell a parent from a
+          // child: both are PARENT_OF, pointing opposite ways.
+          direction: edge.from_entity_id === userEntityId ? 'outgoing' : 'incoming',
           age: relatedNode.properties?.['age'] as number | undefined,
           properties: relatedNode.properties ?? {},
         });
@@ -708,6 +738,43 @@ export class UserContextService {
       lines.push(`  - ${fenceUntrusted(value)}`);
     });
   }
+}
+
+/**
+ * What a family member is to the user, in a word: "sibling", "parent", "child".
+ *
+ * The graph type alone can't say: PARENT_OF names the user's parent when it
+ * points at them and their child when it points away, so `direction` decides.
+ * The same words as Self > About you (`familyRoleLabel` in AboutYouSection), so
+ * the model and the page agree on who is whose parent. A type this does not
+ * know, or a PARENT_OF / CHILD_OF without its direction, is lower-cased with
+ * spaces rather than sent as the raw enum.
+ */
+export function familyRoleLabel(member: {
+  relationship: string;
+  direction?: 'outgoing' | 'incoming';
+}): string {
+  switch (member.relationship) {
+    case 'SPOUSE':
+      return 'spouse';
+    case 'SIBLING_OF':
+      return 'sibling';
+    case 'PARENT_OF':
+      if (member.direction) {
+        return member.direction === 'incoming' ? 'parent' : 'child';
+      }
+
+      break;
+    case 'CHILD_OF':
+      if (member.direction) {
+        return member.direction === 'incoming' ? 'child' : 'parent';
+      }
+
+      break;
+  }
+
+  // "parent of" with no direction says only what the edge says, like the page.
+  return member.relationship.replace(/_/g, ' ').toLowerCase();
 }
 
 /**

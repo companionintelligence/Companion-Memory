@@ -46,4 +46,4 @@ stays shell on purpose: a prerequisite checker must not need the prerequisites.
 - CI is `workflow_dispatch`-only: an absent check means nobody ran it. `gh workflow run <file> --ref <ref>`.
 - Destructive git operations (`reset --hard`, `clean -f`) require explicit user confirmation.
 - Commits reference CI-Engineering issues.
-- All content is **private and confidential** — Property of Lifescope Inc.
+- Licensed under PolyForm Noncommercial 1.0.0 (see LICENSE.md). Never commit or transmit secrets, credentials, or personal data.

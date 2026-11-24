@@ -36,7 +36,7 @@ import { asRecord } from './json';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams, Graph } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 // Filenames a Chromium-based browser uses for its history database.
 const HISTORY_FILENAMES = new Set([
@@ -470,11 +470,7 @@ class ChromiumFileImporter implements FileImporter {
           classification: 'bookmark',
           timestamp: ts,
           intermediateLocation: fpath,
-          content: {
-            filename: 'bookmark.txt',
-            mediaType: 'text/plain',
-            data: async () => Buffer.from(`${b.title}\n${b.url}`),
-          },
+          content: textContent('bookmark.txt', `${b.title}\n${b.url}`),
           metadata: {
             // A title-less save (Chrome allows editing a bookmark's name down
             // to empty) left `Title` undefined, which push/canonical.ts's

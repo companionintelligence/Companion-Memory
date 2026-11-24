@@ -1,16 +1,27 @@
-import * as crypto from 'node:crypto';
-
-import { Injectable } from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { createRemoteJWKSet, decodeProtectedHeader, jwtVerify, type JWTPayload } from 'jose';
 
 import { SYSTEM_USER } from '@ci/common/context';
-import type { PortalTokenVerifier } from '@ci/common/guards/PortalTokenVerifier';
+import {
+  CAPTURE_SCOPE,
+  INTENTS_SCOPE,
+  MCP_SCOPE,
+  MEMORY_SCOPE,
+  WRITE_CAPABILITY,
+} from '@ci/common/decorators';
+import type { PortalPrincipal, PortalTokenVerifier } from '@ci/common/guards/PortalTokenVerifier';
 import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
 import { type User, UserService } from '@ci/domains/user';
 
 import {
-  parseAllowedServiceClients,
+  isApplianceAudience,
+  MEMORY_SIGN_IN_CLIENT,
+  mintedByAddressingPortal,
+  thisApplianceAudience,
+} from '../utils/applianceAudience';
+import {
+  parseAllowedServiceClients as parseClientIds,
   resolveServiceAccount,
   type ServiceAccountClaims,
 } from '../utils/serviceAccountToken';
@@ -58,6 +69,62 @@ const PORTAL_JWS_ALGS: ReadonlySet<string> = new Set([
   'PS512',
 ]);
 
+/**
+ * What a refused Memory sign-in token is answered with. A phone app from before addressed pairing
+ * sends exactly such a token to `POST /api/keys`, and shows this text as it stands; it reads a
+ * message containing "unauthorized" as "sign in again", which would only repeat the refusal.
+ */
+export const MEMORY_SIGN_IN_REFUSED_MESSAGE =
+  'This Companion sign-in was not issued for this Memory. Sign in to this Memory directly, or connect again from an up-to-date app.';
+
+/** The scopes a service token's `scope` claim can grant: the api-key scopes, nothing else. */
+const SERVICE_ACCOUNT_SCOPES: ReadonlySet<string> = new Set([
+  MEMORY_SCOPE,
+  INTENTS_SCOPE,
+  MCP_SCOPE,
+  CAPTURE_SCOPE,
+]);
+
+/** What a capture agent's token may do, however it was issued: record captures. */
+const CAPTURE_ONLY = {
+  limits: { scopes: [CAPTURE_SCOPE], capability: WRITE_CAPABILITY },
+  credentialRoutes: false,
+  admin: false,
+} as const satisfies Omit<PortalPrincipal, 'user'>;
+
+/** The user's full authority, as a session has it. Only for a token addressed to this appliance. */
+const FULL_AUTHORITY = {
+  limits: null,
+  credentialRoutes: true,
+  admin: true,
+} as const satisfies Omit<PortalPrincipal, 'user'>;
+
+/**
+ * A token from a Portal that predates appliance addressing: nothing could have addressed it, so
+ * it keeps what it always had (phone pairing mints its key with one), except the admin routes.
+ */
+const BEFORE_ADDRESSING = {
+  limits: null,
+  credentialRoutes: true,
+  admin: false,
+} as const satisfies Omit<PortalPrincipal, 'user'>;
+
+/** Who a verified token was issued to, and whether it was addressed to this appliance. */
+interface TokenAddress {
+  /** The client the token was issued to: `azp`, else its only accepted `aud` value. */
+  client: string;
+  /** `aud` names this appliance. A token naming only another appliance never gets this far. */
+  toThisAppliance: boolean;
+}
+
+function audienceList(aud: unknown): string[] {
+  if (typeof aud === 'string') {
+    return [aud];
+  }
+
+  return Array.isArray(aud) ? aud.filter((value): value is string => typeof value === 'string') : [];
+}
+
 class PortalVerifyTimeoutError extends Error {
   readonly code = 'ERR_PORTAL_VERIFY_TIMEOUT';
 
@@ -79,24 +146,33 @@ class PortalVerifyTimeoutError extends Error {
  *
  * An appliance serves one person, and that person's Portal identity is bound to
  * their local account the first time they sign in. Anyone else on the box is a
- * household member with an email-and-password account the owner invited. So a
- * Portal identity that is not yet bound here is admitted in exactly one case:
- * the appliance has no accounts at all, and this sign-in claims it. On a claimed
- * appliance an unbound Portal identity is refused — there is no invitation
- * mechanism on this path, and account creation belongs to the browser flow
- * (`OidcController`), which is where invitations are checked. Until this rule
- * existed the bearer path created an account for ANY valid Portal token, which
- * on a tunnelled Hub install meant anyone with a Portal login could sign up.
+ * household member with an email-and-password account the owner invited. A
+ * Portal identity that is not yet bound here is refused: this path creates no
+ * accounts, not even the first one. Account creation belongs to the browser
+ * flow (`OidcController`), the Hub bridge and signup: someone setting the
+ * Memory up in person, and where invitations are checked.
  *
- * ## Service accounts (Portal-brokered service credential — B5)
+ * ## Which Memory a token is for
  *
- * Sidecars (HBPE, Summary) used to self-sign HS256 JWTs with the shared
- * `AUTH_JWT_AUTHTOKENSECRET`; a single leaked symmetric secret meant full user
- * impersonation. They now present a Portal-issued, EdDSA-signed service token
- * whose `client_id`/`act.sub` is one of `auth.portal.serviceClients`. Such tokens
- * are verified against the same Portal JWKS and resolve to the existing user
- * named in `sub` (the on-behalf-of principal) — never JIT-provisioned by email.
- * See CI-Engineering `architecture/identity/unified-identity-plan.md` · B5 / D3.
+ * Every Memory trusts the same Portal and signs its users in as the same client
+ * (`ci-server`), so a token's client id alone does not say which Memory it was
+ * meant for. The Portal can now say: a token addressed to an appliance carries
+ * `urn:ci:device:<device id>` in `aud` (see `utils/applianceAudience.ts`). Only a
+ * token addressed to this appliance carries the user's full authority, and one
+ * addressed to another is refused. So is any token from such a Portal that is
+ * addressed to no appliance, unless its client is a capture agent: a `ci-server`
+ * one is the id_token a Memory receives at its own sign-in, a `ci-hub` one the
+ * id_token every Hub a person signs in to holds. Capture clients get the capture
+ * scope. See {@link PortalTokenService.authorityFor}.
+ *
+ * ## Service accounts
+ *
+ * A token whose `client_id`/`act.sub` is one of `auth.portal.serviceClients`
+ * acts on behalf of the existing user named in `sub`, never JIT-provisioned.
+ * Nothing ships one today: the HBPE and Summary sidecars authenticate with
+ * `SIDECAR_AUTH_SECRET` and per-run tokens, so the list is empty by default. A
+ * service token must be addressed to this appliance and is confined to the
+ * api-key scopes in its `scope` claim.
  *
  * Gated behind `auth.portal.enabled` so it runs alongside the legacy JWT/api-key
  * paths during migration. See unified-identity-pipeline.md.
@@ -107,7 +183,7 @@ export class PortalTokenService implements PortalTokenVerifier {
   private jwks?: ReturnType<typeof createRemoteJWKSet>;
 
   // Allow-listed service-account client ids, parsed once from config.
-  private readonly serviceClients = parseAllowedServiceClients(config.auth.portal.serviceClients);
+  private readonly serviceClients = parseClientIds(config.auth.portal.serviceClients);
 
   constructor(
     private readonly userService: UserService,
@@ -122,18 +198,105 @@ export class PortalTokenService implements PortalTokenVerifier {
   }
 
   /**
-   * better-auth's jwt() plugin defaults `aud` to the issuer URL (BASE_URL).
-   * OIDC id_tokens use `aud === client_id`. Accept both so a phone that only
-   * holds the access token is not 401'd while the id_token would have worked.
+   * The client ids whose tokens are accepted at all (`auth.portal.audience`).
+   *
+   * The Portal's own URL used to be added here, for "a phone that only holds the access token".
+   * Most of the Portal's access tokens are opaque and never verify here. The ones it issues as JWTs
+   * (companion-atlas) verify by their client id, as an id_token does. The only JWT carrying the
+   * Portal's own URL as its audience is its session JWT, which names no client and so has no business
+   * on a Memory. No client sends one.
    */
   private acceptedAudiences(): string[] {
-    const configured = config.auth.portal.audience
-      .split(',')
-      .map((a) => a.trim())
-      .filter(Boolean);
-    const issuer = config.auth.portal.issuer?.trim();
+    return parseClientIds(config.auth.portal.audience);
+  }
 
-    return [...new Set(issuer ? [...configured, issuer] : configured)];
+  /** Clients that are capture agents (`auth.portal.captureClients`): capture scope, write, always. */
+  private captureClients(): string[] {
+    return parseClientIds(config.auth.portal.captureClients);
+  }
+
+  /**
+   * Who a verified token was issued to and whether it is addressed to this appliance, or null when
+   * it must be refused: it names another appliance, or its client cannot be told.
+   *
+   * A token naming an appliance is refused unless one of the appliances it names is this one.
+   * That is the whole point of naming one: a token the Portal issued for a different Memory, or
+   * that a different Memory received during its own sign-in, is not a credential here.
+   */
+  private addressOf(payload: JWTPayload, accepted: readonly string[]): TokenAddress | null {
+    const audiences = audienceList(payload.aud);
+    const appliances = audiences.filter(isApplianceAudience);
+    const ours = thisApplianceAudience();
+    const toThisAppliance = ours != null && appliances.includes(ours);
+
+    if (appliances.length > 0 && !toThisAppliance) {
+      this.logger.debug('Portal token refused: addressed to a different appliance', {
+        audiences: appliances,
+      });
+
+      return null;
+    }
+
+    const clients = audiences.filter((aud) => accepted.includes(aud));
+    const client = typeof payload.azp === 'string' ? payload.azp : clients.length === 1 ? clients[0] : null;
+
+    if (!client || !accepted.includes(client)) {
+      this.logger.debug('Portal token refused: no single accepted client', { audiences, azp: payload.azp });
+
+      return null;
+    }
+
+    return { client, toThisAppliance };
+  }
+
+  /**
+   * What a human's verified token may do here, or null when it may do nothing.
+   *
+   * | token                                                             | authority                    |
+   * |-------------------------------------------------------------------|------------------------------|
+   * | issued to a capture client                                        | capture scope, write         |
+   * | addressed to this appliance                                       | full                         |
+   * | not addressed, from a Portal that addresses tokens                | refused                      |
+   * | not addressed, from a Portal from before addressing               | full except the admin guards |
+   *
+   * "From a Portal that addresses tokens" is read off the token itself (the
+   * `ci_appliance_binding` claim), not from configuration or discovery. Memory can be upgraded
+   * before the Portal: until the Portal stamps its tokens, phone pairing keeps working as it did,
+   * and an hour after the Portal starts stamping (the life of the last unstamped token) the
+   * unaddressed case is closed on every Memory at once.
+   *
+   * A stamped `ci-server` token addressed to no appliance is what a Memory receives when someone
+   * signs in to it with Companion: the Portal addresses only the phone's pairing exchange. Such a
+   * token is refused rather than confined, so one Memory's sign-in is no credential at any other,
+   * whichever address (provisioned host, tailnet name, LAN address) the other is reached at. The
+   * phone never sends one: it pairs only with a token addressed to the Memory it picked.
+   *
+   * Any other client's stamped, unaddressed token is refused for the same reason. The Portal
+   * addresses only `ci-server` tokens, so for every other client that is all of them, and they are
+   * held by whoever the person signed in to: a `ci-hub` id_token is held by every Hub a person
+   * signs in to with Companion (the Hub exchanges the code itself), including someone else's.
+   * Confining it to the capture scope still let that Hub add captures, upload files and register
+   * devices in the person's own Memory for the token's lifetime. A client whose tokens are meant to
+   * record captures here is listed in `auth.portal.captureClients` instead.
+   */
+  private authorityFor(address: TokenAddress, payload: JWTPayload): Omit<PortalPrincipal, 'user'> | null {
+    if (this.captureClients().includes(address.client)) {
+      return CAPTURE_ONLY;
+    }
+
+    if (address.toThisAppliance) {
+      return FULL_AUTHORITY;
+    }
+
+    if (!mintedByAddressingPortal(payload)) {
+      return BEFORE_ADDRESSING;
+    }
+
+    this.logger.debug('Portal token refused: a stamped token addressed to no appliance', {
+      client: address.client,
+    });
+
+    return null;
   }
 
   private getJwks(): ReturnType<typeof createRemoteJWKSet> {
@@ -250,30 +413,90 @@ export class PortalTokenService implements PortalTokenVerifier {
   /**
    * Verify a portal token and return the corresponding CI-Server user, or null
    * if the token is not a valid portal token (so the caller can fall back to
-   * the legacy strategies).
+   * the legacy strategies). A token the Portal did sign but that this Memory
+   * refuses outright (a `ci-server` token addressed to no appliance, see
+   * {@link PortalTokenService.authorityFor}) throws `UnauthorizedException`
+   * instead, saying what to do: no other credential in the request is tried.
    */
-  async verifyAndProvision(token: string): Promise<User | null> {
+  async verifyAndProvision(token: string): Promise<PortalPrincipal | null> {
     if (!this.enabled) {
       return null;
     }
 
-    // First-party client ids plus the issuer URL (better-auth access tokens).
-    const payload = await this.verifyPortalJwt(token, this.acceptedAudiences());
+    const accepted = this.acceptedAudiences();
+    const payload = await this.verifyPortalJwt(token, accepted);
     if (!payload) {
       return null;
     }
 
-    // A Portal-brokered service credential (e.g. HBPE) acts on behalf of an
-    // existing user; resolve it distinctly from a human OIDC login.
+    // A Portal-brokered service credential acts on behalf of an existing user;
+    // resolve it distinctly from a human OIDC login. Checked before the client is
+    // read, because a service token names its service in `azp`/`client_id`.
     const serviceAccount = resolveServiceAccount(
       payload as JWTPayload & ServiceAccountClaims,
       this.serviceClients,
     );
     if (serviceAccount) {
-      return this.resolveServiceAccountUser(serviceAccount.clientId, serviceAccount.onBehalfOfUserId);
+      return this.resolveServiceAccountPrincipal(payload, serviceAccount);
     }
 
-    return this.provisionUser(payload);
+    const address = this.addressOf(payload, accepted);
+    if (!address) {
+      return null;
+    }
+
+    // Decided before anyone is looked up: a token that may do nothing here resolves no account.
+    const authority = this.authorityFor(address, payload);
+    if (!authority) {
+      // Only a Memory sign-in token gets the explanation: an older phone app sends one and shows
+      // the answer. Any other client's refused token is just not a credential here.
+      if (address.client === MEMORY_SIGN_IN_CLIENT) {
+        throw new UnauthorizedException(MEMORY_SIGN_IN_REFUSED_MESSAGE);
+      }
+
+      return null;
+    }
+
+    const user = await this.provisionUser(payload);
+
+    return user ? { user, ...authority } : null;
+  }
+
+  /**
+   * A service token's principal: only when it is addressed to this appliance, and confined to the
+   * api-key scopes its `scope` claim names, at `write`. Its `sub` is taken as a local user id, so a
+   * token for another box (where that id means nothing, or someone else) must never get here; and
+   * a service is never a person signing in, so it never reaches credential or admin routes. A
+   * token naming no scope this server knows grants nothing.
+   */
+  private async resolveServiceAccountPrincipal(
+    payload: JWTPayload,
+    serviceAccount: { clientId: string; onBehalfOfUserId: string; scopes: string[] },
+  ): Promise<PortalPrincipal | null> {
+    const ours = thisApplianceAudience();
+    if (!ours || !audienceList(payload.aud).includes(ours)) {
+      this.logger.warn(
+        `Service account "${serviceAccount.clientId}" token is not addressed to this appliance`,
+      );
+
+      return null;
+    }
+
+    const scopes = serviceAccount.scopes.filter((scope) => SERVICE_ACCOUNT_SCOPES.has(scope));
+    if (scopes.length === 0) {
+      this.logger.warn(`Service account "${serviceAccount.clientId}" token names no api-key scope`);
+
+      return null;
+    }
+
+    const user = await this.resolveServiceAccountUser(
+      serviceAccount.clientId,
+      serviceAccount.onBehalfOfUserId,
+    );
+
+    return user
+      ? { user, limits: { scopes, capability: WRITE_CAPABILITY }, credentialRoutes: false, admin: false }
+      : null;
   }
 
   /**
@@ -354,9 +577,6 @@ export class PortalTokenService implements PortalTokenVerifier {
 
     const claimedEmail = typeof payload.email === 'string' ? payload.email : undefined;
     const emailVerified = payload.email_verified === true;
-    // Shadow address keyed on the stable subject when no usable email is present.
-    const email = claimedEmail ?? `oidc-${sub}@portal.local`;
-    const name = typeof payload.name === 'string' && payload.name.trim() ? payload.name : email;
 
     // 2. One-time link: an account that pre-dates the binding table, matched on
     //    a VERIFIED email. Every later request for this (iss,sub) takes path 1.
@@ -367,14 +587,34 @@ export class PortalTokenService implements PortalTokenVerifier {
     //    also adopt the account — which is exactly the email-is-not-an-identity
     //    takeover this binding exists to prevent, merely requiring the attacker
     //    to control a verified address at any trusted issuer.
+    //
+    //    And only into an account whose OWN address is proven. The issuer vouches
+    //    for its account's address, not for this one's: signup and
+    //    `PATCH /account/email` store whatever they are given, so an unproven
+    //    address could be a future member's, planted to receive their sign-in.
     if (claimedEmail && emailVerified) {
-      const existing = await this.userService.findByEmail(claimedEmail);
+      const existing = await this.userService.findAccountByEmail(claimedEmail);
+      if (existing === 'ambiguous') {
+        this.logger.warn(`refusing email link for ${issuer}#${sub}: several accounts match the address`);
+
+        return null;
+      }
+
       if (existing) {
-        const alreadyFederated = await this.federatedIdentityService.listForUser(existing.id);
+        // OIDC identities only: a Hub person's own binding is not another identity's claim.
+        const alreadyFederated = await this.federatedIdentityService.listForUser(existing.id, {
+          oidcOnly: true,
+        });
         if (alreadyFederated.length > 0) {
           this.logger.warn(
             `refusing email link for ${issuer}#${sub}: user already bound to another identity`,
           );
+
+          return null;
+        }
+
+        if (!this.userService.isEmailProven(existing)) {
+          this.logger.warn(`refusing email link for ${issuer}#${sub}: the account's address is not proven`);
 
           return null;
         }
@@ -391,33 +631,15 @@ export class PortalTokenService implements PortalTokenVerifier {
       }
     }
 
-    // 3. Nobody here has claimed this Portal identity. Only an UNCLAIMED
-    //    appliance admits it — the sign-in becomes the owner (UserService.create
-    //    promotes the first account to admin). On a claimed appliance the answer
-    //    is no: the owner already exists, and household members are invited
-    //    through the browser flow as email-and-password accounts.
-    if (!(await this.userService.hasNoUsers())) {
-      this.logger.warn(`refusing to provision ${issuer}#${sub}: this appliance already has an owner`);
+    // 3. Nobody here has claimed this Portal identity, and a bearer token never
+    //    creates an account. It used to on an appliance with none: whoever held
+    //    any valid Portal token and reached the box first became its owner and
+    //    administrator, a token sent to some other Memory included. The first
+    //    account is created by a sign-in in the browser or the app
+    //    (`OidcController`), the Hub (`HubForwardAuthBridgeService`) or a signup:
+    //    by whoever sets this Memory up.
+    this.logger.warn(`refusing Portal token for ${issuer}#${sub}: no account here is bound to it`);
 
-      return null;
-    }
-
-    //    Portal-authenticated users have no CI-Server password; set a random one.
-    const created = await this.userService.create(
-      { userId: SYSTEM_USER },
-      { name, email, password: crypto.randomBytes(32).toString('hex'), passwordChosenByUser: false },
-    );
-
-    if (created) {
-      await this.federatedIdentityService.bind({
-        userId: created.id,
-        issuer,
-        subject: sub,
-        email: claimedEmail ?? null,
-        bindMethod: 'sub',
-      });
-    }
-
-    return created;
+    return null;
   }
 }

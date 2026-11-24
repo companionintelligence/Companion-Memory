@@ -89,30 +89,43 @@ internal class FakeOutbox(
     var countsResult: OutboxCounts = OutboxCounts(pending = 0, needsAttention = 0, total = 0)
     var getResult: OutboxItem? = null
     var deleteResult: Boolean = false
+    var deleteAllResult: Int = 0
+    var reassignResult: Int = 0
     var recordFailedAttemptResult: OutboxItem? = outboxItem()
     var retryResult: OutboxItem? = outboxItem()
 
     /** `[kind, payloadJson, capturedAt, idempotencyKey]` per accepted enqueue. */
     val enqueueCalls = mutableListOf<List<String>>()
+
+    /** The `owner` each accepted enqueue carried, in the same order as [enqueueCalls]. */
+    val enqueueOwners = mutableListOf<String?>()
     val listFilters = mutableListOf<String?>()
     val fetchedIds = mutableListOf<String>()
     val deletedIds = mutableListOf<String>()
+    var deleteAllCalls: Int = 0
+        private set
     val recordedAttempts = mutableListOf<Triple<String, String, Boolean>>()
     val retriedIds = mutableListOf<String>()
+
+    /** `from` to `to` per re-stamp the router passed on. */
+    val reassignCalls = mutableListOf<Pair<List<String>, String>>()
 
     /** True when the router reached the store at all -- the assertion for "rejected first". */
     val wasTouched: Boolean
         get() = enqueueCalls.isNotEmpty() || listFilters.isNotEmpty() || fetchedIds.isNotEmpty() ||
-            deletedIds.isNotEmpty() || recordedAttempts.isNotEmpty() || retriedIds.isNotEmpty()
+            deletedIds.isNotEmpty() || recordedAttempts.isNotEmpty() || retriedIds.isNotEmpty() ||
+            deleteAllCalls > 0 || reassignCalls.isNotEmpty()
 
     override fun enqueue(
         kind: String,
         payloadJson: String,
         capturedAt: String,
         idempotencyKey: String,
+        owner: String?,
     ): EnqueueOutcome {
         thrown?.let { throw it }
         enqueueCalls += listOf(kind, payloadJson, capturedAt, idempotencyKey)
+        enqueueOwners += owner
         return nextEnqueueOutcome
     }
 
@@ -132,6 +145,18 @@ internal class FakeOutbox(
         thrown?.let { throw it }
         deletedIds += id
         return deleteResult
+    }
+
+    override fun deleteAll(): Int {
+        thrown?.let { throw it }
+        deleteAllCalls++
+        return deleteAllResult
+    }
+
+    override fun reassignOwner(from: List<String>, to: String): Int {
+        thrown?.let { throw it }
+        reassignCalls += from to to
+        return reassignResult
     }
 
     override fun recordFailedAttempt(id: String, error: String, permanent: Boolean): OutboxItem? {
@@ -161,6 +186,7 @@ internal fun outboxItem(
     attempts: Int = 0,
     lastError: String? = null,
     payload: String? = null,
+    owner: String? = null,
 ): OutboxItem = OutboxItem(
     id = id,
     kind = kind,
@@ -170,6 +196,7 @@ internal fun outboxItem(
     attempts = attempts,
     lastError = lastError,
     payload = payload,
+    owner = owner,
 )
 
 /**

@@ -1,12 +1,12 @@
 import { BadRequestException, Inject } from '@nestjs/common';
 
-import config from '@ci/configuration';
-
 import type { Connection } from '../entities/ConnectionEntity';
 import { CloudOAuthProxyService } from '../services/CloudOAuthProxyService';
 import { ProviderKeyService } from '../services/ProviderKeyService';
+import { type CallbackRequestOrigin, exchangeRedirectUri, oauthCallbackUrl } from '../utils/callbackUrls';
 
 import { BaseClient } from './BaseClient';
+import { providerApiUrl } from './providerApiUrl';
 import type { TokenExchange, TokenResponse } from './types';
 
 /** Renders an OAuth token-endpoint error body into a message safe to append to an Error. */
@@ -44,6 +44,25 @@ export abstract class BaseOAuth2Client extends BaseClient {
    * is then a best-effort no-op and we rely on local deletion of the token).
    */
   protected readonly revocationEndpoint: string | null = null;
+
+  /**
+   * True when {@link revoke} ends the grant using the connection's ACCESS
+   * token alone (Dropbox). That matters for a connection CI Portal brokered:
+   * Portal holds only the provider's refresh token, and for such a provider
+   * it has no way to present that for revocation — but this appliance still
+   * holds a real access token that can. See DataDeletionService.
+   */
+  readonly revokesWithAccessToken: boolean = false;
+
+  /**
+   * Whether {@link revoke} can end a grant with this provider at all: false for
+   * a provider with no revocation endpoint, whose `revoke()` always answers
+   * `{ revoked: false }` without asking it. Lets a caller tell "nothing to
+   * revoke here" from "the provider did not accept the revocation".
+   */
+  get canRevoke(): boolean {
+    return this.revocationEndpoint != null || this.revokesWithAccessToken;
+  }
 
   protected abstract scopes: string[];
 
@@ -84,11 +103,8 @@ export abstract class BaseOAuth2Client extends BaseClient {
       throw new Error('Connection not authenticated');
     }
 
-    const endpointSplitOnProtocol = /^(https:\/\/[^/]+)(\/.*)?$/.exec(endpoint);
-    const baseUrl = endpointSplitOnProtocol ? endpointSplitOnProtocol[1] : this.baseUrl;
-    const path = endpointSplitOnProtocol ? endpointSplitOnProtocol[2] || '' : endpoint;
-
-    return fetch(`${baseUrl}${path}`, {
+    // Only the provider's own API gets the token (see `providerApiUrl`).
+    return fetch(providerApiUrl(this.baseUrl, endpoint), {
       ...options,
       headers: {
         ...options?.headers,
@@ -134,7 +150,7 @@ export abstract class BaseOAuth2Client extends BaseClient {
     return (await response.json()) as T;
   }
 
-  async getAuthorizationUrl(connection: Connection): Promise<string> {
+  async getAuthorizationUrl(connection: Connection, request?: CallbackRequestOrigin): Promise<string> {
     const clientCredentials = await this.getClientCredentials(connection);
     if (!clientCredentials) {
       this.logger.error('Cannot getAuthorizationUrl because client credentials not found for connection', {
@@ -146,7 +162,7 @@ export abstract class BaseOAuth2Client extends BaseClient {
 
     const params = new URLSearchParams({
       client_id: clientCredentials.clientId,
-      redirect_uri: config.auth.oauth.callbackUrl || `${process.env.APP_PUBLIC_URL}/oauth/callback`,
+      redirect_uri: oauthCallbackUrl(request),
       response_type: 'code',
       scope: this.getScopesFromActiveEndpoints(connection.activeEndpoints),
       state: connection.id,
@@ -156,7 +172,11 @@ export abstract class BaseOAuth2Client extends BaseClient {
     return `${this.authorizationEndpoint}?${params.toString()}`;
   }
 
-  async exchangeAuthorizationCode(connection: Connection, code: string): Promise<TokenExchange> {
+  async exchangeAuthorizationCode(
+    connection: Connection,
+    code: string,
+    request?: CallbackRequestOrigin,
+  ): Promise<TokenExchange> {
     const clientCredentials = await this.getClientCredentials(connection);
     if (!clientCredentials) {
       this.logger.error(
@@ -173,7 +193,7 @@ export abstract class BaseOAuth2Client extends BaseClient {
       code,
       client_id: clientCredentials.clientId,
       client_secret: clientCredentials.clientSecret,
-      redirect_uri: config.auth.oauth.callbackUrl || `${process.env.APP_PUBLIC_URL}/oauth/callback`,
+      redirect_uri: exchangeRedirectUri(connection, request),
       grant_type: 'authorization_code',
     });
 

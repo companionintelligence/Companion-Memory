@@ -1,11 +1,14 @@
-import { useState, type ComponentType, type ReactNode } from 'react';
+import { useState, type ComponentType, type CSSProperties, type ReactNode } from 'react';
 
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
+import { useDeviceLayout, useScrollOverflow } from '@ci/common';
 import { Button, DropdownMenu, cn } from '@ci/shadcn';
 import { ChevronDown, Shapes, Tag as TagIcon } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useSearchParams } from 'react-router-dom';
 
+import { MenuShield } from '@/components/MenuShield';
+import { ScrollMoreArrows } from '@/components/ScrollMoreArrows';
 import { AVAILABLE_ENTITY_TYPES, useDropdown } from '@/components/SearchBox/useDropdown';
 import { TagInput } from '@/components/TagInput';
 import { gql } from '@/graphql';
@@ -44,7 +47,7 @@ const GET_EVENT_TYPES = gql(`
 `);
 
 const EXPAND_LABEL_BASE_CLASS =
-  'overflow-hidden text-ellipsis whitespace-nowrap transition-all duration-200 ease-out';
+  'overflow-hidden text-ellipsis whitespace-nowrap transition-[color,background-color,border-color,box-shadow,opacity,transform] duration-200 ease-out';
 
 /** Collapsed to nothing until the pointer (or keyboard focus, or the open menu) asks for it. */
 const EXPAND_LABEL_HOVER_CLASS =
@@ -118,6 +121,23 @@ function categoryButtonClass(selected: boolean, active: boolean) {
         ? 'border-border bg-background text-foreground hover:bg-accent'
         : 'border-border bg-background text-muted-foreground hover:bg-accent hover:text-accent-foreground',
   );
+}
+
+/**
+ * The What strip's width with every button at rest: the floor it keeps when it
+ * shares a line with the filter controls (see the strip in MemoryEntityTypeNav).
+ *
+ * Mirrors the buttons' own classes: `border` and `px-2` around a 1rem icon make
+ * 2rem + 2px ({@link categoryButtonClass}), a dropdown adds its 0.875rem caret
+ * ({@link chevronClass}, `h-3.5` with no margin at rest), and `md:gap-1.5` sits
+ * between buttons. A revealed label (selected, or under the pointer) is left
+ * out on purpose: it scrolls inside the strip rather than widening it.
+ */
+function restingStripWidth(categories: WhatCategory[]): string {
+  const dropdowns = categories.filter((category) => category.kind !== 'standalone').length;
+  const rem = categories.length * 2 + dropdowns * 0.875 + Math.max(0, categories.length - 1) * 0.375;
+
+  return `calc(${rem}rem + ${categories.length * 2}px)`;
 }
 
 function CategoryIcon({
@@ -216,6 +236,7 @@ function GroupWhatDropdown({
   isGroupActive,
   onSelectOnly,
   onToggleType,
+  modal,
 }: {
   category: Extract<WhatCategory, { kind: 'group' }>;
   selectedEntityTypes: string[];
@@ -224,6 +245,8 @@ function GroupWhatDropdown({
   isGroupActive: (types: string[]) => boolean;
   onSelectOnly: (entityType: string) => void;
   onToggleType: (entityType: string) => void;
+  /** See {@link MemoryEntityTypeNav}: modal on a phone, so a tap away only closes the menu. */
+  modal: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const types = entityTypesForCategory(category);
@@ -237,7 +260,7 @@ function GroupWhatDropdown({
   const { CheckboxItem, Content, Label, Separator, Trigger } = DropdownMenu;
 
   return (
-    <DropdownMenu modal={false} open={open} onOpenChange={setOpen}>
+    <DropdownMenu modal={modal} open={open} onOpenChange={setOpen}>
       {/* No tooltip: the label already expands inline on hover (expandLabelClass). */}
       <Trigger asChild>
         <button
@@ -254,6 +277,7 @@ function GroupWhatDropdown({
         </button>
       </Trigger>
 
+      <MenuShield open={open} />
       <Content align="start" sideOffset={4} className="z-[9999] w-56 p-2">
         <Label className="px-1 pb-2 text-sm font-medium">{category.label}</Label>
         <Separator className="mb-1" />
@@ -332,11 +356,13 @@ function EventsWhatDropdown({
   selected,
   active,
   onSelectOnly,
+  modal,
 }: {
   category: Extract<WhatCategory, { kind: 'events' }>;
   selected: boolean;
   active: boolean;
   onSelectOnly: () => void;
+  modal: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
@@ -371,7 +397,7 @@ function EventsWhatDropdown({
   };
 
   return (
-    <DropdownMenu modal={false} open={open} onOpenChange={setOpen}>
+    <DropdownMenu modal={modal} open={open} onOpenChange={setOpen}>
       {/* No tooltip: the label already expands inline on hover (expandLabelClass). */}
       <Trigger asChild>
         <button
@@ -388,6 +414,7 @@ function EventsWhatDropdown({
         </button>
       </Trigger>
 
+      <MenuShield open={open} />
       <Content align="start" sideOffset={4} className="z-[9999] max-h-80 w-56 overflow-y-auto p-2">
         <div className="flex items-center justify-between px-1 pb-2">
           <Label className="p-0 text-sm font-medium">Events</Label>
@@ -443,7 +470,15 @@ function EventsWhatDropdown({
   );
 }
 
-function TagWhatDropdown({ tags, onTagsChange }: { tags: string[]; onTagsChange: (next: string[]) => void }) {
+function TagWhatDropdown({
+  tags,
+  onTagsChange,
+  modal,
+}: {
+  tags: string[];
+  onTagsChange: (next: string[]) => void;
+  modal: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const active = tags.length > 0;
   const { data } = useQuery(GET_TAGS, { skip: !open });
@@ -453,7 +488,7 @@ function TagWhatDropdown({ tags, onTagsChange }: { tags: string[]; onTagsChange:
   const valueLabel = active ? tags.join(', ') : 'Tag';
 
   return (
-    <DropdownMenu modal={false} open={open} onOpenChange={setOpen}>
+    <DropdownMenu modal={modal} open={open} onOpenChange={setOpen}>
       {/* No tooltip: the label already expands inline on hover (expandLabelClass). */}
       <Trigger asChild>
         <button
@@ -469,6 +504,7 @@ function TagWhatDropdown({ tags, onTagsChange }: { tags: string[]; onTagsChange:
         </button>
       </Trigger>
 
+      <MenuShield open={open} />
       <Content align="start" sideOffset={4} className="z-[9999] w-80 p-3">
         <Label className="mb-2 block text-sm font-medium">Tags</Label>
         <TagInput
@@ -511,7 +547,14 @@ export function MemoryEntityTypeNav({ actions }: { actions?: ReactNode }) {
   } = useWhatSelection();
   const [searchParams] = useSearchParams();
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [stripRef, stripMore] = useScrollOverflow<HTMLDivElement>();
   const activeFilterCount = countActiveFilters(searchParams);
+  // The What menus are modal on a phone: a modal menu swallows the tap that
+  // closes it, so tapping away cannot also open whatever was under the finger.
+  // Desktop keeps the non-modal menus (no scroll lock, no scrollbar jump), the
+  // same split MemoryExplorerFilterControls makes for When / How / Who.
+  const { isMobile } = useDeviceLayout();
+  const modal = isMobile === true;
   const filtersLabel = activeFilterCount > 0 ? `Filters, ${activeFilterCount} active` : 'Filters';
 
   return (
@@ -555,10 +598,24 @@ export function MemoryEntityTypeNav({ actions }: { actions?: ReactNode }) {
         {/* Below `xl` the strip takes the whole line (`basis-0`, grows) and scrolls
           the categories inside it if it must; the filter controls sit on a
           line of their own and wrap there. From `xl` up the strip and the
-          controls share the line: each has a floor (16rem here, 24rem there),
+          controls share the line: each has a floor (every What button at
+          rest here — `restingStripWidth` — and 24rem there),
           the room beyond both floors is split between them, and the strip
           never grows past its content (`max-w-max`) so the excess goes to the
-          controls. Measured 2026-09-22 at the controls' natural width of
+          controls.
+
+          The strip's floor is its buttons at rest (392 px for /memory's eight
+          at the 17px root), so none starts out scrolled out of sight. A fixed
+          16rem hid the Tags button whenever the rail was pinned below
+          ~1,600 px, with no scrollbar to say it was there. Not `min-w-max`:
+          max-content includes a label sliding out under the pointer, so the
+          strip grew on hover, squeezed the controls onto another line and the
+          bar jumped a line at 1,280 and 1,440 px. Computed from the
+          categories, not a constant, because the events explorer shows four.
+          The cost is a third line of controls with the rail pinned at
+          1,280–1,366 px.
+
+          Measured 2026-09-22 at the controls' natural width of
           ~1,280 px: inline from `xl` gives a 99 px bar at 1,400 px, while
           inline from `md` gave a 233 px bar at 900 px with the strip cut to
           five buttons — the controls' own line is the shorter layout below
@@ -571,54 +628,62 @@ export function MemoryEntityTypeNav({ actions }: { actions?: ReactNode }) {
           strip was left a 57 px sliver — one What button and part of the next,
           scrolling behind the controls — and below ~1,350 px the controls
           dropped to a second line and ran off the right edge. */}
-        <div className="scrollbar-none min-w-0 flex-1 basis-0 overflow-x-auto overscroll-x-contain xl:min-w-[16rem] xl:max-w-max">
-          <div className="flex w-max items-center gap-1 md:gap-1.5">
-            {categories.map((category) => {
-              if (category.kind === 'standalone') {
-                const types = entityTypesForCategory(category);
+        <ScrollMoreArrows
+          more={stripMore}
+          className="flex min-w-0 flex-1 basis-0 xl:min-w-(--what-strip-floor) xl:max-w-max"
+          style={{ '--what-strip-floor': restingStripWidth(categories) } as CSSProperties}
+        >
+          <div ref={stripRef} className="scrollbar-none min-w-0 flex-1 overflow-x-auto overscroll-x-contain">
+            <div className="flex w-max items-center gap-1 md:gap-1.5">
+              {categories.map((category) => {
+                if (category.kind === 'standalone') {
+                  const types = entityTypesForCategory(category);
 
-                return (
-                  <StandaloneWhatButton
-                    key={category.id}
-                    category={category}
-                    onSelect={() => selectOnlyEntityType(category.entityType)}
-                    selected={isEntityTypeSelected(category.entityType)}
-                    active={isGroupActive(types)}
-                  />
-                );
-              }
+                  return (
+                    <StandaloneWhatButton
+                      key={category.id}
+                      category={category}
+                      onSelect={() => selectOnlyEntityType(category.entityType)}
+                      selected={isEntityTypeSelected(category.entityType)}
+                      active={isGroupActive(types)}
+                    />
+                  );
+                }
 
-              if (category.kind === 'group') {
-                return (
-                  <GroupWhatDropdown
-                    key={category.id}
-                    category={category}
-                    selectedEntityTypes={selectedEntityTypes}
-                    isFiltered={isFiltered}
-                    isGroupSelected={isGroupSelected}
-                    isGroupActive={isGroupActive}
-                    onSelectOnly={selectOnlyEntityType}
-                    onToggleType={toggleEntityType}
-                  />
-                );
-              }
+                if (category.kind === 'group') {
+                  return (
+                    <GroupWhatDropdown
+                      key={category.id}
+                      category={category}
+                      selectedEntityTypes={selectedEntityTypes}
+                      isFiltered={isFiltered}
+                      isGroupSelected={isGroupSelected}
+                      isGroupActive={isGroupActive}
+                      onSelectOnly={selectOnlyEntityType}
+                      onToggleType={toggleEntityType}
+                      modal={modal}
+                    />
+                  );
+                }
 
-              if (category.kind === 'events') {
-                return (
-                  <EventsWhatDropdown
-                    key={category.id}
-                    category={category}
-                    selected={isEntityTypeSelected(category.entityType)}
-                    active={isGroupActive(entityTypesForCategory(category))}
-                    onSelectOnly={() => selectOnlyEntityType(category.entityType)}
-                  />
-                );
-              }
+                if (category.kind === 'events') {
+                  return (
+                    <EventsWhatDropdown
+                      key={category.id}
+                      category={category}
+                      selected={isEntityTypeSelected(category.entityType)}
+                      active={isGroupActive(entityTypesForCategory(category))}
+                      onSelectOnly={() => selectOnlyEntityType(category.entityType)}
+                      modal={modal}
+                    />
+                  );
+                }
 
-              return <TagWhatDropdown key={category.id} tags={tags} onTagsChange={setTags} />;
-            })}
+                return <TagWhatDropdown key={category.id} tags={tags} onTagsChange={setTags} modal={modal} />;
+              })}
+            </div>
           </div>
-        </div>
+        </ScrollMoreArrows>
 
         {/* Outside the scrolling strip so the create action stays reachable when
           the What categories overflow. */}

@@ -1,0 +1,7 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- USE_BIOMETRIC is a normal-level permission (granted at install, no runtime prompt)
+         that BiometricPrompt requires on API 28+. Declared here so any app installing this
+         plugin inherits it; the manifest merger unions it with the host app's if present. -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+</manifest>

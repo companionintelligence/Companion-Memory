@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 
-import { useApolloClient } from '@apollo/client';
+import { useApolloClient } from '@apollo/client/react';
 import { fetchJson, GlobalUID } from '@ci/common';
 
 import type { GraphNode } from '@/api/useGraphOverview';

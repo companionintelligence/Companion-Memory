@@ -94,4 +94,36 @@ describe('serviceLabels', () => {
     // worse than an unpolished one.
     expect(serviceLabels(['kindle_reading'], sources)).toEqual(['kindle reading']);
   });
+
+  it('names a service once, however many of its files the archive held', () => {
+    // `import_runs.data_sources` records one entry per recognized FILE: a real
+    // Google Takeout is 47 entries of which 30 are `google_my_activity`. Mapped
+    // one-for-one that read "Google Voice, Google My Activity, Google My
+    // Activity, +44" on the run card.
+    expect(
+      serviceLabels(
+        ['google_voice', 'google_my_activity', 'google_my_activity', 'vcard', 'google_my_activity'],
+        [
+          { name: 'google_voice', title: 'Google Voice' },
+          { name: 'google_my_activity', title: 'Google My Activity' },
+        ],
+      ),
+    ).toEqual(['Google Voice', 'Google My Activity', 'vcard']);
+  });
+
+  it('keeps the first appearance, which is the parse ranking', () => {
+    expect(serviceLabels(['audible', 'prime_video', 'audible'], sources)).toEqual(['Audible', 'Prime Video']);
+  });
+
+  it('collapses two importers the catalogue gives one title', () => {
+    expect(
+      serviceLabels(
+        ['calendar', 'ics_calendar'],
+        [
+          { name: 'calendar', title: 'Calendar' },
+          { name: 'ics_calendar', title: 'Calendar' },
+        ],
+      ),
+    ).toEqual(['Calendar']);
+  });
 });

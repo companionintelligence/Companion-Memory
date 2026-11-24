@@ -1,7 +1,7 @@
 import { ApiError } from '../client';
 import { CliError, type CliContext } from '../context';
 import { json, stamp, table } from '../output';
-import { waitForRuns } from '../wait';
+import { followRuns } from '../wait';
 import type { RetryFailedPushResult } from '../wire';
 
 import { parseTimeout } from './import';
@@ -37,8 +37,11 @@ export interface PushOptions {
  * {@link retryFailedPush}.
  */
 export async function pushCommand(ctx: CliContext, options: PushOptions = {}): Promise<void> {
+  // Before anything is pushed, for the reason `importCommand` gives.
+  const timeoutMs = parseTimeout(options.timeout);
+
   if (options.retryFailed) {
-    await retryFailedPush(ctx, options);
+    await retryFailedPush(ctx, options, timeoutMs);
 
     return;
   }
@@ -96,13 +99,13 @@ export async function pushCommand(ctx: CliContext, options: PushOptions = {}): P
     ctx.term.out(`\n${runs.length} run(s) queued for push.`);
   }
 
-  if (options.wait && runs.length > 0) {
-    await waitForRuns(
-      ctx.client,
-      ctx.term,
-      runs.map((run) => run.id),
-      { timeoutMs: parseTimeout(options.timeout), quiet: options.json },
-    );
+  const unfinished = await followRuns(ctx.client, ctx.term, options.wait ? runs.map((run) => run.id) : [], {
+    timeoutMs,
+    quiet: options.json,
+  });
+
+  if (unfinished != null) {
+    throw new CliError(unfinished, 1);
   }
 }
 
@@ -132,7 +135,7 @@ export async function pushCommand(ctx: CliContext, options: PushOptions = {}): P
  * re-queued runs to their close-out, which is where the run's status is
  * recomputed.
  */
-async function retryFailedPush(ctx: CliContext, options: PushOptions): Promise<void> {
+async function retryFailedPush(ctx: CliContext, options: PushOptions, timeoutMs: number): Promise<void> {
   const runIds = options.run ?? [];
 
   if (runIds.length === 0) {
@@ -235,19 +238,22 @@ async function retryFailedPush(ctx: CliContext, options: PushOptions): Promise<v
     }
   }
 
-  if (options.wait && requeued.length > 0) {
-    await waitForRuns(
-      ctx.client,
-      ctx.term,
-      requeued.map((entry) => entry.runId),
-      { timeoutMs: parseTimeout(options.timeout), quiet: options.json },
-    );
-  }
+  const unfinished = await followRuns(
+    ctx.client,
+    ctx.term,
+    options.wait ? requeued.map((entry) => entry.runId) : [],
+    { timeoutMs, quiet: options.json },
+  );
 
   if (refused.length > 0) {
     throw new CliError(
-      `${refused.length} of ${results.length} run(s) could not be retried.`,
-      requeued.length > 0 ? 2 : 1,
+      `${refused.length} of ${results.length} run(s) could not be retried.` +
+        (unfinished == null ? '' : ` ${unfinished}`),
+      unfinished == null && requeued.length > 0 ? 2 : 1,
     );
+  }
+
+  if (unfinished != null) {
+    throw new CliError(unfinished, 1);
   }
 }

@@ -1,5 +1,6 @@
 import { Field, Float, Int, InputType } from '@nestjs/graphql';
-import GraphQLJSONObject from 'graphql-type-json';
+
+import { GraphQLJSONObject } from '@ci/domains/graphql/scalars/JsonObjectScalar';
 
 /**
  * Batch browser-activity ingest input for the importer. Carries the provenance

@@ -12,8 +12,11 @@ export default {
 
   transformIgnorePatterns: [
     // Ignore .yarn/cache packages EXCEPT ESM-only ones that require transformation
-    // (jose arrives via PortalAuthModule, so anything booting the whole App needs it)
-    '\\.yarn/cache/(?!(p-limit|yocto-queue|parse-duration|jose)-npm-)',
+    // (jose arrives via PortalAuthModule, so anything booting the whole App needs it;
+    // uuid 14, serialize-error 13, non-error, and htmlparser2 12 with its domhandler,
+    // domutils, domelementtype and entities dependencies, are ESM-only too, and so are the
+    // identikey domain's @noble/hashes 2, @noble/curves 2 and @noble/post-quantum, which its crypto suites load)
+    '\\.yarn/cache/(?!(p-limit|yocto-queue|parse-duration|jose|uuid|serialize-error|non-error|htmlparser2|domhandler|domutils|domelementtype|dom-serializer|entities|@noble-hashes|@noble-curves|@noble-post-quantum)-npm-)',
     '\\.pnp\\.cjs$',
   ],
 
@@ -46,8 +49,9 @@ export default {
   // new domains land with a real floor from day one instead of inheriting it.
   //
   // The planning floor is set just under what the suite achieves WITHOUT a
-  // database, since TaskService.tenancy.integration.test.ts skips unless
-  // PLANNING_TEST_DATABASE_URL is set.
+  // database, since TaskService.tenancy.integration.test.ts and the other
+  // DB-backed planning suites skip unless a database is configured
+  // (PLANNING_TEST_DATABASE_URL or the DATABASE_URL fallback).
   coverageThreshold: {
     './src/domains/planning/': {
       statements: 88,
@@ -89,4 +93,10 @@ export default {
   workerIdleMemoryLimit: '768MB',
 
   setupFilesAfterEnv: ['reflect-metadata'],
+
+  // `default` is what jest uses when this is unset. The second one exists
+  // because the default drops the console output of any file whose tests were
+  // ALL skipped — which is exactly where a database-backed spec prints why it
+  // did not run. It lists those files, with their reasons, above the totals.
+  reporters: ['default', '<rootDir>/src/domains/__tests__/support/skippedSuitesReporter.js'],
 };

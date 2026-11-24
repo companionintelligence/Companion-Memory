@@ -64,10 +64,10 @@ export function renderBatchedDelete(target: TableRef, scope: PurgeScope, batchSi
 /**
  * One bounded null-out.
  *
- * The `IS NOT NULL` guard is load-bearing, not tidiness: `ci.users.entity_id` is
- * nulled with the scope `id = $1`, which still matches the row afterwards.
- * Without the guard the batch loop would keep matching the same row, always
- * report a full batch, and never terminate.
+ * The `IS NOT NULL` guard is load-bearing, not tidiness: a null step whose scope
+ * is not the column it nulls (`ci.users.entity_id` was once nulled by `id = $1`)
+ * still matches the row afterwards. Without the guard the batch loop would keep
+ * matching the same row, always report a full batch, and never terminate.
  */
 export function renderBatchedNull(
   target: TableRef,
@@ -77,10 +77,31 @@ export function renderBatchedNull(
 ): string {
   const table = quoteTable(target);
   const quotedColumn = quoteIdentifier(column);
-  const predicate = `${renderScope(scope)} AND ${quotedColumn} IS NOT NULL`;
 
   return countingWrapper(
-    `UPDATE ${table} SET ${quotedColumn} = NULL WHERE ctid IN (SELECT ctid FROM ${table} WHERE ${predicate} LIMIT ${assertBatchSize(batchSize)})`,
+    `UPDATE ${table} SET ${quotedColumn} = NULL WHERE ctid IN (SELECT ctid FROM ${table} WHERE ${nullPredicate(quotedColumn, scope)} LIMIT ${assertBatchSize(batchSize)})`,
+  );
+}
+
+/**
+ * One unbatched delete, for a compressed TimescaleDB chunk.
+ *
+ * A compressed chunk has no `ctid` to batch on (TimescaleDB answers
+ * "transparent decompression only supports tableoid system column"), but it
+ * does take an ordinary `DELETE … WHERE`, decompressing only the batches the
+ * predicate touches. One chunk is one time slice of one hypertable, so the
+ * statement is bounded by the chunk rather than by a `LIMIT`.
+ */
+export function renderUnbatchedDelete(target: TableRef, scope: PurgeScope): string {
+  return countingWrapper(`DELETE FROM ${quoteTable(target)} WHERE ${renderScope(scope)}`);
+}
+
+/** {@link renderBatchedNull} for a compressed chunk; see {@link renderUnbatchedDelete}. */
+export function renderUnbatchedNull(target: TableRef, column: string, scope: PurgeScope): string {
+  const quotedColumn = quoteIdentifier(column);
+
+  return countingWrapper(
+    `UPDATE ${quoteTable(target)} SET ${quotedColumn} = NULL WHERE ${nullPredicate(quotedColumn, scope)}`,
   );
 }
 
@@ -100,6 +121,11 @@ export function renderDeleteUser(target: TableRef): string {
  */
 function countingWrapper(statement: string): string {
   return `WITH purge_batch AS (${statement} RETURNING 1) SELECT count(*)::int AS count FROM purge_batch`;
+}
+
+/** The rows a null step still has to touch; see {@link renderBatchedNull} for why the guard matters. */
+function nullPredicate(quotedColumn: string, scope: PurgeScope): string {
+  return `${renderScope(scope)} AND ${quotedColumn} IS NOT NULL`;
 }
 
 function assertBatchSize(batchSize: number): number {

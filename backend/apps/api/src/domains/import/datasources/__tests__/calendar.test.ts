@@ -3,7 +3,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'path';
 
-import { CalendarFileImporter, parseIcsEvents } from '../calendar';
+import { serverTimezone, wallClockInTZ } from '@ci/common/time/zoned';
+import { expandAll, expandSeries, parseRecurrence } from '@ci/domains/memory';
+
+import { CalendarFileImporter, icsEventStatus, MAX_RECURRENCE_DATES, parseIcsEvents } from '../calendar';
 import type { ImportParams } from '../timeline';
 
 import { metaText, type EmittedGraph } from './support/emitted';
@@ -22,6 +25,64 @@ import { metaText, type EmittedGraph } from './support/emitted';
  */
 
 const FIXTURES_DIR = path.join(__dirname, 'fixtures');
+
+/**
+ * The head of a calendar published from Outlook.com (Settings > Shared
+ * calendars > Publish a calendar): Exchange names every zone the Windows way
+ * and defines each one it uses in a VTIMEZONE block before the first event.
+ */
+const OUTLOOK_HEAD = [
+  'BEGIN:VCALENDAR',
+  'METHOD:PUBLISH',
+  'PRODID:Microsoft Exchange Server 2010',
+  'VERSION:2.0',
+  'X-WR-CALNAME:Calendar',
+  'BEGIN:VTIMEZONE',
+  'TZID:Pacific Standard Time',
+  'BEGIN:STANDARD',
+  'DTSTART:16010101T020000',
+  'TZOFFSETFROM:-0700',
+  'TZOFFSETTO:-0800',
+  'RRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=1SU;BYMONTH=11',
+  'END:STANDARD',
+  'BEGIN:DAYLIGHT',
+  'DTSTART:16010101T020000',
+  'TZOFFSETFROM:-0800',
+  'TZOFFSETTO:-0700',
+  'RRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=2SU;BYMONTH=3',
+  'END:DAYLIGHT',
+  'END:VTIMEZONE',
+  'BEGIN:VTIMEZONE',
+  'TZID:GMT Standard Time',
+  'BEGIN:STANDARD',
+  'DTSTART:16010101T030000',
+  'TZOFFSETFROM:+0100',
+  'TZOFFSETTO:+0000',
+  'RRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=-1SU;BYMONTH=10',
+  'END:STANDARD',
+  'BEGIN:DAYLIGHT',
+  'DTSTART:16010101T010000',
+  'TZOFFSETFROM:+0000',
+  'TZOFFSETTO:+0100',
+  'RRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=-1SU;BYMONTH=3',
+  'END:DAYLIGHT',
+  'END:VTIMEZONE',
+  'BEGIN:VTIMEZONE',
+  'TZID:W. Europe Standard Time',
+  'BEGIN:STANDARD',
+  'DTSTART:16010101T030000',
+  'TZOFFSETFROM:+0200',
+  'TZOFFSETTO:+0100',
+  'RRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=-1SU;BYMONTH=10',
+  'END:STANDARD',
+  'BEGIN:DAYLIGHT',
+  'DTSTART:16010101T010000',
+  'TZOFFSETFROM:+0100',
+  'TZOFFSETTO:+0200',
+  'RRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=-1SU;BYMONTH=3',
+  'END:DAYLIGHT',
+  'END:VTIMEZONE',
+];
 
 /** Write an .ics into a throwaway directory and hand back its path. */
 function icsFile(prefix: string, name: string, lines: string[], newline = '\r\n'): string {
@@ -142,6 +203,81 @@ describe('Calendar datasource', () => {
     }
   });
 
+  it('imports a Google Calendar HTML description as text, keeping its lines and links', async () => {
+    // The shape Google writes into DESCRIPTION (RFC 5545 says plain TEXT): its
+    // appointment-booking body, with markup and real `\n` escapes mixed. 194 of
+    // the 1,260 descriptions in the reference exports carried tags, and they
+    // were displayed, indexed and embedded as raw markup.
+    const icsPath = icsFile('ci-ics-html-', 'google.ics', [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//Google Inc//Google Calendar 70.9054//EN',
+      'BEGIN:VEVENT',
+      'UID:html-1@google.com',
+      'DTSTART:20260704T150000Z',
+      'DTEND:20260704T160000Z',
+      'SUMMARY:Intro call',
+      'DESCRIPTION:<b>Booked by</b>\\nAda Lovelace\\nada@example.com\\n\\nQuestions? Answers <a href="https://exam',
+      ' ple.com/faq">here</a>&nbsp\\;&amp\\; more.<br><br>Join with Google Meet: https://meet.example/abc',
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ]);
+
+    try {
+      const [event] = await importIcs(icsPath);
+      const text =
+        'Booked by\nAda Lovelace\nada@example.com\n\nQuestions? Answers here (https://example.com/faq) & more.\n\n' +
+        'Join with Google Meet: https://meet.example/abc';
+
+      // Metadata `Description` is what the push stores as the event's
+      // description: shown in Memory, indexed for search, and embedded.
+      expect(event.item.metadata.Description).toBe(text);
+    } finally {
+      fs.rmSync(path.dirname(icsPath), { recursive: true, force: true });
+    }
+  });
+
+  it('leaves a plain-text description exactly as written, angle brackets and all', () => {
+    // No HTML tag, so no HTML parser: one would delete `<ada@example.com>` as
+    // an unknown element and decode a literal `&amp;`.
+    const ics = [
+      'BEGIN:VCALENDAR',
+      'BEGIN:VEVENT',
+      'UID:plain-1@x',
+      'DTSTART:20260101T090000Z',
+      'SUMMARY:Sync',
+      'DESCRIPTION:Organizer: Ada <ada@example.com>\\nQ&amp\\;A if 2 < 3',
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ].join('\r\n');
+
+    const [event] = parseIcsEvents(ics, 'plain.ics');
+
+    expect(event.description).toBe('Organizer: Ada <ada@example.com>\nQ&amp;A if 2 < 3');
+  });
+
+  it('keeps the UID-less event id stable: the sig hashes the raw HTML, not the text', () => {
+    const rawDescription = '<b>Booked by</b>\\nAda';
+    const ics = [
+      'BEGIN:VCALENDAR',
+      'BEGIN:VEVENT',
+      'DTSTART:20260101T090000Z',
+      'SUMMARY:Call',
+      `DESCRIPTION:${rawDescription}`,
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ].join('\n');
+
+    const [event] = parseIcsEvents(ics, 'noUidHtml.ics');
+    const expectedSig = crypto
+      .createHash('sha1')
+      .update(['20260101T090000Z', '', 'Call', '', rawDescription].join('\0'))
+      .digest('hex');
+
+    expect(event.description).toBe('Booked by\nAda');
+    expect(event.id).toBe(`ics:noUidHtml.ics:${expectedSig}`);
+  });
+
   it('keeps the UID-less event id (sig) stable across the unescape fix', () => {
     // The sig hash seeding the id for UID-less events is computed from the RAW
     // (still-escaped) text, not the unescaped display text. Otherwise every
@@ -235,6 +371,90 @@ describe('Calendar datasource', () => {
     }
   });
 
+  it('reads Windows zone names, as an Outlook published calendar writes them', async () => {
+    const icsPath = icsFile('ci-ics-outlook-', 'calendar.ics', [
+      ...OUTLOOK_HEAD,
+      'BEGIN:VEVENT',
+      'UID:dentist@outlook',
+      'SUMMARY:Dentist',
+      'DTSTART;TZID=Pacific Standard Time:20260818T143000',
+      'DTEND;TZID=Pacific Standard Time:20260818T153000',
+      'END:VEVENT',
+      'BEGIN:VEVENT',
+      'UID:review@outlook',
+      'SUMMARY:Quarterly review',
+      'DTSTART;TZID=Pacific Standard Time:20261103T130000',
+      'DTEND;TZID=Pacific Standard Time:20261103T140000',
+      'END:VEVENT',
+      'BEGIN:VEVENT',
+      'UID:london@outlook',
+      'SUMMARY:Call with London',
+      'DTSTART;TZID=GMT Standard Time:20260612T170000',
+      'DTEND;TZID=GMT Standard Time:20260612T174500',
+      'END:VEVENT',
+      'BEGIN:VEVENT',
+      'UID:frankfurt@outlook',
+      'SUMMARY:Stand setup',
+      'DTSTART;TZID=W. Europe Standard Time:20261014T080000',
+      'DTEND;TZID=W. Europe Standard Time:20261014T120000',
+      'END:VEVENT',
+      'BEGIN:VEVENT',
+      'UID:webinar@outlook',
+      'SUMMARY:Webinar',
+      'DTSTART:20260325T180000Z',
+      'DTEND:20260325T190000Z',
+      'END:VEVENT',
+      'BEGIN:VEVENT',
+      'UID:birthday@outlook',
+      'SUMMARY:Birthday',
+      'DTSTART;VALUE=DATE:20260502',
+      'DTEND;VALUE=DATE:20260503',
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ]);
+
+    try {
+      const items = (await importIcs(icsPath)).map((graph) => graph.item);
+      const at = (id: string) => {
+        const item = items.find((candidate) => candidate.id === id);
+
+        return [item?.timestamp?.toISOString(), item?.timespanEnd?.toISOString()];
+      };
+
+      // Pacific in summer (PDT, UTC-7) and after the clocks went back on
+      // November 1 (PST, UTC-8), London in summer (BST, UTC+1) and Frankfurt in
+      // summer (CEST, UTC+2). Each used to be the wall clock read as UTC.
+      expect(at('dentist@outlook')).toEqual(['2026-08-18T21:30:00.000Z', '2026-08-18T22:30:00.000Z']);
+      expect(at('review@outlook')).toEqual(['2026-11-03T21:00:00.000Z', '2026-11-03T22:00:00.000Z']);
+      expect(at('london@outlook')).toEqual(['2026-06-12T16:00:00.000Z', '2026-06-12T16:45:00.000Z']);
+      expect(at('frankfurt@outlook')).toEqual(['2026-10-14T06:00:00.000Z', '2026-10-14T10:00:00.000Z']);
+      // No TZID to resolve: as before.
+      expect(at('webinar@outlook')).toEqual(['2026-03-25T18:00:00.000Z', '2026-03-25T19:00:00.000Z']);
+      expect(at('birthday@outlook')).toEqual(['2026-05-02T00:00:00.000Z', '2026-05-03T00:00:00.000Z']);
+    } finally {
+      fs.rmSync(path.dirname(icsPath), { recursive: true, force: true });
+    }
+  });
+
+  it('reads a quoted TZID, as Outlook desktop exports write it', () => {
+    const [event] = parseIcsEvents(
+      [
+        'BEGIN:VCALENDAR',
+        'BEGIN:VEVENT',
+        'UID:desktop@outlook',
+        'SUMMARY:Dentist',
+        'DTSTART;TZID="Pacific Standard Time":20260818T143000',
+        'DTEND;TZID="Pacific Standard Time":20260818T153000',
+        'END:VEVENT',
+        'END:VCALENDAR',
+      ].join('\r\n'),
+      'calendar.ics',
+    );
+
+    expect(event.dtStart?.toISOString()).toBe('2026-08-18T21:30:00.000Z');
+    expect(event.dtEnd?.toISOString()).toBe('2026-08-18T22:30:00.000Z');
+  });
+
   it("keeps the event's own properties when a nested VALARM repeats them", async () => {
     // RFC 5545 §3.6.6 nests VALARM INSIDE the VEVENT, and every Apple/Google
     // export emits it AFTER the event's own properties. The parser used to fold
@@ -258,9 +478,10 @@ describe('Calendar datasource', () => {
     expect(items.map((item) => item.id)).not.toContain('04AACD36-CF84-4420-AA2A-D25CB8B9C662');
 
     // The body is the event's, not the reminder boilerplate. `\n` is a real
-    // RFC 5545 TEXT escape, decoded like everywhere else.
+    // RFC 5545 TEXT escape, decoded like everywhere else, and Google's `<b>` is
+    // converted to text (see icsDescriptionText).
     expect(booked?.metadata.Description).toBe(
-      '<b>Booked by</b>\nAva Booker\nava@example.com\n\nJoin with Google Meet: https://meet.example.com/fby-pwgg-pff',
+      'Booked by\nAva Booker\nava@example.com\n\nJoin with Google Meet: https://meet.example.com/fby-pwgg-pff',
     );
     expect(metaText(booked?.metadata.Description)).not.toContain('This is an event reminder');
     expect(booked?.metadata.Summary).toBe('Meet w/ Liam (Ava Booker)');
@@ -354,5 +575,590 @@ describe('Calendar datasource', () => {
     } finally {
       fs.rmSync(path.dirname(icsPath), { recursive: true, force: true });
     }
+  });
+
+  /**
+   * A series' rule. The importer used to keep only whether a VEVENT had an
+   * RRULE. The calendar expands a series only from the rule itself, so an
+   * imported weekly meeting showed on its first date and never again.
+   */
+  describe('recurrence', () => {
+    const PACIFIC = 'America/Los_Angeles';
+    const WEEKLY = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//Test//EN',
+      'BEGIN:VEVENT',
+      'UID:weekly-team-sync@example.com',
+      'DTSTART;TZID=America/Los_Angeles:20261005T100000',
+      'DTEND;TZID=America/Los_Angeles:20261005T103000',
+      'RRULE:FREQ=WEEKLY;BYDAY=MO',
+      'EXDATE;TZID=America/Los_Angeles:20261026T100000',
+      'EXDATE;TZID=America/Los_Angeles:20261109T100000',
+      'RDATE;TZID=America/Los_Angeles:20261125T100000',
+      'SUMMARY:Weekly team sync',
+      'END:VEVENT',
+      'BEGIN:VEVENT',
+      'UID:kickoff@example.com',
+      'DTSTART;TZID=America/Los_Angeles:20261118T140000',
+      'SUMMARY:Project kickoff',
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ];
+
+    it('carries the RRULE, every EXDATE and RDATE line and the start zone, as Google sync stores them', async () => {
+      const icsPath = icsFile('ci-ics-series-', 'work.ics', WEEKLY);
+
+      try {
+        const items = (await importIcs(icsPath)).map((graph) => graph.item);
+        const series = items.find((item) => item.id === 'weekly-team-sync@example.com');
+        const once = items.find((item) => item.id === 'kickoff@example.com');
+
+        // Both EXDATE lines: the property map keeps one value per name.
+        expect(series?.metadata.recurrenceRule).toEqual([
+          'RRULE:FREQ=WEEKLY;BYDAY=MO',
+          'EXDATE;TZID=America/Los_Angeles:20261026T100000',
+          'EXDATE;TZID=America/Los_Angeles:20261109T100000',
+          'RDATE;TZID=America/Los_Angeles:20261125T100000',
+        ]);
+        expect(series?.metadata.recurrenceTimeZone).toBe(PACIFIC);
+        expect(once?.metadata.recurrenceRule).toBeUndefined();
+        expect(once?.metadata.recurrenceTimeZone).toBeUndefined();
+      } finally {
+        fs.rmSync(path.dirname(icsPath), { recursive: true, force: true });
+      }
+    });
+
+    it('expands on the calendar: every Monday at 10:00, without the excluded dates, with the added one', async () => {
+      const icsPath = icsFile('ci-ics-expand-', 'work.ics', WEEKLY);
+
+      try {
+        const [series] = (await importIcs(icsPath)).map((graph) => graph.item);
+        const spec = parseRecurrence(
+          {
+            id: 'series',
+            startTime: series.timestamp as Date,
+            endTime: series.timespanEnd ?? null,
+            isAllDay: series.metadata.isAllDay as boolean,
+            metadata: series.metadata,
+            recurrencePattern: null,
+            sourceSystem: 'calendar',
+            sourceId: series.id as string,
+          },
+          { fallbackTimeZone: 'UTC' },
+        );
+
+        expect(spec?.timeZone).toBe(PACIFIC);
+
+        const { starts } = expandSeries(spec!, {
+          from: new Date('2026-10-01T00:00:00Z'),
+          to: new Date('2026-12-01T00:00:00Z'),
+        });
+        const local = starts.map((start) => {
+          const wall = wallClockInTZ(start, PACIFIC);
+
+          return `${wall.month}/${wall.day} ${wall.hour}:${String(wall.minute).padStart(2, '0')}`;
+        });
+
+        // October 26 and November 9 are excluded and November 25 (a Wednesday)
+        // is added. The series stays at 10:00 after the clocks change on
+        // November 1.
+        expect(local).toEqual([
+          '10/5 10:00',
+          '10/12 10:00',
+          '10/19 10:00',
+          '11/2 10:00',
+          '11/16 10:00',
+          '11/23 10:00',
+          '11/25 10:00',
+          '11/30 10:00',
+        ]);
+      } finally {
+        fs.rmSync(path.dirname(icsPath), { recursive: true, force: true });
+      }
+    });
+
+    it.each([
+      ['a UTC start', 'DTSTART:20261005T170000Z', 'UTC'],
+      // The zone the parser read the wall clock in (see seriesTimeZone).
+      ['a floating start', 'DTSTART:20261005T100000', serverTimezone()],
+      ['a Windows zone name', 'DTSTART;TZID=Pacific Standard Time:20261005T100000', PACIFIC],
+      // Outlook's desktop export quotes the TZID.
+      ['a quoted Windows zone name', 'DTSTART;TZID="Pacific Standard Time":20261005T100000', PACIFIC],
+      ['a quoted IANA id', 'DTSTART;TZID="America/Los_Angeles":20261005T100000', PACIFIC],
+      ['a zone the runtime does not know', 'DTSTART;TZID=Not/AZone:20261005T100000', serverTimezone()],
+    ])('sets the series zone for %s', (_, dtstart, zone) => {
+      const [event] = parseIcsEvents(
+        [
+          'BEGIN:VCALENDAR',
+          'BEGIN:VEVENT',
+          'UID:s@x',
+          dtstart,
+          'RRULE:FREQ=WEEKLY',
+          'END:VEVENT',
+          'END:VCALENDAR',
+        ].join('\r\n'),
+        'zones.ics',
+      );
+
+      expect(event.recurrence).toEqual(['RRULE:FREQ=WEEKLY']);
+      expect(event.recurrenceTimeZone).toBe(zone);
+    });
+
+    it('repeats an Outlook series at its own wall clock through DST, without its excluded and moved dates', async () => {
+      const icsPath = icsFile('ci-ics-outlook-series-', 'calendar.ics', [
+        ...OUTLOOK_HEAD,
+        'BEGIN:VEVENT',
+        'RRULE:FREQ=WEEKLY;UNTIL=20261215T170000Z;INTERVAL=1;BYDAY=TU;WKST=SU',
+        'EXDATE;TZID=Pacific Standard Time:20260707T090000',
+        'UID:guild-sync@outlook',
+        'SUMMARY:Weekly guild sync',
+        'DTSTART;TZID=Pacific Standard Time:20260106T090000',
+        'DTEND;TZID=Pacific Standard Time:20260106T093000',
+        'END:VEVENT',
+        'BEGIN:VEVENT',
+        'RECURRENCE-ID;TZID=Pacific Standard Time:20260915T090000',
+        'UID:guild-sync@outlook',
+        'SUMMARY:Weekly guild sync (moved to Wednesday)',
+        'DTSTART;TZID=Pacific Standard Time:20260916T100000',
+        'DTEND;TZID=Pacific Standard Time:20260916T103000',
+        'END:VEVENT',
+        'END:VCALENDAR',
+      ]);
+
+      try {
+        const items = (await importIcs(icsPath)).map((graph) => graph.item);
+        const series = items.find((item) => item.id === 'guild-sync@outlook')!;
+        const moved = items.find((item) => item.id !== series.id)!;
+
+        // 09:00 PST is 17:00Z. The override keeps the key it had (its
+        // RECURRENCE-ID wall clock) and lands at 10:00 PDT, 17:00Z.
+        expect(series.timestamp?.toISOString()).toBe('2026-01-06T17:00:00.000Z');
+        expect(series.metadata.recurrenceTimeZone).toBe(PACIFIC);
+        expect(moved.id).toBe('guild-sync@outlook#20260915T090000');
+        expect(moved.timestamp?.toISOString()).toBe('2026-09-16T17:00:00.000Z');
+
+        const spec = parseRecurrence(
+          {
+            id: 'series',
+            startTime: series.timestamp as Date,
+            endTime: series.timespanEnd ?? null,
+            isAllDay: false,
+            metadata: series.metadata,
+            recurrencePattern: null,
+            sourceSystem: 'calendar',
+            sourceId: series.id as string,
+          },
+          { fallbackTimeZone: 'UTC' },
+        );
+        const local = (from: string, to: string) =>
+          expandSeries(spec!, { from: new Date(from), to: new Date(to) }).starts.map((start) => {
+            const wall = wallClockInTZ(start, PACIFIC);
+
+            return `${wall.month}/${wall.day} ${wall.hour}:${String(wall.minute).padStart(2, '0')}`;
+          });
+
+        // The clocks go forward on March 8: still 09:00 either side.
+        expect(local('2026-02-25T00:00:00Z', '2026-03-20T00:00:00Z')).toEqual([
+          '3/3 9:00',
+          '3/10 9:00',
+          '3/17 9:00',
+        ]);
+        // July 7 is excluded and September 15 moved to the override's own row.
+        expect(local('2026-06-29T00:00:00Z', '2026-07-22T00:00:00Z')).toEqual([
+          '6/30 9:00',
+          '7/14 9:00',
+          '7/21 9:00',
+        ]);
+        expect(local('2026-09-07T00:00:00Z', '2026-09-30T00:00:00Z')).toEqual([
+          '9/8 9:00',
+          '9/22 9:00',
+          '9/29 9:00',
+        ]);
+      } finally {
+        fs.rmSync(path.dirname(icsPath), { recursive: true, force: true });
+      }
+    });
+
+    it('skips a floating EXDATE even when the owner lives in another zone', () => {
+      const [event] = parseIcsEvents(
+        [
+          'BEGIN:VCALENDAR',
+          'BEGIN:VEVENT',
+          'UID:floating@x',
+          'DTSTART:20261005T100000',
+          'RRULE:FREQ=WEEKLY;COUNT=4',
+          'EXDATE:20261019T100000',
+          'END:VEVENT',
+          'END:VCALENDAR',
+        ].join('\r\n'),
+        'floating.ics',
+      );
+      const serverZone = serverTimezone();
+      // Any zone but the server's, so the owner's zone cannot paper over a
+      // series walked from the wrong wall clock.
+      const ownerZone = serverZone === 'Asia/Tokyo' ? 'America/Los_Angeles' : 'Asia/Tokyo';
+      const spec = parseRecurrence(
+        {
+          id: 'series',
+          startTime: event.dtStart as Date,
+          endTime: null,
+          isAllDay: false,
+          metadata: { recurrenceRule: event.recurrence, recurrenceTimeZone: event.recurrenceTimeZone },
+          recurrencePattern: null,
+          sourceSystem: 'calendar',
+          sourceId: 'floating@x',
+        },
+        { fallbackTimeZone: ownerZone },
+      );
+      const { starts } = expandSeries(spec!, {
+        from: new Date('2026-09-01T00:00:00Z'),
+        to: new Date('2026-12-01T00:00:00Z'),
+      });
+
+      expect(
+        starts.map((start) => {
+          const wall = wallClockInTZ(start, serverZone);
+
+          return `${wall.month}/${wall.day} ${wall.hour}:${String(wall.minute).padStart(2, '0')}`;
+        }),
+      ).toEqual(['10/5 10:00', '10/12 10:00', '10/26 10:00']);
+    });
+
+    it('leaves the rule off an all-day series, which the nightly time repair moves off UTC midnight', () => {
+      const [event] = parseIcsEvents(
+        [
+          'BEGIN:VCALENDAR',
+          'BEGIN:VEVENT',
+          'UID:all-day@x',
+          'DTSTART;VALUE=DATE:20261005',
+          'RRULE:FREQ=WEEKLY;BYDAY=MO',
+          'EXDATE;VALUE=DATE:20261019',
+          'END:VEVENT',
+          'END:VCALENDAR',
+        ].join('\r\n'),
+        'all-day.ics',
+      );
+
+      expect(event.isAllDay).toBe(true);
+      expect(event.isRecurring).toBe(true);
+      expect(event.recurrence).toBeUndefined();
+      expect(event.recurrenceTimeZone).toBeUndefined();
+    });
+
+    it('leaves the rule off a series whose DTSTART does not parse', () => {
+      const [event] = parseIcsEvents(
+        [
+          'BEGIN:VCALENDAR',
+          'BEGIN:VEVENT',
+          'UID:undated@x',
+          'DTSTART;TZID="(UTC-05:00) Eastern Time (US & Canada)":20261005T100000',
+          'RRULE:FREQ=DAILY',
+          'END:VEVENT',
+          'END:VCALENDAR',
+        ].join('\r\n'),
+        'undated.ics',
+      );
+
+      expect(event.dtStart).toBeUndefined();
+      expect(event.isRecurring).toBe(true);
+      expect(event.recurrence).toBeUndefined();
+      expect(event.recurrenceTimeZone).toBeUndefined();
+    });
+
+    /**
+     * Calendar drops an occurrence when an override row is keyed by its UTC
+     * instant. A floating RECURRENCE-ID, or one in a zone the runtime does not
+     * know, keeps its wall clock as its key, so the series has to be told.
+     */
+    it.each([
+      // The series' zone is America/Los_Angeles; the overrides keep their
+      // Windows-named wall clock as their key.
+      ['a Windows zone name', ';TZID=Pacific Standard Time'],
+      ['a quoted Windows zone name', ';TZID="Pacific Standard Time"'],
+      ['a zone the runtime does not know', ';TZID=Customized Time Zone'],
+      ['a floating time', ''],
+    ])('does not draw the occurrence an override replaces, for %s', (_, tzid) => {
+      const events = parseIcsEvents(
+        [
+          'BEGIN:VCALENDAR',
+          'BEGIN:VEVENT',
+          'UID:moved@x',
+          'RECURRENCE-ID' + tzid + ':20261019T100000',
+          'DTSTART' + tzid + ':20261020T150000',
+          'SUMMARY:Sync, moved to Tuesday',
+          'END:VEVENT',
+          'BEGIN:VEVENT',
+          'UID:moved@x',
+          'DTSTART' + tzid + ':20261005T100000',
+          'RRULE:FREQ=WEEKLY;COUNT=4',
+          'SUMMARY:Sync',
+          'END:VEVENT',
+          'BEGIN:VEVENT',
+          'UID:moved@x',
+          'RECURRENCE-ID' + tzid + ':20261012T100000',
+          'DTSTART' + tzid + ':20261012T100000',
+          'STATUS:CANCELLED',
+          'END:VEVENT',
+          'END:VCALENDAR',
+        ].join('\r\n'),
+        'moved.ics',
+      );
+      const master = events.find((event) => event.id === 'moved@x')!;
+      const overrideIds = events.filter((event) => event !== master).map((event) => event.id);
+
+      expect(overrideIds).toEqual(['moved@x#20261019T100000', 'moved@x#20261012T100000']);
+      expect(master.recurrence).toEqual([
+        'RRULE:FREQ=WEEKLY;COUNT=4',
+        `EXDATE${tzid}:20261019T100000`,
+        `EXDATE${tzid}:20261012T100000`,
+      ]);
+
+      const zone = master.recurrenceTimeZone!;
+      const drawn = expandAll(
+        [
+          {
+            id: 'series',
+            startTime: master.dtStart as Date,
+            endTime: null,
+            isAllDay: false,
+            metadata: { recurrenceRule: master.recurrence, recurrenceTimeZone: zone },
+            recurrencePattern: null,
+            sourceSystem: 'calendar',
+            sourceId: master.id,
+          },
+        ],
+        { from: new Date('2026-09-01T00:00:00Z'), to: new Date('2026-12-01T00:00:00Z') },
+        { fallbackTimeZone: 'UTC' },
+      ).map((occurrence) => {
+        const wall = wallClockInTZ(occurrence.startTime, zone);
+
+        return `${wall.month}/${wall.day} ${wall.hour}:00`;
+      });
+
+      // October 5 is the stored row itself. October 12 was cancelled and
+      // October 19 moved to the 20th, which is the override's own row.
+      expect(drawn).toEqual(['10/26 10:00']);
+    });
+
+    it('adds no EXDATE for an override Calendar already matches by its UTC instant', () => {
+      const events = parseIcsEvents(
+        [
+          'BEGIN:VCALENDAR',
+          'BEGIN:VEVENT',
+          'UID:zoned@x',
+          'DTSTART;TZID=America/Los_Angeles:20261005T100000',
+          'RRULE:FREQ=WEEKLY;COUNT=4',
+          'END:VEVENT',
+          'BEGIN:VEVENT',
+          'UID:zoned@x',
+          'RECURRENCE-ID;TZID=America/Los_Angeles:20261019T100000',
+          'DTSTART;TZID=America/Los_Angeles:20261020T150000',
+          'END:VEVENT',
+          'END:VCALENDAR',
+        ].join('\r\n'),
+        'zoned.ics',
+      );
+
+      expect(events.map((event) => event.id)).toEqual(['zoned@x', 'zoned@x#20261019T170000Z']);
+      expect(events[0].recurrence).toEqual(['RRULE:FREQ=WEEKLY;COUNT=4']);
+    });
+
+    it('adds one EXDATE for an override the export repeats', () => {
+      const override = (sequence: number) => [
+        'BEGIN:VEVENT',
+        'UID:repeated@x',
+        'RECURRENCE-ID:20261019T100000',
+        'DTSTART:20261020T100000',
+        `SEQUENCE:${sequence}`,
+        'END:VEVENT',
+      ];
+      const [master] = parseIcsEvents(
+        [
+          'BEGIN:VCALENDAR',
+          'BEGIN:VEVENT',
+          'UID:repeated@x',
+          'DTSTART:20261005T100000',
+          'RRULE:FREQ=WEEKLY;COUNT=4',
+          'EXDATE:20261019T100000',
+          'END:VEVENT',
+          ...override(1),
+          ...override(2),
+          'END:VCALENDAR',
+        ].join('\r\n'),
+        'repeated.ics',
+      );
+
+      // The master already excludes October 19 in the same spelling, so the
+      // two override blocks add nothing.
+      expect(master.recurrence).toEqual(['RRULE:FREQ=WEEKLY;COUNT=4', 'EXDATE:20261019T100000']);
+
+      const [again] = parseIcsEvents(
+        [
+          'BEGIN:VCALENDAR',
+          'BEGIN:VEVENT',
+          'UID:repeated@x',
+          'DTSTART:20261005T100000',
+          'RRULE:FREQ=WEEKLY;COUNT=4',
+          'END:VEVENT',
+          ...override(1),
+          ...override(2),
+          'END:VCALENDAR',
+        ].join('\r\n'),
+        'repeated.ics',
+      );
+
+      expect(again.recurrence).toEqual(['RRULE:FREQ=WEEKLY;COUNT=4', 'EXDATE:20261019T100000']);
+    });
+
+    it(`leaves the rule off a series listing more than ${MAX_RECURRENCE_DATES} dates`, () => {
+      const stamps = (count: number) =>
+        Array.from({ length: count }, (_, day) =>
+          new Date(Date.UTC(2020, 0, 1 + day, 10)).toISOString().replace(/[-:]|\.\d{3}/g, ''),
+        );
+      const parse = (exdates: string[], rdates: string[]) =>
+        parseIcsEvents(
+          [
+            'BEGIN:VCALENDAR',
+            'BEGIN:VEVENT',
+            'UID:busy@x',
+            'DTSTART:20200101T100000Z',
+            'RRULE:FREQ=DAILY',
+            `EXDATE:${exdates.join(',')}`,
+            `RDATE:${rdates.join(',')}`,
+            'END:VEVENT',
+            'END:VCALENDAR',
+          ].join('\r\n'),
+          'busy.ics',
+        )[0];
+      const dates = stamps(MAX_RECURRENCE_DATES + 1);
+
+      expect(parse(dates.slice(0, 500), dates.slice(500, MAX_RECURRENCE_DATES)).recurrence).toHaveLength(3);
+
+      const over = parse(dates.slice(0, 500), dates.slice(500));
+
+      expect(over.isRecurring).toBe(true);
+      expect(over.recurrence).toBeUndefined();
+      expect(over.recurrenceTimeZone).toBeUndefined();
+    });
+
+    it('leaves the rule off an override, which is one occurrence and not a series', async () => {
+      const pipeline = await importIcs(path.join(FIXTURES_DIR, 'apple-calendar-valarm.ics'));
+      const seriesUid = '0vkr94uvv688d4grk3cns7g3aq_R20210326T210000@example.com';
+      const series = pipeline
+        .map((graph) => graph.item)
+        .filter((item) => (item.id ?? '').startsWith(seriesUid));
+
+      expect(series.find((item) => item.id === seriesUid)?.metadata.recurrenceRule).toEqual([
+        'RRULE:FREQ=WEEKLY;BYDAY=FR',
+      ]);
+      expect(
+        series.filter((item) => item.id !== seriesUid).map((item) => item.metadata.recurrenceRule),
+      ).toEqual([undefined, undefined]);
+    });
+  });
+
+  /**
+   * STATUS, RFC 5545 §3.8.1.11.
+   *
+   * The parser read STATUS into its property map and then never used it, so a
+   * cancelled event was stored as `confirmed`, and every reader of
+   * `ci.events.status` took it for something that happened.
+   */
+  describe('STATUS', () => {
+    it('maps the three VEVENT statuses, in any case, and nothing else', () => {
+      expect(icsEventStatus('CANCELLED')).toBe('cancelled');
+      expect(icsEventStatus('TENTATIVE')).toBe('tentative');
+      expect(icsEventStatus('CONFIRMED')).toBe('confirmed');
+      // §3.2: enumerated property values are case-insensitive.
+      expect(icsEventStatus('Cancelled')).toBe('cancelled');
+      expect(icsEventStatus(' tentative ')).toBe('tentative');
+
+      // VTODO and VJOURNAL values say nothing about an event, and no STATUS at
+      // all leaves the column DEFAULT.
+      expect(icsEventStatus('NEEDS-ACTION')).toBeUndefined();
+      expect(icsEventStatus('COMPLETED')).toBeUndefined();
+      expect(icsEventStatus('')).toBeUndefined();
+      expect(icsEventStatus(undefined)).toBeUndefined();
+    });
+
+    it('states a cancelled occurrence of a series as cancelled, under its override id', async () => {
+      // How Google Takeout writes "delete just this one": the series master,
+      // then a block repeating its UID with the occurrence's RECURRENCE-ID and
+      // STATUS:CANCELLED. The override has to arrive cancelled. The stored row
+      // is what stops the calendar synthesizing that occurrence
+      // (`dropExistingOverrides`), so dropping the block instead would bring
+      // the meeting back.
+      const icsPath = icsFile('ci-ics-status-', 'status.ics', [
+        'BEGIN:VCALENDAR',
+        'VERSION:2.0',
+        'PRODID:-//Google Inc//Google Calendar 70.9054//EN',
+        'BEGIN:VEVENT',
+        'DTSTART;TZID=America/Los_Angeles:20221006T010000',
+        'DTEND;TZID=America/Los_Angeles:20221006T020000',
+        'RRULE:FREQ=WEEKLY;BYDAY=TH',
+        'UID:weekly-sync@google.com',
+        'STATUS:CONFIRMED',
+        'SUMMARY:Weekly sync',
+        'END:VEVENT',
+        'BEGIN:VEVENT',
+        'DTSTART;TZID=America/Los_Angeles:20221013T010000',
+        'DTEND;TZID=America/Los_Angeles:20221013T020000',
+        'UID:weekly-sync@google.com',
+        'RECURRENCE-ID;TZID=America/Los_Angeles:20221013T010000',
+        'STATUS:CANCELLED',
+        'SUMMARY:Weekly sync',
+        'END:VEVENT',
+        'BEGIN:VEVENT',
+        'DTSTART:20221014T170000Z',
+        'UID:maybe-lunch@google.com',
+        'STATUS:TENTATIVE',
+        'SUMMARY:Lunch?',
+        'END:VEVENT',
+        'BEGIN:VEVENT',
+        'DTSTART:20221015T170000Z',
+        'UID:no-status@example.com',
+        'SUMMARY:A calendar that writes no STATUS',
+        'END:VEVENT',
+        'END:VCALENDAR',
+      ]);
+
+      try {
+        const items = (await importIcs(icsPath)).filter((graph) => graph.item).map((graph) => graph.item);
+        const statusOf = (id: string) => items.find((item) => item.id === id)?.metadata.eventStatus;
+
+        // 01:00 America/Los_Angeles on 2022-10-13 (PDT, UTC-7) is 08:00Z.
+        expect(items.map((item) => item.id)).toContain('weekly-sync@google.com#20221013T080000Z');
+        expect(statusOf('weekly-sync@google.com#20221013T080000Z')).toBe('cancelled');
+        expect(statusOf('weekly-sync@google.com')).toBe('confirmed');
+        expect(statusOf('maybe-lunch@google.com')).toBe('tentative');
+        expect(statusOf('no-status@example.com')).toBeUndefined();
+      } finally {
+        fs.rmSync(path.dirname(icsPath), { recursive: true, force: true });
+      }
+    });
+
+    it("reads the event's own STATUS, never a nested component's", () => {
+      // RFC 5545 gives VALARM no STATUS, but the parser must not rely on that:
+      // a stray one inside the block cannot cancel the event around it.
+      const block = (own: string[]) =>
+        [
+          'BEGIN:VCALENDAR',
+          'BEGIN:VEVENT',
+          'UID:nested@x',
+          'DTSTART:20260101T090000Z',
+          ...own,
+          'BEGIN:VALARM',
+          'ACTION:DISPLAY',
+          'TRIGGER:-PT10M',
+          'STATUS:CANCELLED',
+          'END:VALARM',
+          'END:VEVENT',
+          'END:VCALENDAR',
+        ].join('\r\n');
+
+      expect(parseIcsEvents(block([]), 'nested.ics')[0].status).toBeUndefined();
+      expect(parseIcsEvents(block(['STATUS:CONFIRMED']), 'nested.ics')[0].status).toBe('confirmed');
+    });
   });
 });

@@ -1,3 +1,5 @@
+import { fenceUntrusted } from '@ci/common/prompt/untrustedBlock';
+
 import { PersonaComposeService } from '../PersonaComposeService';
 import type { PersonaContextPackService } from '../PersonaContextPackService';
 
@@ -103,6 +105,28 @@ describe('PersonaComposeService', () => {
     expect(result.approach).toHaveLength(2);
     expect(result.evidence[0]?.kind).toBe('dossier');
     expect(chat).toHaveBeenCalledTimes(3);
+  });
+
+  it('drops the prompt escape from the dossier summary when the brief falls back to it', async () => {
+    const { service, chat } = makeService({
+      markdown: `## User Dossier Snapshot\n- Summary: ${fenceUntrusted('**Personality:** Curious.')}`,
+      evidence: [{ kind: 'dossier', note: 'from your dossier' }],
+      hasSignal: true,
+    });
+
+    chat
+      .mockResolvedValueOnce({
+        message: { content: JSON.stringify({ title: 'Plan', openQuestions: [], constraints: [] }) },
+      })
+      // The who-synthesis reply fails its schema, so the brief comes from the summary.
+      .mockResolvedValueOnce({ message: { content: '{}' } })
+      .mockResolvedValueOnce({
+        message: { content: JSON.stringify({ approach: [], people: [], followUps: [], confidence: 0.4 }) },
+      });
+
+    const result = await service.howYoudDoIt(context, 'plan a week', { includeRecall: false });
+
+    expect(result.personaBrief).toBe('You tend to operate like this: **Personality:** Curious.');
   });
 
   it('applyToPossibilities upserts one candidate per approach step', async () => {

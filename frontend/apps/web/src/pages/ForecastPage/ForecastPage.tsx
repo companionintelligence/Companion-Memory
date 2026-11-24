@@ -1,7 +1,7 @@
-import { EmptyState, ErrorPage, LoadingPage, usePageTitle } from '@ci/common';
+import { EmptyState, ErrorPage, forecastBuilt, LoadingPage, usePageTitle } from '@ci/common';
 import { CloudSun } from '@ci/shadcn/icons';
 
-import { useForecastService, useWeekAheadService } from '@/api';
+import { type ForecastBucket, useForecastService, useWeekAheadService } from '@/api';
 import { useFeatures } from '@/common/feature';
 import { ForecastStrip } from '@/components/ForecastStrip';
 import { PageContent } from '@/components/layout';
@@ -9,9 +9,11 @@ import { WeekAhead } from '@/components/WeekAhead';
 import { placeVisible } from '@/lib/forecastDisplay';
 
 import { NextForecast } from './BranchialTree';
-import { NextPlacesPanel } from './ForecastPanels';
+import { CalibrationPanel, DivergenceHeatmapPanel, NextPlacesPanel } from './ForecastPanels';
 import { OffScript } from './OffScript';
 import { useForecastExtras } from './useForecastExtras';
+
+const NO_BUCKETS: ForecastBucket[] = [];
 
 export function ForecastPage() {
   usePageTitle('Forecast - Companion Memory');
@@ -45,13 +47,13 @@ export function ForecastPage() {
           <div className="relative min-h-60 flex-1">
             <EmptyState
               icon={<CloudSun size={48} />}
-              message="Couldn't reach the forecasting service just now. Try again shortly."
+              message="Couldn’t reach the forecasting service just now. Try again shortly."
             />
           </div>
         ) : (
           <div className="flex flex-col gap-6" data-testid="tomorrows-forecast">
             <div>
-              <h2 className="text-2xl font-bold text-foreground">Tomorrow&apos;s Forecast</h2>
+              <h2 className="text-2xl font-bold text-foreground">Tomorrow’s Forecast</h2>
               <ForecastStrip
                 buckets={forecast.buckets}
                 generatedAt={forecast.generatedAt}
@@ -70,6 +72,21 @@ export function ForecastPage() {
             />
             <WeekAhead week={week} due={due} />
             {places.length > 0 ? <NextPlacesPanel places={places} /> : null}
+            <div
+              className="flex flex-col gap-6"
+              style={{
+                contentVisibility: 'auto',
+                containIntrinsicSize: 'auto none auto 220px',
+              }}
+            >
+              <CalibrationPanel calibration={extras.calibration} />
+              {/* The starter prior names one class for every slot. Like the
+                  strip, the heatmap's forecast row waits for a built forecast. */}
+              <DivergenceHeatmapPanel
+                historyDays={extras.historyDays}
+                buckets={forecastBuilt(forecast) ? forecast.buckets : NO_BUCKETS}
+              />
+            </div>
           </div>
         )}
       </PageContent>

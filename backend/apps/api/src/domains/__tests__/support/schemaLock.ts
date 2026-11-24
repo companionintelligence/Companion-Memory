@@ -32,6 +32,9 @@
  * time after. Neither suite is wrong on its own and both pass when run alone,
  * which is exactly why this was read as flakiness for as long as it was.
  *
+ * Creating and compressing `ci.position` chunks deadlock too. Those two are
+ * handled without this lock: see `positionChunks.ts`.
+ *
  * ## The protocol
  *
  * One advisory lock in Postgres, taken in the two modes the problem actually
@@ -112,6 +115,7 @@ async function acquire(
       `${label}: waited ${LOCK_TIMEOUT_MS} ms for the ${mode} ci.* schema test lock and did not get it. ` +
         'Another suite is holding it — most likely one that applies a migration and did not release. ' +
         `Cause: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
     );
   }
 

@@ -1,7 +1,7 @@
 import { Field, ID, ObjectType } from '@nestjs/graphql';
-import GraphQLJSONObject from 'graphql-type-json';
 
 import { type Connection } from '@ci/domains/connections';
+import { GraphQLJSONObject } from '@ci/domains/graphql/scalars/JsonObjectScalar';
 
 import { GlobalUID } from './GlobalUID';
 import { Node } from './Node';

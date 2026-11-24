@@ -147,6 +147,91 @@ describe('ConnectionsController.completeCallback — CI Portal proxy flow', () =
     expect(stored.tokenExpiry!.getTime()).toBeLessThanOrEqual(Date.now() + 3600 * 1000);
   });
 
+  describe('the account id the connection is stored with', () => {
+    // On disconnect the appliance can ask CI Portal to revoke by provider + this id, and every
+    // account here shares CI Portal's device. A browser-supplied id let one account claim
+    // another's provider account and so address that account's stored grant.
+    function storedExternalId(connectionService: ReturnType<typeof makeController>['connectionService']) {
+      const call = connectionService.update.mock.calls.find(([, , input]) => input && 'externalId' in input);
+
+      return (call?.[2] as { externalId?: string } | undefined)?.externalId;
+    }
+
+    it('takes it from CI Portal, over the device channel, not from the browser', async () => {
+      const { controller, cloudOAuthProxyService, connectionService, logger } = makeController();
+      cloudOAuthProxyService.refreshAccessToken.mockResolvedValue({
+        access_token: 'portal-access-token',
+        refresh_token: 'rotated-refresh-token',
+        expires_in: 3600,
+        user_provider_id: 'portal-bound-account',
+      });
+
+      await controller.completeCallback(
+        ctx,
+        proxyBody({ refreshToken: 'fragment-refresh-token', userProviderId: 'someone-elses-account' }),
+      );
+
+      expect(storedExternalId(connectionService)).toBe('portal-bound-account');
+      expect(logger.warn).toHaveBeenCalledWith(
+        'CI Portal bound this grant to a different account than the browser reported',
+        expect.anything(),
+      );
+    });
+
+    it('refuses a second connection to the account CI Portal names, and hands its grant to the first', async () => {
+      const { controller, cloudOAuthProxyService, connectionService } = makeController();
+      cloudOAuthProxyService.refreshAccessToken.mockResolvedValue({
+        access_token: 'portal-access-token',
+        refresh_token: 'rotated-refresh-token',
+        expires_in: 3600,
+        user_provider_id: 'portal-bound-account',
+      });
+      // Nothing under the browser's id; the existing connection is under CI Portal's.
+      connectionService.search.mockImplementation(async (_ctx: unknown, query: { externalId?: string }) =>
+        query.externalId === 'portal-bound-account' ? [{ id: 'conn-existing' }] : [],
+      );
+
+      await expect(
+        controller.completeCallback(
+          ctx,
+          proxyBody({ refreshToken: 'fragment-refresh-token', userProviderId: 'browser-said-this' }),
+        ),
+      ).rejects.toBeInstanceOf(ConflictException);
+
+      expect(connectionService.update).toHaveBeenCalledWith(
+        expect.anything(),
+        'conn-existing',
+        expect.objectContaining({
+          accessToken: 'portal-access-token',
+          refreshToken: 'rotated-refresh-token',
+        }),
+      );
+      expect(connectionService.remove).toHaveBeenCalledWith(expect.anything(), 'conn-1');
+      expect(storedExternalId(connectionService)).toBeUndefined();
+    });
+
+    it("keeps the browser's id when an older CI Portal does not return one", async () => {
+      const { controller, cloudOAuthProxyService, connectionService } = makeController();
+      cloudOAuthProxyService.refreshAccessToken.mockResolvedValue({
+        access_token: 'portal-access-token',
+        refresh_token: 'rotated-refresh-token',
+        expires_in: 3600,
+      });
+
+      await controller.completeCallback(ctx, proxyBody({ refreshToken: 'fragment-refresh-token' }));
+
+      expect(storedExternalId(connectionService)).toBe('up-1');
+    });
+
+    it("keeps the browser's id for an access-token-only grant, which CI Portal stores nothing for", async () => {
+      const { controller, connectionService } = makeController();
+
+      await controller.completeCallback(ctx, proxyBody({ accessToken: 'browser-access-token' }));
+
+      expect(storedExternalId(connectionService)).toBe('up-1');
+    });
+  });
+
   it('refuses a proxy completion that carries neither token before looking anything up', async () => {
     const { controller, cloudOAuthProxyService, connectionService } = makeController();
     // An active connection to the same account must not be the reason anything is

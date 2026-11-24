@@ -3,7 +3,10 @@ import { type ReactNode } from 'react';
 import { Badge, Button, Card } from '@ci/shadcn';
 import { Pencil } from '@ci/shadcn/icons';
 
+import { webAddress } from '@/lib/webAddress';
+
 import type { PersonDraftSource } from './personDraft';
+import { phoneHref } from './phoneHref';
 
 function labelFor(value: string | null | undefined, fallback: string): string {
   const trimmed = value?.trim();
@@ -14,7 +17,7 @@ function labelFor(value: string | null | undefined, fallback: string): string {
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="grid grid-cols-[6rem_minmax(0,1fr)] gap-3 py-2 first:pt-0 last:pb-0">
-      <span className="text-xs uppercase tracking-wide text-muted-foreground">{label}</span>
+      <span className="text-xs text-muted-foreground">{label}</span>
       <span className="min-w-0 break-words text-sm">{children}</span>
     </div>
   );
@@ -116,7 +119,7 @@ export function PersonProfileCard({ person, onEdit }: Props) {
         <div className="flex flex-col gap-1">
           {phones.map((phone) => (
             <span key={`${phone.kind}:${phone.value}`} className="flex items-center gap-2">
-              <a href={`tel:${phone.value}`} className="truncate hover:underline">
+              <a href={phoneHref(phone)} className="truncate hover:underline">
                 {phone.rawValue?.trim() || phone.value}
               </a>
               {phone.label && (
@@ -150,16 +153,27 @@ export function PersonProfileCard({ person, onEdit }: Props) {
   }
 
   if (person.website) {
+    // A contact card keeps its URL as typed, often a bare `www.example.com`.
+    // As an `href` that opened one of Memory's own pages, so only a web
+    // address is a link (see webAddress). The link goes to the parsed form
+    // because a browser reads `https:www.example.com` in an `href` as a path
+    // on Memory's own https origin.
+    const website = webAddress(person.website);
+
     rows.push(
       <Row key="website" label="Website">
-        <a
-          href={person.website}
-          target="_blank"
-          rel="noreferrer noopener"
-          className="truncate hover:underline"
-        >
-          {person.website}
-        </a>
+        {website ? (
+          <a
+            href={website.href}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="truncate hover:underline"
+          >
+            {person.website}
+          </a>
+        ) : (
+          person.website
+        )}
       </Row>,
     );
   }

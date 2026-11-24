@@ -8,7 +8,7 @@
 # UUIDv7 generation uses PG18's native uuidv7() builtin, so no
 # pg_uuidv7 extension is required.
 
-FROM postgres:18.4-bookworm
+FROM postgres:18.6-bookworm
 
 # Add the Timescale apt repository, then install every extension from
 # official upstream packages in a single layer.

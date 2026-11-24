@@ -1,7 +1,5 @@
 # ARCHITECTURE
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 This document states where code goes and why. It is the normative answer to
 "which directory does this belong in", for both the JavaScript and the Python
 stack, so the answer stops being folklore that lives in one file's header
@@ -173,10 +171,10 @@ the contract, and everything behind it can move without a cross-repo import
 sweep.
 
 **The baseline is not clean.**
-`backend/apps/api/.dependency-cruiser-known-violations.json` currently holds 42
-grandfathered entries — 41 `no-cross-domain-internals` and 1 `no-circular` —
-of which 15 come from spec files. `yarn workspace @ci/be-api depcheck` runs
-with `--ignore-known`, so those 42 pass silently; only *new* violations fail.
+`backend/apps/api/.dependency-cruiser-known-violations.json` currently holds 63
+grandfathered entries (60 active known violations — 59 `no-cross-domain-internals`
+and 1 `no-circular`, of which 24 come from spec files). `yarn workspace @ci/be-api depcheck`
+runs with `--ignore-known`, so those 60 pass silently; only *new* violations fail.
 Accepting a new baseline is `yarn workspace @ci/be-api depcheck:accept`, which
 should be a deliberate, reviewed act, not a way to get a branch green. The
 number above is the target to drive to zero, and it is the honest measure of
@@ -306,9 +304,11 @@ pinning: the build plan, GPU detection and the HBPE wheel-tag derivation, the
 `REPO`/`PROJECT_NAME` formula, image tagging, the uv pin. The root
 `package.json` now declares `test` and `typecheck` scripts, so that suite is
 reached by `make test` (the root is a workspace, and `make test` is
-`yarn workspaces foreach --all`) and the code is typechecked by `yarn typecheck`
-and by pr-gate's existing `Type check packages` lane, which runs the same
-`foreach`.
+`yarn workspaces foreach --all`) and the code is typechecked by `make
+typecheck` / `yarn typecheck`. In CI, `ci.yml` runs both as lanes of their
+own, `Type check root` and `Run root tests`, when someone dispatches it. The
+lane that used to type-check this on every PR (`pr-gate.yml`'s `Type check
+packages`) was deleted along with the rest of that file.
 
 Where the logic lives:
 
@@ -394,8 +394,9 @@ is reached.
 
 **`make lint`** — `yarn lint` (oxlint then ESLint) and `yarn format:check`
 (Prettier), then `uv run ruff check .`, `uv run ruff format --check .`,
-`uv run mypy`, `uv lock --check`, `scripts/check-ci-namespace.sh` and
-`scripts/check-capacitor-native-sync.mjs`. `make format` is the writing half.
+`uv run mypy`, `uv lock --check`, `scripts/check-ci-namespace.sh`,
+`scripts/check-capacitor-native-sync.mjs` and `scripts/check-viewport-zoom.mjs`.
+`make format` is the writing half.
 
 ### One lockfile per stack
 
@@ -447,6 +448,23 @@ not oversights, and they have two different reasons:
 precisely because those three trees are outside the normal install: nothing else
 would notice them drifting.
 
+`scripts/check-viewport-zoom.mjs` guards pinch-zoom, the only in-app way to
+enlarge the app (one input to WCAG 1.4.4, not all of it: the fixed root font size
+is a separate gap). Three independent settings can switch it off: a viewport meta
+with `user-scalable=no` or a `maximum-scale` below 5, and Capacitor's
+`zoomEnabled`, which defaults to **false** in each shell (`ios.zoomEnabled` in
+`frontend/apps/ios/capacitor.config.ts`, `android.zoomEnabled` in
+`frontend/apps/android/capacitor.config.ts`). With it off, iOS disables the web
+view's pinch recogniser and Android calls `setBuiltInZoomControls(false)`,
+whatever the page's meta says, so dropping the setting from a config puts the
+lock back silently. It runs in `make lint`, in lint-staged (the root
+`.lintstagedrc`, plus `frontend/apps/web/.lintstagedrc.mjs` for the web app's
+HTML, since that config replaces the root one) and, with negative cases, in
+`yarn test` (`scripts/check-viewport-zoom.test.ts`). Nothing in CI runs it (see
+below). With zoom on, the page height that `usePreventOverscroll` publishes as
+`--vv-height` must stay in layout pixels: the visual viewport shrinks as the page
+is zoomed, and read as a keyboard it crushes the phone column.
+
 ## CI reality
 
 **Nothing in this repository gates a merge.** `main` carries no
@@ -466,28 +484,35 @@ gh workflow run <file> --ref <branch-or-tag>
 `--ref` matters: the workflow file is read from that branch, so a workflow that
 only exists on your branch must be dispatched against it.
 
-Of the thirteen workflow files in `.github/workflows/`, nine are
-`workflow_dispatch`-only: `ci.yml`, `codeql.yml`, `consent-path-gate.yml`,
-`desktop-build.yml`, `e2e.yml`, `migration-integrity-check.yml`,
-`mobile-build.yml`, `publish.yml`, `style-canon-lint.yml`. For those, an absent
-check means nobody dispatched it — not that anything passed.
+Of the thirteen workflow files in `.github/workflows/`, all thirteen are
+`workflow_dispatch`-only as of 2026-09-17: `ci.yml`, `codeql.yml`,
+`consent-path-gate.yml`, `desktop-build.yml`, `desktop-e2e.yml`, `e2e.yml`,
+`migration-integrity-check.yml`, `mobile-build.yml`, `publish.yml`,
+`style-canon-lint.yml`, `benchmark-unit.yml`, `mobile-release.yml`,
+`desktop-release.yml`. For those, an absent check means nobody dispatched it —
+not that anything passed.
 
-Four have automatic triggers:
+Until 2026-09-17, four of them had automatic triggers instead:
 
-- **`pr-gate.yml`** — the one thing that runs on every pull request to `main`.
+- **`pr-gate.yml`** — the one thing that ran on every pull request to `main`.
   Lint (four lanes) and typecheck (two lanes), and nothing else; the unit-test
-  and Python lanes stay on dispatch because they are the expensive half. Its job
-  names match `ci.yml`'s on purpose, so a dispatched `ci.yml` would satisfy the
-  same branch-protection rule rather than sitting beside it as a near-duplicate.
+  and Python lanes stayed on dispatch because they were the expensive half.
+  **Deleted** 2026-09-17 to cut the GitHub Actions bill, along with the six
+  required status checks its lint/typecheck jobs used to produce — nothing
+  gates a merge now, automatically or by review.
 - **`benchmark-unit.yml`** — pull request and push to `main`, path-filtered to
-  `scripts/benchmark/**`. It runs pytest and no linter.
+  `scripts/benchmark/**`. Ran pytest and, later, a pinned ruff. Gated to
+  `workflow_dispatch`-only the same day.
 - **`mobile-release.yml`** — push of an `ios-v*`, `android-v*` or
-  `mobile-release-v*` tag; TestFlight and Play internal.
-- **`desktop-release.yml`** — push of a `desktop-v*` tag.
+  `mobile-release-v*` tag; TestFlight and Play internal. Gated the same day —
+  a tag push now only names the version, dispatch the workflow on it to
+  actually submit.
+- **`desktop-release.yml`** — push of a `desktop-v*` tag. Gated the same day,
+  same story as above.
 
-`codeql.yml` is gated for a specific reason: the scan completes and the SARIF
-upload is then rejected because this private repository has no GitHub Code
-Security. Restore its push/PR triggers only after that is enabled.
+`codeql.yml` is gated for a different, older reason: the scan completes and the
+SARIF upload is then rejected because this private repository has no GitHub
+Code Security. Restore its push/PR triggers only after that is enabled.
 
 Full table and per-workflow commands: [`docs/CI.md`](docs/CI.md). The release
 QA programme, the measured defect baseline, and the proposal for the minimum

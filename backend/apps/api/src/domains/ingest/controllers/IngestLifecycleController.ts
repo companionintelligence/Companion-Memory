@@ -1,7 +1,13 @@
 import { Body, Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
-import { READ_CAPABILITY, RequireCapability, WRITE_CAPABILITY } from '@ci/common/decorators';
+import {
+  CAPTURE_SCOPE,
+  READ_CAPABILITY,
+  RequireCapability,
+  RequireScopes,
+  WRITE_CAPABILITY,
+} from '@ci/common/decorators';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { ValidationPipe } from '@ci/common/pipes';
 import {
@@ -46,7 +52,11 @@ export class IngestLifecycleController {
   // principals), so capability is the ONLY axis standing between a read-only
   // key and this orchestration. Declared per route because `status` below is a
   // genuine read and a class-level `write` would wrongly refuse it.
+  //
+  // Open to the capture scope: step 2 belongs to whoever did step 1, and the
+  // bulk endpoints are capture routes.
   @Post('finish')
+  @RequireScopes(CAPTURE_SCOPE)
   @RequireCapability(WRITE_CAPABILITY)
   async finish(
     @Context() context: RequestContext,

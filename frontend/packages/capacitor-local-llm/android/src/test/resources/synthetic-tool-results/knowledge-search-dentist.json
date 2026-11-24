@@ -1,0 +1,908 @@
+{
+  "summary": "Showing the top 25 of at least 25 matches. The count is not exact.",
+  "totalMatches": null,
+  "truncated": true,
+  "limit": 25,
+  "mode": "hybrid",
+  "items": [
+    {
+      "id": "0199ebbe-d99b-72ec-9899-a7d858674dab",
+      "entityType": "event",
+      "title": "Dentist: Dr. Priya Nair",
+      "eventType": "calendar",
+      "category": "health",
+      "startTime": "2025-10-09T21:30:00.000Z",
+      "endTime": "2025-10-09T22:30:00.000Z",
+      "timeSource": "source",
+      "timePrecision": "minute",
+      "observedAt": null,
+      "durationMinutes": 60,
+      "locationName": "Fremont Smile Dental, Fremont",
+      "locationCoordinates": {
+        "x": -122.2612,
+        "y": 37.8044
+      },
+      "locationEntityId": "0199485b-e8f9-7b1d-9a13-e51003dbc964",
+      "participantEntityIds": [
+        "0199156a-8f77-7d31-9c48-9795033b5f72"
+      ],
+      "organizerEntityId": "01995f6c-a67c-728d-94a6-8bf7b95678d1",
+      "sourceType": "calendar",
+      "sourceSystem": "google_calendar",
+      "sourceId": "evt_e4d6c8868d7ff151e589",
+      "connectionId": "0198f0ab-91de-7a44-b5c1-2e07d8a6f410",
+      "captureTickId": null,
+      "confidenceScore": 1,
+      "isRecurring": false,
+      "recurrencePattern": null,
+      "isAllDay": false,
+      "isPrivate": false,
+      "priority": 0,
+      "metadata": {
+        "htmlLink": "https://calendar.example.com/event?eid=e2fa3ed882931c31124f7a8e",
+        "reminders": [
+          {
+            "method": "popup",
+            "minutes": 30
+          }
+        ]
+      },
+      "isPredicted": false,
+      "isInferred": false,
+      "inferenceSources": {},
+      "tags": [
+        "health"
+      ],
+      "sentimentScore": null,
+      "energyLevel": null,
+      "status": "confirmed",
+      "sourceStatus": "confirmed",
+      "sourceStartTime": "2025-10-09T21:30:00.000Z",
+      "sourceEndTime": "2025-10-09T22:30:00.000Z",
+      "sourceRecurrence": null,
+      "sourceTitle": "Dentist: Dr. Priya Nair",
+      "type": "event",
+      "link": "/events/0199ebbe-d99b-72ec-9899-a7d858674dab"
+    },
+    {
+      "id": "01992f86-8bfa-72c5-9aef-83b932e56c9b",
+      "entityType": "communication",
+      "time": "2025-09-25T16:05:00.000Z",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "communicationType": "email",
+      "deviceId": null,
+      "direction": "inbound",
+      "threadId": "01995625-9ebf-7b05-96e1-6bb88e42d0f2",
+      "fromEntityId": "01992161-6d92-7597-9bfa-bf9fbd662ce2",
+      "toEntityIds": [
+        "01992749-dc1d-78a1-93fb-89191956b200"
+      ],
+      "participantsMetadata": {
+        "from": {
+          "name": "Fremont Smile Dental",
+          "address": "fremont.smile.dental@example.com"
+        }
+      },
+      "metadata": {
+        "platform": "gmail",
+        "service": "Gmail",
+        "importBatch": "takeout-2026-09",
+        "labels": [
+          "health"
+        ]
+      },
+      "subject": "Your appointment is confirmed",
+      "content": "Hello! This confirms your cleaning and exam with Dr. Priya Nair on Thursday, October 9 at 2:30 PM at Fremont Smile Dental, 39100 Liberty St. Please arrive ten minutes early. Reply to this message or call us to reschedule.",
+      "attachments": [],
+      "durationSeconds": null,
+      "sentimentScore": 0.42,
+      "importanceScore": 0.3,
+      "urgencyScore": 0.1,
+      "category": "appointment",
+      "summary": null,
+      "tags": [
+        "health"
+      ],
+      "connectionId": "0198f0ab-91de-7a44-b5c1-2e07d8a6f410",
+      "isEncrypted": false,
+      "isArchived": false,
+      "preview": "Hello! This confirms your cleaning and exam with Dr. Priya N…",
+      "sourceType": "import",
+      "sourceSystem": "google_takeout",
+      "sourceId": "msg-bfddea2db82e5049",
+      "type": "communication",
+      "link": "/communications/01992f86-8bfa-72c5-9aef-83b932e56c9b"
+    },
+    {
+      "id": "01994089-75d8-7a33-9a60-dc9d391a3989",
+      "entityType": "communication",
+      "time": "2025-10-08T17:00:00.000Z",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "communicationType": "sms",
+      "deviceId": null,
+      "direction": "inbound",
+      "threadId": "019927b3-bc51-7457-9b75-22ac2e1e15b2",
+      "fromEntityId": "0199808d-f87c-79f0-9b08-e05ce25b7ab4",
+      "toEntityIds": [
+        "01992d41-2c6b-7ea7-9d4f-137b3acb90bc"
+      ],
+      "participantsMetadata": {
+        "from": {
+          "name": "Fremont Smile Dental",
+          "address": "+15105552212"
+        }
+      },
+      "metadata": {
+        "platform": "imessage",
+        "service": "iMessage",
+        "importBatch": "takeout-2026-09",
+        "labels": []
+      },
+      "subject": null,
+      "content": "Reminder: you have an appointment with Dr. Nair tomorrow, Thu Oct 9 at 2:30 PM. Reply C to confirm or R to reschedule.",
+      "attachments": [],
+      "durationSeconds": null,
+      "sentimentScore": 0.42,
+      "importanceScore": 0.3,
+      "urgencyScore": 0.1,
+      "category": "appointment",
+      "summary": null,
+      "tags": [],
+      "connectionId": "0198f0ab-91de-7a44-b5c1-2e07d8a6f410",
+      "isEncrypted": false,
+      "isArchived": false,
+      "preview": "Reminder: you have an appointment with Dr. Nair tomorrow, Th…",
+      "sourceType": "import",
+      "sourceSystem": "apple_messages",
+      "sourceId": "msg-2df1e2fd69444285",
+      "type": "communication",
+      "link": "/communications/01994089-75d8-7a33-9a60-dc9d391a3989"
+    },
+    {
+      "id": "0199bfb1-f1bf-7b4f-9226-5fead1b071b6",
+      "title": "Floss more before the dentist",
+      "description": null,
+      "status": "pending",
+      "priority": "medium",
+      "dueDate": "2025-10-09",
+      "completedAt": null,
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "tags": [],
+      "createdAt": "2026-09-01T08:00:00.000Z",
+      "updatedAt": "2026-09-01T08:00:00.000Z",
+      "type": "task",
+      "link": "/tasks/0199bfb1-f1bf-7b4f-9226-5fead1b071b6"
+    },
+    {
+      "id": "01991de0-5399-7f2b-9396-2b8c75908bfa",
+      "entityType": "communication",
+      "time": "2024-01-01T06:00:00.000Z",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "communicationType": "sms",
+      "deviceId": null,
+      "direction": "inbound",
+      "threadId": "01993858-775c-767d-97cd-f797c3609691",
+      "fromEntityId": "0199ec66-1cef-773b-9c80-84a145787ab0",
+      "toEntityIds": [
+        "0199a05c-5c6e-7ec3-9a4f-9e163db4d26f"
+      ],
+      "participantsMetadata": {
+        "from": {
+          "name": "Alex Kim",
+          "address": "+15105553665"
+        }
+      },
+      "metadata": {
+        "platform": "imessage",
+        "service": "iMessage",
+        "importBatch": "takeout-2026-09",
+        "labels": []
+      },
+      "subject": null,
+      "content": "Do you still have the number for the plumber?",
+      "attachments": [],
+      "durationSeconds": null,
+      "sentimentScore": 0.42,
+      "importanceScore": 0.3,
+      "urgencyScore": 0.1,
+      "category": "personal",
+      "summary": null,
+      "tags": [],
+      "connectionId": "0198f0ab-91de-7a44-b5c1-2e07d8a6f410",
+      "isEncrypted": false,
+      "isArchived": false,
+      "preview": "Do you still have the number for the plumber?",
+      "sourceType": "import",
+      "sourceSystem": "apple_messages",
+      "sourceId": "msg-6d8d57c20f9437c4",
+      "type": "communication",
+      "link": "/communications/01991de0-5399-7f2b-9396-2b8c75908bfa"
+    },
+    {
+      "id": "0199c426-becc-7bad-99c1-5d7ff018835c",
+      "entityType": "communication",
+      "time": "2025-06-04T13:11:00.000Z",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "communicationType": "email",
+      "deviceId": null,
+      "direction": "inbound",
+      "threadId": "01996daa-1507-7e0d-97a7-6a5b7c4578af",
+      "fromEntityId": "01994b12-bfdc-7cdd-9877-fece549d75ec",
+      "toEntityIds": [
+        "0199deda-e50b-7ac9-94df-2b0e8be05aa6"
+      ],
+      "participantsMetadata": {
+        "from": {
+          "name": "Neighborhood Association",
+          "address": "neighborhood.association@example.com"
+        }
+      },
+      "metadata": {
+        "platform": "gmail",
+        "service": "Gmail",
+        "importBatch": "takeout-2026-09",
+        "labels": [
+          "updates"
+        ]
+      },
+      "subject": "Invitation: team offsite",
+      "content": "Maria Gonzalez shared the document Q3 planning notes with you. Open it to view and comment. You are receiving this because your address was entered as a collaborator.",
+      "attachments": [],
+      "durationSeconds": null,
+      "sentimentScore": 0.42,
+      "importanceScore": 0.3,
+      "urgencyScore": 0.1,
+      "category": "notification",
+      "summary": null,
+      "tags": [
+        "updates"
+      ],
+      "connectionId": "0198f0ab-91de-7a44-b5c1-2e07d8a6f410",
+      "isEncrypted": false,
+      "isArchived": false,
+      "preview": "Maria Gonzalez shared the document Q3 planning notes with yo…",
+      "sourceType": "import",
+      "sourceSystem": "google_takeout",
+      "sourceId": "msg-1858e0e21656e740",
+      "type": "communication",
+      "link": "/communications/0199c426-becc-7bad-99c1-5d7ff018835c"
+    },
+    {
+      "id": "0199e270-dcfe-7cdb-9453-ede6183c9674",
+      "title": "Recipe: lemon olive oil cake",
+      "content": "Oat milk, lemons, eggs, sourdough, bananas, the good butter, parsley, two limes, olive oil if we are low. Check whether the farmers market still has the plums.",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "createdAt": "2026-11-07T20:22:00.000Z",
+      "updatedAt": "2026-11-07T20:22:00.000Z",
+      "type": "note",
+      "link": "/notes/0199e270-dcfe-7cdb-9453-ede6183c9674"
+    },
+    {
+      "id": "0199d237-5227-74f4-93fe-307f2db8b4ce",
+      "entityType": "communication",
+      "time": "2024-04-10T12:33:00.000Z",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "communicationType": "sms",
+      "deviceId": null,
+      "direction": "outbound",
+      "threadId": "01995869-555e-7979-9b95-1b8f21f94be5",
+      "fromEntityId": "0199afc0-7b57-7e98-9c24-4001e2ce3a17",
+      "toEntityIds": [
+        "019987da-593f-730d-9628-5551c11c3012"
+      ],
+      "participantsMetadata": {
+        "from": {
+          "name": "Alex Kim",
+          "address": "+15105552446"
+        }
+      },
+      "metadata": {
+        "platform": "imessage",
+        "service": "iMessage",
+        "importBatch": "takeout-2026-09",
+        "labels": []
+      },
+      "subject": null,
+      "content": "The blue folder is on the printer, grab it before the three o'clock",
+      "attachments": [],
+      "durationSeconds": null,
+      "sentimentScore": 0.42,
+      "importanceScore": 0.3,
+      "urgencyScore": 0.1,
+      "category": "personal",
+      "summary": null,
+      "tags": [],
+      "connectionId": "0198f0ab-91de-7a44-b5c1-2e07d8a6f410",
+      "isEncrypted": false,
+      "isArchived": false,
+      "preview": "The blue folder is on the printer, grab it before the three …",
+      "sourceType": "import",
+      "sourceSystem": "apple_messages",
+      "sourceId": "msg-8d89a984f3b98e24",
+      "type": "communication",
+      "link": "/communications/0199d237-5227-74f4-93fe-307f2db8b4ce"
+    },
+    {
+      "id": "019973d3-a6ba-73d8-9456-a517157e0ced",
+      "entityType": "content",
+      "type": "photo",
+      "title": "IMG_4148.jpeg",
+      "text": "A heron-shaped weather vane on top of a barn roof against a cloudy sky.",
+      "mimetype": "image/jpeg",
+      "externalId": "IMG-f3acc43092",
+      "externalIdKind": "apple_photos",
+      "sourceUrl": null,
+      "sourceData": {
+        "width": 4032,
+        "height": 3024,
+        "takenAt": "2025-09-13T19:44:00.000Z",
+        "camera": "iPhone 15 Pro",
+        "place": null
+      },
+      "sourceType": "import",
+      "sourceSystem": "apple_photos",
+      "sourceId": "asset-9774bf4c54c430d7",
+      "connectionId": "0198f0ab-91de-7a44-b5c1-2e07d8a6f410",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "eventId": null,
+      "createdAt": "2025-09-13T19:44:00.000Z",
+      "updatedAt": "2025-09-13T19:44:00.000Z",
+      "mimeCategory": "image",
+      "tags": [],
+      "type": "content",
+      "link": "/content/019973d3-a6ba-73d8-9456-a517157e0ced"
+    },
+    {
+      "id": "019965e7-4697-7bdf-9dfc-13517cfb6d7c",
+      "entityType": "communication",
+      "time": "2026-02-16T11:55:00.000Z",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "communicationType": "sms",
+      "deviceId": null,
+      "direction": "outbound",
+      "threadId": "0199edc0-7433-752e-9a1f-94aeb3702ac2",
+      "fromEntityId": "01992772-23d6-761e-9475-a66c740b0787",
+      "toEntityIds": [
+        "0199c4a1-2e25-7abd-9bb7-87a28e924e6f"
+      ],
+      "participantsMetadata": {
+        "from": {
+          "name": "Alex Kim",
+          "address": "+15105552974"
+        }
+      },
+      "metadata": {
+        "platform": "imessage",
+        "service": "iMessage",
+        "importBatch": "takeout-2026-09",
+        "labels": []
+      },
+      "subject": null,
+      "content": "Did the package come? The tracking says it was left at the front desk",
+      "attachments": [],
+      "durationSeconds": null,
+      "sentimentScore": 0.42,
+      "importanceScore": 0.3,
+      "urgencyScore": 0.1,
+      "category": "personal",
+      "summary": null,
+      "tags": [],
+      "connectionId": "0198f0ab-91de-7a44-b5c1-2e07d8a6f410",
+      "isEncrypted": false,
+      "isArchived": false,
+      "preview": "Did the package come? The tracking says it was left at the f…",
+      "sourceType": "import",
+      "sourceSystem": "apple_messages",
+      "sourceId": "msg-908b52982bd166dd",
+      "type": "communication",
+      "link": "/communications/019965e7-4697-7bdf-9dfc-13517cfb6d7c"
+    },
+    {
+      "id": "01999c59-b592-718b-960e-6c2eb60673c1",
+      "entityType": "communication",
+      "time": "2024-07-19T18:06:00.000Z",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "communicationType": "email",
+      "deviceId": null,
+      "direction": "inbound",
+      "threadId": "0199e13e-cfa8-7418-9cde-eae147dcd791",
+      "fromEntityId": "0199ff34-ba3a-7904-9a81-1c4769c3450d",
+      "toEntityIds": [
+        "0199c4e9-4e3d-7a6f-9aee-249d272e8cf8"
+      ],
+      "participantsMetadata": {
+        "from": {
+          "name": "Orders",
+          "address": "orders@example.com"
+        }
+      },
+      "metadata": {
+        "platform": "gmail",
+        "service": "Gmail",
+        "importBatch": "takeout-2026-09",
+        "labels": [
+          "updates"
+        ]
+      },
+      "subject": "Heron Street neighborhood association minutes",
+      "content": "Thanks for your order. Your package is on its way and should arrive in three to five business days. Track it from your account page at any time. If anything looks wrong with the shipment, reply to this message and we will make it right.",
+      "attachments": [],
+      "durationSeconds": null,
+      "sentimentScore": 0.42,
+      "importanceScore": 0.3,
+      "urgencyScore": 0.1,
+      "category": "notification",
+      "summary": null,
+      "tags": [
+        "updates"
+      ],
+      "connectionId": "0198f0ab-91de-7a44-b5c1-2e07d8a6f410",
+      "isEncrypted": false,
+      "isArchived": false,
+      "preview": "Thanks for your order. Your package is on its way and should…",
+      "sourceType": "import",
+      "sourceSystem": "google_takeout",
+      "sourceId": "msg-14c8023dc344f9e6",
+      "type": "communication",
+      "link": "/communications/01999c59-b592-718b-960e-6c2eb60673c1"
+    },
+    {
+      "id": "01993681-9284-7660-9371-3fd399429449",
+      "title": "Book notes: The Overstory",
+      "content": "Chapter three is where it turns. The idea that trees communicate through the soil is less settled than the book makes it sound, but the writing about the chestnut is worth rereading. Quote to remember on page 61.",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "createdAt": "2025-12-22T10:17:00.000Z",
+      "updatedAt": "2025-12-22T10:17:00.000Z",
+      "type": "note",
+      "link": "/notes/01993681-9284-7660-9371-3fd399429449"
+    },
+    {
+      "id": "0199a05e-55e2-78cd-9d7f-3ec4c11593d5",
+      "entityType": "communication",
+      "time": "2026-05-25T17:28:00.000Z",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "communicationType": "sms",
+      "deviceId": null,
+      "direction": "inbound",
+      "threadId": "0199908d-cb95-747e-9814-966221f26cb0",
+      "fromEntityId": "0199ee46-a534-72f4-9123-58063e345f0f",
+      "toEntityIds": [
+        "01993ba5-e6b9-795d-91ea-47c53e84744a"
+      ],
+      "participantsMetadata": {
+        "from": {
+          "name": "Jordan Lee",
+          "address": "+15105554462"
+        }
+      },
+      "metadata": {
+        "platform": "imessage",
+        "service": "iMessage",
+        "importBatch": "takeout-2026-09",
+        "labels": []
+      },
+      "subject": null,
+      "content": "Did the package come? The tracking says it was left at the front desk",
+      "attachments": [],
+      "durationSeconds": null,
+      "sentimentScore": 0.42,
+      "importanceScore": 0.3,
+      "urgencyScore": 0.1,
+      "category": "personal",
+      "summary": null,
+      "tags": [],
+      "connectionId": "0198f0ab-91de-7a44-b5c1-2e07d8a6f410",
+      "isEncrypted": false,
+      "isArchived": false,
+      "preview": "Did the package come? The tracking says it was left at the f…",
+      "sourceType": "import",
+      "sourceSystem": "apple_messages",
+      "sourceId": "msg-ce738b5653edbfad",
+      "type": "communication",
+      "link": "/communications/0199a05e-55e2-78cd-9d7f-3ec4c11593d5"
+    },
+    {
+      "id": "019956b5-8391-7166-9388-bff7cb7ab54d",
+      "title": "Renew library card",
+      "description": null,
+      "status": "pending",
+      "priority": "medium",
+      "dueDate": "2024-10-01T00:00:00.000Z",
+      "completedAt": null,
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "tags": [],
+      "createdAt": "2026-09-01T08:00:00.000Z",
+      "updatedAt": "2026-09-01T08:00:00.000Z",
+      "type": "task",
+      "link": "/tasks/019956b5-8391-7166-9388-bff7cb7ab54d"
+    },
+    {
+      "id": "0199fa88-50a2-7bc3-910f-78505bfb3555",
+      "entityType": "communication",
+      "time": "2025-03-04T16:50:00.000Z",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "communicationType": "sms",
+      "deviceId": null,
+      "direction": "inbound",
+      "threadId": "0199d468-9da1-7a73-9f08-d089f81cf93c",
+      "fromEntityId": "0199368e-10ea-79d9-9eb3-54eb6337ed9e",
+      "toEntityIds": [
+        "0199cfa0-2761-716d-99f9-5ccbb370c88f"
+      ],
+      "participantsMetadata": {
+        "from": {
+          "name": "Jordan Lee",
+          "address": "+15105552203"
+        }
+      },
+      "metadata": {
+        "platform": "imessage",
+        "service": "iMessage",
+        "importBatch": "takeout-2026-09",
+        "labels": []
+      },
+      "subject": null,
+      "content": "The blue folder is on the printer, grab it before the three o'clock",
+      "attachments": [],
+      "durationSeconds": null,
+      "sentimentScore": 0.42,
+      "importanceScore": 0.3,
+      "urgencyScore": 0.1,
+      "category": "personal",
+      "summary": null,
+      "tags": [],
+      "connectionId": "0198f0ab-91de-7a44-b5c1-2e07d8a6f410",
+      "isEncrypted": false,
+      "isArchived": false,
+      "preview": "The blue folder is on the printer, grab it before the three …",
+      "sourceType": "import",
+      "sourceSystem": "apple_messages",
+      "sourceId": "msg-ed2bd896bbf1aaf1",
+      "type": "communication",
+      "link": "/communications/0199fa88-50a2-7bc3-910f-78505bfb3555"
+    },
+    {
+      "id": "01998fbc-e5fa-7dbf-9553-2b81ace6584a",
+      "entityType": "communication",
+      "time": "2026-08-07T08:01:00.000Z",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "communicationType": "email",
+      "deviceId": null,
+      "direction": "inbound",
+      "threadId": "01999f23-70ad-79cc-94df-4067105af023",
+      "fromEntityId": "019927c4-f905-7416-967c-6c841a939e46",
+      "toEntityIds": [
+        "0199b290-57a8-7748-9f1c-26dfd892c726"
+      ],
+      "participantsMetadata": {
+        "from": {
+          "name": "Orders",
+          "address": "orders@example.com"
+        }
+      },
+      "metadata": {
+        "platform": "gmail",
+        "service": "Gmail",
+        "importBatch": "takeout-2026-09",
+        "labels": [
+          "updates"
+        ]
+      },
+      "subject": "Your order has shipped",
+      "content": "The neighborhood association met on Tuesday evening. Items discussed: the repaving schedule for Heron Street, a proposal for a community garden on the vacant lot, and the annual block party. Minutes are attached. The next meeting is the first Tuesday of next month.",
+      "attachments": [],
+      "durationSeconds": null,
+      "sentimentScore": 0.42,
+      "importanceScore": 0.3,
+      "urgencyScore": 0.1,
+      "category": "notification",
+      "summary": null,
+      "tags": [
+        "updates"
+      ],
+      "connectionId": "0198f0ab-91de-7a44-b5c1-2e07d8a6f410",
+      "isEncrypted": false,
+      "isArchived": false,
+      "preview": "The neighborhood association met on Tuesday evening. Items d…",
+      "sourceType": "import",
+      "sourceSystem": "google_takeout",
+      "sourceId": "msg-8fe2dafe0990844b",
+      "type": "communication",
+      "link": "/communications/01998fbc-e5fa-7dbf-9553-2b81ace6584a"
+    },
+    {
+      "id": "0199e765-7b88-7b29-96a0-49c48d6d4ef6",
+      "title": "Grocery list",
+      "content": "Whisk the eggs and sugar until pale, fold in the olive oil, zest and juice of two lemons, then the flour. Bake at 350 for forty minutes until a skewer comes out clean.",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "createdAt": "2024-01-10T15:12:00.000Z",
+      "updatedAt": "2024-01-10T15:12:00.000Z",
+      "type": "note",
+      "link": "/notes/0199e765-7b88-7b29-96a0-49c48d6d4ef6"
+    },
+    {
+      "id": "0199fb30-99e2-73e9-9c3c-e10645f121a1",
+      "entityType": "communication",
+      "time": "2025-06-13T07:23:00.000Z",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "communicationType": "sms",
+      "deviceId": null,
+      "direction": "outbound",
+      "threadId": "01995cd7-a9c7-74ad-9cd0-a8700ff6e42b",
+      "fromEntityId": "0199dc93-fc92-7800-9ffb-efe628081bae",
+      "toEntityIds": [
+        "01991c87-2cbb-77f1-94fb-c5b5efdbb8c2"
+      ],
+      "participantsMetadata": {
+        "from": {
+          "name": "Sam Patel",
+          "address": "+15105552744"
+        }
+      },
+      "metadata": {
+        "platform": "imessage",
+        "service": "iMessage",
+        "importBatch": "takeout-2026-09",
+        "labels": []
+      },
+      "subject": null,
+      "content": "Do you still have the number for the plumber?",
+      "attachments": [],
+      "durationSeconds": null,
+      "sentimentScore": 0.42,
+      "importanceScore": 0.3,
+      "urgencyScore": 0.1,
+      "category": "personal",
+      "summary": null,
+      "tags": [],
+      "connectionId": "0198f0ab-91de-7a44-b5c1-2e07d8a6f410",
+      "isEncrypted": false,
+      "isArchived": false,
+      "preview": "Do you still have the number for the plumber?",
+      "sourceType": "import",
+      "sourceSystem": "apple_messages",
+      "sourceId": "msg-b427b9d74470c201",
+      "type": "communication",
+      "link": "/communications/0199fb30-99e2-73e9-9c3c-e10645f121a1"
+    },
+    {
+      "id": "0199c26c-48a3-7208-9744-8fef62e1af85",
+      "entityType": "content",
+      "type": "photo",
+      "title": "IMG_4518.jpeg",
+      "text": "A plate of pastries on a wooden table next to a cup of coffee.",
+      "mimetype": "image/jpeg",
+      "externalId": "IMG-5ada494d44",
+      "externalIdKind": "apple_photos",
+      "sourceUrl": null,
+      "sourceData": {
+        "width": 4032,
+        "height": 3024,
+        "takenAt": "2026-11-16T14:34:00.000Z",
+        "camera": "iPhone 15 Pro",
+        "place": null
+      },
+      "sourceType": "import",
+      "sourceSystem": "apple_photos",
+      "sourceId": "asset-cb9d52ac03ded61b",
+      "connectionId": "0198f0ab-91de-7a44-b5c1-2e07d8a6f410",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "eventId": null,
+      "createdAt": "2026-11-16T14:34:00.000Z",
+      "updatedAt": "2026-11-16T14:34:00.000Z",
+      "mimeCategory": "image",
+      "tags": [],
+      "type": "content",
+      "link": "/content/0199c26c-48a3-7208-9744-8fef62e1af85"
+    },
+    {
+      "id": "0199ec89-982c-789b-9bae-facddb27d4e6",
+      "entityType": "communication",
+      "time": "2024-04-19T06:45:00.000Z",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "communicationType": "sms",
+      "deviceId": null,
+      "direction": "outbound",
+      "threadId": "019949a3-db0b-77b0-9b92-9223c8cb0974",
+      "fromEntityId": "0199c65c-b9c8-7feb-919b-80e00c1e3ca1",
+      "toEntityIds": [
+        "01993c66-ae2a-74ed-9b25-230c5ab39efa"
+      ],
+      "participantsMetadata": {
+        "from": {
+          "name": "Maria Gonzalez",
+          "address": "+15105557346"
+        }
+      },
+      "metadata": {
+        "platform": "imessage",
+        "service": "iMessage",
+        "importBatch": "takeout-2026-09",
+        "labels": []
+      },
+      "subject": null,
+      "content": "Alvarez and Sons is quoting the fence repair at nine hundred dollars",
+      "attachments": [],
+      "durationSeconds": null,
+      "sentimentScore": 0.42,
+      "importanceScore": 0.3,
+      "urgencyScore": 0.1,
+      "category": "personal",
+      "summary": null,
+      "tags": [],
+      "connectionId": "0198f0ab-91de-7a44-b5c1-2e07d8a6f410",
+      "isEncrypted": false,
+      "isArchived": false,
+      "preview": "Alvarez and Sons is quoting the fence repair at nine hundred…",
+      "sourceType": "import",
+      "sourceSystem": "apple_messages",
+      "sourceId": "msg-d6557236e6796199",
+      "type": "communication",
+      "link": "/communications/0199ec89-982c-789b-9bae-facddb27d4e6"
+    },
+    {
+      "id": "01991cd8-344d-7486-916d-abb3498050da",
+      "entityType": "communication",
+      "time": "2025-09-22T13:56:00.000Z",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "communicationType": "email",
+      "deviceId": null,
+      "direction": "inbound",
+      "threadId": "0199b24b-8319-7973-9fc6-a0707e95fcbe",
+      "fromEntityId": "01997edb-5463-7b39-992f-b72f2b1da41b",
+      "toEntityIds": [
+        "01997ec4-5596-7bd6-9f09-9aa5f7d5942c"
+      ],
+      "participantsMetadata": {
+        "from": {
+          "name": "Accounts",
+          "address": "accounts@example.com"
+        }
+      },
+      "metadata": {
+        "platform": "gmail",
+        "service": "Gmail",
+        "importBatch": "takeout-2026-09",
+        "labels": [
+          "updates"
+        ]
+      },
+      "subject": "Confirmation: appointment with your accountant",
+      "content": "Your appointment with the accountant is confirmed for Tuesday, November 18 at 10:00 AM. Please bring last year's return and any new forms. Parking is available behind the building.",
+      "attachments": [],
+      "durationSeconds": null,
+      "sentimentScore": 0.42,
+      "importanceScore": 0.3,
+      "urgencyScore": 0.1,
+      "category": "notification",
+      "summary": null,
+      "tags": [
+        "updates"
+      ],
+      "connectionId": "0198f0ab-91de-7a44-b5c1-2e07d8a6f410",
+      "isEncrypted": false,
+      "isArchived": false,
+      "preview": "Your appointment with the accountant is confirmed for Tuesda…",
+      "sourceType": "import",
+      "sourceSystem": "google_takeout",
+      "sourceId": "msg-1fc333c0a9968cb9",
+      "type": "communication",
+      "link": "/communications/01991cd8-344d-7486-916d-abb3498050da"
+    },
+    {
+      "id": "0199950d-5214-7bdc-91a0-921e6d9bc9db",
+      "title": "Recipe: lemon olive oil cake",
+      "content": "Oat milk, lemons, eggs, sourdough, bananas, the good butter, parsley, two limes, olive oil if we are low. Check whether the farmers market still has the plums.",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "createdAt": "2026-02-25T20:07:00.000Z",
+      "updatedAt": "2026-02-25T20:07:00.000Z",
+      "type": "note",
+      "link": "/notes/0199950d-5214-7bdc-91a0-921e6d9bc9db"
+    },
+    {
+      "id": "0199fb3b-8157-74d7-9aed-d95505671ed9",
+      "entityType": "communication",
+      "time": "2024-07-01T12:18:00.000Z",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "communicationType": "sms",
+      "deviceId": null,
+      "direction": "inbound",
+      "threadId": "01994234-8d10-787b-9e76-8a0ca86a6dc7",
+      "fromEntityId": "019934d7-6e99-7d84-99f9-320680809208",
+      "toEntityIds": [
+        "01999596-1e01-786c-917a-7f3505946f3c"
+      ],
+      "participantsMetadata": {
+        "from": {
+          "name": "Maria Gonzalez",
+          "address": "+15105555070"
+        }
+      },
+      "metadata": {
+        "platform": "imessage",
+        "service": "iMessage",
+        "importBatch": "takeout-2026-09",
+        "labels": []
+      },
+      "subject": null,
+      "content": "The blue folder is on the printer, grab it before the three o'clock",
+      "attachments": [],
+      "durationSeconds": null,
+      "sentimentScore": 0.42,
+      "importanceScore": 0.3,
+      "urgencyScore": 0.1,
+      "category": "personal",
+      "summary": null,
+      "tags": [],
+      "connectionId": "0198f0ab-91de-7a44-b5c1-2e07d8a6f410",
+      "isEncrypted": false,
+      "isArchived": false,
+      "preview": "The blue folder is on the printer, grab it before the three …",
+      "sourceType": "import",
+      "sourceSystem": "apple_messages",
+      "sourceId": "msg-821a30a0b7ab6e59",
+      "type": "communication",
+      "link": "/communications/0199fb3b-8157-74d7-9aed-d95505671ed9"
+    },
+    {
+      "id": "0199f1b0-8227-7fe6-9434-618cfe6d4820",
+      "title": "Call dentist to confirm",
+      "description": null,
+      "status": "pending",
+      "priority": "medium",
+      "dueDate": "2025-12-04T00:00:00.000Z",
+      "completedAt": null,
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "tags": [],
+      "createdAt": "2026-09-01T08:00:00.000Z",
+      "updatedAt": "2026-09-01T08:00:00.000Z",
+      "type": "task",
+      "link": "/tasks/0199f1b0-8227-7fe6-9434-618cfe6d4820"
+    },
+    {
+      "id": "01992e24-af4a-752c-9b0a-5e2db2e141f8",
+      "entityType": "communication",
+      "time": "2026-05-07T11:40:00.000Z",
+      "userId": "0198f0aa-3b52-7c10-8e2d-6a9f01c4d377",
+      "communicationType": "sms",
+      "deviceId": null,
+      "direction": "inbound",
+      "threadId": "01995ec4-3a6c-7e69-951e-913838a49cd3",
+      "fromEntityId": "0199c766-bea8-7829-94dc-c403795bbf8e",
+      "toEntityIds": [
+        "01995306-e589-7f7d-9b3a-ae8e3be5a602"
+      ],
+      "participantsMetadata": {
+        "from": {
+          "name": "Sam Patel",
+          "address": "+15105550673"
+        }
+      },
+      "metadata": {
+        "platform": "imessage",
+        "service": "iMessage",
+        "importBatch": "takeout-2026-09",
+        "labels": []
+      },
+      "subject": null,
+      "content": "Can you pick up oat milk on the way home?",
+      "attachments": [],
+      "durationSeconds": null,
+      "sentimentScore": 0.42,
+      "importanceScore": 0.3,
+      "urgencyScore": 0.1,
+      "category": "personal",
+      "summary": null,
+      "tags": [],
+      "connectionId": "0198f0ab-91de-7a44-b5c1-2e07d8a6f410",
+      "isEncrypted": false,
+      "isArchived": false,
+      "preview": "Can you pick up oat milk on the way home?",
+      "sourceType": "import",
+      "sourceSystem": "apple_messages",
+      "sourceId": "msg-6ed37cd118726a9b",
+      "type": "communication",
+      "link": "/communications/01992e24-af4a-752c-9b0a-5e2db2e141f8"
+    }
+  ]
+}

@@ -643,10 +643,14 @@ describe('DeadLetterReaperListener', () => {
     }
 
     /**
-     * One exhausted job on the dead-letter queue, as pg-boss re-inserts it:
-     * original payload in `data`, the failure in `output`.
+     * One exhausted job on the dead-letter queue, as pg-boss 10 re-inserted it:
+     * original payload in `data`, the failure in `output`. pg-boss 12 leaves
+     * `output` empty and puts the failure in `source_output` and the queue it
+     * failed on in `source_name`; pass those for that shape.
      */
-    async function seedDeadLetter(fields: { data?: unknown; output?: unknown } = {}): Promise<string> {
+    async function seedDeadLetter(
+      fields: { data?: unknown; output?: unknown; sourceOutput?: unknown; sourceName?: string } = {},
+    ): Promise<string> {
       const id = randomUUID();
       // Year 2000 + a monotonic counter: older than every genuine dead letter,
       // so `ORDER BY created_on LIMIT` is deterministic no matter what the live
@@ -654,9 +658,18 @@ describe('DeadLetterReaperListener', () => {
       const createdOn = new Date(Date.UTC(2000, 0, 1) + clock++ * 1_000).toISOString();
 
       await runner.query(
-        `INSERT INTO pgboss.job (id, name, data, output, created_on, keep_until)
-         VALUES ($1::uuid, $2, $3::jsonb, $4::jsonb, $5::timestamptz, $5::timestamptz + interval '30 days')`,
-        [id, DEAD_LETTER_QUEUE, toJsonb(fields.data), toJsonb(fields.output), createdOn],
+        `INSERT INTO pgboss.job (id, name, data, output, source_output, source_name, created_on, keep_until)
+         VALUES ($1::uuid, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6, $7::timestamptz,
+                 $7::timestamptz + interval '30 days')`,
+        [
+          id,
+          DEAD_LETTER_QUEUE,
+          toJsonb(fields.data),
+          toJsonb(fields.output),
+          toJsonb(fields.sourceOutput),
+          fields.sourceName ?? null,
+          createdOn,
+        ],
       );
 
       return id;
@@ -669,6 +682,7 @@ describe('DeadLetterReaperListener', () => {
       stage: string | null;
       entity_type: string | null;
       entity_id: string | null;
+      user_id: string | null;
       payload: unknown;
       error: string;
       failed_at: Date;
@@ -725,6 +739,102 @@ describe('DeadLetterReaperListener', () => {
       expect(letter.error).toContain('at open (fs.js:1:1)');
     });
 
+    it('records the queue the job failed on, read from its failure output', async () => {
+      // pg-boss drops the source queue when it copies a job onto `dead-letter`,
+      // so PGBossEventService names it in `output.queue`. Replay sends the
+      // letter to this queue alone. Recording `dead-letter` here is what sent a
+      // `file.uploaded` that failed only its preview back to all six listeners.
+      const id = await seedDeadLetter({
+        data: { name: 'file.uploaded', fileId: randomUUID() },
+        output: { message: 'vips not found on PATH', queue: 'file-preview-generation' },
+      });
+
+      await listener.reap();
+
+      const [letter] = await lettersFor([id]);
+      expect(letter.queue).toBe('file-preview-generation');
+      expect(letter.error).toBe('vips not found on PATH');
+    });
+
+    /**
+     * The shape every dead letter has had since pg-boss 12: the copy is a new
+     * job that has not run, so its `output` is NULL. The failed job's output
+     * and queue ride along as `source_output` and `source_name`. Reading
+     * `output` alone filed every one of these as `dead-letter` with the "no
+     * recorded output" placeholder.
+     */
+    it('reads the failure and its queue from where pg-boss 12 keeps them', async () => {
+      const id = await seedDeadLetter({
+        data: { name: 'file.uploaded', fileId: randomUUID() },
+        sourceName: 'document-parsing',
+        sourceOutput: {
+          message: 'fetch failed',
+          stack: 'TypeError: fetch failed\n    at MarkItDownExtractor.parse (MarkItDownExtractor.ts:69:22)',
+          queue: 'document-parsing',
+        },
+      });
+
+      await listener.reap();
+
+      const [letter] = await lettersFor([id]);
+      expect(letter.queue).toBe('document-parsing');
+      expect(letter.error).toBe(
+        'fetch failed\nTypeError: fetch failed\n    at MarkItDownExtractor.parse (MarkItDownExtractor.ts:69:22)',
+      );
+    });
+
+    it("takes the queue from `source_name` when the failure names none, as pg-boss's own expiry does not", async () => {
+      const id = await seedDeadLetter({
+        data: { name: 'file.uploaded' },
+        sourceName: 'file-preview-generation',
+        sourceOutput: { value: { message: 'job failed by timeout in active state' } },
+      });
+
+      await listener.reap();
+
+      const [letter] = await lettersFor([id]);
+      expect(letter.queue).toBe('file-preview-generation');
+      expect(letter.error).toContain('job failed by timeout in active state');
+    });
+
+    it.each([
+      ['a blank `source_name`', ''],
+      ['a `source_name` that is the dead-letter queue itself', DEAD_LETTER_QUEUE],
+    ])('keeps `dead-letter` for %s when the failure names no queue', async (_label, sourceName) => {
+      const id = await seedDeadLetter({
+        data: { name: 'file.uploaded' },
+        sourceName,
+        sourceOutput: { message: 'boom' },
+      });
+
+      await listener.reap();
+
+      const [letter] = await lettersFor([id]);
+      expect(letter.queue).toBe(DEAD_LETTER_QUEUE);
+      expect(letter.error).toBe('boom');
+    });
+
+    it.each([
+      ['no output at all', undefined],
+      ['an output with no queue, as every failure had before it was recorded', { message: 'boom' }],
+      ["pg-boss's own expiry output", { value: { message: 'job failed by timeout in active state' } }],
+      ['a blank queue', { message: 'boom', queue: '' }],
+      ['the dead-letter queue itself', { message: 'boom', queue: DEAD_LETTER_QUEUE }],
+      ['a queue that is not a string', { message: 'boom', queue: 42 }],
+      ['an output that is not an object', 'a bare string'],
+    ])(
+      'keeps `dead-letter` for %s, so replay falls back to listener registration',
+      async (_label, output) => {
+        const id = await seedDeadLetter({ data: { name: 'file.uploaded' }, output });
+
+        await listener.reap();
+
+        const [letter] = await lettersFor([id]);
+        expect(letter).toBeDefined();
+        expect(letter.queue).toBe(DEAD_LETTER_QUEUE);
+      },
+    );
+
     it('starts every letter unreplayed', async () => {
       // `replayed_at IS NULL` is the replay queue's partial index and the
       // idempotency flag that makes "replay all" safe to run twice. A letter
@@ -756,6 +866,75 @@ describe('DeadLetterReaperListener', () => {
       expect(letter.stage).toBe('enrich.media_dimensions');
       expect(letter.entity_type).toBe('file');
       expect(letter.entity_id).toBe(entityId);
+    });
+
+    // -----------------------------------------------------------------------
+    // Whose letter it is
+    // -----------------------------------------------------------------------
+    //
+    // `user_id` decides who sees and may replay a letter. NULL is the appliance
+    // admin's alone, so a letter that names its user under either key has to
+    // land under that user, and only a payload that names nobody may stay NULL.
+
+    it('files a letter under the userId its payload names', async () => {
+      const userId = randomUUID();
+      const id = await seedDeadLetter({ data: { name: 'file.ingested', userId } });
+
+      await listener.reap();
+
+      const [letter] = await lettersFor([id]);
+      expect(letter.user_id).toBe(userId);
+    });
+
+    it('falls back to ownerId, which the graph and chat events use', async () => {
+      // graph.node.upserted carries the node the owner's agent wrote (name,
+      // description, properties). Filed NULL, it used to be listed and
+      // replayable for every account on the appliance.
+      const ownerId = randomUUID();
+      const id = await seedDeadLetter({
+        data: { name: 'graph.node.upserted', ownerId, node: { name: 'Dr. Example', description: 'GP' } },
+      });
+
+      await listener.reap();
+
+      const [letter] = await lettersFor([id]);
+      expect(letter.user_id).toBe(ownerId);
+    });
+
+    it('prefers userId when a payload carries both', async () => {
+      const userId = randomUUID();
+      const id = await seedDeadLetter({ data: { name: 'chat.generate', userId, ownerId: randomUUID() } });
+
+      await listener.reap();
+
+      const [letter] = await lettersFor([id]);
+      expect(letter.user_id).toBe(userId);
+    });
+
+    it('reaches ownerId past a userId that is not a uuid, without aborting the batch', async () => {
+      const ownerId = randomUUID();
+      const id = await seedDeadLetter({
+        data: { name: 'chat.summarization', userId: 'not-a-uuid', ownerId },
+      });
+
+      await listener.reap();
+
+      const [letter] = await lettersFor([id]);
+      expect(letter.user_id).toBe(ownerId);
+    });
+
+    it.each([
+      ['no user key at all', { name: 'content.created', contentId: '00000000-0000-4000-8000-0000000000c1' }],
+      ['an ownerId that is not a uuid', { name: 'graph.node.upserted', ownerId: '../etc' }],
+      ['a payload that is not an object', ['an', 'array']],
+    ])('leaves a letter with %s unattributed', async (_label, data) => {
+      const id = await seedDeadLetter({ data });
+
+      await listener.reap();
+
+      const [letter] = await lettersFor([id]);
+      expect(letter).toBeDefined();
+      expect(letter.user_id).toBeNull();
     });
 
     it('records a job with no pipeline provenance rather than dropping it', async () => {

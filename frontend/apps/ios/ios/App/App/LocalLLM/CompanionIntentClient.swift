@@ -47,12 +47,15 @@ enum IntentToolError: Error, LocalizedError {
 /// Talks to CI-Server on behalf of the on-device model: reads the intent catalog, and executes an
 /// intent when the model calls one. The Swift twin of the Android `CompanionIntentClient`.
 ///
-/// Two server quirks are baked in here rather than left to callers:
+/// Two server facts are baked in here rather than left to callers:
 ///
-/// 1. **The catalog path has a doubled `/api`.** `IntentsController` is `@Controller('api/intents')`
-///    while the fronting proxy already strips a leading `/api`, so the real path from an app holding
-///    the proxy origin is `<base>/api/api/intents`. `McpController` is `@Controller('mcp')`, so it is
-///    the ordinary `<base>/api/mcp`.
+/// 1. **The catalog is `<base>/api/intents` — one `/api`, like `<base>/api/mcp`.** The fronting proxy
+///    strips a leading `/api`, and both `IntentsController` (`@Controller(['intents', 'agent/intents'])`)
+///    and `McpController` (`@Controller('mcp')`) mount at bare paths. This client used to ask for
+///    `/api/api/intents`, which only worked while the controller baked its own `api/` into its mount
+///    (removed in #2653); on a current appliance that is a 404 and `refreshRulings` quietly returns no
+///    tools, so the model answers from its weights alone. An appliance older than #2653 is the mirror
+///    case: it only serves the doubled path, and reads as toolless the same graceful way.
 /// 2. **There is no REST "execute this intent" endpoint.** The only wire protocol for "run intent X
 ///    with args Y" is MCP `tools/call` over `POST /mcp` — JSON-RPC, preceded by an `initialize`
 ///    handshake whose `Mcp-Session-Id` must be echoed on every later call. Managed transparently below.
@@ -78,7 +81,7 @@ actor CompanionIntentClient {
 
   /// Reads the catalog with the server's own rulings for the on-device tier attached.
   func fetchManifest() async throws -> IntentManifest {
-    var request = authorized(path: "/api/api/intents", query: "tier=local")
+    var request = authorized(path: "/api/intents", query: "tier=local")
     request.httpMethod = "GET"
 
     let (data, response) = try await session.data(for: request)

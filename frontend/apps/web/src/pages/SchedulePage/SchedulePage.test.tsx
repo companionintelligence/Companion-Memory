@@ -6,6 +6,9 @@ import { renderWithProviders } from '@/test/renderWithProviders';
 
 import { SchedulePage } from './SchedulePage';
 
+const toastError = vi.hoisted(() => vi.fn());
+const toastDismiss = vi.hoisted(() => vi.fn());
+
 const h = vi.hoisted(() => ({
   schedule: {} as Record<string, unknown>,
   plan: {} as Record<string, unknown>,
@@ -66,6 +69,16 @@ vi.mock('@/api/useRescheduleEvent', () => ({
 
 // The page reads the owner's zone to draw in. `useCurrentUser` reaches for the
 // auth hook context, which `renderWithProviders` deliberately does not supply.
+// Sonner only paints behind a mounted Toaster, which this page does not own.
+vi.mock('@ci/shadcn', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+
+  return {
+    ...actual,
+    useToast: () => ({ toast: { error: toastError, dismiss: toastDismiss } }),
+  };
+});
+
 vi.mock('@/hooks/useCurrentUser', () => ({
   useCurrentUser: () => ({
     user: { id: 'u1', timezone: h.profileTimeZone },
@@ -91,6 +104,8 @@ vi.mock('@/components/HorizonGrid', () => ({
     timeZone,
     onMoveEvent,
     onSelectSlot,
+    onSelectDay,
+    liftSelectedHour,
   }: {
     footer?: string;
     colorMode?: string;
@@ -98,8 +113,13 @@ vi.mock('@/components/HorizonGrid', () => ({
     timeZone?: string;
     onMoveEvent: (id: string, at: Date) => void;
     onSelectSlot?: (slot: { instant: Date; allDay: boolean }) => void;
+    onSelectDay?: (day: Date) => void;
+    liftSelectedHour?: boolean;
   }) => (
     <div data-testid="vertical-calendar">
+      <button type="button" onClick={() => onSelectDay?.(new Date(2026, 7, 6))}>
+        stub-select-day
+      </button>
       <button
         type="button"
         onClick={() => onSelectSlot?.({ instant: new Date(2026, 7, 6, 16, 15), allDay: false })}
@@ -116,6 +136,7 @@ vi.mock('@/components/HorizonGrid', () => ({
       <p data-testid="stub-color-mode">{colorMode}</p>
       <p data-testid="stub-occupancy">{occupancy?.length ?? 0}</p>
       <p data-testid="stub-time-zone">{timeZone}</p>
+      <p data-testid="stub-lift-selected">{String(Boolean(liftSelectedHour))}</p>
       <p>{footer}</p>
     </div>
   ),
@@ -443,7 +464,10 @@ describe('SchedulePage — mutations that the server refuses', () => {
     renderWithProviders(<SchedulePage />);
     placeFromDrawer('Call the dentist');
 
-    expect(await screen.findByText(/Could not put that on the calendar/)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/Could not put that on the calendar/)),
+    );
+    expect(screen.queryByText(/Could not put that on the calendar/)).not.toBeInTheDocument();
   });
 
   it('tells the user when a move is rejected', async () => {
@@ -452,7 +476,10 @@ describe('SchedulePage — mutations that the server refuses', () => {
     renderWithProviders(<SchedulePage />);
     fireEvent.click(screen.getByText('stub-move'));
 
-    expect(await screen.findByText(/Could not move that/)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/Could not move that/)),
+    );
+    expect(screen.queryByText(/Could not move that/)).not.toBeInTheDocument();
   });
 
   it('tells the user when dismissing a proposed task is rejected', async () => {
@@ -466,7 +493,10 @@ describe('SchedulePage — mutations that the server refuses', () => {
     fireEvent.click(screen.getByText('stub-slot'));
     fireEvent.click(screen.getByLabelText('Dismiss Book the dentist'));
 
-    expect(await screen.findByText(/Could not dismiss that task/)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/Could not dismiss that task/)),
+    );
+    expect(screen.queryByText(/Could not dismiss that task/)).not.toBeInTheDocument();
   });
 
   it('clears the message when the next attempt succeeds', async () => {
@@ -478,13 +508,15 @@ describe('SchedulePage — mutations that the server refuses', () => {
 
     renderWithProviders(<SchedulePage />);
     placeFromDrawer('Call the dentist');
-    expect(await screen.findByText(/Could not put that on the calendar/)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/Could not put that on the calendar/)),
+    );
+    expect(toastDismiss).toHaveBeenCalledTimes(1);
 
     fireEvent.click(screen.getByText('stub-move'));
 
-    await waitFor(() =>
-      expect(screen.queryByText(/Could not put that on the calendar/)).not.toBeInTheDocument(),
-    );
+    await waitFor(() => expect(toastDismiss).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText(/Could not put that on the calendar/)).not.toBeInTheDocument();
   });
 });
 
@@ -509,6 +541,8 @@ describe('SchedulePage — failed queries', () => {
   });
 
   it('shows the slate as failed rather than empty when the plan list errors', () => {
+    // Flag off, so an unreachable forecast can't be what keeps the week up.
+    h.hbpeEnabled = false;
     setSchedule({ events: [], rhythm: [] });
     setPlan({ error: true });
 
@@ -523,6 +557,9 @@ describe('SchedulePage — failed queries', () => {
   });
 
   it('still shows the empty state when everything resolved and there is nothing', () => {
+    // With the flag on, a null forecast is a failed call (next case); with it
+    // off there is no rhythm layer to wait for, so this is a truly empty week.
+    h.hbpeEnabled = false;
     setSchedule({ events: [], rhythm: [] });
 
     renderWithProviders(<SchedulePage />);
@@ -530,7 +567,59 @@ describe('SchedulePage — failed queries', () => {
     expect(screen.getByText(/Connect a calendar/)).toBeInTheDocument();
   });
 
+  it('shows the week and says the forecast is unreachable, not "connect a calendar", when HBPE is down', () => {
+    // The forecast resolver swallows an HBPE failure and answers null. An empty
+    // week then got the first-run welcome, which told someone whose calendar was
+    // already imported to connect one. The footer naming the real problem never
+    // rendered.
+    h.hbpeEnabled = true;
+    setSchedule({ events: [], rhythm: [], generatedAt: null });
+
+    renderWithProviders(<SchedulePage />);
+
+    expect(screen.queryByText(/Connect a calendar/)).not.toBeInTheDocument();
+    expect(screen.getByTestId('vertical-calendar')).toBeInTheDocument();
+    expect(screen.getByText(/Couldn't reach the rhythm forecast/)).toBeInTheDocument();
+  });
+
+  it('keeps the week up when the week forecast failed but in-window occupancy answered', () => {
+    const at = new Date();
+    at.setHours(9, 0, 0, 0);
+    h.forecast = [
+      {
+        data: {
+          systemStatus: 'READY',
+          generatedAt: '2026-09-06T03:00:00.000Z',
+          buckets: [
+            {
+              bucketIndex: 36,
+              startTime: at.toISOString(),
+              l0Probs: [{ label: 'WORK', probability: 0.8 }],
+              l1Probs: [],
+              l2Probs: null,
+              q10: 0.5,
+              q50: 0.8,
+              q90: 0.9,
+            },
+          ],
+        },
+        loading: false,
+        stalled: false,
+      },
+      { refetch: vi.fn() },
+    ];
+    setSchedule({ events: [], rhythm: [], generatedAt: null });
+
+    renderWithProviders(<SchedulePage />);
+
+    expect(screen.queryByText(/Connect a calendar/)).not.toBeInTheDocument();
+    expect(screen.getByTestId('vertical-calendar')).toBeInTheDocument();
+    expect(screen.getByText(/Pattern rhythm \(HBPE\) from your history, updated/)).toBeInTheDocument();
+  });
+
   it('keeps the week visible when the calendar is empty but Plan has backlog', () => {
+    // Flag off, so an unreachable forecast can't be what keeps the week up.
+    h.hbpeEnabled = false;
     setSchedule({ events: [], rhythm: [] });
     setPlan({
       backlog: [{ key: 'unscheduled', tasks: [{ id: 't1', title: 'Call the dentist' }] }],
@@ -643,6 +732,18 @@ describe('SchedulePage — week paging', () => {
      * pointed at Monday 2pm, so "New event" or a Possibilities card landed on
      * a day that was no longer on screen.
      */
+    it('lifts the selected hour above the sheet without lengthening the day', () => {
+      setViewport(true);
+
+      renderWithProviders(<SchedulePage />);
+
+      expect(screen.getByTestId('stub-lift-selected')).toHaveTextContent('false');
+
+      fireEvent.click(screen.getByText('stub-slot'));
+
+      expect(screen.getByTestId('stub-lift-selected')).toHaveTextContent('true');
+    });
+
     it('drops the slot when a day chip moves the one visible day', () => {
       setViewport(true);
 
@@ -786,7 +887,7 @@ describe('SchedulePage — colour mode only once colour means something', () => 
 
     renderWithProviders(<SchedulePage />);
 
-    expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument();
+    expect(screen.queryByRole('radiogroup', { name: /^Colour by/ })).not.toBeInTheDocument();
     expect(screen.queryByText('Activity')).not.toBeInTheDocument();
     expect(screen.queryByText('Source')).not.toBeInTheDocument();
   });
@@ -796,7 +897,7 @@ describe('SchedulePage — colour mode only once colour means something', () => 
 
     renderWithProviders(<SchedulePage />);
 
-    expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument();
+    expect(screen.queryByRole('radiogroup', { name: /^Colour by/ })).not.toBeInTheDocument();
   });
 
   it('offers the toggle, with a key, once there is more than one', () => {
@@ -804,7 +905,7 @@ describe('SchedulePage — colour mode only once colour means something', () => 
 
     renderWithProviders(<SchedulePage />);
 
-    expect(screen.getByRole('radiogroup')).toBeInTheDocument();
+    expect(screen.getByRole('radiogroup', { name: /^Colour by/ })).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: 'Activity' })).toHaveAttribute('aria-checked', 'true');
     expect(screen.getByText('work')).toBeInTheDocument();
     expect(screen.getByText('exercise')).toBeInTheDocument();
@@ -869,7 +970,7 @@ describe('SchedulePage — colour mode only once colour means something', () => 
 
     renderWithProviders(<SchedulePage />);
 
-    expect(screen.getByRole('radiogroup')).toBeInTheDocument();
+    expect(screen.getByRole('radiogroup', { name: /^Colour by/ })).toBeInTheDocument();
   });
 });
 
@@ -928,7 +1029,10 @@ describe('SchedulePage — dragging a planned block moves its task too', () => {
     renderWithProviders(<SchedulePage />);
     fireEvent.click(screen.getByText('stub-move-planned'));
 
-    expect(await screen.findByText(/Could not move that/)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/Could not move that/)),
+    );
+    expect(screen.queryByText(/Could not move that/)).not.toBeInTheDocument();
   });
 
   /**
@@ -948,7 +1052,8 @@ describe('SchedulePage — dragging a planned block moves its task too', () => {
     renderWithProviders(<SchedulePage />);
     fireEvent.click(screen.getByText('stub-move'));
 
-    expect(await screen.findByText(/Recurring occurrences can't be moved yet/)).toBeInTheDocument();
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith("Recurring occurrences can't be moved yet."));
+    expect(screen.queryByText(/Recurring occurrences can't be moved yet/)).not.toBeInTheDocument();
     expect(h.reschedule).not.toHaveBeenCalled();
     expect(placeOnDay).not.toHaveBeenCalled();
   });
@@ -990,5 +1095,85 @@ describe('SchedulePage — the week is drawn in the profile zone', () => {
       Intl.DateTimeFormat().resolvedOptions().timeZone,
     );
     expect(screen.getByTestId('vertical-calendar')).toBeInTheDocument();
+  });
+});
+
+describe('SchedulePage — timescales', () => {
+  beforeEach(() => {
+    localStorage.removeItem('ci.schedule.view');
+  });
+
+  it('starts on a week and offers Day / Week / Month / Year', () => {
+    renderWithProviders(<SchedulePage />);
+
+    const views = screen.getByRole('radiogroup', { name: 'View' });
+    expect(within(views).getByRole('radio', { name: 'Week' })).toBeChecked();
+    expect(
+      within(views)
+        .getAllByRole('radio')
+        .map((radio) => radio.textContent),
+    ).toEqual(['Day', 'Week', 'Month', 'Year']);
+  });
+
+  it('switches the surface and the arrows with the view, and remembers the choice', () => {
+    renderWithProviders(<SchedulePage />);
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Month' }));
+    expect(screen.getByRole('grid')).toBeInTheDocument();
+    expect(screen.queryByTestId('vertical-calendar')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Next month')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 2 }).textContent).toMatch(/^[A-Z][a-z]+ \d{4}$/);
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Year' }));
+    expect(screen.getAllByRole('region')).toHaveLength(12);
+    expect(screen.getByLabelText('Next year')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 2 }).textContent).toMatch(/^\d{4}$/);
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Day' }));
+    expect(screen.getByTestId('vertical-calendar')).toBeInTheDocument();
+    expect(screen.getByLabelText('Next day')).toBeInTheDocument();
+
+    expect(localStorage.getItem('ci.schedule.view')).toBe('day');
+  });
+
+  it('opens a day from the year, then the month from nowhere, via the keyboard', () => {
+    renderWithProviders(<SchedulePage />);
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Year' }));
+    const today = new Date();
+    const label = today.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
+    fireEvent.click(screen.getByRole('button', { name: `Open ${label}` }));
+
+    expect(screen.getByRole('radio', { name: 'Day' })).toBeChecked();
+    expect(screen.queryByRole('button', { name: 'Back to today' })).not.toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: 'm' });
+    expect(screen.getByRole('radio', { name: 'Month' })).toBeChecked();
+
+    fireEvent.click(screen.getByLabelText('Next month'));
+    expect(screen.getByRole('button', { name: 'Back to today' })).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: 't' });
+    expect(screen.queryByRole('button', { name: 'Back to today' })).not.toBeInTheDocument();
+  });
+
+  it("opens a day from the week's header", () => {
+    renderWithProviders(<SchedulePage />);
+    expect(screen.getByRole('radio', { name: 'Week' })).toBeChecked();
+
+    fireEvent.click(screen.getByText('stub-select-day'));
+
+    expect(screen.getByRole('radio', { name: 'Day' })).toBeChecked();
+    expect(screen.getByRole('heading', { level: 2 }).textContent).toMatch(/August 6, 2026/);
+  });
+
+  it('ignores the shortcuts while typing', () => {
+    renderWithProviders(<SchedulePage />);
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+
+    fireEvent.keyDown(input, { key: 'y' });
+
+    expect(screen.getByRole('radio', { name: 'Week' })).toBeChecked();
+    input.remove();
   });
 });

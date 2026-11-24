@@ -16,18 +16,19 @@ interface FakeRow {
 /**
  * Build a DataSource whose `query` serves the candidate SELECT once, returns
  * [] for any later SELECT (so the keyset loop terminates after one page), and
- * records UPDATE calls for assertion. No transaction wrapper needed — the
- * event backfill writes UPDATEs directly off the DataSource (the comms
- * backfill's `transaction` was for the TimescaleDB decompression override,
- * which doesn't apply to non-hypertable ci.events).
+ * records UPDATE calls for assertion. Each page's UPDATE runs inside
+ * `transaction()` together with the edge leg's re-open, so the fake routes the
+ * entity manager's `query()` back to the same mock and records the order.
  */
 function makeDataSource(rows: FakeRow[]) {
   const updates: Array<{ sql: string; params: unknown[] }> = [];
+  const calls: string[] = [];
   let selectServed = false;
 
   const query = jest.fn(async (sql: string, params: unknown[]) => {
     if (sql.includes('UPDATE ci.events')) {
       updates.push({ sql, params });
+      calls.push('update');
 
       return [];
     }
@@ -45,7 +46,31 @@ function makeDataSource(rows: FakeRow[]) {
     return [];
   });
 
-  return { dataSource: { query }, updates, query };
+  const managers: Array<{ query: typeof query }> = [];
+  const transaction = jest.fn(async (cb: (em: { query: typeof query }) => Promise<unknown>) => {
+    const em = { query };
+    managers.push(em);
+    calls.push('begin');
+    const result = await cb(em);
+    calls.push('commit');
+
+    return result;
+  });
+
+  return { dataSource: { query, transaction }, updates, query, calls, managers };
+}
+
+/** `EDGE_PROJECTION_REOPENER` as the lazily-resolving ModuleRef returns it. */
+function makeReopener(calls?: string[]) {
+  const reopener = {
+    reopen: jest.fn(async (_source: string, ids: readonly string[], _manager: unknown) => {
+      calls?.push('reopen');
+
+      return ids.length;
+    }),
+  };
+
+  return { reopener, moduleRef: { get: jest.fn(() => reopener) } };
 }
 
 function makeIdentifierService(map: Record<string, string>) {
@@ -70,6 +95,7 @@ function makeService(rows: FakeRow[], identifierMap: Record<string, string>) {
   const ds = makeDataSource(rows);
   const ids = makeIdentifierService(identifierMap);
   const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
+  const { reopener, moduleRef } = makeReopener(ds.calls);
 
   const service = new EventParticipantBackfillService(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -78,9 +104,11 @@ function makeService(rows: FakeRow[], identifierMap: Record<string, string>) {
     ids as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     logger as any,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    moduleRef as any,
   );
 
-  return { service, ds, ids };
+  return { service, ds, ids, reopener };
 }
 
 describe('EventParticipantBackfillService.backfill', () => {
@@ -319,12 +347,73 @@ describe('EventParticipantBackfillService.backfill', () => {
     expect(params[3]).toEqual([JSON.stringify([ATTENDEE_1]), JSON.stringify([ATTENDEE_1])]);
   });
 
-  it('returns an empty result when there are no candidate rows', async () => {
-    const { service, ds, ids } = makeService([], {});
+  it("re-opens promote.edge_event's decision for the events it wrote, inside the write's transaction", async () => {
+    const rows: FakeRow[] = [
+      {
+        event_id: 'event-1',
+        start_time: new Date('2026-06-01T10:00:00.000Z'),
+        organizer_entity_id: null,
+        participant_entity_ids: null,
+        metadata: { organizerEmail: 'alice@example.com' },
+      },
+      {
+        event_id: 'event-2',
+        start_time: new Date('2026-05-01T10:00:00.000Z'),
+        organizer_entity_id: null,
+        participant_entity_ids: null,
+        metadata: { organizerEmail: 'stranger@example.com' },
+      },
+    ];
+
+    const { service, ds, reopener } = makeService(rows, { 'email:alice@example.com': ORGANIZER });
 
     const result = await service.backfill(USER);
 
-    expect(result).toEqual({ examined: 0, organizersLinked: 0, participantsLinked: 0, pages: 0 });
+    // Only the event this page wrote; the unresolved one was never touched.
+    expect(reopener.reopen).toHaveBeenCalledTimes(1);
+    expect(reopener.reopen).toHaveBeenCalledWith('events', ['event-1'], ds.managers[0]);
+    expect(ds.calls).toEqual(['begin', 'update', 'reopen', 'commit']);
+    expect(result.edgeDecisionsReopened).toBe(1);
+  });
+
+  it('fails the page before it writes anything when no re-opener is bound', async () => {
+    const rows: FakeRow[] = [
+      {
+        event_id: 'event-1',
+        start_time: new Date('2026-06-01T10:00:00.000Z'),
+        organizer_entity_id: null,
+        participant_entity_ids: null,
+        metadata: { organizerEmail: 'alice@example.com' },
+      },
+    ];
+    const ds = makeDataSource(rows);
+    const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
+    const service = new EventParticipantBackfillService(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ds.dataSource as any,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      makeIdentifierService({ 'email:alice@example.com': ORGANIZER }) as any,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      logger as any,
+    );
+
+    await expect(service.backfill(USER)).rejects.toThrow(/EDGE_PROJECTION_REOPENER/);
+    expect(ds.updates).toHaveLength(0);
+  });
+
+  it('returns an empty result when there are no candidate rows', async () => {
+    const { service, ds, ids, reopener } = makeService([], {});
+
+    const result = await service.backfill(USER);
+
+    expect(result).toEqual({
+      examined: 0,
+      organizersLinked: 0,
+      participantsLinked: 0,
+      edgeDecisionsReopened: 0,
+      pages: 0,
+    });
+    expect(reopener.reopen).not.toHaveBeenCalled();
     // The SELECT runs once and returns 0 rows; no identifier lookup, no UPDATE.
     expect(ds.query).toHaveBeenCalledTimes(1);
     expect(ids.findEntityIdsByIdentifiers).not.toHaveBeenCalled();
@@ -349,7 +438,15 @@ describe('EventParticipantBackfillService.backfill', () => {
       onProgress: (p) => ticks.push({ ...p }),
     });
 
-    expect(ticks).toEqual([{ examined: 1, organizersLinked: 1, participantsLinked: 0, pagesDone: 1 }]);
-    expect(result).toEqual({ examined: 1, organizersLinked: 1, participantsLinked: 0, pages: 1 });
+    expect(ticks).toEqual([
+      { examined: 1, organizersLinked: 1, participantsLinked: 0, edgeDecisionsReopened: 1, pagesDone: 1 },
+    ]);
+    expect(result).toEqual({
+      examined: 1,
+      organizersLinked: 1,
+      participantsLinked: 0,
+      edgeDecisionsReopened: 1,
+      pages: 1,
+    });
   });
 });

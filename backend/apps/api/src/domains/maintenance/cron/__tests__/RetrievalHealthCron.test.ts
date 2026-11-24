@@ -1,5 +1,4 @@
-import { SCHEDULE_CRON_OPTIONS } from '@nestjs/schedule/dist/schedule.constants';
-
+import { SCHEDULE_CRON_OPTIONS } from '@ci/common/schedule/metadataKeys';
 import { PersonalizationService, type TrustMode } from '@ci/domains/personalization';
 
 import type { RetrievalHealthAlert, RetrievalHealthRun } from '../../services/RetrievalHealthService';

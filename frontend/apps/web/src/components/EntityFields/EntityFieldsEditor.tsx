@@ -39,7 +39,10 @@ export interface EntityFieldsEditorState {
   setValue: (key: string, value: string) => void;
   saving: boolean;
   saveError: string | null;
-  /** Persists the current values. Resolves `true` when the write succeeded. */
+  /**
+   * Persists the current values. Resolves `true` when the write succeeded, or
+   * when nothing was changed and so nothing was written.
+   */
   save: () => Promise<boolean>;
   /** Discards the buffer, restoring the persisted values. */
   reset: () => void;
@@ -72,6 +75,11 @@ export function useEntityFieldsEditor({ fields, onSave, editing, resetKey }: Edi
   }, [fields]);
 
   const [values, setValues] = useState<Record<string, string>>(liveValues);
+  // What the buffer was last seeded with. Save judges an edit against this,
+  // not against `liveValues`: a value that landed from elsewhere while the
+  // buffer was open (the drawer writes straight into the Apollo cache) is not
+  // something the user changed, and writing the seed back would revert it.
+  const [seeded, setSeeded] = useState<Record<string, string>>(liveValues);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
@@ -84,6 +92,7 @@ export function useEntityFieldsEditor({ fields, onSave, editing, resetKey }: Edi
 
     if (editing) {
       setValues(liveValues);
+      setSeeded(liveValues);
       setSaveError(null);
     }
   }
@@ -94,6 +103,7 @@ export function useEntityFieldsEditor({ fields, onSave, editing, resetKey }: Edi
   if (activeKey !== resetKey) {
     setActiveKey(resetKey);
     setValues(liveValues);
+    setSeeded(liveValues);
     setSaving(false);
     setSaveError(null);
   }
@@ -104,12 +114,20 @@ export function useEntityFieldsEditor({ fields, onSave, editing, resetKey }: Edi
 
   const reset = useCallback(() => {
     setValues(liveValues);
+    setSeeded(liveValues);
     setSaveError(null);
   }, [liveValues]);
 
   const save = useCallback(async (): Promise<boolean> => {
     if (!onSave) {
       return false;
+    }
+
+    // Nothing was changed, so closing edit mode is all Save has to do. Writing
+    // the stored values back reached Change History as an edit: the event page's
+    // unchanged title, saved next to its description, read as a rename.
+    if (Object.keys(values).every((key) => values[key] === seeded[key])) {
+      return true;
     }
 
     setSaving(true);
@@ -130,7 +148,7 @@ export function useEntityFieldsEditor({ fields, onSave, editing, resetKey }: Edi
     } finally {
       setSaving(false);
     }
-  }, [onSave, toast, values]);
+  }, [onSave, seeded, toast, values]);
 
   const state: EntityFieldsEditorState = { values, setValue, saving, saveError, save, reset };
 
@@ -214,9 +232,7 @@ export function EntityMetaList({ items }: MetaListProps) {
     <div className="flex flex-col divide-y divide-border/50">
       {visible.map((item) => (
         <div key={item.label} className="grid grid-cols-[7rem_minmax(0,1fr)] gap-3 py-2 first:pt-0 last:pb-0">
-          <span className="w-28 shrink-0 text-xs uppercase tracking-wide text-muted-foreground">
-            {item.label}
-          </span>
+          <span className="w-28 shrink-0 text-xs text-muted-foreground">{item.label}</span>
           <span className="min-w-0 break-words text-sm">{item.value}</span>
         </div>
       ))}

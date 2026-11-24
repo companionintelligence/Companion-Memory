@@ -1,0 +1,417 @@
+# One run ships a Memory server release everywhere it goes, in this order:
+#   server images (publish.yml) > GitHub Release > Memory Desktop
+#   (desktop-release.yml) and the phone apps (mobile-release.yml once for iOS
+#   and once for Android, then testflight-distribute.yml) > a check of every
+#   place the release should be.
+#
+# The desktop and phone apps take the server's version: server 2026.11.17 ships
+# Memory Desktop 2026.11.17 and phone apps 2026.11.17. A re-cut such as
+# 2026.11.17.1 ships apps numbered 2026.11.17, because Apple allows three numbers
+# at most; scripts/release/release-plan.mjs holds these rules.
+#
+# The phone apps only rebuild when something they contain changed since the last
+# phone release: the web UI, the frontend packages, the phone projects or the
+# root dependency files (scripts/release/release-plan.mjs, PHONE_PATHS). On auto
+# a release that changes none of them skips the phones, which keep the version of
+# the release they were last built from. The commit each phone release came from
+# is tagged mobile-v<server version>, which is how the next run knows what changed.
+#
+# To cut a release:
+#   1. Run the test workflows on main and wait for all three to pass:
+#        gh workflow run ci.yml --ref main
+#        gh workflow run migration-integrity-check.yml --ref main
+#        gh workflow run desktop-build.yml --ref main
+#   2. Tag that commit and push the tag:
+#        git tag v2026.11.17 <sha> && git push origin v2026.11.17
+#   3. gh workflow run release.yml --ref v2026.11.17
+#
+# publish.yml and desktop-release.yml look for those test runs at the tagged
+# commit. The `plan` job checks for them first, so a missing one fails in a
+# minute instead of after the images are out.
+#
+# Each called lane gets only the secrets it reads, listed by name; the called
+# workflows declare the same names. Memory Desktop is the exception: it runs as
+# a dispatched run of its own (see the `desktop` job), because its Windows lane
+# needs the `production` Environment's Azure secrets.
+#
+# A lane that fails can be retried with "Re-run failed jobs"; the lanes that
+# passed are kept. Uploads to TestFlight and Play's internal track go to testers
+# only. These steps stay outside this run: the CI-Marketplace pin bump and its
+# deploys (another repository), Homebrew and Scoop for the desktop app, the
+# ci.computer download page, App Store review and Play's production track. The
+# last job's table shows which of those still have an older version.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      desktop:
+        description: 'Build and publish Memory Desktop with this release'
+        type: boolean
+        default: true
+      phones:
+        description: 'Phone apps. auto builds them only when something they contain changed since the last phone release'
+        type: choice
+        options:
+          - auto
+          - always
+          - skip
+        default: auto
+      skip_test_gate:
+        description: >-
+          Release even though the test workflows have no green run at this
+          commit. Emergency only: it needs bypass_reason, and publish.yml and
+          desktop-release.yml write the reason into their run summaries.
+        type: boolean
+        default: false
+      bypass_reason:
+        description: 'Required when skip_test_gate is true: an incident number, a link or a sentence.'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # publish.yml's shape, with the leading v every release tag carries. publish.yml also takes
+  # a tag without it, but the check job and the mobile-v tag both build on v<version>.
+  RELEASE_TAG_RE: '^v[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}(\.[0-9]+)?$'
+
+jobs:
+  plan:
+    name: Plan the release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # contents: write for the desktop tag (last step).
+    permissions:
+      contents: write
+      actions: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      app_version: ${{ steps.phones.outputs.app_version }}
+      phones: ${{ steps.phones.outputs.build }}
+    steps:
+      - name: Refuse a non-release ref
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          if [[ "${GITHUB_REF}" != refs/tags/* || ! "${tag}" =~ ${RELEASE_TAG_RE} ]]; then
+            echo "::error::Dispatch this workflow on a release tag such as v2026.11.17, not ${GITHUB_REF}."
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Version
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Check the test runs for this commit
+        if: ${{ !inputs.skip_test_gate }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DESKTOP: ${{ inputs.desktop }}
+        run: |
+          set -euo pipefail
+          # The required gates come from publish.yml's GATED_WORKFLOWS, the list its
+          # verify-ci-passed job enforces, so making a gate required there covers this check
+          # too. desktop-build.yml is desktop-release.yml's own gate.
+          mapfile -t workflows < <(sed -n '/GATED_WORKFLOWS: |/,/^        run:/p' .github/workflows/publish.yml \
+            | sed 's/#.*//' | grep -oE '[A-Za-z0-9._-]+\.yml:required' | cut -d: -f1)
+          if (( ${#workflows[@]} == 0 )); then
+            echo "::error::Couldn't read the required gates from GATED_WORKFLOWS in publish.yml."
+            exit 1
+          fi
+          if [[ "${DESKTOP}" == "true" ]]; then workflows+=(desktop-build.yml); fi
+          missing=0
+          for workflow in "${workflows[@]}"; do
+            count=$(gh run list --workflow "${workflow}" --commit "${GITHUB_SHA}" --status success \
+              --limit 1 --json databaseId --jq length)
+            if [[ "${count}" == "0" ]]; then
+              echo "::error::No green ${workflow} run at ${GITHUB_SHA}. Run 'gh workflow run ${workflow} --ref main' while main is at this commit, wait for it to pass, then re-run this workflow."
+              missing=1
+            fi
+          done
+          exit "${missing}"
+
+      - name: Decide on the phone apps
+        id: phones
+        env:
+          MODE: ${{ inputs.phones }}
+        run: |
+          set -euo pipefail
+          node scripts/release/release-plan.mjs phones "${GITHUB_REF_NAME}" "${MODE}" | tee -a "$GITHUB_OUTPUT"
+          echo "### Phone apps" >> "$GITHUB_STEP_SUMMARY"
+          grep '^reason=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2- >> "$GITHUB_STEP_SUMMARY"
+
+      # The desktop Release's tag is made here, at the start of the run, while
+      # main is most likely still at the tagged commit. GitHub refuses the
+      # workflow token a new tag at this commit once main's workflow files
+      # differ from it, and main can move during the hour the images and
+      # installers build. desktop-v2026.11.19 failed that way twice.
+      - name: Create the desktop tag
+        if: inputs.desktop
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: bash scripts/release/ensure-tag.sh "desktop-v${VERSION}" "${GITHUB_SHA}"
+
+  publish:
+    name: Server images
+    needs: plan
+    uses: ./.github/workflows/publish.yml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets:
+      DEV_STORE_ADMIN_API_KEY: ${{ secrets.DEV_STORE_ADMIN_API_KEY }}
+      GHPR_READ_TOKEN: ${{ secrets.GHPR_READ_TOKEN }}
+    with:
+      skip_test_gate: ${{ inputs.skip_test_gate }}
+      bypass_reason: ${{ inputs.bypass_reason }}
+
+  github-release:
+    name: GitHub Release
+    needs: [plan, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Create the Release for this tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "A Release for ${TAG} already exists; leaving it as it is."
+            exit 0
+          fi
+          # Notes start at the newest server release older than this tag. That is
+          # the Latest one for a normal release and an earlier one for a re-cut of
+          # an older line, whose notes would otherwise compare against a later commit.
+          releases=$(gh release list --limit 200 --exclude-drafts --exclude-pre-releases \
+            --json tagName --jq '.[].tagName' | grep -E '^v[0-9]{4}\.' | grep -vxF "${TAG}" || true)
+          previous=$({ printf '%s\n' "${releases}"; echo "${TAG}"; } | grep -v '^$' | sort -V \
+            | grep -B1 -xF "${TAG}" | grep -vxF "${TAG}" || true)
+          # "Server 2026.11.19", to sit beside "Desktop 2026.11.19 (macOS, Windows, Linux)".
+          args=(--verify-tag --title "Server ${TAG#v}" --generate-notes)
+          if [[ -n "${previous}" ]]; then
+            args+=(--notes-start-tag "${previous}")
+          fi
+          # Latest belongs to the newest server release. A re-cut of an older
+          # release doesn't take it back.
+          newest=$({ printf '%s\n' "${releases}"; echo "${TAG}"; } | grep -v '^$' | sort -V | tail -1)
+          if [[ "${newest}" == "${TAG}" ]]; then
+            args+=(--latest)
+          else
+            args+=(--latest=false)
+          fi
+          gh release create "${TAG}" "${args[@]}"
+
+  # desktop-release.yml runs as a run of its own, not as a called workflow. Its
+  # Windows lane signs with the Azure values in the `production` Environment,
+  # and a called workflow's jobs did not receive Environment secrets: in the
+  # v2026.11.19 release the Windows lane found none and was skipped. A
+  # dispatched run reads them as it always has. This job starts that run on
+  # the release tag, links it in the summary and waits for it, so the release
+  # still fails when the desktop app does.
+  desktop:
+    name: Desktop app
+    needs: [plan, publish]
+    if: inputs.desktop
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Run desktop-release.yml on ${{ github.ref_name }} and wait for it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          SKIP_TEST_GATE: ${{ inputs.skip_test_gate }}
+          BYPASS_REASON: ${{ inputs.bypass_reason }}
+        run: |
+          set -euo pipefail
+          started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          gh workflow run desktop-release.yml --ref "${TAG}" \
+            -f version_name="${VERSION}" -f server_image_tag="${VERSION}" \
+            -f skip_test_gate="${SKIP_TEST_GATE}" -f bypass_reason="${BYPASS_REASON}"
+          run_id=""
+          for _ in $(seq 1 30); do
+            run_id=$(gh run list --workflow desktop-release.yml --event workflow_dispatch --branch "${TAG}" \
+              --limit 5 --json databaseId,createdAt \
+              --jq "[.[] | select(.createdAt >= \"${started}\")] | last | .databaseId // empty")
+            if [[ -n "${run_id}" ]]; then break; fi
+            sleep 10
+          done
+          if [[ -z "${run_id}" ]]; then
+            echo "::error::desktop-release.yml was dispatched on ${TAG} but no run showed up within 5 minutes."
+            exit 1
+          fi
+          url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+          echo "Desktop release run: ${url}"
+          echo "Memory Desktop: [desktop-release.yml run](${url})" >> "$GITHUB_STEP_SUMMARY"
+          gh run watch "${run_id}" --interval 60 --exit-status > /dev/null
+
+  # iOS and Android are two calls of mobile-release.yml, so one store failing
+  # doesn't hold the other back: an iOS build reaches TestFlight testers even when
+  # the Play upload fails. "Re-run failed jobs" then retries only the failed store.
+  phones-ios:
+    name: Phone app (iOS)
+    needs: [plan, publish]
+    if: needs.plan.outputs.phones == 'true'
+    uses: ./.github/workflows/mobile-release.yml
+    permissions:
+      contents: read
+      packages: read
+    secrets:
+      APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+      APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+      APPSTORE_PRIVATE_KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      IOS_DIST_CERT_P12_BASE64: ${{ secrets.IOS_DIST_CERT_P12_BASE64 }}
+      IOS_DIST_CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
+      IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+      IOS_EXTENSION_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_EXTENSION_PROVISIONING_PROFILE_BASE64 }}
+      IOS_WIDGETS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_WIDGETS_PROVISIONING_PROFILE_BASE64 }}
+      CI_BROWSER_EXTENSION_DEPLOY_KEY: ${{ secrets.CI_BROWSER_EXTENSION_DEPLOY_KEY }}
+    with:
+      dry_run: false
+      version_name: ${{ needs.plan.outputs.app_version }}
+      platform: ios
+
+  phones-android:
+    name: Phone app (Android)
+    needs: [plan, publish]
+    if: needs.plan.outputs.phones == 'true'
+    uses: ./.github/workflows/mobile-release.yml
+    permissions:
+      contents: read
+      packages: read
+    secrets:
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+    with:
+      dry_run: false
+      version_name: ${{ needs.plan.outputs.app_version }}
+      platform: android
+
+  testflight:
+    name: TestFlight testers
+    needs: phones-ios
+    if: needs.phones-ios.outputs.ios_ran == 'true'
+    uses: ./.github/workflows/testflight-distribute.yml
+    permissions:
+      contents: read
+    secrets:
+      APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+      APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+      APPSTORE_PRIVATE_KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
+    with:
+      build_number: ${{ needs.phones-ios.outputs.build_number }}
+
+  # Only when both stores succeeded: the tag tells the next run the phones are
+  # current. After a partial failure, "Re-run failed jobs" finishes the store that
+  # failed and then writes the tag.
+  phone-tag:
+    name: Record the phone release
+    needs: [plan, phones-ios, phones-android]
+    if: needs.phones-ios.outputs.ios_ran == 'true' || needs.phones-android.outputs.android_ran == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout the release scripts
+        uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts/release
+
+      # This tag can only be made once the phones are uploaded, so main may
+      # have moved past the commit by now. If GitHub refuses the workflow token
+      # (exit 3, see scripts/release/ensure-tag.sh) the release still stands;
+      # only the next phones=auto run would rebuild the phones, unless someone
+      # pushes the tag with the command the script prints.
+      - name: Tag this commit mobile-v${{ needs.plan.outputs.version }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: mobile-v${{ needs.plan.outputs.version }}
+        run: |
+          set +e
+          bash scripts/release/ensure-tag.sh "${TAG}" "${GITHUB_SHA}"
+          status=$?
+          if [[ "${status}" == "3" ]]; then
+            echo "::warning::${TAG} isn't pushed, so the next phones=auto run will rebuild the phone apps. Push it with the command above to record this phone release."
+            exit 0
+          fi
+          exit "${status}"
+
+  check:
+    name: Check every platform
+    needs: [plan, publish, github-release, desktop, phones-ios, phones-android, testflight, phone-tag]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      # Reports, never fails the run: right after a release some places are
+      # expected to lag (App Store review, the marketplace bump, the download
+      # page), and the table says which.
+      - name: Ask every platform which version it has
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLAY_KEY_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set +e
+          node scripts/release/release-check.mjs --version "${VERSION}" --format markdown > "${RUNNER_TEMP}/check.md"
+          status=$?
+          set -e
+          cat "${RUNNER_TEMP}/check.md"
+          {
+            echo "## Where ${VERSION} is"
+            echo
+            cat "${RUNNER_TEMP}/check.md"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ "${status}" == "1" ]]; then
+            echo "::warning::Some places don't have ${VERSION} yet. The table on the run page lists them."
+          elif [[ "${status}" != "0" ]]; then
+            exit "${status}"
+          fi

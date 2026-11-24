@@ -38,4 +38,17 @@ describe('ChatMessage', () => {
 
     expect(container).toBeEmptyDOMElement();
   });
+
+  it('draws persisted tool calls that are not embedded in the content', () => {
+    const { getByText } = renderWithProviders(
+      <ChatMessage
+        role="assistant"
+        content="Let me look that up."
+        toolCalls={[{ function: { name: 'places_find' } }]}
+      />,
+    );
+
+    expect(getByText('Let me look that up.')).toBeInTheDocument();
+    expect(getByText('Calling places_find...')).toBeInTheDocument();
+  });
 });

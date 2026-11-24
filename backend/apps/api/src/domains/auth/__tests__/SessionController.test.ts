@@ -16,7 +16,7 @@ import { UserService } from '@ci/domains/user';
 
 import { SessionController } from '../controllers/SessionController';
 import { AuthService } from '../services/AuthService';
-import { CsrfService } from '../services/CsrfService';
+import { CsrfService, CsrfValidationError } from '../services/CsrfService';
 import { HubForwardAuthBridgeService } from '../services/HubForwardAuthBridgeService';
 import { LoginThrottleService } from '../services/LoginThrottleService';
 
@@ -39,7 +39,7 @@ const mockAuthService = {
   rotateSessionToken: jest
     .fn()
     .mockResolvedValue({ sessionToken: 'rotated-session-token', sessionId: MOCK_SESSION_ID }),
-  invalidateSession: jest.fn().mockResolvedValue(undefined),
+  invalidateSession: jest.fn().mockResolvedValue(true),
   resolveCsrfScope: jest.fn().mockReturnValue(null),
 };
 
@@ -69,8 +69,19 @@ const mockLogger = {
   error: jest.fn(),
 };
 
+const validatePassword = jest.fn().mockResolvedValue(mockUser);
+
 const mockUserService = {
-  validatePassword: jest.fn().mockResolvedValue(mockUser),
+  validatePassword,
+  // What the login route calls. Delegates to `validatePassword` so each case can keep saying
+  // whether the password was right; the real one also compares unknown addresses against a
+  // dummy hash, which `UserService.deletion.test.ts` pins.
+  authenticatePassword: jest.fn(
+    async (email: string, password: string): Promise<{ user: unknown; accountExists: boolean }> => ({
+      user: await validatePassword(email, password),
+      accountExists: true,
+    }),
+  ),
   findById: jest.fn().mockResolvedValue(mockUser),
 };
 
@@ -86,6 +97,7 @@ const mockLoginThrottle = {
 const mockHubBridge = {
   verifyUsername: jest.fn().mockReturnValue(null),
   alignSession: jest.fn().mockResolvedValue({ username: null, replaced: false }),
+  describeIdentity: jest.fn().mockResolvedValue({ username: null, accountId: null, refused: null }),
 };
 
 @Module({
@@ -177,6 +189,8 @@ describe('SessionController', () => {
         .expect(200);
 
       expect(response.body).toEqual({ accessToken: 'access-token-value' });
+      // Tied to the session it was minted for, so the live-update stream ends when that session is signed out.
+      expect(mockAuthService.issueAccessToken).toHaveBeenCalledWith(mockUser.id, MOCK_SESSION_ID);
     });
 
     it('should not return session token in the response body', async () => {
@@ -212,6 +226,28 @@ describe('SessionController', () => {
         .send({ username: 'bad@example.com', password: 'wrong' })
         .expect(401);
     });
+
+    it.each([true, false])(
+      'tells the throttle whether the address is an account (%p), and the 401 says nothing either way',
+      async (accountExists) => {
+        mockUserService.authenticatePassword.mockResolvedValueOnce({ user: null, accountExists });
+
+        const response = await request(app.getHttpServer())
+          .post('/authenticate')
+          .set('Cookie', [`${CSRF_COOKIE_NAME}=${MOCK_CSRF_TOKEN}`])
+          .set('X-CSRF-Token', MOCK_CSRF_TOKEN)
+          .send({ username: 'someone@example.com', password: 'wrong' })
+          .expect(401);
+
+        expect(response.body.message).toBe('Invalid credentials');
+        expect(mockLoginThrottle.recordFailure).toHaveBeenCalledWith(
+          expect.anything(),
+          'someone@example.com',
+          undefined,
+          { accountExists },
+        );
+      },
+    );
 
     it('should ROTATE the CSRF token on login (identity boundary), bound to the new session', async () => {
       // Login is one of the few rotation points; the pre-auth token must not
@@ -256,6 +292,7 @@ describe('SessionController', () => {
         .expect(200);
 
       expect(response.body).toEqual({ accessToken: 'access-token-value' });
+      expect(mockAuthService.issueAccessToken).toHaveBeenCalledWith('user-1', MOCK_SESSION_ID);
     });
 
     it('should return 400 when no session cookie is present', async () => {
@@ -288,7 +325,25 @@ describe('SessionController', () => {
         .expect(401);
     });
 
-    it('should not set a session cookie on grace-period match', async () => {
+    it('should set the current token a grace-period match sends back', async () => {
+      // The browser sent the token the last rotation replaced (a refresh alongside it, or one whose
+      // answer never arrived): it gets the session's current token, not a new one.
+      mockAuthService.rotateSessionToken.mockResolvedValue({
+        sessionToken: 'current-session-token',
+        sessionId: MOCK_SESSION_ID,
+      });
+
+      const response = await request(app.getHttpServer())
+        .post('/authenticate/refresh')
+        .set('Cookie', [`${COOKIE_NAME}=old-session-token`, `${CSRF_COOKIE_NAME}=${MOCK_CSRF_TOKEN}`])
+        .set('X-CSRF-Token', MOCK_CSRF_TOKEN)
+        .expect(200);
+
+      expect(parseCookies(response)[COOKIE_NAME].value).toBe('current-session-token');
+      expect(response.body).toEqual({ accessToken: 'access-token-value' });
+    });
+
+    it('should not set a session cookie on a grace-period match with no token to send back', async () => {
       mockAuthService.rotateSessionToken.mockResolvedValue({
         sessionToken: null,
         sessionId: MOCK_SESSION_ID,
@@ -371,11 +426,26 @@ describe('SessionController', () => {
         .set('X-CSRF-Token', MOCK_CSRF_TOKEN)
         .expect(204);
 
-      expect(mockAuthService.invalidateSession).toHaveBeenCalledWith(
-        'user-1',
-        'session-token-value',
-        expect.any(Object),
-      );
+      // The token and the user only: no address or user agent, which a browser that updated or a
+      // laptop on another network no longer matches.
+      expect(mockAuthService.invalidateSession).toHaveBeenCalledWith('user-1', 'session-token-value');
+    });
+
+    it('should answer 204 and clear both cookies when the session is already gone', async () => {
+      // Signed out before, or signed out by a password change on another device.
+      mockAuthService.invalidateSession.mockResolvedValueOnce(false);
+
+      const response = await request(app.getHttpServer())
+        .post('/authenticate/logout')
+        .set('Cookie', [`${COOKIE_NAME}=session-token-value`, `${CSRF_COOKIE_NAME}=${MOCK_CSRF_TOKEN}`])
+        .set('X-CSRF-Token', MOCK_CSRF_TOKEN)
+        .expect(204);
+
+      const cookies = parseCookies(response);
+      for (const name of [COOKIE_NAME, CSRF_COOKIE_NAME]) {
+        expect(cookies[name]).toBeDefined();
+        expect(cookies[name].value === '' || cookies[name].expires?.getTime() === 0).toBe(true);
+      }
     });
 
     it('should return 400 when no session cookie is present', async () => {
@@ -523,6 +593,38 @@ describe('SessionController', () => {
 
       expect(mockCsrfService.ensureToken).toHaveBeenCalledWith(undefined, MOCK_SESSION_ID);
       expect(response.body.csrfToken).toBe(MOCK_CSRF_TOKEN);
+    });
+  });
+
+  describe('POST /authenticate/hub-bridge', () => {
+    it("aligns the session for the web app's cookie and header pair", async () => {
+      mockHubBridge.alignSession.mockResolvedValueOnce({ username: 'owner@example.com', replaced: false });
+
+      const response = await request(app.getHttpServer())
+        .post('/authenticate/hub-bridge')
+        .set('Cookie', [`${CSRF_COOKIE_NAME}=${MOCK_CSRF_TOKEN}`])
+        .set('X-CSRF-Token', MOCK_CSRF_TOKEN)
+        .expect(200);
+
+      expect(response.body).toEqual({ username: 'owner@example.com', replaced: false });
+      expect(mockCsrfService.validateToken).toHaveBeenCalledWith(MOCK_CSRF_TOKEN, MOCK_CSRF_TOKEN, null);
+    });
+
+    it("refuses the native app's cookie-less shape: only the web app calls this route", async () => {
+      // The real CsrfService rejects a missing cookie; the shared mock passes everything by default.
+      mockCsrfService.validateToken.mockImplementation((cookie: unknown) => {
+        if (!cookie) {
+          throw new CsrfValidationError('missing', 'Missing CSRF token');
+        }
+      });
+
+      await request(app.getHttpServer())
+        .post('/authenticate/hub-bridge')
+        .set('X-CSRF-Token', MOCK_CSRF_TOKEN)
+        .expect(403);
+
+      expect(mockCsrfService.verifyToken).not.toHaveBeenCalled();
+      expect(mockHubBridge.alignSession).not.toHaveBeenCalled();
     });
   });
 

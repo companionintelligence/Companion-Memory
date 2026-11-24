@@ -3,12 +3,14 @@ import { Badge, Card } from '@ci/shadcn';
 import { useParams } from 'react-router-dom';
 
 import { PageContent } from '@/components/layout';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 
 import { useSummaryService } from './useSummaryService';
 
 export function SummaryDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [{ data: summary, loading, error }] = useSummaryService(id || '');
+  const fmt = useDateTimeFormat();
 
   usePageTitle(summary?.title || 'Summary - Companion Memory');
 
@@ -29,13 +31,17 @@ export function SummaryDetailPage() {
   }
 
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-    });
+    return fmt.dateTime(
+      dateString,
+      {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      },
+      'en-US',
+    );
   };
 
   const formatPeriodType = (type: string) => {

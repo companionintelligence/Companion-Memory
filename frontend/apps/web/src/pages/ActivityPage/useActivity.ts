@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { fetchJson } from '@ci/common';
 
+import { useNeedsWebSignIn } from '@/components/WebSignInRequired';
 import { useJobsAuth } from '@/pages/JobsPage/useJobsAuth';
 
 /** How a call ended. Mirrors `ToolInvocationOutcome` in `@ci/tool-core`. */
@@ -86,7 +87,13 @@ export function useActivity(filters: ActivityFilters = {}, refreshIntervalMs = 1
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const { ready, headers } = useJobsAuth();
+  const { ready: authenticated, headers } = useJobsAuth();
+  // `GET /tools/invocations` takes a session JWT or a Portal bearer, never an api key — the ledger's
+  // whole subject is which key called what, so a key paging through its own record is the one
+  // authority it should not have. The native shell holds only a device key, so on it every request
+  // (the first load, then one every `refreshIntervalMs`) could only 401. Do not send them.
+  const needsWebSignIn = useNeedsWebSignIn();
+  const ready = authenticated && !needsWebSignIn;
 
   // Serialised so the load callbacks can depend on the filters by value; a fresh
   // object literal every render would restart the poll on every render.
@@ -226,5 +233,7 @@ export function useActivity(filters: ActivityFilters = {}, refreshIntervalMs = 1
     hasMore: nextCursor != null,
     loadMore,
     refresh: load,
+    /** True where the ledger can never be read: signed in by a device key, with no web JWT. */
+    needsWebSignIn,
   } as const;
 }

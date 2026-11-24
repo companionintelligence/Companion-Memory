@@ -1,3 +1,4 @@
+import { setApiKey } from '@ci/common';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -52,8 +53,12 @@ const useGraphDotsMock = vi.fn();
 const setActiveEntityMock = vi.fn();
 const resolveNodeEntityMock = vi.fn();
 
+// The web session holds a JWT. The native shell holds only a device API key, so there is no JWT
+// there (`authToken` null) while the session is still `authenticated`.
+const authState = vi.hoisted(() => ({ authToken: 'test-token' as string | null, authenticated: true }));
+
 vi.mock('@/hooks', () => ({
-  useAuth: () => [{ authToken: 'test-token' }],
+  useAuth: () => [authState],
 }));
 
 vi.mock('@/pages/MemoryPage/useEntityService', () => ({
@@ -62,6 +67,12 @@ vi.mock('@/pages/MemoryPage/useEntityService', () => ({
 
 vi.mock('@/pages/MemoryPage/Components', () => ({
   Empty: ({ title }: { title: string }) => <div>{title}</div>,
+  ErrorState: ({ description, onRetry }: { description?: string; onRetry?: () => void }) => (
+    <div role="alert">
+      <p>{description}</p>
+      {onRetry && <button onClick={onRetry}>Try again</button>}
+    </div>
+  ),
 }));
 
 vi.mock('@/components/SearchBox/useDropdown', () => ({
@@ -107,12 +118,16 @@ vi.mock('./GraphCanvas3D', () => ({
  * /graph/data — the contract these tests cover. The unfiltered default now
  * takes the dots path instead, covered by its own block below.
  */
-function renderShell(initialEntries: string[] = ['/?from=2024-01-01']) {
-  return render(
+function shell(initialEntries: string[] = ['/?from=2024-01-01']) {
+  return (
     <MemoryRouter initialEntries={initialEntries}>
       <GraphTabPanel variant="desktop" />
-    </MemoryRouter>,
+    </MemoryRouter>
   );
+}
+
+function renderShell(initialEntries?: string[]) {
+  return render(shell(initialEntries));
 }
 
 async function nodeGroup(name: string) {
@@ -166,6 +181,9 @@ describe('GraphTabPanel (webbed-feet spike)', () => {
   });
 
   afterEach(() => {
+    authState.authToken = 'test-token';
+    authState.authenticated = true;
+    setApiKey(null);
     globalThis.requestAnimationFrame = realRequestAnimationFrame;
     globalThis.cancelAnimationFrame = realCancelAnimationFrame;
     useNodeGraphServiceMock.mockReset();
@@ -367,7 +385,7 @@ describe('GraphTabPanel (webbed-feet spike)', () => {
     const realFetch = globalThis.fetch;
 
     function mockSearchResponse(payload: Record<string, unknown>) {
-      const fetchMock = vi.fn(async (input: RequestInfo | URL) => ({
+      const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => ({
         url: String(input),
         ok: true,
         status: 200,
@@ -378,6 +396,18 @@ describe('GraphTabPanel (webbed-feet spike)', () => {
 
       return fetchMock;
     }
+
+    const FRIDA_RESULT = {
+      success: true,
+      nodes: [{ entity_id: 'friend-1', entity_type: 'Person', name: 'Frida Friend' }],
+      links: [],
+      limit: 150,
+      truncated: false,
+    };
+
+    /** The headers the first search request went out with, as a plain object. */
+    const searchHeaders = (fetchMock: ReturnType<typeof mockSearchResponse>) =>
+      fetchMock.mock.calls[0]?.[1]?.headers as Record<string, string>;
 
     afterEach(() => {
       globalThis.fetch = realFetch;
@@ -419,6 +449,58 @@ describe('GraphTabPanel (webbed-feet spike)', () => {
 
       expect(await screen.findByTestId('graph-search-truncated')).toBeInTheDocument();
     });
+
+    it('searches with the bearer on the web', async () => {
+      const fetchMock = mockSearchResponse(FRIDA_RESULT);
+
+      renderShell(['/?search=frida']);
+
+      await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+      expect(searchHeaders(fetchMock).Authorization).toBe('Bearer test-token');
+    });
+
+    /**
+     * ═══ "AUTHENTICATION REQUIRED FOR GRAPH SEARCH" ON THE PHONE ═══
+     *
+     * `authToken` is the web JWT, null in the Capacitor app — whose durable credential is a
+     * keystore API key. The search effect refused before it asked, so every graph search on the
+     * phone ended in that message for a signed-in person. `GET /graph/search` is
+     * `JwtOrApiKeyAuthGuard`, and the request already carries the key; it also sent
+     * `Authorization: Bearer null`, which is dropped here.
+     */
+    describe('native shell (API key, no web JWT)', () => {
+      beforeEach(() => {
+        authState.authToken = null;
+        setApiKey('device-key');
+      });
+
+      it('searches with the device key and no bearer, and draws the result', async () => {
+        const fetchMock = mockSearchResponse(FRIDA_RESULT);
+
+        renderShell(['/?search=frida']);
+
+        await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+
+        const headers = searchHeaders(fetchMock);
+        expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/api/graph/search');
+        expect(headers['x-api-key']).toBe('device-key');
+        expect(headers).not.toHaveProperty('Authorization');
+
+        expect(await screen.findByTestId('graph-search-chip')).toHaveTextContent('frida');
+        expect(screen.queryByText('Authentication required for graph search.')).not.toBeInTheDocument();
+      });
+    });
+
+    it('still says authentication is required when nobody is signed in, and asks nothing', async () => {
+      authState.authToken = null;
+      authState.authenticated = false;
+      const fetchMock = mockSearchResponse(FRIDA_RESULT);
+
+      renderShell(['/?search=frida']);
+
+      expect(await screen.findByText('Authentication required for graph search.')).toBeInTheDocument();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
   });
 
   describe('dots overview (no restrictive filters)', () => {
@@ -450,6 +532,46 @@ describe('GraphTabPanel (webbed-feet spike)', () => {
       expect(useGraphDotsMock).toHaveBeenCalledWith(expect.objectContaining({ skip: false }));
       // No edges ship with the dots payload; they arrive via focus/section fetches.
       expect(screen.queryAllByTestId('force-link')).toHaveLength(0);
+    });
+
+    it('shows a plain message with Try again, not the raw error, and refetches on retry', async () => {
+      // One stable object per state, like the hook's memoised result: a fresh
+      // `counts` object on every render re-runs the explorer's effects forever.
+      const loaded = {
+        loading: false,
+        error: null,
+        nodes: DOT_NODES,
+        userEntityId: 'user-1',
+        counts: { PersonType: 2, Event: 1 },
+        truncated: false,
+      };
+      const failed = {
+        loading: false,
+        error: 'Fetch failed: 500 Internal Server Error',
+        nodes: [],
+        userEntityId: null,
+        counts: {},
+        truncated: false,
+      };
+
+      useGraphDotsMock.mockImplementation((options: { refreshKey?: number }) =>
+        options.refreshKey ? loaded : failed,
+      );
+
+      renderShell(['/']);
+
+      expect(
+        await screen.findByText("We couldn't load your graph. Check your connection and try again."),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/Fetch failed/)).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+      await waitFor(() => {
+        expect(screen.getAllByTestId('force-node')).toHaveLength(DOT_NODES.length);
+      });
+      expect(useGraphDotsMock).toHaveBeenCalledWith(expect.objectContaining({ refreshKey: 1 }));
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     });
 
     it('preloads edges among busy dots when switching to 3D overview', async () => {
@@ -497,6 +619,77 @@ describe('GraphTabPanel (webbed-feet spike)', () => {
       } finally {
         globalThis.fetch = previousFetch;
       }
+    });
+
+    it('opens the clicked dot’s card once its neighbourhood has loaded', async () => {
+      // The real fetch takes a moment; until it lands the focus canvas is empty, and the
+      // selection must survive that wait for the card to open.
+      let focusLoaded = false;
+
+      useNodeGraphServiceMock.mockImplementation(({ entityId, skip }) =>
+        skip || !entityId
+          ? { data: null, loading: false, error: null, refresh: vi.fn() }
+          : focusLoaded
+            ? { data: FOCUS_SUBGRAPH, loading: false, error: null, refresh: vi.fn() }
+            : { data: null, loading: true, error: null, refresh: vi.fn() },
+      );
+
+      const { rerender } = renderShell(['/']);
+
+      fireEvent.click(await nodeGroup('Frida Friend'));
+
+      await waitFor(() => expect(screen.getByTestId('graph-back-to-overview')).toBeInTheDocument());
+      expect(screen.queryByTestId('entity-info-dialog')).not.toBeInTheDocument();
+
+      focusLoaded = true;
+      rerender(shell(['/']));
+
+      expect(await screen.findByTestId('entity-info-dialog')).toHaveTextContent('Frida Friend');
+    });
+
+    it('opens the second clicked dot’s card too, after a trip back to the overview', async () => {
+      // useNodeGraphService keeps the last subgraph it fetched until the next one lands, so the
+      // second focus waits on Frida's neighbourhood, not on nothing.
+      const EVENT_SUBGRAPH = {
+        nodes: [
+          { ...node('event-1', 'Coffee Meetup'), entity_type: 'Event' },
+          node('user-1', 'Owner Person'),
+        ],
+        links: [link('rel-5', 'user-1', 'event-1')],
+      };
+      const subgraphs: Record<string, typeof FOCUS_SUBGRAPH> = {
+        'friend-1': FOCUS_SUBGRAPH,
+        'event-1': EVENT_SUBGRAPH,
+      };
+      const loaded = new Set(['friend-1']);
+      let lastData: typeof FOCUS_SUBGRAPH | null = null;
+
+      useNodeGraphServiceMock.mockImplementation(({ entityId, skip }) => {
+        if (!skip && entityId && loaded.has(entityId)) {
+          lastData = subgraphs[entityId];
+
+          return { data: lastData, loading: false, error: null, refresh: vi.fn() };
+        }
+
+        return { data: lastData, loading: !skip && Boolean(entityId), error: null, refresh: vi.fn() };
+      });
+
+      const { rerender } = renderShell(['/']);
+
+      fireEvent.click(await nodeGroup('Frida Friend'));
+      expect(await screen.findByTestId('entity-info-dialog')).toHaveTextContent('Frida Friend');
+
+      fireEvent.click(screen.getByTestId('graph-back-to-overview'));
+      await waitFor(() => expect(screen.queryByTestId('graph-back-to-overview')).not.toBeInTheDocument());
+
+      fireEvent.click(await nodeGroup('Coffee Meetup'));
+      await waitFor(() => expect(screen.getByTestId('graph-back-to-overview')).toBeInTheDocument());
+      expect(screen.queryByTestId('entity-info-dialog')).not.toBeInTheDocument();
+
+      loaded.add('event-1');
+      rerender(shell(['/']));
+
+      expect(await screen.findByTestId('entity-info-dialog')).toHaveTextContent('Coffee Meetup');
     });
 
     it('expands a clicked dot straight into focus mode', async () => {

@@ -1,11 +1,12 @@
 import { useMemo, useState } from 'react';
 
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { ENTITY_TYPE_MAP } from '@ci/common/src/constants';
 import { Database } from '@ci/shadcn/icons';
 import { useLocation, useSearchParams } from 'react-router-dom';
 
 import { gql } from '@/graphql';
+import { sourceFilterLabel } from '@/lib/sourceNames';
 import {
   explorerSearchTypeFilters,
   readCsvParam,
@@ -13,7 +14,7 @@ import {
   writeCsvFilterParam,
 } from '@/pages/MemoryPage/Components/ExplorerToolbar/filterParams';
 
-import { FilterValuePicker } from './FilterValuePicker';
+import { FilterValuePicker, type FilterValuePickerProps } from './FilterValuePicker';
 
 // "How" — the data-source dimension (gmail, imessage, reddit, ...), written
 // to `?connectors=`. Populated from the distinct `source_system` values across
@@ -70,9 +71,11 @@ interface Props {
    * selection, as the explorer's does.
    */
   includeTypes?: string[];
+  /** Opens the picker from the caller's own element (the phone filter sheet's row). */
+  renderTrigger?: FilterValuePickerProps['renderTrigger'];
 }
 
-export function ConnectorFilter({ modal = true, label = 'How', includeTypes }: Props) {
+export function ConnectorFilter({ modal = true, label = 'How', includeTypes, renderTrigger }: Props) {
   const [searchParams, setSearchParams] = useSearchParams();
   const { pathname } = useLocation();
   const [open, setOpen] = useState(false);
@@ -103,6 +106,7 @@ export function ConnectorFilter({ modal = true, label = 'How', includeTypes }: P
       values={values}
       options={data?.sourceSystems ?? []}
       optionsKnown={data != null}
+      formatValue={sourceFilterLabel}
       loading={loading}
       onOpenChange={setOpen}
       onAdd={(value) => {
@@ -119,6 +123,7 @@ export function ConnectorFilter({ modal = true, label = 'How', includeTypes }: P
       searchPlaceholder="Search sources…"
       emptyText="No sources match"
       unknownValueHint="No connected source has this name, so this filter matches nothing."
+      renderTrigger={renderTrigger}
     />
   );
 }

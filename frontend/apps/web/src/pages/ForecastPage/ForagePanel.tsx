@@ -17,7 +17,7 @@ function BranchList({
 }) {
   return (
     <div>
-      <div className="mb-2 text-[10px] uppercase tracking-wide text-muted-foreground">
+      <div className="mb-2 text-[10px] text-muted-foreground">
         Slider 1 · branch
         {trial.ready && trial.pick ? ` · committed ${trial.pick}` : ' · not ready'}
       </div>
@@ -55,7 +55,7 @@ function TextureList({ trial }: { trial: ForageTrial }) {
 
   return (
     <div>
-      <div className="mb-2 text-[10px] uppercase tracking-wide text-muted-foreground">
+      <div className="mb-2 text-[10px] text-muted-foreground">
         Slider 2 · who under {trial.permutationBranch}
         {trial.texture ? ` · ${trial.texture}` : ' · still mixed'}
       </div>
@@ -110,7 +110,7 @@ export function ForagePanel() {
         </div>
 
         <div>
-          <div className="mb-2 text-[10px] uppercase tracking-wide text-muted-foreground">
+          <div className="mb-2 text-[10px] text-muted-foreground">
             Lake · ranked by G · {trial.attention.length} facts
           </div>
           <div className="flex flex-col gap-1.5">
@@ -136,7 +136,7 @@ export function ForagePanel() {
 
         {trial.reads.length > 0 && (
           <div>
-            <div className="mb-2 text-[10px] uppercase tracking-wide text-muted-foreground">Reads</div>
+            <div className="mb-2 text-[10px] text-muted-foreground">Reads</div>
             <div className="flex flex-col gap-1 text-sm">
               {trial.reads.map((read, index) => (
                 <div key={`${read.itemId}-${index}`} className="text-muted-foreground">

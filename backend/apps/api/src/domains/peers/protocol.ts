@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 /**
  * The peer-ask wire protocol — the contract two Companion Memory boxes speak.
@@ -120,6 +120,18 @@ export const peerAskBodySchema = z.object({
   askId: z.string().regex(PEER_ASK_ID_PATTERN),
   /** The asker's Portal handle, for display and peer-link matching. */
   askerHandle: z.string().min(1).max(120),
+  /**
+   * The person on the receiving box this ask is for: their `did:key`, as the
+   * asker's link to them records it.
+   *
+   * Two people on one box may each have linked the same asker, so the asker's
+   * identity alone can name two links, and without this the receiving box
+   * could only refuse ("Ambiguous peer link") rather than answer as an
+   * arbitrary one of them. When it is present, only that person's link
+   * answers. Optional: an asker from before it existed, or one linked by a
+   * Portal identity, sends none and is matched by identity alone, as before.
+   */
+  recipient: z.string().max(200).optional(),
   /** Natural-language question, shown to the responder in their review inbox. */
   prompt: z.string().min(1).max(500),
   /**

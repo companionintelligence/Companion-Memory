@@ -3,6 +3,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { Accordion, Badge, Card, Input, Skeleton, Switch, cn } from '@ci/shadcn';
 import { AlertTriangle, Lock } from '@ci/shadcn/icons';
 
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+
 import { FoldBody, FoldCard, FoldTrigger, cardPad, usePhone } from './Fold';
 import { categoryDot, categoryLabel, CATEGORY_LABELS } from './jobCategories';
 import type { JobControlsPatch, JobControlsResponse, JobMode, JobQueueControl } from './useJobControls';
@@ -108,7 +110,7 @@ export function JobControlsCard({
                         {controls.queues.length}
                       </span>
                       {offQueues > 0 ? (
-                        <Badge variant="secondary" className="text-[10px] uppercase">
+                        <Badge variant="secondary" className="text-[10px] ">
                           {offQueues} not running
                         </Badge>
                       ) : null}
@@ -118,7 +120,7 @@ export function JobControlsCard({
                     <div className="space-y-4 pb-2">
                       {queueGroups.map(([category, queues]) => (
                         <section key={category} aria-label={categoryLabel(category)}>
-                          <h4 className="flex items-center gap-2 border-b border-border/40 pb-1 text-xs uppercase text-muted-foreground">
+                          <h4 className="flex items-center gap-2 border-b border-border/40 pb-1 text-xs text-muted-foreground">
                             <span aria-hidden className={`h-2 w-2 rounded-full ${categoryDot(category)}`} />
                             {categoryLabel(category)}
                           </h4>
@@ -304,7 +306,7 @@ function QueueRow({
             {queue.interactive ? (
               <Badge
                 variant="outline"
-                className="text-[10px] uppercase"
+                className="text-[10px] "
                 title="Something on this queue is work a person is waiting on, so the global pause leaves it running."
               >
                 interactive
@@ -342,12 +344,13 @@ function QueueRow({
  * one greyed-out row.
  */
 function QueueStatusLine({ queue, globallyPaused }: { queue: JobQueueControl; globallyPaused: boolean }) {
+  const fmt = useDateTimeFormat();
   const dropped =
     queue.skippedCount > 0 ? (
       <>
         {' '}
         {queue.skippedCount.toLocaleString()} job{queue.skippedCount === 1 ? '' : 's'} dropped
-        {queue.lastSkippedAt ? `, last ${new Date(queue.lastSkippedAt).toLocaleString()}` : ''}.
+        {queue.lastSkippedAt ? `, last ${fmt.dateTime(queue.lastSkippedAt)}` : ''}.
       </>
     ) : null;
 
@@ -361,7 +364,7 @@ function QueueStatusLine({ queue, globallyPaused }: { queue: JobQueueControl; gl
 
   if (queue.mode === 'paused') {
     return (
-      <p className="mt-0.5 text-xs text-amber-600 dark:text-amber-400">
+      <p className="mt-0.5 text-xs text-warning dark:text-amber-400">
         {queue.pausedByGlobal && globallyPaused
           ? 'Paused by “Pause background work”. Jobs are queuing up and will run when you switch that back.'
           : 'Paused — jobs are queuing up and nothing is being worked.'}
@@ -376,7 +379,7 @@ function QueueStatusLine({ queue, globallyPaused }: { queue: JobQueueControl; gl
 function LockedBadge({ reason }: { reason: string | null }) {
   return (
     <span
-      className="inline-flex shrink-0 items-center gap-1 rounded border border-border bg-muted/40 px-1.5 py-0.5 text-[10px] font-medium uppercase text-muted-foreground"
+      className="inline-flex shrink-0 items-center gap-1 rounded border border-border bg-muted/40 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
       title={reason ?? 'This job cannot be switched off.'}
     >
       <Lock aria-hidden className="h-3 w-3" />
@@ -567,7 +570,7 @@ function NumberControl({
             event.currentTarget.blur();
           }
         }}
-        className={labelHidden ? 'h-7 w-16 px-2 text-xs tabular-nums' : 'mt-1 h-8'}
+        className={labelHidden ? 'h-7 w-16 px-2 text-base tabular-nums md:text-xs' : 'mt-1 h-8'}
       />
       {help ? <p className="mt-1 text-xs text-muted-foreground">{help}</p> : null}
       {/* Only shown when it disagrees with the request — the case where a number

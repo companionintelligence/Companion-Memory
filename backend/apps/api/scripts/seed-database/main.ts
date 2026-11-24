@@ -7,6 +7,7 @@ import { verifyDatabaseSchema } from '@ci/common/persistence';
 import config from '@ci/configuration';
 import { FileService } from '@ci/domains/files';
 import { PythonFunctionCrons } from '@ci/domains/python-functions/cron/PythonFunctionCrons';
+import { SmartRotationSummariesCron } from '@ci/domains/smart-rotation/cron/SmartRotationScheduledCrons';
 
 import { createAdminTestingModule } from '../support/admin-testing-module';
 
@@ -89,6 +90,12 @@ const logger = new LoggerService();
     // FileService note above and the "Why a stub is not `class {}`" section in
     // scripts/support/admin-testing-module.ts for why that distinction matters.
     .overrideProvider(PythonFunctionCrons)
+    .useValue({})
+    // The summaries cron fires at :22 and can dispatch to summary-service while
+    // this script is still seeding. The admin harness has no sidecars, and its
+    // LocalEventService runs that listener inline, so keep scheduled work out
+    // of the seed process just as we do for the HBPE bootstrap above.
+    .overrideProvider(SmartRotationSummariesCron)
     .useValue({})
     .compile();
 

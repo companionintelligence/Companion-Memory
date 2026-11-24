@@ -8,11 +8,13 @@
  *
  * Every function degrades gracefully on web (no `window.Capacitor`): secure storage
  * falls back to `localStorage`, and external links fall back to a normal navigation.
+ * The desktop shell (Tauri) keeps secure storage in the OS keychain instead; see
+ * {@link desktopSecureGet}.
  */
 
-import { isIosPlatform, isNativePlatform, isTauriPlatform } from './apiBase';
+import { isAndroidPlatform, isIosPlatform, isNativePlatform, isTauriPlatform } from './apiBase';
 import { streamingFetch } from './fetchJson';
-import type { BackgroundGeolocationLocation } from './deviceSources/location';
+import type { NativeLocationEvent } from './deviceSources/location';
 
 /**
  * `capacitor-secure-storage-plugin`. **Legacy — read-only, for migration.** It used to hold
@@ -46,7 +48,8 @@ interface LocalHubPlugin {
   secureGet(options: { key: string }): Promise<{ value: string | null }>;
   secureSet(options: { key: string; value: string }): Promise<void>;
   secureRemove(options: { key: string }): Promise<void>;
-  openUrl(options: { url: string }): Promise<void>;
+  /** `external`: not a sign-in, so Android skips the Auth Tab (see the plugin's definitions). */
+  openUrl(options: { url: string; external?: boolean }): Promise<void>;
   /**
    * iOS only. In-app Safari authentication sheet. Resolves when the sheet
    * finishes and rejects with `code: 'CANCELLED'` if the user dismisses it.
@@ -62,37 +65,72 @@ interface LocalHubPlugin {
   requestLocationAuthorization?(options: {
     always: boolean;
   }): Promise<{ status: NativeLocationAuthorization }>;
+  /**
+   * Background samples for Always. iOS: significant-change monitoring, which fires when
+   * the phone moves, without the blue background indicator. Android: the plugin's
+   * motion-gated tracker (GPS only while moving; fixes queued natively; an exit geofence
+   * restarts it). `addListener` is the Capacitor bridge, not a custom method.
+   */
+  addListener?(
+    eventName: 'significantLocation' | 'significantLocationError',
+    listener: (event: NativeLocationEvent & { code?: string }) => void,
+  ): Promise<{ remove: () => Promise<void> }>;
+  startSignificantLocationUpdates?(options?: SignificantLocationOptions): Promise<void>;
+  stopSignificantLocationUpdates?(): Promise<void>;
+  getBackgroundUpload?(): Promise<BackgroundUploadState>;
+  setBackgroundUpload?(options: { enabled: boolean }): Promise<BackgroundUploadState>;
+  configureBackgroundSync?(options: NativeReplicaSyncOptions): Promise<void>;
+  claimReplica?(): Promise<{ free: boolean }>;
+  releaseReplica?(): Promise<void>;
+  clearBackgroundSync?(): Promise<void>;
 }
 
-export interface BackgroundGeolocationError {
-  code: string;
-  message: string;
+/** What the phone apps' background replica sync needs to do what the app's PowerSync client does. */
+export interface NativeReplicaSyncOptions {
+  apiBaseUrl: string;
+  /** The replica's file name on disk (`<name>SQLite.db`). */
+  databaseFile: string;
+  lookbackDays: number;
+  /** JSON of the options the app's client passes `powersync_control('start')`. */
+  startOptions: string;
 }
 
 /**
- * `@capacitor-community/background-geolocation`. Declared locally, not imported from the
- * plugin package, for the same reason every other plugin interface here is: it keeps the
- * web bundle free of `@capacitor/*` native deps. One writer only — a second `addWatcher`
- * call replaces rather than adds a session on both platforms, so callers must
- * `removeWatcher` their previous id before starting a new one.
+ * Mirror of `SignificantLocationOptions` in `@ci/capacitor-local-hub`'s definitions.ts,
+ * declared locally for the same reason every plugin interface here is. Both platforms build
+ * the wire record from these in a process that may have no JavaScript; the geofence radius
+ * and the notification text are Android's and iOS ignores them.
  */
-interface BackgroundGeolocationPlugin {
-  addWatcher(
-    options: {
-      /** Set to keep sampling once the app leaves the foreground; omit for foreground-only. */
-      backgroundMessage?: string;
-      backgroundTitle?: string;
-      requestPermissions?: boolean;
-      stale?: boolean;
-      distanceFilter?: number;
-    },
-    callback: (
-      location: BackgroundGeolocationLocation | undefined,
-      error?: BackgroundGeolocationError,
-    ) => void,
-  ): Promise<string>;
-  removeWatcher(options: { id: string }): Promise<void>;
-  openSettings(): Promise<void>;
+export interface SignificantLocationOptions {
+  deviceKey: string;
+  provider?: string;
+  owner?: string | null;
+  minDistanceMeters?: number;
+  minIntervalMs?: number;
+  maxAccuracyMeters?: number;
+  /** Radius of the exit geofence Android sets where the phone came to rest. */
+  geofenceRadiusMeters?: number;
+  notificationTitle?: string;
+  notificationText?: string;
+  /** The appliance origin (`getApiBaseUrl()`) the Android background uploader sends to. */
+  apiBaseUrl?: string;
+}
+
+/**
+ * Whether fixes recorded in the background upload without an app open. `supported` is false
+ * where there is no background uploader (a browser), and the setting is hidden there.
+ */
+export interface BackgroundUploadState {
+  enabled: boolean;
+  supported: boolean;
+}
+
+const BACKGROUND_UPLOAD_UNSUPPORTED: BackgroundUploadState = { enabled: false, supported: false };
+
+/** Why a native location session stopped; `NOT_AUTHORIZED` is the one the UI acts on. */
+export interface NativeLocationError {
+  code: string;
+  message: string;
 }
 
 /** One-shot fix from {@link getCurrentDeviceLocation} — placing a pin, not tracking. */
@@ -104,12 +142,7 @@ export interface NativeCurrentLocation {
 
 /** Core Location authorization — iOS Always two-step. `unsupported` on web/Android. */
 export type NativeLocationAuthorization =
-  | 'notDetermined'
-  | 'denied'
-  | 'restricted'
-  | 'whenInUse'
-  | 'always'
-  | 'unsupported';
+  'notDetermined' | 'denied' | 'restricted' | 'whenInUse' | 'always' | 'unsupported';
 
 export type DeviceLocationErrorCode = 'denied' | 'unavailable' | 'timeout';
 
@@ -172,12 +205,14 @@ interface LocalNotificationsPlugin {
 }
 
 /**
- * On-device LLM plugin (Android only; see `frontend/packages/capacitor-local-llm`).
+ * On-device LLM plugin (Android + iOS; see `frontend/packages/capacitor-local-llm`).
  * Declared locally rather than imported from that package — same reason every other
  * plugin interface here is: it keeps the web bundle free of `@capacitor/*` deps.
  */
 interface LocalLlmPlugin {
   isAvailable(): Promise<{ available: boolean; reason?: string }>;
+  /** Absent on a native build older than the model-management contract; treated as "loaded". */
+  getLoadedModel?(): Promise<{ loaded: boolean }>;
   generate(options: { prompt: string }): Promise<{ text: string }>;
   generateStream(options: { prompt: string }): Promise<void>;
   addListener(
@@ -227,10 +262,19 @@ interface BarcodeScannerPlugin {
   scan(options?: { formats?: string[] }): Promise<{ barcodes: Array<{ rawValue: string }> }>;
 }
 
+/**
+ * The Android shell's own `SystemBarsPlugin` (frontend/apps/android). The shell insets the
+ * WebView by the system bars there (`WebViewInsets`), which leaves a strip above and
+ * below showing the *window* background; this paints it with the app's colour.
+ */
+interface SystemBarsPlugin {
+  setBackgroundColor(options: { color: string }): Promise<void>;
+}
+
 interface CapacitorPlugins {
   SecureStoragePlugin?: SecureStoragePlugin;
+  SystemBars?: SystemBarsPlugin;
   LocalHub?: LocalHubPlugin;
-  BackgroundGeolocation?: BackgroundGeolocationPlugin;
   Browser?: BrowserPlugin;
   App?: AppPlugin;
   SplashScreen?: SplashScreenPlugin;
@@ -318,7 +362,7 @@ async function migrateLegacySecureValue(hub: LocalHubPlugin, key: string): Promi
     return null;
   }
 
-  let legacyValue: string | null = null;
+  let legacyValue: string | null;
 
   try {
     const { value } = await legacy.get({ key });
@@ -347,8 +391,21 @@ async function migrateLegacySecureValue(hub: LocalHubPlugin, key: string): Promi
 }
 
 /**
- * Read a value from the OS keystore (iOS Keychain / Android Keystore) on native, or
- * `localStorage` on web. Returns null when absent.
+ * Every key the app writes to the native credential store: the device API key, its id and
+ * capability, and the paired Memory origin mirrored for native consumers. The LocalHub
+ * plugin's `secureSet` accepts these and nothing else on both platforms, so a new key has to
+ * be added there too (`capacitorPluginContract.test.ts` checks the three lists agree).
+ */
+export const SECURE_STORE_KEYS = [
+  'ci.apiKey',
+  'ci.apiKeyId',
+  'ci.apiKeyCapability',
+  'ci.apiBaseUrl',
+] as const;
+
+/**
+ * Read a value from the OS keystore (iOS Keychain / Android Keystore) on native, the OS
+ * keychain on desktop, or `localStorage` on web. Returns null when absent.
  *
  * On native this is the Local Hub plugin's `CompanionSecureStore`, which fails closed rather
  * than degrading to unencrypted storage. Any native failure is collapsed to null here — the
@@ -389,6 +446,10 @@ export async function secureStorageGet(key: string): Promise<string | null> {
     }
   }
 
+  if (isTauriPlatform()) {
+    return desktopSecureGet(key);
+  }
+
   try {
     return typeof window !== 'undefined' ? window.localStorage.getItem(key) : null;
   } catch {
@@ -397,10 +458,12 @@ export async function secureStorageGet(key: string): Promise<string | null> {
 }
 
 /**
- * Persist a value to the OS keystore on native, or `localStorage` on web.
+ * Persist a value to the OS keystore on native, the OS keychain on desktop, or `localStorage`
+ * on web.
  *
  * Failures propagate on purpose: a caller that just stored an API key needs to know if it did
- * not stick, and the native side rejects rather than falling back to unprotected storage.
+ * not stick, and the native and desktop sides reject rather than falling back to unprotected
+ * storage.
  */
 export async function secureStorageSet(key: string, value: string): Promise<void> {
   const hub = plugins()?.LocalHub;
@@ -431,6 +494,12 @@ export async function secureStorageSet(key: string, value: string): Promise<void
     return;
   }
 
+  if (isTauriPlatform()) {
+    await desktopSecureSet(key, value);
+
+    return;
+  }
+
   try {
     window.localStorage.setItem(key, value);
   } catch {
@@ -438,7 +507,7 @@ export async function secureStorageSet(key: string, value: string): Promise<void
   }
 }
 
-/** Remove a value from the OS keystore on native, or `localStorage` on web. */
+/** Remove a value from the OS keystore on native, the OS keychain on desktop, or `localStorage` on web. */
 export async function secureStorageRemove(key: string): Promise<void> {
   const hub = plugins()?.LocalHub;
   const secure = plugins()?.SecureStoragePlugin;
@@ -465,10 +534,113 @@ export async function secureStorageRemove(key: string): Promise<void> {
     return;
   }
 
+  if (isTauriPlatform()) {
+    await desktopSecureRemove(key);
+
+    return;
+  }
+
   try {
     window.localStorage.removeItem(key);
   } catch {
     // ignore
+  }
+}
+
+/**
+ * Desktop (Tauri) keeps its secure values in the OS keychain through `tauri-plugin-ci-auth`:
+ * Keychain on macOS, Credential Manager on Windows, Secret Service on Linux. The plugin's
+ * `secure_*` commands take any key the caller names, and its keychain service is shared with any
+ * other app built on the plugin, so every key carries Memory's namespace.
+ */
+const DESKTOP_SECURE_NAMESPACE = 'memory:';
+
+function desktopSecureKey(key: string): string {
+  return `${DESKTOP_SECURE_NAMESPACE}${key}`;
+}
+
+/**
+ * Reads a desktop secure value from the keychain. A keychain that refuses the read is "no value",
+ * and the legacy `localStorage` copy is not consulted: a failing store must never hand back the
+ * weaker copy.
+ */
+async function desktopSecureGet(key: string): Promise<string | null> {
+  try {
+    const { value } = await tauriInvoke<{ value: string | null }>('plugin:ci-auth|secure_get', {
+      key: desktopSecureKey(key),
+    });
+
+    if (value !== null && value !== undefined) {
+      // The keychain copy is authoritative, so a legacy copy an earlier build left is removed.
+      removeLegacyLocalStorageValue(key);
+
+      return value;
+    }
+
+    return await migrateLegacyLocalStorageValue(key);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Moves a value that an earlier desktop build kept in `localStorage` into the keychain, once.
+ * The keychain write resolves before the `localStorage` copy is removed, so a failed write leaves
+ * the old copy where it is for the next launch to retry. A failed write throws, and
+ * {@link desktopSecureGet} turns that into "no value" instead of returning the weaker copy.
+ */
+async function migrateLegacyLocalStorageValue(key: string): Promise<string | null> {
+  const legacyValue = readLegacyLocalStorageValue(key);
+
+  if (legacyValue === null) {
+    return null;
+  }
+
+  await tauriInvoke('plugin:ci-auth|secure_set', { key: desktopSecureKey(key), value: legacyValue });
+  removeLegacyLocalStorageValue(key);
+
+  return legacyValue;
+}
+
+/**
+ * Stores a desktop secure value in the keychain. A refused write throws, and the value is not
+ * written anywhere else.
+ */
+async function desktopSecureSet(key: string, value: string): Promise<void> {
+  await tauriInvoke('plugin:ci-auth|secure_set', { key: desktopSecureKey(key), value });
+  removeLegacyLocalStorageValue(key);
+}
+
+/**
+ * Removes a desktop secure value from the keychain and from any legacy `localStorage` copy. A
+ * keychain that refuses the delete is swallowed, as the native branch swallows its own: sign-out
+ * has already asked the server to revoke the key by the time this runs, and a throw here would
+ * leave the screen signed in. The keychain keeps its copy in that case, and no weaker copy is
+ * written.
+ */
+async function desktopSecureRemove(key: string): Promise<void> {
+  try {
+    await tauriInvoke('plugin:ci-auth|secure_remove', { key: desktopSecureKey(key) });
+  } catch {
+    // Already gone, or the keychain refused. Either way there is no weaker store to fall back to.
+  }
+
+  removeLegacyLocalStorageValue(key);
+}
+
+function readLegacyLocalStorageValue(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function removeLegacyLocalStorageValue(key: string): void {
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    // Storage unavailable — nothing to clear.
   }
 }
 
@@ -531,6 +703,29 @@ export async function openExternalUrl(url: string): Promise<void> {
   }
 }
 
+/**
+ * Open a link that is not a sign-in outside the app: a provider's page, say. On Android it
+ * goes to whichever app handles it (the browser, or the provider's own app) rather than the
+ * sign-in Auth Tab, which hands any `companion://` address the page navigates to back to
+ * the app as a sign-in result. iOS opens Safari either way. Elsewhere this is
+ * {@link openExternalUrl}.
+ */
+export async function openLinkOutsideApp(url: string): Promise<void> {
+  if (isNativePlatform()) {
+    const hub = resolveLocalHub();
+
+    if (!hub?.openUrl) {
+      throw new Error('Could not open the link outside the app.');
+    }
+
+    await hub.openUrl({ url, external: true });
+
+    return;
+  }
+
+  await openExternalUrl(url);
+}
+
 /** User dismissed the in-app sign-in sheet. Callers should stay quiet. */
 export class AuthSessionCancelledError extends Error {
   constructor() {
@@ -576,81 +771,163 @@ export async function openAuthSession(url: string, callbackScheme = 'companion')
 }
 
 /**
- * Starts a `@capacitor-community/background-geolocation` watcher — the one writer for
- * both iOS and Android native location. No-op (`null`) on web, which keeps using
- * `navigator.geolocation` instead.
+ * Always-mode background samples on both native platforms. Returns a stop function, or
+ * `null` off native.
  *
- * `options.background`, when true, keeps sampling after the app leaves the foreground
- * (Android shows a persistent notification while this is active; iOS shows the blue
- * status-bar indicator). When false, updates are only guaranteed in the foreground on
- * both platforms. Returns the watcher id `removeBackgroundLocationWatcher` needs, or
- * `null` if no watcher was started.
+ * iOS: significant-change monitoring, which fires when the phone moves a meaningful
+ * distance and does not turn on the blue location indicator. Every event is a fix for the
+ * caller to queue.
+ *
+ * Android: motion-gated sampling in the LocalHub plugin. GPS runs only while the phone is
+ * moving, and each fix that clears the gate is queued into the outbox natively -- which is
+ * what keeps working after the WebView is gone -- and then also delivered here. The caller
+ * queues it again; the shared `source_id` makes that a no-op.
+ *
+ * This is the only recorder on either platform: there is no on-screen trail.
+ * `@capacitor-community/background-geolocation`, which used to provide one, held a 1 Hz
+ * high-accuracy GPS request that our own location foreground service kept alive in the
+ * background, doubling every trip's trail and undoing the battery saving.
  */
-export async function addBackgroundLocationWatcher(
-  options: { background: boolean; distanceFilter?: number; requestPermissions?: boolean },
-  onLocation: (location: BackgroundGeolocationLocation) => void,
-  onError: (error: BackgroundGeolocationError) => void,
-): Promise<string | null> {
-  const plugin = plugins()?.BackgroundGeolocation;
+export async function startSignificantLocationUpdates(
+  options: SignificantLocationOptions,
+  onLocation: (location: NativeLocationEvent) => void,
+  onError: (error: NativeLocationError) => void,
+): Promise<(() => Promise<void>) | null> {
+  const hub = plugins()?.LocalHub;
 
-  if (!isNativePlatform() || !plugin) {
+  if (!isNativePlatform() || !hub?.startSignificantLocationUpdates || !hub.addListener) {
     return null;
   }
 
-  return plugin.addWatcher(
-    {
-      requestPermissions: options.requestPermissions ?? true,
-      distanceFilter: options.distanceFilter,
-      ...(options.background
-        ? {
-            backgroundTitle: 'Recording location',
-            backgroundMessage: 'Companion is recording your location so it can place memories on the map.',
-          }
-        : {}),
-    },
-    (location, error) => {
-      if (error) {
-        onError(error);
+  // The native monitor is one per process, not one per caller. A React effect that re-runs
+  // (every dependency change, and twice per mount in development) starts a second session
+  // and then runs the first one's cleanup -- which, if it reached the plugin, would stop the
+  // session the newer effect just started. So each start takes a generation number and a
+  // stop only reaches the plugin while its generation is still the latest; a superseded stop
+  // just drops its own listeners. Seen on a device: start, start, stop within 200 ms left
+  // Android's tracker disarmed while the hook believed Always was on.
+  const generation = ++significantLocationGeneration;
 
-        return;
-      }
+  const locationHandle = await hub.addListener('significantLocation', (event) => {
+    onLocation(event);
+  });
+  const errorHandle = await hub.addListener('significantLocationError', (event) => {
+    onError({ code: event.code ?? 'UNKNOWN', message: 'Significant location updates stopped.' });
+  });
 
-      if (location) {
-        onLocation(location);
-      }
-    },
-  );
+  try {
+    await hub.startSignificantLocationUpdates(options);
+  } catch (err) {
+    await locationHandle.remove();
+    await errorHandle.remove();
+    throw err;
+  }
+
+  return async () => {
+    await locationHandle.remove();
+    await errorHandle.remove();
+
+    if (generation === significantLocationGeneration) {
+      await hub.stopSignificantLocationUpdates?.();
+    }
+  };
 }
 
-/** Stops a watcher started by {@link addBackgroundLocationWatcher}. No-op on web. */
-export async function removeBackgroundLocationWatcher(id: string): Promise<void> {
-  const plugin = plugins()?.BackgroundGeolocation;
+let significantLocationGeneration = 0;
 
-  if (!isNativePlatform() || !plugin) {
-    return;
+/**
+ * Settings -> Location's "Upload in the background". The phone apps' plugin uploads fixes its
+ * tracker queued while the app was closed. In a browser, or when the plugin call fails,
+ * resolves unsupported so the setting stays hidden.
+ */
+export async function getBackgroundUpload(): Promise<BackgroundUploadState> {
+  const hub = plugins()?.LocalHub;
+
+  if (!isNativePlatform() || !hub?.getBackgroundUpload) {
+    return BACKGROUND_UPLOAD_UNSUPPORTED;
   }
 
   try {
-    await plugin.removeWatcher({ id });
+    return await hub.getBackgroundUpload();
   } catch {
-    // Already removed, or the plugin is mid-teardown — nothing further to recover.
+    return BACKGROUND_UPLOAD_UNSUPPORTED;
   }
 }
 
 /**
- * Opens the OS location settings screen for the continuous background-tracking
- * permission (Settings → Location, via the background-geolocation plugin). No-op on web.
- * For the one-shot "use my location" denied case, see {@link openNativeAppSettings} instead.
+ * The phone apps' background replica sync (LocalHub: Android `replica/`, iOS
+ * `ReplicaBackgroundSync.swift`): the app's PowerSync client hands it a config each time it
+ * connects, claims the replica before connecting, and releases it once disconnected, so the two
+ * never sync the same file at once. In a browser these do nothing. Failures are swallowed --
+ * the app's own sync must not depend on the background one.
+ */
+function replicaSyncHub(): LocalHubPlugin | undefined {
+  return isNativePlatform() ? plugins()?.LocalHub : undefined;
+}
+
+export async function configureNativeReplicaSync(options: NativeReplicaSyncOptions): Promise<void> {
+  try {
+    await replicaSyncHub()?.configureBackgroundSync?.(options);
+  } catch (error) {
+    console.warn('[PowerSync] Could not configure background sync', error);
+  }
+}
+
+/** Resolves once no background run is syncing the replica (or after the plugin's own timeout). */
+export async function claimNativeReplica(): Promise<void> {
+  try {
+    const result = await replicaSyncHub()?.claimReplica?.();
+
+    if (result && !result.free) {
+      console.warn('[PowerSync] A background sync did not stop in time; connecting anyway');
+    }
+  } catch (error) {
+    console.warn('[PowerSync] Could not claim the replica from background sync', error);
+  }
+}
+
+export async function releaseNativeReplica(): Promise<void> {
+  try {
+    await replicaSyncHub()?.releaseReplica?.();
+  } catch {
+    // The activity going away releases it natively too.
+  }
+}
+
+export async function clearNativeReplicaSync(): Promise<void> {
+  try {
+    await replicaSyncHub()?.clearBackgroundSync?.();
+  } catch (error) {
+    console.warn('[PowerSync] Could not turn background sync off', error);
+  }
+}
+
+/** Turn background upload on or off; resolves the state the plugin now holds. */
+export async function setBackgroundUpload(enabled: boolean): Promise<BackgroundUploadState> {
+  const hub = plugins()?.LocalHub;
+
+  if (!isNativePlatform() || !hub?.setBackgroundUpload) {
+    return BACKGROUND_UPLOAD_UNSUPPORTED;
+  }
+
+  return hub.setBackgroundUpload({ enabled });
+}
+
+/**
+ * Opens this app's OS settings page so the user can raise the location grant to Always /
+ * Allow all the time. No-op on web. The same screen {@link openNativeAppSettings} opens on
+ * iOS; kept as its own name because the settings section means "fix the background-location
+ * grant" by it, and because this one opens on Android too.
  */
 export async function openNativeLocationSettings(): Promise<void> {
-  const plugin = plugins()?.BackgroundGeolocation;
+  const hub = plugins()?.LocalHub;
 
-  if (!isNativePlatform() || !plugin) {
+  if (!isNativePlatform() || !hub?.openAppSettings) {
     return;
   }
 
   try {
-    await plugin.openSettings();
+    await hub.openAppSettings();
   } catch {
     // Best-effort — nothing to recover into if the OS refuses.
   }
@@ -880,6 +1157,51 @@ export async function addAppStateListener(handler: (isActive: boolean) => void):
 }
 
 /**
+ * Whether this page has asked `take_pending_deep_link_command` yet, per Tauri bridge object.
+ *
+ * The shell keeps one pending link and gives it to the first caller. A page mounts more than
+ * one listener at once: useAuth's sign-in callback and WidgetDeepLinkRouter. When the widget
+ * router asked first, a sign-in link that started the app went to a listener that ignores it and
+ * the window stayed on the sign-in screen. So the page takes the link once and dispatches it as a
+ * live `companion-deep-link` event, which every listener subscribed at that moment receives, each
+ * ignoring what is not for it. A listener that subscribes after that does not get it again, the
+ * same as a live link it missed: the widget router subscribes again on every navigation and would
+ * otherwise send the person back to the same page each time. Keyed by the bridge object, so a page
+ * (and a test that installs its own bridge) takes once.
+ */
+const pendingDeepLinkDeliveries = new WeakMap<object, Promise<void>>();
+
+function deliverPendingDeepLinkOnce(): Promise<void> {
+  const bridge = (window as unknown as { __TAURI_INTERNALS__: object }).__TAURI_INTERNALS__;
+  let delivery = pendingDeepLinkDeliveries.get(bridge);
+
+  if (!delivery) {
+    // `take_pending_deep_link_command` resolves with `null` (never rejects) for the
+    // ordinary "nothing pending" case — its Rust impl returns Option<String>. A
+    // REJECTION here is therefore always a real failure (an ACL/permission denial is
+    // the one seen in practice: the capability granting this command IPC reachability
+    // must list the origin the webview navigated to). Keep the same `null` fallback so
+    // callers are unaffected, but log the failure instead of silently discarding it.
+    // A failed take handed nothing over, so the next listener that subscribes asks again.
+    delivery = tauriInvoke<string | null>('take_pending_deep_link_command')
+      .catch((err: unknown) => {
+        console.error('take_pending_deep_link_command failed', err);
+        pendingDeepLinkDeliveries.delete(bridge);
+
+        return null;
+      })
+      .then((pending) => {
+        if (pending) {
+          window.dispatchEvent(new CustomEvent('companion-deep-link', { detail: pending }));
+        }
+      });
+    pendingDeepLinkDeliveries.set(bridge, delivery);
+  }
+
+  return delivery;
+}
+
+/**
  * Subscribe to deep links opened into the app (custom URL scheme / universal links).
  * `handler` receives the full URL string. Used to complete native "Sign in with CI
  * Portal": the system browser redirects to `companion://oidc/callback?...` and that
@@ -892,14 +1214,14 @@ export async function addAppStateListener(handler: (isActive: boolean) => void):
  *   (`getLaunchUrl`, see useAuth.ts), not this function.
  * - Tauri (desktop): the Rust side (`main.rs`) already unifies cold-start AND
  *   warm-start delivery into one place, so there is no separate getLaunchUrl-shaped
- *   call needed here — this function alone covers both. It (a) drains
- *   `take_pending_deep_link_command` once, for a URL that arrived before this
- *   listener was up (true cold start, or a warm-start delivery that raced mounting),
- *   then (b) subscribes to the live `companion-deep-link` DOM event `main.rs`
- *   dispatches for anything after. A plain `window.addEventListener` — no
- *   `@tauri-apps/api` import needed, matching this file's Capacitor-free-import
- *   philosophy, because `main.rs` dispatches a standard DOM CustomEvent rather than a
- *   Tauri-specific one.
+ *   call needed here — this function alone covers both. It (a) subscribes to the live
+ *   `companion-deep-link` DOM event `main.rs` dispatches, then (b) has the page take
+ *   the URL that arrived before any listener was up (true cold start, or a warm-start
+ *   delivery that raced page load) once and dispatch it as that same event, so every
+ *   listener mounted alongside this one gets it (see deliverPendingDeepLinkOnce). A
+ *   plain `window.addEventListener` — no `@tauri-apps/api` import needed, matching
+ *   this file's Capacitor-free-import philosophy, because `main.rs` dispatches a
+ *   standard DOM CustomEvent rather than a Tauri-specific one.
  */
 export async function addAppUrlOpenListener(handler: (url: string) => void): Promise<() => void> {
   const app = plugins()?.App;
@@ -917,24 +1239,6 @@ export async function addAppUrlOpenListener(handler: (url: string) => void): Pro
   }
 
   if (isTauriPlatform()) {
-    // `take_pending_deep_link_command` resolves with `null` (never rejects) for the
-    // ordinary "nothing pending" case — its Rust impl returns Option<String>. A
-    // REJECTION here is therefore always a real failure (an ACL/permission denial is
-    // the one seen in practice: the capability granting this command IPC reachability
-    // must list the origin the webview navigated to). Keep the same `null` fallback so
-    // callers are unaffected, but log the failure instead of silently discarding it.
-    const pending = await tauriInvoke<string | null>('take_pending_deep_link_command').catch(
-      (err: unknown) => {
-        console.error('take_pending_deep_link_command failed', err);
-
-        return null;
-      },
-    );
-
-    if (pending) {
-      handler(pending);
-    }
-
     const onDeepLink = (event: Event) => {
       const url = (event as CustomEvent<string>).detail;
 
@@ -943,7 +1247,10 @@ export async function addAppUrlOpenListener(handler: (url: string) => void): Pro
       }
     };
 
+    // Subscribed before the pending link is taken, so it reaches this listener as well as the
+    // others the page mounted alongside it.
     window.addEventListener('companion-deep-link', onDeepLink);
+    await deliverPendingDeepLinkOnce();
 
     return () => {
       window.removeEventListener('companion-deep-link', onDeepLink);
@@ -951,6 +1258,66 @@ export async function addAppUrlOpenListener(handler: (url: string) => void): Pro
   }
 
   return noop;
+}
+
+/** Where a "Download recommended model" started in Memory Desktop has got. */
+export type DesktopModelDownload =
+  | { state: 'idle' }
+  | { state: 'downloading'; model: string; completedBytes: number; totalBytes: number }
+  | { state: 'switching'; model: string }
+  | {
+      state: 'done';
+      downloaded: string[];
+      chatModel: string;
+      /** Memory was stopped from the tray when it ended, so it runs on `chatModel` only from its next start. */
+      waitsForStart: boolean;
+    }
+  | { state: 'failed'; message: string };
+
+/**
+ * What Memory Desktop says about the models of the person's own Ollama
+ * (`frontend/apps/desktop/src-tauri/src/local_model/recommended.rs`, whose field names these are).
+ */
+export interface DesktopRecommendedModel {
+  /** The person's own Ollama serves Memory. Otherwise the app runs its own, which has the recommended models. */
+  ownOllama: boolean;
+  /** The chat model Memory Desktop would have downloaded for itself. */
+  recommended: string;
+  /** The chat model Memory runs on now for anyone who has not picked one. */
+  chatModel: string | null;
+  /**
+   * Recommended models the person's Ollama does not have, the embedding model included. Null when it was not asked
+   * (not the person's own Ollama, a download is running or one waits for Memory to start) or did not answer, which
+   * says nothing about what it has.
+   */
+  missing: string[] | null;
+  download: DesktopModelDownload;
+}
+
+/**
+ * Memory Desktop's view of the recommended models, or null when there is none to ask for: not inside Memory
+ * Desktop, or a Memory Desktop from before it could answer (the command is unknown to it, or not granted to this
+ * page).
+ */
+export async function getDesktopRecommendedModel(): Promise<DesktopRecommendedModel | null> {
+  if (!isTauriPlatform()) {
+    return null;
+  }
+
+  try {
+    return await tauriInvoke<DesktopRecommendedModel>('get_recommended_model_command');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Has Memory Desktop download the recommended models the person's Ollama lacks and switch Memory to the
+ * recommended chat model. Resolves once the download has started; follow it with
+ * {@link getDesktopRecommendedModel}. Rejects with Memory Desktop's own message when it cannot start.
+ */
+export async function downloadDesktopRecommendedModel(): Promise<DesktopRecommendedModel> {
+  return tauriInvoke<DesktopRecommendedModel>('download_recommended_model_command');
 }
 
 /** Quit the native app (Android). No-op on web/iOS (iOS has no programmatic exit). */
@@ -996,6 +1363,28 @@ export async function setStatusBarStyle(style: 'DARK' | 'LIGHT', backgroundColor
     }
   } catch {
     // Plugin unavailable or unsupported on this platform — ignore.
+  }
+}
+
+/**
+ * Android only. Paints the window behind the status and navigation bars with the app's
+ * resolved background colour. On Android 15+ the WebView is inset by the system bars
+ * (`WebViewInsets` in the Android shell), so those
+ * strips show the window background rather than web content, and without this call they
+ * show the launch splash drawable. Pair it with {@link setStatusBarStyle} on every theme
+ * change. A no-op on iOS and web, and when the shell predates the plugin.
+ */
+export async function setSystemBarsBackground(color: string): Promise<void> {
+  const systemBars = plugins()?.SystemBars;
+
+  if (!isAndroidPlatform() || !systemBars) {
+    return;
+  }
+
+  try {
+    await systemBars.setBackgroundColor({ color });
+  } catch {
+    // Older shell without the plugin, or the activity is gone — ignore.
   }
 }
 
@@ -1318,7 +1707,9 @@ export async function generateOffline(
     try {
       const { available } = await llm.isAvailable();
 
-      if (available) {
+      // `available` is a capability probe (RAM, OS version), not "a model is loaded" — a device that
+      // clears the floor with nothing downloaded would otherwise fail here and only then fall back.
+      if (available && (await isModelResident(llm))) {
         const text = options.onToken
           ? await generateLocalStreaming(llm, prompt, options.onToken)
           : (await llm.generate({ prompt })).text;
@@ -1333,6 +1724,15 @@ export async function generateOffline(
   const text = await generateRemote(prompt, options);
 
   return { text, source: 'remote' };
+}
+
+/** Whether a model is loaded. A native build without `getLoadedModel` predates it, so we cannot tell and try. */
+async function isModelResident(llm: LocalLlmPlugin): Promise<boolean> {
+  if (!llm.getLoadedModel) {
+    return true;
+  }
+
+  return (await llm.getLoadedModel()).loaded;
 }
 
 /** Drives `generateStream` + the `llmToken` event into a single buffered result, forwarding partials. */

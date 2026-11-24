@@ -405,8 +405,15 @@ export class UnfurlFetcher {
   }
 }
 
-/** Reads at most `max` bytes; returns null (and cancels the stream) past that. */
-async function readCapped(response: UndiciResponse, max: number): Promise<Buffer | null> {
+/**
+ * Reads at most `max` bytes; returns null (and cancels the stream) past that. Exported for the
+ * other guarded download (`etl/services/Facebook/facebookCdnDownload.ts`), so both cap a body the
+ * same way.
+ */
+export async function readCapped(
+  response: { readonly body: ReadableStream<Uint8Array> | null },
+  max: number,
+): Promise<Buffer | null> {
   if (!response.body) {
     return Buffer.alloc(0);
   }

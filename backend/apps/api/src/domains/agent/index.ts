@@ -113,6 +113,24 @@ import { TurnFragmentService } from './services/TurnFragmentService';
 export class AgentModule {}
 
 export { BranchialForecastService, ForageCorpusService, ForecastContextService, RecallService };
+export { applyRecencyDecay } from './services/RecallService';
+export {
+  AgentMemoryService,
+  detectSupersessionOrConflict,
+  extractReferencedPaths,
+  inferMemoryCategory,
+  type CreateAgentMemoryDto,
+  type GovernanceRelation,
+  type MemoryDriftMatch,
+  type MemoryDriftReport,
+} from './services/AgentMemoryService';
+export {
+  AGENT_MEMORY_CATEGORIES,
+  AGENT_MEMORY_STATUSES,
+  type AgentMemory,
+  type AgentMemoryCategory,
+  type AgentMemoryStatus,
+} from './entities/AgentMemoryEntity';
 export type { RecallOptions } from './services/RecallService';
 export type { EvidenceVoice, RecallLine, RecallObjectRef, RecallObjectType, RecallResult } from './types';
 export type {

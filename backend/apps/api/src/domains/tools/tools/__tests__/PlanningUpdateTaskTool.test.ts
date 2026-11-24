@@ -4,6 +4,8 @@ import type { Task, TaskService } from '@ci/domains/planning/task.module';
 
 import { PlanningUpdateTaskTool } from '../PlanningUpdateTaskTool';
 
+import { losAngelesPlanningTime } from './losAngelesPlanningTime';
+
 const CONTEXT = { userId: '00000000-0000-0000-0000-0000000000aa' } as RequestContext;
 const TASK_ID = '11111111-1111-1111-1111-111111111111';
 const PARENT_ID = '22222222-2222-2222-2222-222222222222';
@@ -19,7 +21,7 @@ function logger(): LoggerService {
 }
 
 function makeTool(update: jest.Mock) {
-  return new PlanningUpdateTaskTool({ update } as unknown as TaskService, logger());
+  return new PlanningUpdateTaskTool({ update } as unknown as TaskService, losAngelesPlanningTime(), logger());
 }
 
 describe('PlanningUpdateTaskTool', () => {
@@ -58,6 +60,21 @@ describe('PlanningUpdateTaskTool', () => {
         parentId: PARENT_ID,
       }),
     );
+  });
+
+  it("reads a zoneless dueAt as the owner's local time and never sends timeZone on", async () => {
+    const update = jest.fn().mockResolvedValue({ id: 't1' } as unknown as Task);
+
+    await makeTool(update).execute(CONTEXT, {
+      taskId: '11111111-1111-1111-1111-111111111111',
+      dueAt: '2026-07-01T09:30',
+      timeZone: 'Europe/London',
+    });
+
+    const [, , patch] = update.mock.calls[0];
+
+    // 09:30 BST (+1).
+    expect(patch).toEqual({ dueAt: new Date('2026-07-01T08:30:00.000Z') });
   });
 
   it('omits dueAt from the patch entirely when not provided, rather than sending undefined', async () => {
@@ -156,5 +173,68 @@ describe('PlanningUpdateTaskTool', () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.message).toBe(`Task ${TASK_ID} not found`);
+  });
+});
+
+/**
+ * Nothing keeps a task's old description or notes, so replacing text that is there loses it. That
+ * call is labelled destructive for itself (a write key is refused it, and the autonomy dial asks
+ * before it runs); every other update stays the plain write the tool is declared as.
+ */
+describe('PlanningUpdateTaskTool.privacyFor', () => {
+  const destructive = { access: 'write', sensitivity: 'personal', destructive: true, external: false };
+
+  function toolWith(stored: { description: string | null; notes: string | null } | null) {
+    const findById = jest.fn().mockResolvedValue(stored ? ({ id: TASK_ID, ...stored } as Task) : null);
+    const tool = new PlanningUpdateTaskTool(
+      { update: jest.fn(), findById } as unknown as TaskService,
+      losAngelesPlanningTime(),
+      logger(),
+    );
+
+    return { tool, findById };
+  }
+
+  it('marks replacing non-empty notes or a non-empty description destructive', async () => {
+    const { tool, findById } = toolWith({
+      description: 'Call the landlord',
+      notes: 'Asked about the boiler',
+    });
+
+    await expect(tool.privacyFor(CONTEXT, { taskId: TASK_ID, notes: 'done' })).resolves.toStrictEqual(
+      destructive,
+    );
+    await expect(tool.privacyFor(CONTEXT, { taskId: TASK_ID, description: '' })).resolves.toStrictEqual(
+      destructive,
+    );
+    expect(findById).toHaveBeenCalledWith({ userId: CONTEXT.userId }, TASK_ID);
+  });
+
+  it('leaves filling in an empty field, or resending the same text, a plain write', async () => {
+    const { tool } = toolWith({ description: null, notes: 'Asked about the boiler' });
+
+    await expect(
+      tool.privacyFor(CONTEXT, { taskId: TASK_ID, description: 'Call the landlord' }),
+    ).resolves.toBeUndefined();
+    await expect(
+      tool.privacyFor(CONTEXT, { taskId: TASK_ID, notes: 'Asked about the boiler' }),
+    ).resolves.toBeUndefined();
+    await expect(
+      tool.privacyFor(CONTEXT, { taskId: TASK_ID, notes: 'Asked about the boiler\n' }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('does not look the task up for an update that touches neither field', async () => {
+    const { tool, findById } = toolWith({ description: 'x', notes: 'y' });
+
+    await expect(tool.privacyFor(CONTEXT, { taskId: TASK_ID, priority: 1 })).resolves.toBeUndefined();
+    expect(findById).not.toHaveBeenCalled();
+  });
+
+  it('leaves a missing task and an invalid input unlabelled, for execute to refuse', async () => {
+    const { tool } = toolWith(null);
+
+    await expect(tool.privacyFor(CONTEXT, { taskId: TASK_ID, notes: 'x' })).resolves.toBeUndefined();
+    await expect(tool.privacyFor(CONTEXT, { taskId: 'nope', notes: 'x' })).resolves.toBeUndefined();
   });
 });

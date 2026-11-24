@@ -10,6 +10,14 @@ describe('sourceLabel', () => {
     expect(sourceLabel('import:communications:participant')).toBe('Message participants');
   });
 
+  it('names files added through the catch-all importer rather than calling them "Generic"', () => {
+    expect(sourceLabel('import:generic')).toBe('Files you added');
+  });
+
+  it('names uploads the ledger knows only by their bytes rather than calling them "File"', () => {
+    expect(sourceLabel('import:file')).toBe('Uploaded files');
+  });
+
   it('resolves connectors through the shared map, ignoring the import: prefix', () => {
     expect(sourceLabel('import:apple_contacts')).toBe('Contacts');
     expect(sourceLabel('gmail')).toBe('Gmail');

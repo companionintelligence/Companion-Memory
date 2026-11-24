@@ -30,10 +30,15 @@ async function run() {
  * checked-in fixture only ever hits one of its four shapes.
  */
 async function runOrder(order: Record<string, unknown>) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gpurchases-money-'));
+  return runRecord({ order, uniqueId: 'synthetic' });
+}
+
+/** Runs one synthetic action_*.json record and returns the item it produced. */
+async function runRecord(record: Record<string, unknown>) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gpurchases-action-'));
   try {
     const file = path.join(dir, 'action_synthetic.json');
-    fs.writeFileSync(file, JSON.stringify({ order, uniqueId: 'synthetic' }), 'utf8');
+    fs.writeFileSync(file, JSON.stringify(record), 'utf8');
     const fi = new GooglePurchasesFileImporter();
     const pipeline: EmittedGraph[] = [];
     await fi.fileImport({}, { filename: 'action_synthetic.json', fullPath: file }, {
@@ -134,6 +139,73 @@ describe('Google Purchases & Reservations datasource', () => {
     it('falls back to a top-level `amount` field when neither `total` nor `price` is present', async () => {
       const item = await runOrder({ name: 'Doohickey', amount: 7.25 });
       expect(item.metadata?.Total).toBe(7.25);
+    });
+  });
+
+  /**
+   * A reservation the user cancelled.
+   *
+   * Takeout keeps a cancelled booking or waitlist entry and marks it with
+   * `canceled: true`. The reference export has five, out of 42 reservations.
+   * The importer used to record that only as `metadata.Canceled`, which no
+   * reader of `ci.events.status` looks at, so the event was stored
+   * `confirmed`. Invented venues throughout.
+   */
+  describe('a cancelled reservation', () => {
+    const booking = {
+      name: 'Booking',
+      merchantName: 'Harbor Noodle House',
+      startTime: '2023-10-22T03:30:00Z',
+      endTime: '2023-10-22T04:00:00Z',
+      partySize: 2,
+      service: 'Reservations & Waitlist',
+      address: 'California, 100 Example Way, Laguna Beach, US',
+    };
+
+    it("states a cancelled booking as a cancelled event and keeps Google's flag", async () => {
+      const item = await runRecord({ booking: { ...booking, canceled: true }, uniqueId: '1001' });
+
+      expect(item.classification).toBe('event');
+      expect(item.metadata?.eventStatus).toBe('cancelled');
+      expect(item.metadata?.Canceled).toBe(true);
+    });
+
+    it('states a cancelled waitlist entry the same way', async () => {
+      const item = await runRecord({
+        waitlist: {
+          name: 'Waitlist',
+          merchantName: 'Harbor Noodle House',
+          createdTime: '2023-11-04T01:10:00Z',
+          partySize: 3,
+          service: 'Reservations & Waitlist',
+          canceled: true,
+        },
+        uniqueId: '1002',
+      });
+
+      expect(item.metadata?.Kind).toBe('waitlist');
+      expect(item.metadata?.eventStatus).toBe('cancelled');
+    });
+
+    it('states no status for a booking that was not cancelled', async () => {
+      // Explicitly `false`, and absent as in the checked-in fixture. Neither
+      // says more than the column DEFAULT, so neither sets a status.
+      const kept = await runRecord({ booking: { ...booking, canceled: false }, uniqueId: '1003' });
+      const [fixture] = (await run()).filter((item) => item.id === 'gpurchase:11953315030926749523');
+
+      expect(kept.metadata?.Canceled).toBe(false);
+      expect(kept.metadata?.eventStatus).toBeUndefined();
+      expect(fixture.metadata?.Canceled).toBeUndefined();
+      expect(fixture.metadata?.eventStatus).toBeUndefined();
+    });
+
+    it('does not read a string as a cancellation', async () => {
+      // Only Google's JSON boolean counts. The repair migration selects on the
+      // same thing (`metadata @> '{"Canceled": true}'`).
+      const item = await runRecord({ booking: { ...booking, canceled: 'true' }, uniqueId: '1004' });
+
+      expect(item.metadata?.eventStatus).toBeUndefined();
+      expect(item.metadata?.Canceled).toBeUndefined();
     });
   });
 });

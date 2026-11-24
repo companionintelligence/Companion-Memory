@@ -2,6 +2,17 @@
 # THIS FILE WAS AUTOMATICALLY GENERATED (DO NOT MODIFY)
 # ------------------------------------------------------
 
+input AcceptPeerInviteInput {
+  code: String!
+  displayName: String
+  myName: String
+}
+
+type AcceptPeerInvitePayload {
+  peerLink: PeerLinkType
+  success: Boolean!
+}
+
 type ActionConnection implements Connection {
   edges: [ActionEdge!]!
   pageInfo: PageInfo!
@@ -163,7 +174,7 @@ enum AnswerSource {
 type AnswerType implements Node {
   answer: String!
   answerConfidence: Float
-  answerEvidence: JSON
+  answerEvidence: JSONObject
   answerMethod: String!
   answerRationale: String
   answerSource: String
@@ -202,6 +213,13 @@ enum AskAuditOutcome {
   expired
 }
 
+type AskAuditReceiptPayload {
+  askId: ID
+  auditId: ID!
+  auditSaid: String!
+  receipt: AskConsentReceiptType!
+}
+
 type AskAuditType {
   askId: ID
   askerId: ID
@@ -229,6 +247,21 @@ type AskChannelType {
   covered: [String!]!
   keyThumbprint: String!
   verifiedAt: DateTime!
+}
+
+type AskConsentReceiptType {
+  consentBasis: String
+  d: String!
+  disclosedCount: Int!
+  issuedAt: String!
+  legalBasis: String!
+  outcome: String!
+  piiPrincipalId: String
+  processing: [String!]!
+  purposes: [String!]!
+  recipient: String
+  recordId: String!
+  schemaVersion: String!
 }
 
 input AskDisclosureHistoryInput {
@@ -311,6 +344,7 @@ type AskQueryType {
   actor: AskActorType
   dataClass: String
   prompt: String!
+  promptHiddenCharactersRemoved: Boolean!
   purpose: String
   queryType: String!
 }
@@ -473,8 +507,8 @@ type CommunicationType implements Node & Taggable {
   direction: String!
   from: PersonType
   id: ID!
-  metadata: JSON!
-  participantsMetadata: JSON!
+  metadata: JSONObject!
+  participantsMetadata: JSONObject!
   preview: String
   sourceId: String
   sourceSystem: String
@@ -538,14 +572,14 @@ type ConnectionSyncJobType implements Node {
   connection: ConnectionType
   connectionId: ID!
   createdAt: DateTime!
-  cursor: JSON
-  data: JSON!
+  cursor: JSONObject
+  data: JSONObject!
   endpointName: String!
-  error: JSON
+  error: JSONObject
   id: ID!
   jobId: ID
-  nextCursor: JSON
-  properties: JSON
+  nextCursor: JSONObject
+  properties: JSONObject
   status: String!
   type: String!
   updatedAt: DateTime!
@@ -563,7 +597,7 @@ type ConnectionType implements Node {
   provider: ProviderType!
   providerId: ID!
   schedule: String
-  syncState: JSON
+  syncState: JSONObject
   tokenExpiry: DateTime
 }
 
@@ -606,7 +640,7 @@ type ContentType implements Node & Taggable {
   playbackUrl: String
   player: EmbedPlayerType
   previewUrl: String
-  sourceData: JSON
+  sourceData: JSONObject
   sourceId: String
   sourceSystem: String
   sourceType: String
@@ -663,7 +697,7 @@ input CreateBrowserActivityInput {
   isIncognito: Boolean
   pageSummary: String
   productivityScore: Float
-  properties: JSON
+  properties: JSONObject
   scrollDepthPercent: Float
   sourceId: String
   sourceSystem: String
@@ -674,13 +708,13 @@ input CreateBrowserActivityInput {
 }
 
 input CreateCommunicationInput {
-  attachments: [JSON!]
+  attachments: [JSONObject!]
   communicationType: String!
   content: String!
   direction: String
   durationSeconds: Int
   fromEntityId: String
-  participantsMetadata: JSON
+  participantsMetadata: JSONObject
   preview: String
   sourceId: String
   sourceSystem: String
@@ -711,7 +745,7 @@ input CreateConnectionInput {
   providerId: ID!
   refreshToken: String
   schedule: String
-  syncState: JSON
+  syncState: JSONObject
   tokenExpiry: DateTime
 }
 
@@ -722,15 +756,11 @@ type CreateConnectionPayload {
 
 input CreateConnectionSyncJobInput {
   connectionId: ID!
-  cursor: JSON
-  data: JSON
   endpointName: String!
-  error: JSON
+  error: JSONObject
   id: ID
   jobId: ID
-  nextCursor: JSON
-  properties: JSON
-  status: String
+  properties: JSONObject
   type: String!
   userId: ID!
 }
@@ -744,7 +774,7 @@ input CreateContentInput {
   eventId: ID
   externalId: String
   mimetype: String
-  sourceData: JSON
+  sourceData: JSONObject
   sourceId: String
   sourceSystem: String
   sourceType: String
@@ -769,10 +799,10 @@ input CreateEventInput {
   """
   isLocked: Boolean
   isRecurring: Boolean
-  locationCoordinates: JSON
+  locationCoordinates: JSONObject
   locationEntityId: ID
   locationName: String
-  metadata: JSON
+  metadata: JSONObject
   organizerEntityId: ID
   participantEntityIds: [ID!]
   sharingLevel: String
@@ -803,7 +833,7 @@ input CreateItemInput {
   """
   {material: fraction} summing to at most 1. Percentages are accepted and converted.
   """
-  composition: JSON
+  composition: JSONObject
   condition: ItemCondition
   currency: String
   currentValue: Float
@@ -823,7 +853,7 @@ input CreateItemInput {
   heightMm: Float
 
   """Serial number, UPC, ISBN, order id, …"""
-  identifierCodes: JSON
+  identifierCodes: JSONObject
 
   """A digital item is refused a mass, a size and a volume."""
   isDigital: Boolean
@@ -839,7 +869,7 @@ input CreateItemInput {
 
   """What the object is made of."""
   materials: [String!]
-  metadata: JSON
+  metadata: JSONObject
   model: String
   name: String!
   purchasePrice: Float
@@ -861,11 +891,23 @@ type CreateItemPayload {
 
 input CreateNoteInput {
   content: String
+  id: String
   title: String
 }
 
 type CreateNotePayload {
   note: NoteType
+  success: Boolean!
+}
+
+input CreatePeerInviteInput {
+  label: String
+  name: String
+}
+
+type CreatePeerInvitePayload {
+  code: String
+  invite: PeerInvite
   success: Boolean!
 }
 
@@ -917,14 +959,14 @@ input CreatePlaceInput {
   description: String
   estimated: Boolean
   geoFormat: String
-  geolocation: JSON
+  geolocation: JSONObject
   latitude: Float
-  locationBoundary: JSON
+  locationBoundary: JSONObject
   longitude: Float
   name: String!
   parentId: String
   placeKind: String
-  properties: JSON
+  properties: JSONObject
   tracked: Boolean
   type: String
   uploaded: Boolean
@@ -946,7 +988,7 @@ input CreateRelationshipInput {
   fromNodeId: ID!
   fromNodeType: String!
   isBidirectional: Boolean
-  properties: JSON
+  properties: JSONObject
   startDate: DateTime
   strength: Float
   toNodeId: String!
@@ -979,6 +1021,7 @@ input CreateSavedSearchInput {
   description: String
   entityTypes: [String!]
   filters: SavedSearchFiltersInput
+  id: String
   name: String
   query: String
   tags: [String!]
@@ -1033,7 +1076,7 @@ input CreateThingInput {
   """
   {material: fraction} summing to at most 1. Percentages are accepted and converted.
   """
-  composition: JSON
+  composition: JSONObject
   condition: ItemCondition
   currency: String
   currentValue: Float
@@ -1051,7 +1094,7 @@ input CreateThingInput {
 
   """Height, in millimetres."""
   heightMm: Float
-  identifierCodes: JSON
+  identifierCodes: JSONObject
 
   """A digital item is refused a mass, a size and a volume."""
   isDigital: Boolean
@@ -1067,7 +1110,7 @@ input CreateThingInput {
 
   """What the object is made of."""
   materials: [String!]
-  metadata: JSON
+  metadata: JSONObject
   model: String
   name: String!
   purchasePrice: Float
@@ -1261,7 +1304,7 @@ type EventType implements Node & Taggable {
   """
   lastMovedAt: DateTime
   location: PlaceType
-  locationCoordinates: JSON
+  locationCoordinates: JSONObject
   locationEntityId: ID
   locationName: String
   mediaContentType: String
@@ -1269,7 +1312,7 @@ type EventType implements Node & Taggable {
   mediaSize: Float
   mediaUrl: String
   mediaWidth: Int
-  metadata: JSON
+  metadata: JSONObject
   organizer: PersonType
   organizerEntityId: ID
 
@@ -1328,7 +1371,7 @@ type FileChunkType implements Node {
   parserName: String!
   parserVersion: String!
   sectionTitle: String
-  sourceLocator: JSON
+  sourceLocator: JSONObject
   updatedAt: DateTime!
 }
 
@@ -1439,6 +1482,11 @@ type ForecastBucketType {
   l0Probs: [ProbabilityEntryType!]!
   l1Probs: [ProbabilityEntryType!]!
   l2Probs: [ProbabilityEntryType!]
+
+  """
+  Class to render for this bucket. Not argmax(l0Probs): the posterior is calibrated and answers UNKNOWN for most of a day, so HBPE prior-corrects the label. Null from an HBPE that predates the field.
+  """
+  predictedL0: String
   q10: Float!
   q50: Float!
   q90: Float!
@@ -1492,6 +1540,15 @@ type ForecastType {
   systemStatus: String!
 }
 
+type GeocodeResultType {
+  cached: Boolean!
+  confidence: Float
+  latitude: Float
+  longitude: Float
+  normalizedAddress: String
+  status: String!
+}
+
 enum GrantMode {
   auto
   block
@@ -1503,7 +1560,7 @@ type GraphEdgeType {
   fromEntityId: ID!
   id: ID!
   isActive: Boolean!
-  properties: JSON
+  properties: JSONObject
   strength: Float
   toEntityId: ID!
   type: String!
@@ -1514,7 +1571,7 @@ input GraphEntityInput {
   entityType: String!
   key: String!
   name: String
-  properties: JSON
+  properties: JSONObject
   sourceSystem: String!
 }
 
@@ -1526,12 +1583,12 @@ type GraphNodeType {
   linkedId: String
   linkedTable: String
   name: String
-  properties: JSON
+  properties: JSONObject
 }
 
 input GraphRelationshipInput {
   fromKey: String!
-  properties: JSON
+  properties: JSONObject
   toKey: String!
   type: String!
 }
@@ -1634,7 +1691,7 @@ input ItemRelationshipInput {
   fromSourceId: String!
   fromSourceSystem: String!
   fromSourceType: String!
-  metadata: JSON
+  metadata: JSONObject
   relation: String!
   toSourceId: String!
   toSourceSystem: String!
@@ -1673,7 +1730,7 @@ type ItemType implements Node & Taggable {
   colors: [String!]
 
   """{material: fraction}; {} when the proportions are unknown."""
-  composition: JSON!
+  composition: JSONObject!
   condition: ItemCondition
   createdAt: DateTime!
   currency: String!
@@ -1714,7 +1771,7 @@ type ItemType implements Node & Taggable {
 
   """What the object is made of."""
   materials: [String!]
-  metadata: JSON
+  metadata: JSONObject
   model: String
   name: String
   observations: [ObjectObservationType!]!
@@ -1747,9 +1804,9 @@ enum ItemUnitSystem {
 }
 
 """
-The `JSON` scalar type represents JSON values as specified by [ECMA-404](http://www.ecma-international.org/publications/files/ECMA-ST/ECMA-404.pdf).
+The `JSONObject` scalar type represents JSON objects as specified by [ECMA-404](http://www.ecma-international.org/publications/files/ECMA-ST/ECMA-404.pdf).
 """
-scalar JSON
+scalar JSONObject
 
 type KnownPlaceCandidateType {
   confidence: Float!
@@ -1759,6 +1816,8 @@ type KnownPlaceCandidateType {
   lat: Float!
   lng: Float!
   locationId: String
+  presenceDays: Int!
+  presenceNights: Int!
   sampleEvents: [KnownPlaceSampleEventType!]!
 }
 
@@ -1789,11 +1848,28 @@ type KnownPlaceType {
   label: String!
   locationId: String
   source: String!
+  tags: [String!]!
 }
 
 input LinkItemToProductInput {
   itemId: ID!
   productId: ID
+}
+
+type LocalPubPeerCandidateType {
+  actorId: String!
+  claimedDids: [String!]!
+  companionDidKey: String
+  companionEndpoint: String
+  displayName: String
+  handle: String!
+  profileUrl: String
+}
+
+type LocalPubPeerLookupPayload {
+  candidate: LocalPubPeerCandidateType
+  found: Boolean!
+  reason: String
 }
 
 type MapPinType {
@@ -1912,7 +1988,7 @@ type MetricAnomalyType {
   detector: String!
   direction: String!
   id: String!
-  metadata: JSON!
+  metadata: JSONObject!
   metric: String!
   score: Float!
   value: Float
@@ -1965,7 +2041,7 @@ An evidence-linked suggestion. Never emitted without a correlation or anomaly FK
 type MetricSuggestionType {
   acceptedAt: String
   dismissedAt: String
-  evidence: JSON!
+  evidence: JSONObject!
   id: String!
   key: String!
   priority: Int
@@ -1976,6 +2052,7 @@ type MetricSuggestionType {
 type Mutation {
   """Accept a candidate at a chosen time, minting a real event"""
   acceptCandidate(endTime: DateTime, id: ID!, startTime: DateTime!): EventType!
+  acceptPeerInvite(input: AcceptPeerInviteInput!): AcceptPeerInvitePayload!
 
   """
   Accept a proposed task into the open backlog. Keeps any preferred date as a hint; does not place a calendar block.
@@ -1997,6 +2074,7 @@ type Mutation {
 
   """Soft-cancel a reminder. The row survives."""
   cancelReminder(id: ID!): ReminderType
+  collectPeerAnswer(askId: ID!): SendPeerAskPayload!
 
   """
   Mark a task done. Idempotent — the original completion instant is preserved.
@@ -2006,7 +2084,7 @@ type Mutation {
     id: ID!
 
     """
-    The owned unit this sighting is of. Omit to confirm the resolution already on the row.
+    The owned unit this sighting is of. Omit to confirm the resolution already on the row. Without a productId, the unit's product, when it has one, becomes the sighting's product.
     """
     itemId: ID
     productId: ID
@@ -2029,6 +2107,7 @@ type Mutation {
   createItem(input: CreateItemInput!): CreateItemPayload!
   createNote(input: CreateNoteInput!): CreateNotePayload!
   createNotes(input: [CreateNoteInput!]!): [NoteType!]!
+  createPeerInvite(input: CreatePeerInviteInput): CreatePeerInvitePayload!
   createPeerLink(input: CreatePeerLinkInput!): PeerLinkPayload!
   createPeople(input: [CreatePersonInput!]!): [PersonType!]!
   createPerson(input: CreatePersonInput!): CreatePersonPayload!
@@ -2154,12 +2233,15 @@ type Mutation {
   Move an event to a new time, keeping its duration. Externally-sourced events are moved locally only and marked pending — the change is not pushed to the source calendar.
   """
   rescheduleEvent(endTime: DateTime, id: ID!, startTime: DateTime!): EventType
+  resendPeerKeyRotation: PeerKeyRotationPayload!
   restoreEvent(input: RestoreByIdInput!): EventType
 
   """Return a placed event to the slate, deleting the event it minted"""
   returnEventToSlate(eventId: ID!): ScheduleCandidateType!
   revokeAskGrant(id: ID!): AskGrantPayload!
+  revokePeerInvite(id: ID!): PeerInvitePayload!
   revokePeerLink(id: ID!): PeerLinkPayload!
+  rotatePeerKey: PeerKeyRotationPayload!
   runAsk(disclosureForm: AnswerForm, id: ID!, redactItemIds: [String!]): RunAskPayload!
 
   """
@@ -2204,6 +2286,18 @@ type Mutation {
 
   """Manually trigger the HBPE pipeline for the current user"""
   triggerHbpe: String!
+
+  """
+  A person says this sighting is not the thing it is linked to. The thing link is cleared and the sighting goes back to unresolvedObservations, so they can pick the right thing. Its product link stays, unless it is linked to a product and no thing. Use rejectObservation for "not a thing at all", which takes it out of that queue.
+  """
+  unlinkObservation(
+    id: ID!
+
+    """
+    The thing the person said it is not. When given, a sighting no longer linked to that thing is left as it is.
+    """
+    itemId: ID
+  ): ObjectObservationType
 
   """Remove the planned block for this task and clear scheduledFor."""
   unscheduleTask(id: ID!): TaskType
@@ -2270,6 +2364,7 @@ type ObjectByIdentifierPayload {
   The namespace the value normalized into — not always the one asked for.
   """
   namespace: ObjectIdentifierNamespace
+  ownedItem: ItemType
   product: ProductModelType
   subjectType: ObjectIdentifierSubjectType
   value: String
@@ -2328,7 +2423,7 @@ type ObjectMergeCountsType {
 }
 
 type ObjectObservationType implements Node {
-  attributes: JSON!
+  attributes: JSONObject!
   bbox: BoundingBoxType
 
   """A human confirmed this link. Written only by confirmObservation."""
@@ -2351,7 +2446,7 @@ type ObjectObservationType implements Node {
   The cropped thumbnail of the sighting, or the whole frame when there is no crop.
   """
   media: ContentType
-  metadata: JSON!
+  metadata: JSONObject!
   observedAt: DateTime!
   place: PlaceType
   placeEntityId: ID
@@ -2402,8 +2497,37 @@ type PageInfo {
   startCursor: String
 }
 
+type PeerInvite {
+  createdAt: DateTime!
+  expiresAt: DateTime!
+  id: ID!
+  inviterName: String!
+  label: String
+  status: PeerInviteStatus!
+  usedAt: DateTime
+}
+
+type PeerInvitePayload {
+  invite: PeerInvite
+  success: Boolean!
+}
+
+enum PeerInviteStatus {
+  expired
+  pending
+  revoked
+  used
+}
+
+type PeerKeyRotationPayload {
+  notified: [String!]!
+  success: Boolean!
+  unreachable: [String!]!
+}
+
 type PeerLinkPayload {
   peerLink: PeerLinkType
+  peerNotified: Boolean
   success: Boolean!
 }
 
@@ -2418,10 +2542,12 @@ type PeerLinkType {
   createdAt: DateTime!
   displayName: String
   id: ID!
+  linkedByKey: Boolean!
   memoryEndpoint: String!
   peerHandle: String!
   personEntityId: ID
   revokedAt: DateTime
+  safetyCode: String
   status: PeerLinkStatus!
   trustTier: PeerTrustTier!
   updatedAt: DateTime!
@@ -2606,23 +2732,23 @@ type PlaceNearType {
 
 type PlaceType implements Node & Taggable {
   appearedAt: DateTime
-  boundary: JSON
+  boundary: JSONObject
   description: String
   entityType: String!
   estimated: Boolean
   geoFormat: String
-  geolocation: JSON
+  geolocation: JSONObject
   id: ID!
   incomingRelationships(limit: Int): [RelationshipType!]
   latitude: Float
-  locationBoundary: JSON
+  locationBoundary: JSONObject
   longitude: Float
   name: String
   outgoingRelationships(limit: Int): [RelationshipType!]
   parent: PlaceType
   parentId: ID
   placeKind: String
-  properties: JSON!
+  properties: JSONObject!
   tags: [EntityTagType!]!
   tracked: Boolean
   type: String
@@ -2725,7 +2851,7 @@ type ProductModelType implements Node & Taggable {
   """ci.content rows holding manuals."""
   manualContentIds: [ID!]
   manufacturer: String
-  metadata: JSON!
+  metadata: JSONObject!
   modelNumber: String
 
   """Manufacturer list price in integer MINOR units of `currency`."""
@@ -2739,14 +2865,14 @@ type ProductModelType implements Node & Taggable {
   sourceType: String
 
   """Descriptive specifications."""
-  spec: JSON!
+  spec: JSONObject!
   subcategory: String
   tags: [EntityTagType!]!
   title: String!
   updatedAt: DateTime!
 
   """Variant AXES only ({color, capacity, size}) — never descriptive specs."""
-  variantAttributes: JSON!
+  variantAttributes: JSONObject!
 }
 
 type ProviderConnection implements Connection {
@@ -2831,6 +2957,7 @@ type Query {
   answers(after: String, before: String, first: Int, last: Int): AnswerConnection!
   ask(id: ID!): AskType
   askAnswer(id: ID!): AskAnswerType
+  askAuditReceipt(id: ID!): AskAuditReceiptPayload
   askDisclosureHistory(input: AskDisclosureHistoryInput): AskDisclosureHistoryPayload!
   askDisclosureSummary(input: AskDisclosureSummaryInput): AskDisclosureSummaryPayload!
   askGrant(id: ID!): AskGrantType
@@ -2924,7 +3051,7 @@ type Query {
   events(after: String, before: String, first: Int, last: Int): EventConnection!
 
   """
-  Events overlapping [from, to) — calendar read path. Excludes cancelled/no-show; keeps tentative. Allowlisted types: calendar_event, meeting, appointment, planned_block, plus events with no event_type (user-created and accepted suggestions).
+  Events overlapping [from, to) — calendar read path. Excludes cancelled/no-show; keeps tentative. Allowlisted types: calendar_event, meeting, appointment, planned_block, plus events with no event_type (user-created and accepted suggestions) and `event` rows from an imported calendar file (source_system calendar).
   """
   eventsInRange(from: DateTime!, to: DateTime!): [EventType!]!
 
@@ -2943,6 +3070,7 @@ type Query {
 
   """Past forecast-vs-actual buckets from hbpe.prediction_log"""
   forecastHistory(days: Int = 5): [ForecastHistoryDayType!]!
+  geocode(query: String!): GeocodeResultType!
   geocodingConfigured: Boolean!
 
   """
@@ -2972,6 +3100,11 @@ type Query {
   knownPlaces(kind: String): [KnownPlaceType!]!
 
   """
+  What a Local.Pub profile claims about a person (name@host): display name, DIDs, and the Companion address and did:key if the profile names them. Creates no link; link with createPeerLink.
+  """
+  localPubPeerLookup(handle: String!): LocalPubPeerLookupPayload!
+
+  """
   Located events as map markers for the given filters. Events-only and located-only; returns the whole matching set in one read (capped at 20000 pins), not a page.
   """
   mapPins(input: SearchInput!, limit: Int): MapPinsType!
@@ -2999,6 +3132,7 @@ type Query {
   myAskGrantHistory: [AskGrantType!]!
   myAskGrants: [AskGrantType!]!
   myHouseholdTiers: [HouseholdTierType!]!
+  myPeerInvites: [PeerInvite!]!
   myPeerLinks: [PeerLinkType!]!
   node(id: ID!): Node
   note(id: ID!): NoteType
@@ -3061,6 +3195,7 @@ type Query {
   questions(after: String, before: String, first: Int, last: Int): QuestionConnection!
   receipt(id: ID!): ReceiptType
   receipts(after: String, extractionState: ReceiptExtractionState, first: Int, merchantName: String, purchasedFrom: DateTime, purchasedTo: DateTime): ReceiptConnection!
+  refreshMediaUrls(urls: [String!]!): [String]!
   relationship(id: ID!): RelationshipType
   relationships(after: String, before: String, first: Int, last: Int): RelationshipConnection!
 
@@ -3184,7 +3319,7 @@ type ReceiptLineItemType {
   """
   isPhysical: Boolean!
   lineNumber: Int!
-  metadata: JSON!
+  metadata: JSONObject!
   mintedObjectId: ID
   modelNumber: String
   productId: ID
@@ -3216,7 +3351,7 @@ type ReceiptType implements Node & Taggable {
   lineItems: [ReceiptLineItemType!]!
   merchantEntityId: ID
   merchantName: String
-  metadata: JSON!
+  metadata: JSONObject!
   orderNumber: String
 
   """Last four digits only. A full card number is never stored."""
@@ -3265,7 +3400,7 @@ type RelationshipType implements Node {
   fromNodeType: String!
   id: ID!
   isBidirectional: Boolean!
-  properties: JSON
+  properties: JSONObject
   startDate: DateTime
   strength: Float
   toNodeId: ID!
@@ -3350,11 +3485,14 @@ type SavedSearchEdge implements Edge {
 }
 
 input SavedSearchFiltersInput {
+  areas: [[Float!]!]
+  bbox: [Float!]
   connectors: [String!]
   datePreset: String
   direction: String
   endTime: String
   eventTypes: [String!]
+  fileKinds: [String!]
   hasLocation: Boolean
   people: [String!]
   places: [String!]
@@ -3362,14 +3500,18 @@ input SavedSearchFiltersInput {
   sortBy: String
   sortOrder: String
   startTime: String
+  view: String
 }
 
 type SavedSearchFiltersType {
+  areas: [[Float!]!]
+  bbox: [Float!]
   connectors: [String!]
   datePreset: String
   direction: String
   endTime: String
   eventTypes: [String!]
+  fileKinds: [String!]
   hasLocation: Boolean
   people: [String!]
   places: [String!]
@@ -3377,6 +3519,7 @@ type SavedSearchFiltersType {
   sortBy: String
   sortOrder: String
   startTime: String
+  view: String
 }
 
 type SavedSearchType implements Node {
@@ -3412,7 +3555,7 @@ type ScheduleCandidateType {
   """
   Saved how-you'd-do-it compose for this card, when the user has personalized it
   """
-  personalization: JSON
+  personalization: JSONObject
 
   """The sentence shown to the user. Never empty."""
   rationale: String!
@@ -3437,18 +3580,21 @@ type ScheduleTaskPayload {
 
 input SearchInput {
   after: String
+  areas: [[Float!]!]
   bbox: [Float!]
   connectors: [String!]
   direction: String
   endTime: String
   eventTypes: [String!]
   excludeTypes: [String!]
+  fileKinds: [String!]
   first: Int
   hasLocation: Boolean
   includeFiles: Boolean
   includeTypes: [String!]
   people: [String!]
   places: [String!]
+  prefix: Boolean
   query: String
   semantic: Boolean
   shareToken: String
@@ -3461,6 +3607,11 @@ input SearchInput {
 type SearchResultConnection {
   edges: [SearchResultEdge!]!
   matchingTags: [TagType!]!
+
+  """
+  True when the list is sorted by name with no search text and some kind of item has more rows than the newest 500 a name sort reads, so the list is in name order but leaves out that kind's older rows. Always false for every other sort, and when search text or tags choose the rows.
+  """
+  nameSortCutShort: Boolean!
   pageInfo: PageInfo!
   totalCount: Int!
 }
@@ -3478,7 +3629,7 @@ input SendPeerAskInput {
   from: String
   handle: String!
   minMinutes: Int
-  peerAccessToken: String!
+  peerAccessToken: String
   prompt: String!
   purpose: String
   subject: String
@@ -3667,7 +3818,7 @@ type TaskPendingChangeType implements Node {
   createdAt: DateTime!
   id: ID!
   kind: TaskPendingChangeKind!
-  patch: JSON!
+  patch: JSONObject!
   rationale: String
   resolvedAt: DateTime
   status: TaskPendingChangeStatus!
@@ -3757,6 +3908,15 @@ type ThreadType implements Node & Taggable {
   tags: [EntityTagType!]!
 }
 
+"""
+How the apps write a time of day. 'auto' leaves it to the device's language settings; 'h12' always writes 3:43 PM and 'h23' always writes 15:43.
+"""
+enum TimeFormat {
+  auto
+  h12
+  h23
+}
+
 type UnfurlType {
   authorName: String
   authorUrl: String
@@ -3765,7 +3925,7 @@ type UnfurlType {
   durationSeconds: Int
   externalRef: String
   fetchedAt: DateTime!
-  payload: JSON!
+  payload: JSONObject!
   resolver: String!
   siteName: String
   status: String!
@@ -3815,13 +3975,12 @@ input UpdateConnectionInput {
   accessToken: String
   active: Boolean
   activeEndpoints: [String!]
-  externalId: String
   id: ID!
   name: String
   needsReauth: Boolean
   refreshToken: String
   schedule: String
-  syncState: JSON
+  syncState: JSONObject
   tokenExpiry: DateTime
 }
 
@@ -3832,15 +3991,11 @@ type UpdateConnectionPayload {
 
 input UpdateConnectionSyncJobInput {
   completedAt: DateTime
-  cursor: JSON
-  data: JSON
   endpointName: String
-  error: JSON
+  error: JSONObject
   id: ID!
   jobId: ID
-  nextCursor: JSON
-  properties: JSON
-  status: String
+  properties: JSONObject
   type: String
 }
 
@@ -3853,7 +4008,7 @@ input UpdateContentInput {
   externalId: String
   id: ID!
   mimetype: String
-  sourceData: JSON
+  sourceData: JSONObject
   sourceUrl: String
   text: String
   title: String
@@ -3862,6 +4017,7 @@ input UpdateContentInput {
 }
 
 input UpdateCurrentUserInput {
+  timeFormat: TimeFormat
   timezone: String
 }
 
@@ -3880,10 +4036,10 @@ input UpdateEventInput {
   """
   isLocked: Boolean
   isRecurring: Boolean
-  locationCoordinates: JSON
+  locationCoordinates: JSONObject
   locationEntityId: ID
   locationName: String
-  metadata: JSON
+  metadata: JSONObject
   organizerEntityId: ID
   participantEntityIds: [ID!]
   sourceId: ID
@@ -3919,7 +4075,7 @@ input UpdateItemInput {
   """
   {material: fraction} summing to at most 1. Percentages are accepted and converted.
   """
-  composition: JSON
+  composition: JSONObject
   condition: ItemCondition
   currency: String
   currentValue: Float
@@ -3954,7 +4110,7 @@ input UpdateItemInput {
 
   """What the object is made of."""
   materials: [String!]
-  metadata: JSON
+  metadata: JSONObject
   model: String
   name: String!
   purchasePrice: Float
@@ -3980,13 +4136,16 @@ input UpdateKnownPlaceInput {
   confidence: Float
   coordinates: KnownPlaceCoordinatesInput
   kind: String!
+  knownPlaceId: String
   label: String!
   locationId: String
   source: String
+  tags: [String!]
 }
 
 input UpdateNoteInput {
   content: String
+  expectedUpdatedAt: DateTime
   id: String!
   title: String
 }
@@ -4040,15 +4199,15 @@ input UpdatePlaceInput {
   description: String
   estimated: Boolean
   geoFormat: String
-  geolocation: JSON
+  geolocation: JSONObject
   id: String!
   latitude: Float
-  locationBoundary: JSON
+  locationBoundary: JSONObject
   longitude: Float
   name: String!
   parentId: String
   placeKind: String
-  properties: JSON
+  properties: JSONObject
   tracked: Boolean
   type: String
   uploaded: Boolean
@@ -4069,7 +4228,7 @@ input UpdateRelationshipInput {
   endDate: DateTime
   id: ID!
   isBidirectional: Boolean
-  properties: JSON
+  properties: JSONObject
   startDate: DateTime
   strength: Float
 }
@@ -4144,6 +4303,7 @@ type UserType implements Node {
   name: String!
   needsIdentityStep: Boolean!
   onboarded: Boolean!
+  timeFormat: TimeFormat!
   timezone: String!
 }
 

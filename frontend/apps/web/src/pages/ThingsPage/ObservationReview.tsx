@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-import { useMutation, useQuery } from '@apollo/client';
+import { useMutation, useQuery } from '@apollo/client/react';
 import { Button, Card, Dialog, Input } from '@ci/shadcn';
 
 import { ObservationStrip } from '@/components/entities';

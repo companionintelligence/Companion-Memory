@@ -28,6 +28,11 @@
  *    ordinary geographic NANP number ({@link nanpNumberClass}). Toll-free,
  *    premium, personal-communications and service numbers, extensions, short
  *    codes and anything invalid are never evidence.
+ *  - A FAX LINE IS A MACHINE, NOT A PERSON. A number a record files as a fax
+ *    (`properties.Faxes`, the vCard parser's `TEL;TYPE=FAX`) is never
+ *    evidence, whatever else the corpus says about it: every card from one
+ *    office lists the office fax, which is how two colleagues were proposed as
+ *    one person at 85% ({@link FAX_FACT_PROPERTY_KEYS}).
  *  - A STATED FORM BEATS AN INFERRED ONE, per last ten digits; a raw value
  *    that was REFUSED beats the inferred reading of its own truncated join
  *    key; and a last-ten that anything in the corpus states with ANOTHER
@@ -343,12 +348,7 @@ export function derivePhoneRegion(input: {
 
 /** What kind of North American number ten digits are. Only `geographic` is ever evidence. */
 export type NanpNumberClass =
-  | 'geographic'
-  | 'toll_free'
-  | 'premium'
-  | 'non_geographic'
-  | 'service'
-  | 'invalid';
+  'geographic' | 'toll_free' | 'premium' | 'non_geographic' | 'service' | 'invalid';
 
 /** Toll-free, and the NPAs NANPA reserves for toll-free expansion. */
 const TOLL_FREE_NPAS: ReadonlySet<string> = new Set([
@@ -450,8 +450,15 @@ export function nanpNumberClass(ten: string): NanpNumberClass {
 // Parsing
 // ---------------------------------------------------------------------------
 
-/** Why a raw value is or is not a usable number. */
-export type PhoneParseStatus = 'ok' | 'invalid' | 'service' | 'no_region' | 'extension' | 'short' | 'letters';
+/**
+ * Why a raw value is or is not a usable number.
+ *
+ * `fax` is never returned by {@link parsePhone}: it is how
+ * {@link extractPhoneFacts} records digits the record itself files as a fax,
+ * and it outranks every other reading of them ({@link PhoneHolders.resolve}).
+ */
+export type PhoneParseStatus =
+  'ok' | 'invalid' | 'service' | 'no_region' | 'extension' | 'short' | 'letters' | 'fax';
 
 /** One raw phone value, read. */
 export interface ParsedPhone {
@@ -464,6 +471,11 @@ export interface ParsedPhone {
    * The last ten digits (all of them when fewer) — `normalizePhone`'s join
    * key, for every status, so a refused value can still be matched to the
    * lines it collides with. Empty when the value has no digits.
+   *
+   * For a value carrying an extension this is the key the join key USED to
+   * give it: `normalizePhone` now refuses such a value outright, but records
+   * written before it did hold the truncation in `phones`, and this is what
+   * lets {@link PhoneHolders.resolve} see the refusal on that same line.
    */
   l10: string;
 }
@@ -601,6 +613,20 @@ export function parsePhone(raw: string, region: PhoneRegion | null): ParsedPhone
  */
 export const PHONE_FACT_PROPERTY_KEYS = ['Phones', 'phones', 'phone'] as const;
 
+/**
+ * The `properties` keys that hold numbers the record files as FAX lines — the
+ * vCard parser's `Faxes` (`TEL;TYPE=FAX`). Read by {@link extractPhoneFacts}
+ * only to REFUSE those digits: a fax is office equipment, and one office's
+ * fax is on every card from that office, so a shared fax says nothing about
+ * whether two people are one. The refusal holds even when the same digits
+ * also sit in a phone key — the vCard parser's identity key can be the fax,
+ * and then `phones` carries it too.
+ */
+export const FAX_FACT_PROPERTY_KEYS = ['Faxes'] as const;
+
+/** Every key the facts are read from — what the SQL loads, and what makes a Person part of the corpus. */
+const FACT_SQL_KEYS: readonly string[] = [...PHONE_FACT_PROPERTY_KEYS, ...FAX_FACT_PROPERTY_KEYS];
+
 /** A name that says nothing about who the person is — the Google Voice stub case. */
 export type PhonePlaceholder = 'empty' | 'email' | 'handle' | 'own_number';
 
@@ -644,13 +670,24 @@ function stringsOf(value: unknown): string[] {
   return [];
 }
 
-/** The raw phone values `properties` holds, in key order. */
-function propertyPhoneValues(properties: Readonly<Record<string, unknown>> | null | undefined): string[] {
+/** The raw values `properties` holds under `keys`, in key order. */
+function propertyValues(
+  properties: Readonly<Record<string, unknown>> | null | undefined,
+  keys: readonly string[],
+): string[] {
   const props = properties ?? {};
 
-  return PHONE_FACT_PROPERTY_KEYS.flatMap((key) => stringsOf(props[key])).filter(
-    (value) => value.trim() !== '',
-  );
+  return keys.flatMap((key) => stringsOf(props[key])).filter((value) => value.trim() !== '');
+}
+
+/** The raw phone values `properties` holds, in key order. */
+function propertyPhoneValues(properties: Readonly<Record<string, unknown>> | null | undefined): string[] {
+  return propertyValues(properties, PHONE_FACT_PROPERTY_KEYS);
+}
+
+/** The raw values `properties` files as fax lines. */
+function propertyFaxValues(properties: Readonly<Record<string, unknown>> | null | undefined): string[] {
+  return propertyValues(properties, FAX_FACT_PROPERTY_KEYS);
 }
 
 const HANDLE_NAME = /^@[\w.]{2,}$/;
@@ -694,7 +731,7 @@ export function classifyPhoneName(
   }
 
   const own = new Set(
-    propertyPhoneValues(properties)
+    [...propertyPhoneValues(properties), ...propertyFaxValues(properties)]
       .map((value) => lastTen(value.replace(/\D/g, '')))
       .filter((digits) => digits.length >= MIN_DIGITS),
   );
@@ -712,10 +749,11 @@ export function isPlaceholderPersonName(name: string | null | undefined): boolea
 /**
  * The phone facts one person's record states, read in `region`.
  *
- * Reads ONLY {@link PHONE_FACT_PROPERTY_KEYS} and a display name that is a
- * number. Values are grouped by last ten digits; within one person a stated
- * form is kept beside the inferred reading, and {@link PhoneHolders.resolve}
- * decides between them with the corpus in view.
+ * Reads ONLY {@link PHONE_FACT_PROPERTY_KEYS}, {@link FAX_FACT_PROPERTY_KEYS}
+ * and a display name that is a number. Values are grouped by last ten digits;
+ * within one person a stated form is kept beside the inferred reading, and
+ * {@link PhoneHolders.resolve} decides between them with the corpus in view.
+ * A fax value only ever marks its digits `fax`: it contributes no reading.
  */
 export function extractPhoneFacts(
   properties: Readonly<Record<string, unknown>> | null | undefined,
@@ -756,6 +794,18 @@ export function extractPhoneFacts(
     } else {
       line.inferred = parsed.e164;
     }
+  }
+
+  for (const value of propertyFaxValues(properties)) {
+    const { l10 } = parsePhone(value, region);
+
+    if (l10.length < MIN_DIGITS) {
+      continue;
+    }
+
+    const line = lines.get(l10) ?? { stated: new Set<string>(), inferred: null, refused: new Set() };
+    line.refused.add('fax');
+    lines.set(l10, line);
   }
 
   const placeholder = classified === 'other_number' ? null : classified;
@@ -939,12 +989,7 @@ export type PhoneCheckReason =
 
 /** Why shared digits are not evidence at all. */
 export type PhoneUnusableReason =
-  | 'over_common'
-  | 'owner_number'
-  | 'service'
-  | 'invalid'
-  | 'extension'
-  | 'short';
+  'over_common' | 'owner_number' | 'service' | 'invalid' | 'extension' | 'short' | 'fax';
 
 /** Where the country of an exact match came from. */
 export type PhoneBasis = 'stated_both' | 'stated_one' | 'inferred_both';
@@ -988,6 +1033,7 @@ function refusalReason(status: PhoneParseStatus): PhoneUnusableReason {
     case 'service':
     case 'extension':
     case 'short':
+    case 'fax':
       return status;
     default:
       return 'invalid';
@@ -1156,6 +1202,9 @@ export class PhoneHolders {
    * What one person's record says these digits are, with the corpus in view.
    * In order:
    *
+   *  0. Digits the record files as a FAX are refused outright, ahead of any
+   *     stated form: the same digits in a phone key (the vCard identity key
+   *     can be the fax) do not make office equipment a personal line.
    *  1. One stated form wins; two that disagree leave the country unconfirmed.
    *  2. A REFUSED raw value beats an inferred reading of the same digits. The
    *     lower-case `phones`/`phone` keys are the importer's last-ten of the
@@ -1172,6 +1221,10 @@ export class PhoneHolders {
 
     if (reading == null) {
       return { kind: 'refused', reasons: ['invalid'] };
+    }
+
+    if (reading.refused.has('fax')) {
+      return { kind: 'refused', reasons: ['fax'] };
     }
 
     if (reading.stated.size > 1) {
@@ -1606,6 +1659,178 @@ export function applyPhoneVerdict<E extends PhoneEvidenceLike>(
 }
 
 // ---------------------------------------------------------------------------
+// Re-checking stored evidence
+// ---------------------------------------------------------------------------
+
+/**
+ * The last-tens one person's record carries as a line of theirs — every line
+ * the record does not itself refuse. A fax is office equipment, and an
+ * extension, a short code or an invalid value names no line at all; a stated
+ * form wins over a refusal of the same digits elsewhere on the record, as in
+ * {@link PhoneHolders.resolve}. A national value the owner's region would
+ * read as a number (`no_region` without one) is carried whatever its reading:
+ * this answers "is the number on the record", not "is it good evidence".
+ *
+ * Needs no corpus — read the facts with any region, `null` included.
+ */
+export function carriedPhoneLines(facts: PhoneFacts): Set<string> {
+  const carried = new Set<string>();
+
+  for (const [line, reading] of facts.lines) {
+    if (reading.refused.has('fax')) {
+      continue;
+    }
+
+    const refusals = [...reading.refused].filter((status) => status !== 'no_region');
+
+    if (reading.stated.size > 0 || reading.inferred != null || refusals.length === 0) {
+      carried.add(line);
+    }
+  }
+
+  return carried;
+}
+
+/** What the live records still support, for {@link revalidatePhoneEvidence}. */
+export interface LivePhoneSupport {
+  /**
+   * Last-tens BOTH people still carry: each one's own record
+   * ({@link carriedPhoneLines}), and the numbers each was OBSERVED with —
+   * live, non-rejected claims from the linkers, NOT self claims, which are
+   * copies of the record that nothing retracts. A stored number outside this
+   * set is a number one of the two people no longer has.
+   */
+  carried: ReadonlySet<string>;
+  /**
+   * Hold what survives below the auto-merge tier, marked `unadjudicated`
+   * ({@link capUnadjudicatedPhones}). The drain sets it when the two records no
+   * longer share any number (verdict `absent`), so what is left stands on
+   * observed claims alone — exactly the claim pass's evidence, which the
+   * detector holds the same way. Default false: the review queue's check
+   * asks only whether the numbers are still there, and leaves grading to the
+   * detector and the drain.
+   */
+  capUnadjudicated?: boolean;
+}
+
+/** A re-checked candidate: its evidence and score now, and whether either moved. */
+export interface RevalidatedPhoneEvidence<E> {
+  score: number;
+  evidence: Array<E | PhoneEvidenceItem>;
+  changed: boolean;
+}
+
+/** The last-ten join key of one number as evidence writes it: E.164, national, or bare digits. */
+function evidenceLine(value: string): string {
+  return lastTen(value.replace(/\D/g, ''));
+}
+
+/** The numbers one phone evidence item names — every writer joins several with `, `. */
+export function phoneEvidenceNumbers(value: string): string[] {
+  return value
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => evidenceLine(part).length > 0);
+}
+
+/**
+ * Re-check a STORED candidate's phone evidence against the live records, and
+ * take out whatever no longer holds.
+ *
+ * ── Why stored evidence goes stale ─────────────────────────────────────────
+ *
+ * `clean.duplicate_detect` writes a pair once per scoring generation and never
+ * withdraws one, and the ledger does not re-open a person when their record
+ * changes — only a version bump does. Between sweeps a re-import rewrites
+ * `properties` from that source's own card (dropping the numbers a merge
+ * folded in), a merge moves numbers, a user edits a contact, and a card can
+ * come to file a number as its office fax. The review queue then shows "Same
+ * phone number" over a number one of the two people no longer carries.
+ *
+ * ── Subtractive, on purpose ─────────────────────────────────────────────────
+ *
+ * This removes; it never adds a number and never raises a score. A phone item
+ * keeps exactly the numbers both people still carry ({@link LivePhoneSupport})
+ * and is dropped when none are left; a `phone_check` goes with the last match
+ * it explained; a `phone_country_conflict` stays while both still carry its
+ * digits. The new score is the strongest item left, capped at the stored score
+ * so a profile-URL veto's cap survives. Finding NEW evidence, or re-grading
+ * old evidence (a number since become over-common, or the owner's), is the
+ * detector's job on its next sweep, and folding an exact pair is the drain's,
+ * after its own live re-check.
+ *
+ * `changed` is false exactly when every stored item still holds, and the
+ * candidate is then returned as it was.
+ */
+export function revalidatePhoneEvidence<E extends PhoneEvidenceLike>(
+  candidate: { readonly score: number; readonly evidence: readonly E[] },
+  live: LivePhoneSupport,
+): RevalidatedPhoneEvidence<E> {
+  let changed = false;
+  let matched = false;
+  const kept: Array<E | PhoneEvidenceItem> = [];
+
+  for (const item of candidate.evidence) {
+    if (item.kind === PHONE_EVIDENCE.conflict) {
+      // "Same digits, two countries": it holds while both still carry them.
+      const digits = phoneEvidenceNumbers(item.value.replace(/≠|;/g, ',')).map(evidenceLine);
+
+      if (digits.length > 0 && digits.every((line) => live.carried.has(line))) {
+        kept.push(item);
+      } else {
+        changed = true;
+      }
+
+      continue;
+    }
+
+    if (item.kind !== PHONE_EVIDENCE.match) {
+      kept.push(item);
+      continue;
+    }
+
+    const numbers = phoneEvidenceNumbers(item.value);
+    const holding = numbers.filter((number) => live.carried.has(evidenceLine(number)));
+
+    if (holding.length === 0) {
+      changed = true;
+      continue;
+    }
+
+    matched = true;
+
+    if (holding.length === numbers.length) {
+      kept.push(item);
+    } else {
+      changed = true;
+      kept.push({ ...item, value: holding.join(', ') });
+    }
+  }
+
+  const evidence = kept.filter((item) => item.kind !== PHONE_EVIDENCE.check || matched);
+
+  if (evidence.length !== kept.length) {
+    changed = true;
+  }
+
+  const capped = live.capUnadjudicated
+    ? capUnadjudicatedPhones({ score: candidate.score, evidence })
+    : { score: candidate.score, evidence };
+
+  if (capped.evidence.length !== evidence.length || capped.evidence.some((item, i) => item !== evidence[i])) {
+    changed = true;
+  }
+
+  if (!changed) {
+    return { score: candidate.score, evidence: [...candidate.evidence], changed: false };
+  }
+
+  const rescored = rescore(capped.evidence);
+
+  return { score: Math.min(candidate.score, rescored.score), evidence: rescored.evidence, changed: true };
+}
+
+// ---------------------------------------------------------------------------
 // SQL text — no access, only construction
 // ---------------------------------------------------------------------------
 
@@ -1615,9 +1840,9 @@ export function applyPhoneVerdict<E extends PhoneEvidenceLike>(
  * `properties` bag.
  */
 export function phoneFactsSqlObject(alias: string): string {
-  return `jsonb_build_object(${PHONE_FACT_PROPERTY_KEYS.map(
-    (key) => `'${key}', ${alias}.properties->'${key}'`,
-  ).join(', ')})`;
+  return `jsonb_build_object(${FACT_SQL_KEYS.map((key) => `'${key}', ${alias}.properties->'${key}'`).join(
+    ', ',
+  )})`;
 }
 
 /**
@@ -1640,7 +1865,7 @@ export const PHONE_FACTS_CORPUS_SQL = `SELECT e.entity_id,
           AND e.entity_type = 'Person'
           AND COALESCE(e.is_active, true) = true
           AND e.merged_into_entity_id IS NULL
-          AND (e.properties ?| array[${PHONE_FACT_PROPERTY_KEYS.map((key) => `'${key}'`).join(', ')}]
+          AND (e.properties ?| array[${FACT_SQL_KEYS.map((key) => `'${key}'`).join(', ')}]
                OR (e.name !~ '[[:alpha:]]' AND e.name ~ '[0-9]'))`;
 
 /**

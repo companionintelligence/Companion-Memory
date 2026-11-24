@@ -5,10 +5,19 @@ import type { PersonalizationProfile, TrustMode } from '@ci/domains/personalizat
 
 import type { IntentDefinition, ToolInvocationContext } from '../../core/types';
 import type { PendingActionEntity } from '../../entities/PendingActionEntity';
+import { GetStreamingAvailabilityTool } from '../../tools/GetStreamingAvailabilityTool';
+import { MessagingListChatsTool } from '../../tools/MessagingListChatsTool';
+import { MessagingListMessagesTool } from '../../tools/MessagingListMessagesTool';
 import { PendingActionService, DEFAULT_PENDING_ACTION_TTL_HOURS } from '../PendingActionService';
 
 function makeLogger() {
-  return { setContext: jest.fn(), debug: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() } as any;
+  return {
+    setContext: jest.fn(),
+    debug: jest.fn(),
+    log: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+  } as any;
 }
 
 function schema(name: string, privacy: Partial<IntentDefinition['privacy']> = {}): IntentDefinition {
@@ -32,8 +41,11 @@ function schema(name: string, privacy: Partial<IntentDefinition['privacy']> = {}
 const FORGET = schema('memory.forget', { access: 'delete', destructive: true });
 const SEND = schema('messaging.send', { access: 'write', external: true });
 const RECALL = schema('memory.recall');
-// The owner's own texts, read off their BlueBubbles server: external, but a read.
-const LIST_MESSAGES = schema('messaging.listMessages', { access: 'read', external: true });
+// The owner's own texts, read off their BlueBubbles server: external, but a read, and no third
+// party receives the query.
+const LIST_MESSAGES = schema('messaging.listMessages', { access: 'read', external: true, ownServer: true });
+// A title looked up on TMDB: a read whose query a third party receives.
+const STREAMING = schema('media.streamingAvailability', { access: 'read', external: true });
 // What `McpToolProvider` labels every connected-server tool, whatever it does.
 const MCP_TOOL = schema('mcp.notes.search', {
   access: 'write',
@@ -42,6 +54,7 @@ const MCP_TOOL = schema('mcp.notes.search', {
   external: true,
 });
 const COMPLETE_TASK = schema('planning.completeTask', { access: 'write', destructive: true });
+const CREATE_TASK = schema('planning.createTask', { access: 'write' });
 
 /**
  * A real profile for the mode, served the way `PersonalizationService.getProfile`
@@ -79,8 +92,9 @@ function makeRepository(rows: Partial<PendingActionEntity>[] = []) {
 
       return row;
     }),
-    findOne: jest.fn(async ({ where }: any) =>
-      store.find((r) => r.id === where.id && (where.userId == null || r.userId === where.userId)) ?? null,
+    findOne: jest.fn(
+      async ({ where }: any) =>
+        store.find((r) => r.id === where.id && (where.userId == null || r.userId === where.userId)) ?? null,
     ),
     // Equality on every `where` key — enough for `propose`'s open-card lookup,
     // which filters on plain columns only.
@@ -214,14 +228,124 @@ describe('PendingActionService.evaluate — the trust dial binding', () => {
     expect((await service.evaluate(COMPLETE_TASK, context())).decision).toBe('queue');
   });
 
-  it('never consults the dial for an ordinary read, in any mode', async () => {
-    const personalization = personalizationFor('cautious');
+  // A chat turn that looked something up may act on what came back, a mail or a note someone else
+  // wrote. Its writes ask in every mode that asks before a delete; the first round's writes, which
+  // the person asked for, do not.
+  it.each([
+    ['hands_off', 'execute'],
+    ['balanced', 'queue'],
+    ['cautious', 'queue'],
+  ] as const)('trust mode %s → %s for a write that follows a lookup', async (trustMode, expected) => {
     const service = new PendingActionService(
       makeRepository(),
-      personalization,
+      personalizationFor(trustMode),
       features(true),
       makeLogger(),
     );
+
+    const ruling = await service.evaluate(CREATE_TASK, context({ followsLookup: true }));
+
+    expect(ruling.decision).toBe(expected);
+    if (expected === 'queue') {
+      expect(ruling.reason).toBe('write-after-lookup');
+    }
+  });
+
+  // A third-party read after a lookup can carry what the lookup returned to that party: a planted
+  // mail can choose the query. So it asks wherever a write after a lookup does, and only hands_off
+  // runs it.
+  it.each([
+    ['hands_off', 'execute'],
+    ['balanced', 'queue'],
+    ['cautious', 'queue'],
+  ] as const)(
+    'trust mode %s → %s for a third-party read that follows a lookup',
+    async (trustMode, expected) => {
+      const service = new PendingActionService(
+        makeRepository(),
+        personalizationFor(trustMode),
+        features(true),
+        makeLogger(),
+      );
+
+      const ruling = await service.evaluate(STREAMING, context({ followsLookup: true }));
+
+      expect(ruling.decision).toBe(expected);
+      if (expected === 'queue') {
+        expect(ruling.reason).toBe('read-after-lookup');
+      }
+    },
+  );
+
+  // A read from the owner's own server sends no third party anything, so a lookup before it changes
+  // nothing: it runs on Balanced and asks on Cautious, as it would in the turn's first round.
+  it.each([
+    ['hands_off', 'execute'],
+    ['balanced', 'execute'],
+    ['cautious', 'queue'],
+  ] as const)(
+    'trust mode %s → %s for a read from the owner’s own server that follows a lookup',
+    async (trustMode, expected) => {
+      const service = new PendingActionService(
+        makeRepository(),
+        personalizationFor(trustMode),
+        features(true),
+        makeLogger(),
+      );
+
+      const ruling = await service.evaluate(LIST_MESSAGES, context({ followsLookup: true }));
+
+      expect(ruling.decision).toBe(expected);
+      if (expected === 'queue') {
+        expect(ruling.reason).toBe('confirmation-required');
+      }
+    },
+  );
+
+  // The real labels. "What did Alex text me?" lists the chats, then reads one chat's messages: the
+  // second call always follows a lookup, because its chatGuid only comes from the first.
+  describe('with the real tool labels on Balanced', () => {
+    const blueBubbles = { toolOwnerUserId: () => 'user-1' } as any;
+    const balanced = () =>
+      new PendingActionService(
+        makeRepository(),
+        personalizationFor('balanced'),
+        features(true),
+        makeLogger(),
+      );
+
+    it('lists a chat and then its messages without a card', async () => {
+      const service = balanced();
+      const listChats = new MessagingListChatsTool(blueBubbles, makeLogger()).schema;
+      const listMessages = new MessagingListMessagesTool(blueBubbles, makeLogger()).schema;
+
+      expect((await service.evaluate(listChats, context())).decision).toBe('execute');
+      expect((await service.evaluate(listMessages, context({ followsLookup: true }))).decision).toBe(
+        'execute',
+      );
+    });
+
+    it('still asks before a TMDB lookup that follows a lookup', async () => {
+      const streaming = new GetStreamingAvailabilityTool(makeLogger()).schema;
+      const ruling = await balanced().evaluate(streaming, context({ followsLookup: true }));
+
+      expect(ruling).toMatchObject({ decision: 'queue', reason: 'read-after-lookup' });
+      expect((await balanced().evaluate(streaming, context())).decision).toBe('execute');
+    });
+  });
+
+  it('never consults the dial for a write the turn did not make after a lookup', async () => {
+    const personalization = personalizationFor('cautious');
+    const service = new PendingActionService(makeRepository(), personalization, features(true), makeLogger());
+
+    expect((await service.evaluate(CREATE_TASK, context())).decision).toBe('execute');
+    expect((await service.evaluate(RECALL, context({ followsLookup: true }))).decision).toBe('execute');
+    expect(personalization.getProfile).not.toHaveBeenCalled();
+  });
+
+  it('never consults the dial for an ordinary read, in any mode', async () => {
+    const personalization = personalizationFor('cautious');
+    const service = new PendingActionService(makeRepository(), personalization, features(true), makeLogger());
 
     expect((await service.evaluate(RECALL, context())).decision).toBe('execute');
     expect(personalization.getProfile).not.toHaveBeenCalled();
@@ -339,7 +463,12 @@ describe('PendingActionService.propose — one card per open question', () => {
   function service(repository = makeRepository()) {
     return {
       repository,
-      service: new PendingActionService(repository, personalizationFor('balanced'), features(true), makeLogger()),
+      service: new PendingActionService(
+        repository,
+        personalizationFor('balanced'),
+        features(true),
+        makeLogger(),
+      ),
     };
   }
 
@@ -348,9 +477,23 @@ describe('PendingActionService.propose — one card per open question', () => {
     // its second round. Two identical cards means approving both sends twice.
     const { repository, service: pending } = service();
 
-    const first = await pending.propose(SEND, 'messaging_send', owner, { to: 'Sam', text: 'late' }, QUEUE, NOW);
+    const first = await pending.propose(
+      SEND,
+      'messaging_send',
+      owner,
+      { to: 'Sam', text: 'late' },
+      QUEUE,
+      NOW,
+    );
     // Same arguments in a different key order: jsonb does not keep the order.
-    const second = await pending.propose(SEND, 'messaging_send', owner, { text: 'late', to: 'Sam' }, QUEUE, NOW);
+    const second = await pending.propose(
+      SEND,
+      'messaging_send',
+      owner,
+      { text: 'late', to: 'Sam' },
+      QUEUE,
+      NOW,
+    );
 
     expect(second.id).toBe(first.id);
     expect(repository.store).toHaveLength(1);
@@ -405,7 +548,11 @@ describe('PendingActionService.propose — one card per open question', () => {
 
   it('keeps an installed app’s card apart from the owner’s — approval replays as whoever asked', async () => {
     const { repository, service: pending } = service();
-    const app = { ...owner, principal: 'managed-app', principalName: 'app:ci-openclaw:ci-marketplace' } as const;
+    const app = {
+      ...owner,
+      principal: 'managed-app',
+      principalName: 'app:ci-openclaw:ci-marketplace',
+    } as const;
 
     const mine = await pending.propose(SEND, 'messaging_send', owner, { to: 'Sam' }, QUEUE, NOW);
     const theirs = await pending.propose(SEND, 'messaging_send', app, { to: 'Sam' }, QUEUE, NOW);
@@ -461,5 +608,41 @@ describe('PendingActionService.sweep', () => {
     expect(outcome.expired).toBe(1);
     expect(repository.store.find((r: any) => r.id === 'pa-good').status).toBe('expired');
     expect(repository.store.find((r: any) => r.id === 'pa-bad').status).toBe('executed');
+  });
+});
+
+/**
+ * PersonalizationService keeps a 60 second profile cache per instance, and it is provided in more
+ * than one module and runs in both the API and the worker. Settings clears only its own instance's
+ * cache, so a gate reading through another one kept honouring Hands-off for up to a minute after
+ * the owner turned it down.
+ */
+describe('PendingActionService.evaluate — the dial is read fresh', () => {
+  it('asks for an uncached profile when it consults the dial', async () => {
+    const personalization = personalizationFor('cautious');
+    const service = new PendingActionService(makeRepository(), personalization, features(true), makeLogger());
+
+    await service.evaluate(FORGET, context());
+
+    expect(personalization.getProfile).toHaveBeenCalledWith('user-1', { fresh: true });
+  });
+
+  it('sees a downgrade at once, with no cache window', async () => {
+    const real = new PersonalizationService(
+      { findById: jest.fn() } as any,
+      { getSelfIdentity: jest.fn(async () => ({ entityId: 'self-1', aliases: [] })) } as any,
+    );
+    let stored = 'hands_off';
+    (real as any).personService.findById = jest.fn(async () => ({
+      properties: { planner: { trust_mode: stored } },
+    }));
+    const service = new PendingActionService(makeRepository(), real, features(true), makeLogger());
+
+    expect((await service.evaluate(FORGET, context())).decision).toBe('execute');
+
+    // Another instance (Settings, or the API while this is the worker) writes the downgrade.
+    stored = 'cautious';
+
+    expect((await service.evaluate(FORGET, context())).decision).toBe('queue');
   });
 });

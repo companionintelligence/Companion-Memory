@@ -1,6 +1,13 @@
 import { Field, GraphQLISODateTime, ID, InputType, ObjectType, registerEnumType } from '@nestjs/graphql';
 
-import { PEER_TRUST_TIERS, type PeerLink, type PeerLinkStatus } from '@ci/domains/peers';
+import {
+  DID_KEY_ISSUER,
+  PEER_TRUST_TIERS,
+  isSelfCertifyingIssuer,
+  safetyCodeFor,
+  type PeerLink,
+  type PeerLinkStatus,
+} from '@ci/domains/peers';
 
 import { GlobalUID } from './GlobalUID';
 
@@ -104,6 +111,27 @@ export class PeerLinkType {
   avatarUrl?: string | null;
 
   /**
+   * Whether this link names the peer by their own key (`did:key`, or
+   * `did:keri:D<x>`), as an invite makes it. Only such a peer can be asked
+   * from this box today: every ask is signed with the sender's key, and the
+   * other side answers it only through a link made for the sender's key.
+   *
+   * A yes/no about the KIND of identity, not the identity: the identifier
+   * itself stays off the wire for the reason given on {@link toType}.
+   */
+  @Field(() => Boolean)
+  linkedByKey!: boolean;
+
+  /**
+   * Twelve digits the owner and the peer can read to each other to check this
+   * link (see `safetyCode.ts`): both sides compute the same number from their
+   * own links, and a swapped invite gives different ones. Null for a link that
+   * does not name the peer by `did:key`, or before the owner has a key.
+   */
+  @Field(() => String, { nullable: true })
+  safetyCode?: string | null;
+
+  /**
    * `peerIssuer` and `peerSubject` are NOT exposed, and this stayed true when
    * they became WRITABLE (see `CreatePeerLinkInput` below).
    *
@@ -119,7 +147,9 @@ export class PeerLinkType {
    * `PeerLinkResolver.test.ts` pins this: a projected link has neither property
    * and its JSON never contains the subject.
    */
-  static toType(link: PeerLink): PeerLinkType {
+  static toType(link: PeerLink, ownerDidKey?: string | null): PeerLinkType {
+    const byDidKey = link.peerIssuer === DID_KEY_ISSUER && link.peerSubject != null;
+
     return {
       id: GlobalUID.encode('peer-link', link.id),
       peerHandle: link.peerHandle,
@@ -131,6 +161,8 @@ export class PeerLinkType {
       createdAt: link.createdAt,
       updatedAt: link.updatedAt,
       revokedAt: link.revokedAt,
+      linkedByKey: isSelfCertifyingIssuer(link.peerIssuer) && link.peerSubject != null,
+      safetyCode: byDidKey && ownerDidKey ? safetyCodeFor(ownerDidKey, link.peerSubject as string) : null,
     };
   }
 }
@@ -178,7 +210,7 @@ export class CreatePeerLinkInput {
    * Not "what this peer is called" — WHICH REMOTE IDENTITY MAY ACT AS THIS
    * PEER. A token bearing this `(iss, sub)` inherits the link's `trustTier`,
    * and with it the ceiling on everything this box will ever disclose. That
-   * puts three constraints on the write path, all enforced below the resolver:
+   * puts these constraints on the write path, all enforced below the resolver:
    *
    *   1. **Owner-scoped, like every other field here.** `createPeerLink` keys
    *      `upsert` on the CALLER's `userId`, and `updatePeerLink` reads the link
@@ -193,6 +225,11 @@ export class CreatePeerLinkInput {
    *   3. **One LIVE link per (owner, identity).** Enforced by
    *      `peer_links_owner_identity_live_uniq`, not by a read-time check —
    *      see the migration and `PeerLinkService.upsert` for the full argument.
+   *   4. **A self-certifying subject (`did:key`, `did:keri:D<x>`) is bound
+   *      under its own issuer, and a `did:key` link names a valid `did:key`**,
+   *      and an owner holds one live link per KEY across the two spellings
+   *      (a check made in front of the write, not by the database; see
+   *      `PeerLinkService.upsert`). They run when a write changes the binding.
    */
   @Field(() => String, { nullable: true })
   peerIssuer?: string | null;
@@ -238,6 +275,14 @@ export class PeerLinkPayload {
 
   @Field(() => PeerLinkType, { nullable: true })
   peerLink?: PeerLinkType | null;
+
+  /**
+   * On `revokePeerLink`: whether the peer's box was told and ended its link
+   * too. False for a link made by address (there is no key to sign a notice
+   * the other side would recognise) or a box that could not be reached.
+   */
+  @Field(() => Boolean, { nullable: true })
+  peerNotified?: boolean | null;
 }
 
 /**

@@ -1,7 +1,5 @@
 # `ci` — the appliance at the command line
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 > **Renamed.** This binary was `ci-import` and this file was
 > `docs/cli/ci-import.md`. Both names still work: `ci-import` is kept as an
 > alias bin that prints a deprecation notice **to stderr** — so `ci-import runs
@@ -67,13 +65,18 @@ this file.
 
 | Setting | Flag | Environment | Default |
 |---|---|---|---|
-| Appliance URL | `--server` | `CI_SERVER_URL` | `http://localhost:3030` |
-| Credential | `--api-key` | `CI_API_KEY`, `CI_SERVER_API_KEY` | none |
+| Appliance URL | `--server` | `CI_SERVER_URL` | `~/.config/ci/credentials.json` or `http://localhost:3030` |
+| Credential | `--api-key` | `CI_API_KEY`, `CI_SERVER_API_KEY` | `~/.config/ci/credentials.json` (via `ci login`) |
 
 Exit codes: **0** success, **2** a failure you can fix (bad path, missing key,
 unreachable server, unknown stage), **1** a failure the appliance owns (5xx, an
 unexpected exception — which also prints a stack). `doctor` overloads **1** with
 one more meaning: its gate tripped — see its section below.
+
+With `--wait`, `import`, `inbox --start` and `push` also exit **1** when a run they
+followed ended `failed` or `cancelled`, or was deleted while they waited. The message names
+each such run with its error. A `partial` run still exits 0, because it imported what it
+could. `runs <id> --wait` only follows and reports: it exits 0 however the run ended.
 
 ---
 
@@ -111,9 +114,10 @@ turn "import" into a filesystem read primitive.
 **The CLI gets no exemption.** It authenticates with an ordinary api key and has
 exactly the authority any other API client has. Concretely:
 
-- `recognize <path>` asks about the **appliance's** disk and stays inside
-  `CI_IMPORT_ROOTS` (plus the caller's own inbox subtree). A path outside them is
-  refused with the remedy, not with a stack trace.
+- `recognize <path>` asks about the **appliance's** disk and stays inside the
+  caller's own inbox subtree, plus `CI_IMPORT_ROOTS` when the key belongs to the
+  appliance administrator. A household member's key never reaches the configured
+  roots. A path outside them is refused with the remedy, not with a stack trace.
 - `import <file>` **uploads the bytes** — the same multipart route the browser
   uses — so it needs no configured root at all and works for any file this
   machine can read. That is the answer for most people, and it is strictly safer
@@ -132,6 +136,11 @@ for anything larger the inbox is the route, and it moves nothing at all.
 percentage moves, the run closes — rather than redrawing on a timer. A redrawn
 progress bar becomes thousands of lines of escape codes in a CI log, and this
 reads the same piped as it does in a terminal.
+
+When the wait under `import`, `inbox --start` or `push` ends, its exit code says
+how the runs ended. A run that failed or was cancelled exits **1**, so
+`ci import export.zip --wait && next-step` stops there instead of going on as if
+the import had happened.
 
 ---
 
@@ -167,6 +176,40 @@ ci memory configure --backend openai-compatible --port 8000 --backend-api-key '�
 Run `memory check` before selecting a model. A reachable server with no exposed
 models is not ready for chat. Full setup paths and troubleshooting are in
 [Companion Memory setup](../setup/companion-memory.md).
+
+### `mcp serve --stdio`
+
+Bridges newline-delimited JSON-RPC 2.0 on stdin/stdout to the appliance's
+Streamable HTTP `/mcp` endpoint (with automatic fallback to `/api/mcp` when
+behind a gateway prefix). Used by MCP hosts that spawn a local subprocess
+rather than speaking Streamable HTTP directly (Claude Desktop stdio connectors,
+Cursor, Goose, MCP Inspector).
+
+```bash
+CI_SERVER_URL=https://ci-memory.example.com CI_API_KEY=… ci mcp serve --stdio
+```
+
+Preserves the `Mcp-Session-Id` header across requests, unpacks both
+`application/json` and `text/event-stream` responses onto stdout, and sends a
+`DELETE` to close the remote MCP session when stdin closes. See
+[`docs/mcp/clients.md`](../mcp/clients.md).
+
+The fallback also fires on a **405**: the gateway serves the web app at `/mcp`,
+and nginx answers a POST to a static file with 405 rather than 404.
+
+### `mcp init-hooks [--host <all|claude-code|cursor|gemini>] [--json]`
+
+Prints ready-to-paste MCP server and lifecycle-hook configs: a `SessionStart`
+hook that fetches `/memory/context` and a `Stop` hook that posts the changed
+files to `/memory/drift` (detection only; it does not mark anything).
+
+The hooks run later, from wherever they are pasted, so their URLs must reach the
+API's own routes. Before printing, the command asks `GET <server>/health` and
+then `GET <server>/api/health`, and uses whichever answers as the API: the API's
+own port keeps `/memory/...`, a gateway URL gets `/api/memory/...`. Without that
+the gateway's web app answers `/memory/context` with its `index.html` and a 200,
+which a `curl -f` hook would hand to the agent as context. When neither probe
+answers, the URLs use `--server` as given and a warning goes to stderr.
 
 ### `datasources [--catalog] [--json]`
 
@@ -225,9 +268,11 @@ asked for. That case gets its own line naming the units. Both lines are silent
 when nothing was truncated.
 
 The inbox is namespaced per user: `CI_IMPORT_INBOX_DIR` is a root, and each
-account owns one subtree under it, named by lowercasing the account's email and
-replacing every character outside `[A-Za-z0-9._-]` with `_`. So
-`test@example.com` reads and writes `<root>/test_example.com/` and nothing else.
+account owns one subtree under it, named after its account id
+(`<root>/<account id>/`), and reads and writes nothing else. Older versions named
+the folder after the email, which two addresses could share; the first boot
+after upgrading moves each account's old folder onto its id. Don't build the
+path yourself: `ci inbox` prints it.
 The folder the command **prints** is that subtree as the host sees it when the
 appliance runs in a container with `CI_IMPORT_INBOX_HOST_DIR` set (the scan's
 `displayDir`); without it, the API's own path (`inboxDir`).
@@ -301,6 +346,11 @@ other command answers "did the import run"; this is the only one that answers
 "did it write the right rows" — the distinction that matters, because every
 defect the 2026-08 QA pass found sat behind a push stage reporting 100%.
 
+Running the checks takes the appliance administrator's key. Every check scans
+all accounts and returns a sample row from whichever one owns the defect, so a
+household member's key gets a 403, which the command reports as admin-only and
+exits **2**. `--list` only reads the registry and works with any key.
+
 Each check is a regression detector for a defect that really shipped. Where a
 check copies a live predicate, its `mirrors` field names the twin — nowadays a
 **guard** (`push/inputs.ts isNotAPlaceName`, `push/canonical.ts destinationsFor`,
@@ -359,7 +409,7 @@ drop without saying so.
 
 ### `backfill [stages...] [--list] [--abort-on-error] [--json]`
 
-The post-import enrichment chain, via `POST /api/maintenance/orchestrate`.
+The post-import enrichment chain, via `POST /maintenance/orchestrate` (`/api/maintenance/orchestrate` through the gateway).
 Fail-soft by default — a geocoder that cannot reach its provider should not cost
 you the embeddings.
 
@@ -373,6 +423,48 @@ Two implementation notes worth knowing:
   `search_index` backfill runs for hours, and a plain fetch waiting on the first
   byte would die on undici's 300-second headers timeout. The stream writes
   headers immediately and heartbeats every ten seconds.
+
+---
+
+## Authentication, Training, Dual-Engine Inference, and Audit
+
+### `login`, `logout`, `whoami`
+
+Headless authentication and credential persistence in `~/.config/ci/credentials.json` (mode `0600`, respecting `CI_CONFIG_DIR` and `XDG_CONFIG_HOME`):
+
+- `ci login --key <apiKey>`: verifies an existing API key against `GET /keys/check` (and resolves `{ me }` via GraphQL) before saving `{ serverUrl, apiKey }` to disk.
+- `ci login --username <email> --password <password> [--key-name <label>] [--capability <read|write|full>]`: fetches a cookie-less native CSRF token (`GET /authenticate/csrf`), authenticates (`POST /authenticate`), mints a scoped API key (`POST /keys`), and persists it locally.
+- `ci logout [--revoke]`: deletes `~/.config/ci/credentials.json` and, when `--revoke` is passed, revokes the active key on the appliance (`DELETE /keys/current`).
+- `ci whoami [--json]`: queries `{ me { id name email } }` and prints the authenticated user and target appliance URL.
+
+### `train run` / `train calibration` / `train rebuild-places`
+
+Operates the HBPE behavioral model and LoRA training pipeline over GraphQL (`ForecastResolver`):
+
+- `ci train run`: triggers `triggerHbpe`, enqueuing `hbpe-scheduled` (`fn:nightly:<userId>:manual`) on `hbpe-service` (which automatically executes cold-start `bootstrap` training when no checkpoint exists or the 6-step nightly pipeline + `hbpe-lora-train`).
+- `ci train calibration [--limit <n>]`: queries `predictionCalibration(limit)` and renders walk-forward Brier score, Expected Calibration Error (ECE), L0 Top-1 / L1 Top-3 accuracy, coverage, and drift flags.
+- `ci train rebuild-places`: triggers `rebuildPlaces` to re-cluster stay points and recompute recency-decayed Markov transition probabilities.
+
+### `inference tiers` / `inference decide` / `inference rank` / `inference forecast`
+
+Exercises both the Dual-Engine (System 1 / System 2) routing & decision endpoints (`ModelRoutingController`) and the HBPE behavioral forecasting resolvers (`ForecastResolver`):
+
+- `ci inference tiers`: lists the `on_device` and `private_cloud` tier profiles (title, context window, offline, whether the tier leaves the appliance) from `GET /model-routing/tiers`, and how many candidate vectors the `ActionVectorArena` holds (`GET /model-routing/arena`, which reports only that count).
+- `ci inference tiers [--plan] [--input-tokens <n>] [--reasoning <light|moderate|deep>] [--tool-depth <n>] [--large-context] [--sensitive] [--force-tier <on_device|private_cloud>]`: plans which tier one task runs on (`POST /model-routing/plan`) and prints the tier, the reasons, and whether the task was `downgraded`. `--sensitive` is the privacy pin (`localOnly`): it keeps the task on the appliance whatever else is asked, including `--force-tier private_cloud`. Any of these options implies `--plan`. The planner strips fields it does not know, so the CLI sends only the ones it reads.
+- `ci inference decide --state <text> [--type <noul|choice|score>] [--action <text>] [--candidates <c1,c2,...>] [--criteria <pole,name:pole,...>] [--engine <auto|contrastive|generative|hybrid>]`: runs one decision primitive via `POST /model-routing/decide`. `noul` needs `--action` and answers whether it applies, with its probability; `choice` needs at least two `--candidates` and prints each one's probability; `score` needs `--criteria`, a comma-separated rubric of poles (each optionally `name:pole`), and prints the weighted score and each criterion's probability. `engine disabled` means both engines are switched off in Settings and the answer is a neutral default.
+- `ci inference rank --query <text> --candidate <id:text> [--top-k <n>] [--engine <auto|contrastive|generative|hybrid>]`: ranks candidate actions/items via `POST /model-routing/rank`, with each one's score and probability and how many candidate embeddings the arena already held.
+- `ci inference forecast [--horizon 24h] [--week] [--due] [--places]`: queries live HBPE day-ahead 15-minute histograms (`24h` is the only horizon HBPE serves), 7-day cluster occurrence forecasts, periodic renewal due lists, or stay-point next-place predictions.
+
+The requests these commands send and the responses their tests render are the files under `backend/apps/cli/src/__tests__/fixtures/wire/`. The API's `cliWireContract.test.ts` suites check those files against the real route schemas and controllers, so the CLI's tests cannot drift from the server unnoticed again.
+
+### `audit deltas` / `audit pipeline` / `audit dead-letters` / `audit jobs`
+
+Provides end-to-end auditability over entity evolution, the enrichment ledger, dead-letter queues, and pg-boss jobs:
+
+- `ci audit deltas <entityId> [--change-type <created|updated|archived|deleted|merged>] [--from <iso>] [--to <iso>] [--limit <n>]`: lists the entity's field-level changes, newest first (`GET /audit/deltas`, at most 250 per call). `--from` / `--to` go out as the route's `since` / `until`.
+- `ci audit pipeline`: renders each stage's `ci.pipeline_state` coverage, with done, skipped, pending, running, failed, quarantined, and stale counts (`GET /pipeline/state`). The counts are ledger rows, not source rows: a stage that has never run shows 0.
+- `ci audit dead-letters [--queue <name>] [--stage <name>] [--limit <n>]`: lists one page of dead-lettered pipeline jobs, newest first, with the first line of each error (`GET /pipeline/dead-letters`, at most 200 per page; `--json` carries the payloads and full errors).
+- `ci audit jobs`: displays pg-boss job counts (pending, active, retry, failed, dead-lettered, completed, cancelled), each queue with its live jobs and retry policy, and every cron schedule with its last run, last success, and state (`GET /jobs/dashboard`).
 
 ---
 

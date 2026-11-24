@@ -1,9 +1,9 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AboutYouView, HowYoudDoItResult } from '@/api/usePersonaCompose';
 
-import { AboutYouSection } from './AboutYouSection';
+import { AboutYouSection, familyRoleLabel } from './AboutYouSection';
 
 const view: AboutYouView = {
   name: 'Bennett',
@@ -87,6 +87,61 @@ describe('AboutYouSection', () => {
     expect(screen.getByText('Balanced')).toBeInTheDocument();
   });
 
+  it('renders a Markdown dossier as formatted text, not as asterisks', async () => {
+    h.fetchAboutYou.mockResolvedValue({
+      ...view,
+      dossier: { summary: '**Personality:** Curious and methodical.\n\n- Early riser' },
+    });
+    await renderSection();
+
+    const label = await screen.findByText('Personality:');
+    expect(label.tagName).toBe('STRONG');
+    expect(screen.getByText('Early riser').tagName).toBe('LI');
+    expect(screen.queryByText(/\*\*/)).not.toBeInTheDocument();
+  });
+
+  it('renders markup and script links in a dossier as inert text', async () => {
+    // The dossier is model-written from the owner's own data, which a stranger's
+    // email can steer. Raw HTML must stay text and a javascript: link must not
+    // survive as one.
+    h.fetchAboutYou.mockResolvedValue({
+      ...view,
+      dossier: {
+        summary:
+          'Likes <img src=x onerror="window.__pwned=1"> photos. <script>window.__pwned=2</script> ' +
+          '[Open](javascript:window.__pwned=3)',
+      },
+    });
+    await renderSection();
+
+    await screen.findByText(/Likes/);
+    expect(document.body.querySelector('img')).toBeNull();
+    expect(document.body.querySelector('script')).toBeNull();
+    expect(document.body.querySelector('[onerror]')).toBeNull();
+    // It is still there, as text the owner can read.
+    expect(screen.getByText(/<img src=x onerror/)).toBeInTheDocument();
+    const link = screen.getByText('Open').closest('a');
+    expect(link?.getAttribute('href') ?? '').not.toMatch(/^javascript:/i);
+    expect((window as { __pwned?: number }).__pwned).toBeUndefined();
+  });
+
+  it('names family by what they are to you, not by the graph type', async () => {
+    h.fetchAboutYou.mockResolvedValue({
+      ...view,
+      family: [
+        { entityId: 'f1', name: 'Jordan Lee', relationship: 'SIBLING_OF', direction: 'incoming' },
+        { entityId: 'f2', name: 'Morgan Lee', relationship: 'PARENT_OF', direction: 'incoming', age: 61 },
+        { entityId: 'f3', name: 'Riley Lee', relationship: 'PARENT_OF', direction: 'outgoing' },
+      ],
+    });
+    await renderSection();
+
+    expect(await screen.findByText('Jordan Lee (sibling)')).toBeInTheDocument();
+    expect(screen.getByText('Morgan Lee (parent, 61)')).toBeInTheDocument();
+    expect(screen.getByText('Riley Lee (child)')).toBeInTheDocument();
+    expect(screen.queryByText(/SIBLING_OF|PARENT_OF/)).not.toBeInTheDocument();
+  });
+
   it('composes a personalized approach from a task', async () => {
     await renderSection();
 
@@ -165,5 +220,177 @@ describe('AboutYouSection', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     await waitFor(() => expect(screen.getByText('About you')).toBeInTheDocument());
+  });
+});
+
+/** The profile as the server returns it with one recent answer. */
+function viewWithAnswer(answer: string): AboutYouView {
+  return {
+    ...view,
+    recentAnswers: [
+      {
+        id: 'a1',
+        question: 'What skill are you trying to get better at this year?',
+        answer,
+        answeredAt: '2026-10-02T09:40:00.000Z',
+      },
+    ],
+  };
+}
+
+/** A promise settled from outside, for holding a fetch open while the test reads the screen. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+
+  return { promise, resolve };
+}
+
+describe('AboutYouSection — "Recent answers" after an answer changes elsewhere on the page', () => {
+  it('refetches in place when the page bumps `refreshToken`, so an edited answer shows its new words', async () => {
+    // The Self page lets you edit an answer in Life details; this list used to
+    // keep showing the old words until the page was reloaded.
+    h.fetchAboutYou
+      .mockReset()
+      .mockResolvedValueOnce(viewWithAnswer('Piano'))
+      .mockResolvedValueOnce(viewWithAnswer('Violin'));
+
+    const { rerender } = render(<AboutYouSection refreshToken={0} />);
+
+    expect(await screen.findByText('Piano')).toBeInTheDocument();
+    expect(h.fetchAboutYou).toHaveBeenCalledTimes(1);
+
+    rerender(<AboutYouSection refreshToken={1} />);
+
+    expect(await screen.findByText('Violin')).toBeInTheDocument();
+    expect(screen.queryByText('Piano')).not.toBeInTheDocument();
+    expect(h.fetchAboutYou).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not fetch a second time on mount just because a token was passed', async () => {
+    h.fetchAboutYou.mockReset().mockResolvedValue(viewWithAnswer('Piano'));
+
+    render(<AboutYouSection refreshToken={3} />);
+
+    await screen.findByText('Piano');
+
+    expect(h.fetchAboutYou).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the section on screen while it refreshes — no "Loading…" in its place', async () => {
+    // A refresh that swapped the section for "Loading…" collapsed it, and the
+    // page scroller with it, on every answer saved above.
+    const refresh = deferred<AboutYouView>();
+    h.fetchAboutYou
+      .mockReset()
+      .mockResolvedValueOnce(viewWithAnswer('Piano'))
+      .mockReturnValueOnce(refresh.promise);
+
+    const { rerender } = render(<AboutYouSection refreshToken={0} />);
+    await screen.findByText('Piano');
+    const heading = screen.getByText('About you');
+
+    rerender(<AboutYouSection refreshToken={1} />);
+    await waitFor(() => expect(h.fetchAboutYou).toHaveBeenCalledTimes(2));
+
+    expect(screen.queryByText('Loading…')).not.toBeInTheDocument();
+    expect(screen.getByText('About you')).toBe(heading);
+    expect(screen.getByText('Piano')).toBeInTheDocument();
+
+    await act(async () => {
+      refresh.resolve(viewWithAnswer('Violin'));
+    });
+
+    expect(await screen.findByText('Violin')).toBeInTheDocument();
+  });
+
+  it('keeps what is shown when a refresh fails, rather than replacing it with an error', async () => {
+    h.fetchAboutYou
+      .mockReset()
+      .mockResolvedValueOnce(viewWithAnswer('Piano'))
+      .mockRejectedValueOnce(new Error('offline'));
+
+    const { rerender } = render(<AboutYouSection refreshToken={0} />);
+    await screen.findByText('Piano');
+
+    rerender(<AboutYouSection refreshToken={1} />);
+    await waitFor(() => expect(h.fetchAboutYou).toHaveBeenCalledTimes(2));
+
+    expect(screen.getByText('Piano')).toBeInTheDocument();
+    expect(screen.queryByText('Could not load what Companion knows about you.')).not.toBeInTheDocument();
+  });
+
+  it('lets only the newest refresh write, whatever order the answers come back in', async () => {
+    const first = deferred<AboutYouView>();
+    const second = deferred<AboutYouView>();
+    h.fetchAboutYou
+      .mockReset()
+      .mockResolvedValueOnce(viewWithAnswer('Piano'))
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+
+    const { rerender } = render(<AboutYouSection refreshToken={0} />);
+    await screen.findByText('Piano');
+
+    rerender(<AboutYouSection refreshToken={1} />);
+    await waitFor(() => expect(h.fetchAboutYou).toHaveBeenCalledTimes(2));
+    rerender(<AboutYouSection refreshToken={2} />);
+    await waitFor(() => expect(h.fetchAboutYou).toHaveBeenCalledTimes(3));
+
+    // The newer answer lands first, then the older one arrives late.
+    await act(async () => {
+      second.resolve(viewWithAnswer('Cello'));
+    });
+    expect(await screen.findByText('Cello')).toBeInTheDocument();
+
+    await act(async () => {
+      first.resolve(viewWithAnswer('Violin'));
+    });
+
+    expect(screen.getByText('Cello')).toBeInTheDocument();
+    expect(screen.queryByText('Violin')).not.toBeInTheDocument();
+  });
+
+  it('reloads after a correction without swapping the section for "Loading…" either', async () => {
+    const reload = deferred<AboutYouView>();
+    h.fetchAboutYou.mockReset().mockResolvedValueOnce(view).mockReturnValueOnce(reload.promise);
+
+    await renderSection();
+
+    fireEvent.change(screen.getByPlaceholderText(/I prefer short meetings/), {
+      target: { value: 'I hate evening calls.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save correction' }));
+
+    await waitFor(() => expect(h.fetchAboutYou).toHaveBeenCalledTimes(2));
+
+    expect(screen.queryByText('Loading…')).not.toBeInTheDocument();
+    expect(screen.getByText('About you')).toBeInTheDocument();
+
+    await act(async () => {
+      reload.resolve(view);
+    });
+  });
+});
+
+describe('familyRoleLabel', () => {
+  const member = (relationship: string, direction?: 'outgoing' | 'incoming') => ({
+    entityId: 'x',
+    name: 'X',
+    relationship,
+    direction,
+  });
+
+  it('reads CHILD_OF the opposite way to PARENT_OF', () => {
+    expect(familyRoleLabel(member('CHILD_OF', 'outgoing'))).toBe('parent');
+    expect(familyRoleLabel(member('CHILD_OF', 'incoming'))).toBe('child');
+    expect(familyRoleLabel(member('SPOUSE', 'outgoing'))).toBe('spouse');
+  });
+
+  it('falls back to a readable form when it cannot tell, never the raw enum', () => {
+    expect(familyRoleLabel(member('PARENT_OF'))).toBe('parent of');
+    expect(familyRoleLabel(member('STEP_PARENT_OF', 'incoming'))).toBe('step parent of');
   });
 });

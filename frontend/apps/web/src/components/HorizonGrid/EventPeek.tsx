@@ -90,7 +90,19 @@ export function EventPeek({
         </Tooltip>
       )}
       <Dialog open={open} onOpenChange={setOpen}>
-        <Dialog.Content className="max-w-sm gap-3 p-4" aria-label={label}>
+        <Dialog.Content
+          className="max-w-sm gap-3 p-4"
+          aria-label={label}
+          // Radix would focus the first tabbable thing here, which is the Move
+          // form's date input — and focusing a date input is what raises iOS's
+          // native picker, over the whole screen before anyone has touched
+          // anything. Land on the dialog itself instead; the fields are one tap
+          // (or one Tab) away, and a screen reader still announces the dialog.
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            (event.currentTarget as HTMLElement | null)?.focus({ preventScroll: true });
+          }}
+        >
           <Dialog.Header>
             <Dialog.Title className="sr-only">{label}</Dialog.Title>
             <Dialog.Description className="sr-only">Event details</Dialog.Description>

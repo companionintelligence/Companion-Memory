@@ -14,10 +14,6 @@ export async function seedUsers(module: TestingModule, multibar: MultiBar) {
   const bar = multibar.create(users.length, 0, { task: 'Users' });
 
   for (const user of users) {
-    if (user.password == null) {
-      throw new Error(`Password not specified for user ${user.email}`);
-    }
-
     const existingUser = await userService.findById(
       {
         userId: SYSTEM_USER,
@@ -26,6 +22,13 @@ export async function seedUsers(module: TestingModule, multibar: MultiBar) {
     );
 
     if (existingUser == null) {
+      // Only a user being created needs a password. Checking before the lookup
+      // would make SEED_USER_ID=<an existing account> demand a password for an
+      // account that already has one.
+      if (user.password == null) {
+        throw new Error(`Password not specified for user ${user.email}`);
+      }
+
       await userService.create(
         {
           userId: SYSTEM_USER,

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import { fetchJson } from '@ci/common';
+import { fetchJson, useDebounced } from '@ci/common';
 
 import { readJobsSnapshot, writeJobsSnapshot } from './jobsSnapshots';
 import { useJobsAuth } from './useJobsAuth';
@@ -120,13 +120,7 @@ export function useJobsList(filters: JobFilters, refreshIntervalMs = 15000) {
 
   const { ready, headers } = useJobsAuth();
 
-  const [debouncedSearch, setDebouncedSearch] = useState(filters.search);
-
-  useEffect(() => {
-    const handle = window.setTimeout(() => setDebouncedSearch(filters.search), 300);
-
-    return () => window.clearTimeout(handle);
-  }, [filters.search]);
+  const debouncedSearch = useDebounced(filters.search, 300);
 
   const query = useMemo(
     () => toQueryString({ ...filters, search: debouncedSearch }),

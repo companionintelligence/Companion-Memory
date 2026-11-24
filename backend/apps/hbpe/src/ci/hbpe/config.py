@@ -7,6 +7,7 @@ environment variables without touching code.
 
 from __future__ import annotations
 
+import math
 import os
 
 from dotenv import load_dotenv
@@ -20,11 +21,11 @@ load_dotenv(os.path.join(_proj_root, ".env"), override=True)
 # container's own loopback to us. Correct them for wherever this process is
 # before anything reads them — see llm_host.py. Loud on every rewrite: a
 # labeler pointed at nothing writes zero labels while reporting healthy.
-from .llm_host import resolve_env as _resolve_llm_host_env
+from ci.sidecar.llm_host import resolve_env as _resolve_llm_host_env
 
 _resolve_llm_host_env()
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -195,6 +196,90 @@ class Settings(BaseSettings):
         )
     )
 
+    # ── Non-Autoregressive Decision Models (Laya, Clef, FastDecisionModel) ────
+    # Off unless asked for. With no HBPE_DECISION_MODEL_ENDPOINT the client falls
+    # back to LocalDecisionEngine, which scores keyword matches, and QwenLabeler
+    # stores that L0 answer without asking Qwen. Turn this on only with a trained
+    # model serving the endpoint.
+    enable_decision_models: bool = Field(
+        default_factory=lambda: (
+            os.getenv("HBPE_ENABLE_DECISION_MODELS", "false").lower()
+            in ("1", "true", "yes", "on")
+        )
+    )
+    decision_model_endpoint: str | None = Field(
+        default_factory=lambda: os.getenv("HBPE_DECISION_MODEL_ENDPOINT") or None
+    )
+    decision_confidence_threshold: float = Field(
+        default_factory=lambda: float(
+            os.getenv("HBPE_DECISION_CONFIDENCE_THRESHOLD", "0.75")
+        )
+    )
+
+    # ── Decision-model promotion gate (see model/decision_gate.py) ───────────
+    # The export writes decision_gate.json next to the model; point
+    # HBPE_DECISION_GATE_FILE at that file. A missing, malformed or failed gate
+    # means the gate did not pass. Each setting is read from its HBPE_ name only,
+    # so a generic DECISION_GATE_* variable in a shared env file cannot change the
+    # gate (same reason as enable_admin_routes).
+    decision_gate_file: str = Field(
+        default="", validation_alias="HBPE_DECISION_GATE_FILE"
+    )
+    # Off by default: a configured endpoint answers every question, as it always
+    # has, and the client only records the gate status on its results. On: the
+    # endpoint answers the intent question only, and only while the gate passed.
+    # Every other question is answered locally. Any value other than an explicit
+    # false spelling turns it on, so a typo cannot quietly switch the gate off.
+    decision_gate_enforce: bool = Field(
+        default=False, validation_alias="HBPE_DECISION_GATE_ENFORCE"
+    )
+    decision_gate_brier_max: float = Field(
+        default=0.20, validation_alias="HBPE_DECISION_GATE_BRIER_MAX"
+    )
+    decision_gate_ece_max: float = Field(
+        default=0.10, validation_alias="HBPE_DECISION_GATE_ECE_MAX"
+    )
+    decision_gate_accuracy_margin: float = Field(
+        default=0.02, validation_alias="HBPE_DECISION_GATE_ACCURACY_MARGIN"
+    )
+    decision_gate_min_eval: int = Field(
+        default=200, validation_alias="HBPE_DECISION_GATE_MIN_EVAL"
+    )
+
+    # Range checks live in evaluate_decision_gate, not here. A bad value must fail
+    # the gate with an "invalid threshold" reason, not stop the service from
+    # importing. A value that is not a number becomes NaN, or -1 for the count,
+    # and that check rejects it.
+    @field_validator(
+        "decision_gate_brier_max",
+        "decision_gate_ece_max",
+        "decision_gate_accuracy_margin",
+        mode="before",
+    )
+    @classmethod
+    def _parse_gate_threshold(cls, value: object) -> object:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return math.nan
+
+    @field_validator("decision_gate_min_eval", mode="before")
+    @classmethod
+    def _parse_gate_min_eval(cls, value: object) -> object:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return -1
+
+    @field_validator("decision_gate_enforce", mode="before")
+    @classmethod
+    def _parse_gate_enforce(cls, value: object) -> bool:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return False
+        return str(value).strip().lower() not in ("", "0", "false", "no", "off")
+
     # ── Staleness (§1.2) ─────────────────────────────────────────────────────
     cluster_staleness_days: int = Field(
         default_factory=lambda: int(os.getenv("CLUSTER_STALENESS_DAYS", "90"))
@@ -262,6 +347,25 @@ class Settings(BaseSettings):
     sidecar_auth_secret: str = Field(
         default_factory=lambda: os.getenv("SIDECAR_AUTH_SECRET", "")
     )
+    # Serve the operator-only routes, POST /trigger and POST /invalidate/{date}.
+    # Off by default: both act on whatever user_id they are given, and the API
+    # never calls them (it dispatches runs through /functions/run). Turn on for
+    # local debugging with HBPE_ENABLE_ADMIN_ROUTES=1 on this container only.
+    #
+    # Read from that one name. A default_factory alone is not enough here:
+    # pydantic-settings also reads every field from the env var named after
+    # it, so ENABLE_ADMIN_ROUTES (set for some other service in a shared env
+    # file) would switch these routes on, and would win over this name.
+    enable_admin_routes: bool = Field(
+        default=False, validation_alias="HBPE_ENABLE_ADMIN_ROUTES"
+    )
+
+    @field_validator("enable_admin_routes", mode="before")
+    @classmethod
+    def _parse_admin_routes_switch(cls, value: object) -> bool:
+        if isinstance(value, str):
+            return value.strip().lower() in ("1", "true", "yes", "on")
+        return bool(value)
 
     # ── Function runner (pg-boss dispatch from the NestJS API) ───────────────
     # Worker pool size for /functions/run. Defaults to 1: labeling shares a

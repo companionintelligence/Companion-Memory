@@ -1,7 +1,5 @@
 # Sources system — execution plan
 
-> Private & Confidential — Property of Lifescope Inc. Do not distribute.
-
 Companion to [`sources-audit.md`](./sources-audit.md). Finding IDs (`SRC-nn`, `U-nn`) refer to
 that document. Baseline `origin/main` = `7367b26e8`.
 

@@ -1,16 +1,8 @@
-import {
-  type ExecutionContext,
-  Inject,
-  Injectable,
-  InternalServerErrorException,
-  UnauthorizedException,
-} from '@nestjs/common';
-import { GqlExecutionContext } from '@nestjs/graphql';
+import { type ExecutionContext, ForbiddenException, Inject, Injectable } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 
-import { ContextService } from '@ci/common/context';
-
-import { extractBearerToken } from './bearerToken';
+import { requestFromContext, userOrUnauthorized } from './guardRequest';
+import { acceptPortalBearer, bindPortalPrincipal } from './portalBearer';
 import { PORTAL_TOKEN_VERIFIER, type PortalTokenVerifier } from './PortalTokenVerifier';
 
 /**
@@ -18,12 +10,17 @@ import { PORTAL_TOKEN_VERIFIER, type PortalTokenVerifier } from './PortalTokenVe
  * deliberately, NOT an api key.
  *
  * This exists for credential-management routes (minting/listing/revoking api
- * keys): portal-authenticated clients like Companion Capture hold only a
- * short-lived portal id_token after sign-in and need to exchange it for a
- * durable api key, but an api key itself must never reach those routes — a
- * leaked key that could mint replacement keys would survive its own
- * revocation. Requiring a JWT/portal principal keeps key management anchored
- * to an interactive sign-in.
+ * keys): a phone pairing with this Memory holds only a short-lived Portal token
+ * after sign-in and exchanges it for a durable api key, but an api key itself
+ * must never reach those routes: a leaked key that could mint replacement keys
+ * would survive its own revocation. Requiring a JWT/portal principal keeps key
+ * management anchored to an interactive sign-in.
+ *
+ * Not every Portal token gets in (`PortalPrincipal.credentialRoutes`). One
+ * addressed to this appliance does, and so does one from a Portal that predates
+ * addressing. A capture client's token (Companion Capture, the browser
+ * extension) and an unaddressed one are refused, so neither becomes a key that
+ * never expires.
  */
 @Injectable()
 export class JwtOrPortalAuthGuard extends AuthGuard('jwt') {
@@ -32,53 +29,35 @@ export class JwtOrPortalAuthGuard extends AuthGuard('jwt') {
   }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
+    const request = this.getRequest(context);
     // Portal-brokered OIDC token path — mirrors JwtOrApiKeyAuthGuard (gated by
     // auth.portal.enabled), falling back to the legacy session-JWT strategy.
-    if (this.portalTokenVerifier.enabled) {
-      const request = this.getRequest(context);
-      const token = extractBearerToken(request?.headers?.authorization);
+    const principal = await acceptPortalBearer(this.portalTokenVerifier, request);
 
-      if (token) {
-        const user = await this.portalTokenVerifier.verifyAndProvision(token);
-
-        if (user) {
-          ContextService.set({ userId: user.id });
-          request.user = user;
-
-          return true;
-        }
+    if (principal) {
+      // Minting a key turns an hour-long token into a credential that never expires, and
+      // the MCP routes behind this guard can run commands. Only a token that carries the
+      // user's full authority here may do either. This guard runs no scope enforcement, so a
+      // principal with limits is refused here too rather than let in unconfined.
+      if (!principal.credentialRoutes || principal.limits) {
+        throw new ForbiddenException(
+          'This Companion sign-in cannot manage keys on this Memory. Sign in to this Memory directly, or connect again from an up-to-date app.',
+        );
       }
+
+      bindPortalPrincipal(request, principal);
+
+      return true;
     }
 
     return (await super.canActivate(context)) as boolean;
   }
 
   getRequest(context: ExecutionContext) {
-    if (context.getType<string>() === 'graphql') {
-      const ctx = GqlExecutionContext.create(context);
-      const { req } = ctx.getContext();
-
-      if (req == null) {
-        throw new InternalServerErrorException('Request object not found in GraphQL context');
-      }
-
-      return req;
-    }
-
-    if (context.getType<string>() === 'http') {
-      return context.switchToHttp().getRequest();
-    }
-
-    throw new InternalServerErrorException(
-      `${JwtOrPortalAuthGuard.name} does not support context type: ${context.getType()}`,
-    );
+    return requestFromContext(context, JwtOrPortalAuthGuard.name);
   }
 
   handleRequest<TUser = unknown>(err: unknown, user: TUser): TUser {
-    if (err || !user) {
-      throw new UnauthorizedException();
-    }
-
-    return user;
+    return userOrUnauthorized(err, user);
   }
 }

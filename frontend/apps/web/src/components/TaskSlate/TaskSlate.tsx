@@ -1,11 +1,13 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 
-import { useMutation } from '@apollo/client';
+import { useMutation } from '@apollo/client/react';
 import { useDeviceLayout } from '@ci/common';
-import { Button, cn, Sheet, Tabs, Tooltip } from '@ci/shadcn';
-import { X } from '@ci/shadcn/icons';
+import { Button, cn, IconButton, Sheet, Tabs, Tooltip } from '@ci/shadcn';
+import { Plus, X } from '@ci/shadcn/icons';
 
+import { usePlaceLookup } from '@/api/usePlaceLookup';
 import {
+  EVENT_DRAFT_PROBLEM_MESSAGES,
   EventForm,
   eventDraftAt,
   eventDraftToInput,
@@ -16,6 +18,8 @@ import {
 import type { CalendarSlot } from '@/components/HorizonGrid';
 import { formatClock } from '@/components/HorizonGrid/nowNext';
 import { gql } from '@/graphql';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
 import { type Section } from '@/pages/PlanPage/taskSections';
 import type { PlanTask } from '@/pages/PlanPage/usePlanTasks';
 
@@ -64,9 +68,20 @@ function BacklogCard({ task, onDismiss, onPlace }: CardProps) {
       onKeyDown={
         onPlace
           ? (event) => {
+              // Only a key pressed on the card itself. Enter or Space on the
+              // Dismiss button inside bubbles up here. Handling it placed the
+              // task while preventDefault() cancelled the button's click.
+              if (event.target !== event.currentTarget) {
+                return;
+              }
+
               if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault();
-                onPlace(task.id);
+
+                // A held key repeats. One press places the task once.
+                if (!event.repeat) {
+                  onPlace(task.id);
+                }
               }
             }
           : undefined
@@ -83,7 +98,12 @@ function BacklogCard({ task, onDismiss, onPlace }: CardProps) {
       <p className="text-[13px] leading-snug text-foreground">{task.title}</p>
 
       {onDismiss && proposed ? (
+        // Clicks in here stay here. That covers the toolbar's own padding and
+        // the "Dismiss" tooltip, which is portalled out of the card in the DOM
+        // but still bubbles through it in React. Either one reaching the card
+        // placed the task.
         <div
+          onClick={(event) => event.stopPropagation()}
           className={cn(
             'absolute bottom-1.5 right-2.5 z-10 flex items-center rounded-md',
             'border border-border/60 bg-background/95 px-0.5 shadow-sm backdrop-blur-sm',
@@ -100,10 +120,7 @@ function BacklogCard({ task, onDismiss, onPlace }: CardProps) {
                 size="icon"
                 className="h-6 w-6 pointer-coarse:h-8 pointer-coarse:w-8"
                 aria-label={`Dismiss ${task.title}`}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onDismiss(task.id);
-                }}
+                onClick={() => onDismiss(task.id)}
               >
                 <X className="h-3.5 w-3.5" strokeWidth={1.5} />
               </Button>
@@ -199,7 +216,7 @@ function BacklogColumn({
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
       {showHeading ? (
-        <h4 className="shrink-0 px-1 pb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        <h4 className="shrink-0 px-1 pb-2 text-xs font-semibold text-muted-foreground">
           {section.label}
           <span className="ml-2 font-normal">{count}</span>
           {overdue > 0 ? (
@@ -220,7 +237,7 @@ function BacklogColumn({
             {lane.label ? (
               <h5
                 className={cn(
-                  'shrink-0 px-1 text-[11px] font-semibold uppercase tracking-wide',
+                  'shrink-0 px-1 text-[11px] font-semibold',
                   lane.key === 'overdue' ? 'text-destructive' : 'text-muted-foreground',
                 )}
               >
@@ -312,10 +329,14 @@ function SlateBody({ sections, loading, error = false, onDismissProposed, onPlac
   );
 }
 
-function formatSlotHeading(slot: CalendarSlot): string {
-  const day = slot.instant.toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' });
+/**
+ * "Wednesday, Sep 30 · 3:00 PM". The slot was picked on the grid, which draws in the profile zone,
+ * so both halves read the formatter's zone — the day and the hour the person actually clicked.
+ */
+function formatSlotHeading(slot: CalendarSlot, fmt: DateTimeFormatter): string {
+  const day = fmt.date(slot.instant, { weekday: 'long', month: 'short', day: 'numeric' });
 
-  return slot.allDay ? `${day} · All day` : `${day} · ${formatClock(slot.instant)}`;
+  return slot.allDay ? `${day} · All day` : `${day} · ${formatClock(slot.instant, fmt)}`;
 }
 
 interface TaskSlateDrawerProps extends SlateBodyProps {
@@ -348,6 +369,12 @@ export function TaskSlateDrawer({
   onCreated,
 }: TaskSlateDrawerProps) {
   const { isMobile } = useDeviceLayout();
+  const [overlayRoot, setOverlayRoot] = useState<HTMLElement | null>(null);
+
+  useLayoutEffect(() => {
+    setOverlayRoot(document.getElementById('overlay-modal'));
+  }, []);
+  const fmt = useDateTimeFormat();
   const [composing, setComposing] = useState(false);
   const [draft, setDraft] = useState<EventDraft>(() =>
     eventDraftAt(slot?.instant ?? new Date(), slot?.allDay),
@@ -355,6 +382,8 @@ export function TaskSlateDrawer({
   const [problem, setProblem] = useState<EventDraftProblem | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [createEvent, { loading: creating }] = useMutation(CREATE_EVENT);
+  const lookupPlace = usePlaceLookup();
+  const actionsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!slot) {
@@ -371,6 +400,15 @@ export function TaskSlateDrawer({
       description: previous.description,
     }));
   }, [slot]);
+
+  // The reason lands one line above the buttons, which pushes them below the
+  // fold of a sheet the person had scrolled to the very end of. Bring them back
+  // into view with it, so Add is still there to press once the problem is fixed.
+  useEffect(() => {
+    if (problem) {
+      actionsRef.current?.scrollIntoView?.({ block: 'nearest' });
+    }
+  }, [problem]);
 
   /**
    * Leaving the composer takes its failure with it.
@@ -422,24 +460,42 @@ export function TaskSlateDrawer({
         overlayClassName="bg-transparent pointer-events-none"
         onPointerDownOutside={(event) => event.preventDefault()}
         onInteractOutside={(event) => event.preventDefault()}
-        className={cn('gap-0 p-0', isMobile ? 'max-h-[70vh] w-full sm:max-w-none' : 'w-[24rem] sm:max-w-md')}
+        container={isMobile ? overlayRoot : undefined}
+        className={cn(
+          'pointer-events-auto gap-0 p-0',
+          isMobile
+            ? 'max-h-[40vh] w-full overscroll-contain pb-[var(--safe-area-bottom)] sm:max-w-none'
+            : 'w-[24rem] sm:max-w-md',
+        )}
       >
         <Sheet.Header className="gap-1 pb-1">
-          <Sheet.Title className="text-sm">Add to calendar</Sheet.Title>
-          <Sheet.Description className="text-[11px] tabular-nums">
-            {slot ? formatSlotHeading(slot) : 'Pick an empty time'}
-          </Sheet.Description>
+          <div className="flex items-start justify-between gap-2 pr-6">
+            <div className="min-w-0">
+              <Sheet.Title className="text-sm">Add to calendar</Sheet.Title>
+              <Sheet.Description className="text-[11px] tabular-nums">
+                {slot ? formatSlotHeading(slot, fmt) : 'Pick an empty time'}
+              </Sheet.Description>
+            </div>
+            {!composing && (
+              <IconButton
+                type="button"
+                variant="outline"
+                label="New event"
+                onClick={openComposer}
+                className="h-8 w-8 shrink-0"
+              >
+                <Plus className="h-4 w-4" strokeWidth={1.75} />
+              </IconButton>
+            )}
+          </div>
         </Sheet.Header>
 
-        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 pb-4">
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto overscroll-contain px-4 pb-4">
           <section
             aria-labelledby="slot-predictions-label"
             className="rounded-lg border border-border bg-muted/30 px-3 py-2.5"
           >
-            <h4
-              id="slot-predictions-label"
-              className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
-            >
+            <h4 id="slot-predictions-label" className="text-[10px] font-semibold text-muted-foreground">
               Predictions
             </h4>
             <p
@@ -454,13 +510,28 @@ export function TaskSlateDrawer({
 
           {composing ? (
             <form onSubmit={handleSubmit} className="flex min-h-0 flex-col gap-4">
-              <EventForm value={draft} onChange={setDraft} problem={problem} disabled={creating} />
+              <EventForm
+                value={draft}
+                onChange={setDraft}
+                problem={problem}
+                disabled={creating}
+                lookupPlace={lookupPlace}
+              />
+              {/* The form scrolls and Add is its last line, so the line EventForm
+                  writes beside the offending field is screens above the finger
+                  that just pressed Add — which then looked dead. Say it here too,
+                  in the slot a rejected write already uses. */}
+              {problem ? (
+                <p role="alert" className="text-sm text-destructive">
+                  {EVENT_DRAFT_PROBLEM_MESSAGES[problem]}
+                </p>
+              ) : null}
               {submitError ? (
                 <p role="alert" className="text-sm text-destructive">
                   {submitError}
                 </p>
               ) : null}
-              <div className="flex justify-end gap-2">
+              <div ref={actionsRef} className="flex justify-end gap-2">
                 <Button type="button" variant="outline" size="sm" onClick={closeComposer} disabled={creating}>
                   Cancel
                 </Button>
@@ -471,14 +542,8 @@ export function TaskSlateDrawer({
             </form>
           ) : (
             <>
-              <Button type="button" variant="outline" size="sm" className="self-start" onClick={openComposer}>
-                New event
-              </Button>
-
               <div>
-                <h4 className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  Possibilities
-                </h4>
+                <h4 className="mb-2 text-[10px] font-semibold text-muted-foreground">Possibilities</h4>
                 <SlateBody
                   sections={sections}
                   loading={loading}

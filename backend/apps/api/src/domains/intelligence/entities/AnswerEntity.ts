@@ -54,6 +54,13 @@ export class AnswerEntity {
   @Column({ default: 'user_input', name: 'answer_source' })
   answerSource!: string;
 
+  /**
+   * How the answer was captured: 'user' for words a person typed (create and
+   * edit both record it), 'inferred' for the appliance's own inference, and the
+   * named paths ('about_you_correction', 'survey'). NULL on a row written before
+   * `AnswerService.create` recorded a method — which the inference selectors
+   * (`answer_method IN ('user', 'inferred')`) do not count as answered.
+   */
   @Column({ nullable: true, name: 'answer_method' })
   answerMethod!: string;
 

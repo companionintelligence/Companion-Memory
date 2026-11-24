@@ -1,5 +1,5 @@
 import type { Point } from 'typeorm';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import type { ObjectLifecycleState, Item } from './entities/ItemEntity';
 import type {
@@ -39,6 +39,12 @@ export const updateContentSchema = z.object({
   user_id: z.string().optional(),
   event_id: z.string().optional(),
 });
+
+/**
+ * A field a source owns on a stored event, and refreshes when it re-delivers
+ * the event — see {@link CreateEventDto.source_asserts}.
+ */
+export type SourceAssertedField = 'status' | 'time' | 'title' | 'location';
 
 export interface CreateEventDto {
   id?: string;
@@ -119,6 +125,23 @@ export interface CreateEventDto {
     id: string;
   };
   content?: CreateContentDto[];
+  /**
+   * Which of this delivery's values are its SOURCE's word, for the refresh of
+   * an event already stored under its identity (CalendarEventService
+   * `refreshFromSource`). Omitted: all of them. A delivery that has to fill in
+   * fields its source did not send — a cancelled occurrence rebuilt from its
+   * series, whose time and title are the series' — names only the ones it
+   * does know, so a stored row's own time and title are not replaced by the
+   * filler. A new row is written with everything either way.
+   *
+   * `location` is the name and the point together (sourceLocationMerge.ts).
+   * Unlike the time and the title it can be genuinely absent, so a delivery
+   * that does not name `source_asserts` and sends no `location_name` is a
+   * source that says the event has no place, and clears one the source gave it
+   * earlier; a delivery that has no word on the place at all must leave
+   * `location` out of the list.
+   */
+  source_asserts?: readonly SourceAssertedField[];
 }
 
 export interface UpdateEventDto {
@@ -548,6 +571,11 @@ export interface FindObjectObservationsFilter {
   /** `true` = only rows linked to an owned unit; `false` = only unlinked. */
   resolved?: boolean;
   confirmedByUser?: boolean;
+  /**
+   * `true` = only sightings a person has answered (`resolution_method = 'user'`,
+   * either way); `false` = only those nobody has.
+   */
+  reviewedByUser?: boolean;
   observedFrom?: Date;
   observedTo?: Date;
   limit?: number;
@@ -733,19 +761,36 @@ export interface FindItemsFilter {
   acquiredTo?: Date;
 }
 
-/** Keyset cursor for {@link ItemService.findPage}: `(createdAt, id)` DESC. */
+/**
+ * Where a row sits in the things list: its `(created_at, object_id)`.
+ *
+ * `createdAt` is TEXT, to the microsecond, in UTC: `2026-05-01T00:00:00.123456Z`. It is never a
+ * `Date`. `ci.objects.created_at` is `timestamptz(6)` and the driver reads it at milliseconds
+ * (`.123456` comes back as `.123`), so a position built from the entity's `Date` names the
+ * millisecond that contains its row, not the row's instant, and a seek past it skips every row of
+ * that instant that sorts after the page boundary. Postgres formats the text itself (see
+ * `ItemService.findPage`) and parses it back as the column's own type, so nothing rounds.
+ */
+export interface ItemPosition {
+  createdAt: string;
+  id: string;
+}
+
+/** Keyset cursor for {@link ItemService.findPage}: `(createdAt, id)` DESC. Pass both halves of an {@link ItemPosition}. */
 export interface ItemKeyset {
   limit?: number;
-  afterCreatedAt?: Date | null;
+  afterCreatedAt?: string | null;
   afterId?: string | null;
 }
 
 /** One page of owned units, newest first. */
 export interface ItemPage {
   items: Item[];
+  /** Where each of {@link items} sits, index for index: a client may resume from any row, not only the last. */
+  positions: ItemPosition[];
   hasMore: boolean;
   /** Cursor to pass back as `afterCreatedAt`/`afterId`; null when the page is the last. */
-  nextCursor: { createdAt: Date; id: string } | null;
+  nextCursor: ItemPosition | null;
 }
 
 export interface CreatePersonDto {
@@ -916,6 +961,49 @@ export function serializePersonAddress(address: PersonAddress): Record<string, u
 }
 
 /**
+ * The flat keys that mirror a person's primary address for readers that
+ * predate the `addresses` list (the search projection, older importers).
+ */
+export const PERSON_ADDRESS_MIRROR_KEYS = [
+  'address',
+  'street_address',
+  'street_address_2',
+  'city',
+  'region',
+  'postal_code',
+  'country',
+] as const;
+
+/** The flat mirror keys for `primary`, every one null when there is none. */
+export function personAddressMirror(
+  primary: PersonAddress | null,
+): Record<(typeof PERSON_ADDRESS_MIRROR_KEYS)[number], string | null> {
+  return {
+    address: primary ? formatPersonAddress(primary) : null,
+    street_address: primary?.streetAddress ?? null,
+    street_address_2: primary?.streetAddress2 ?? null,
+    city: primary?.city ?? null,
+    region: primary?.region ?? null,
+    postal_code: primary?.postalCode ?? null,
+    country: primary?.country ?? null,
+  };
+}
+
+/**
+ * One stored `addresses` entry as an address, or null when it is not an
+ * object or carries no address line.
+ */
+export function readStoredPersonAddress(entry: unknown): PersonAddress | null {
+  if (typeof entry !== 'object' || entry === null) {
+    return null;
+  }
+
+  const address = toPersonAddress(entry as StoredPersonAddress);
+
+  return isPersonAddressEmpty(address) ? null : address;
+}
+
+/**
  * Read a person's address list out of the raw properties bag.
  *
  * Rows written before the list existed carry only the flat `street_address`,
@@ -927,9 +1015,8 @@ export function readPersonAddresses(properties: Record<string, unknown> | null |
 
   if (Array.isArray(raw)) {
     const addresses = raw
-      .filter((entry): entry is StoredPersonAddress => typeof entry === 'object' && entry !== null)
-      .map(toPersonAddress)
-      .filter((address) => !isPersonAddressEmpty(address));
+      .map(readStoredPersonAddress)
+      .filter((address): address is PersonAddress => address != null);
 
     if (addresses.length > 0) {
       return ensureSinglePrimary(addresses);
@@ -1008,6 +1095,14 @@ export enum CommunicationType {
   VOICE_NOTE = 'voice_note',
   POST = 'post',
 }
+
+/**
+ * `category` of the messages `POST /memory/turn` stores: one side of a
+ * conversation with an agent such as OpenClaw or Hermes. The agent's replies
+ * are stored inbound, like mail, so anything that reads inbound messages as
+ * received mail has to leave these out.
+ */
+export const AGENT_TURN_MESSAGE_CATEGORY = 'agent-turn';
 
 export enum CommunicationDirection {
   INBOUND = 'inbound',

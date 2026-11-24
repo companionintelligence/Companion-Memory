@@ -1,5 +1,6 @@
 import { Field, InputType } from '@nestjs/graphql';
-import GraphQLJSONObject from 'graphql-type-json';
+
+import { GraphQLJSONObject } from '@ci/domains/graphql/scalars/JsonObjectScalar';
 
 /**
  * One item↔item edge (email→attachment, photo→album) from the importer. Both

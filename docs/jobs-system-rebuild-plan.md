@@ -1,7 +1,5 @@
 # Jobs / Data-Processing System Rebuild
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 Working document. Every claim about the current system below was read out of this worktree
 (`claude/ci-jobs-system-rebuild-0b9904`) at the time of writing and carries a `path:line` reference.
 Where a prior survey or design asserted something the code does not support, the claim was dropped.
@@ -221,7 +219,7 @@ The damage is recorded in the code that works around it:
 ### 2.5 Ollama is a shared host process, unthrottled
 
 Ollama is **not** a compose service. The API reaches it through
-`extra_hosts: host.docker.internal:host-gateway` and `OLLAMA_HOST` / `OLLAMA_EMBED_HOST`. That single
+`extra_hosts: host.docker.internal:host-gateway` and `OLLAMA_HOST` / `LLM_EMBEDDING_API_BASE`. That single
 host process is contended by interactive chat, embeddings, `llava:7b` (image description),
 `llama3.2-vision:11b` (inventory), `MemoryCompactionService`, `GraphEnrichmentService`, the
 `summary-service` sidecar, and HBPE's Qwen. Nothing admits or prioritises against it.

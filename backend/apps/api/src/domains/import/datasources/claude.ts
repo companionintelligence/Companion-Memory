@@ -16,30 +16,43 @@
    older exports reference names with nothing on disk. References that resolve
    to an on-disk photo/video become 'media' items attached to their message
    (_ai_media.ts); media-looking names with no file land in the drop ledger,
-   while non-media names (the text-extraction attachments) stay silent.
+   while non-media names (the text-extraction attachments) stay silent. The
+   text Claude extracted from an attachment (`extracted_content`) is added to
+   its message's body under the file name.
 
    Projects ship as a sibling `projects/` directory, one `<uuid>.json` file per
    Claude Project (name, description, prompt_template/custom instructions, and
-   a `docs` array of project-knowledge files). Anthropic publishes no schema
+   a `docs` array of project-knowledge files), or as one `projects.json` array
+   of the same objects. Anthropic publishes no schema
    for this either, so — same as memories — parsing is shape-tolerant and
    never assumes every field is present. The parent directory already
    recognizes at high confidence via conversations.json (or memories.json), so
    `projects/` is never independently offered to an importer by
    findImportRoots; it must be picked up here, as part of importing that
-   already-recognized directory, or it is silently dropped. */
+   already-recognized directory, or it is silently dropped. That only works
+   if recognition hands this importer the DIRECTORY: see recognize(). */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { ResolvedAsset } from './_ai_media';
 import { insideRoot, mediaAttachmentsFor, mediaItemForAsset } from './_ai_media';
-import type { MemoryEntry } from './_ai_memory';
-import { parseMemoryEntries, memoryShapeHints, memoryTitle } from './_ai_memory';
+import {
+  parseMemoryEntries,
+  memoryShapeHints,
+  CHATGPT_SIBLINGS,
+  CLAUDE_SIBLINGS,
+  findName,
+  importMemoriesFile,
+  isMemoryFilename,
+} from './_ai_memory';
+import { parseFlexibleDate } from './dates';
+import { readJsonFile } from './readers';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams, Item } from './timeline';
-import { mimeForFile, timeframeContains } from './timeline';
+import { mimeForFile, textContent, timeframeContains } from './timeline';
 
 interface ClaudeContentBlock {
   type?: string;
@@ -97,33 +110,6 @@ interface ClaudeProject {
   docs?: ClaudeProjectDoc[];
 }
 
-const MEMORY_FILENAMES = ['memories.json', 'memory.json'];
-// Claude's data export ships users.json (plural) + projects.json next to
-// conversations.json; OpenAI's ships user.json (singular) + feedback files.
-const CLAUDE_SIBLINGS = ['users.json', 'projects.json'];
-const CHATGPT_SIBLINGS = [
-  'user.json',
-  'message_feedback.json',
-  'model_comparisons.json',
-  'shared_conversations.json',
-  'chat.html',
-];
-
-async function readJson(fpath: string): Promise<unknown> {
-  let raw: string;
-  try {
-    raw = await readFile(fpath, 'utf8');
-  } catch {
-    return undefined;
-  }
-
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return undefined;
-  }
-}
-
 // A parsed value is a Claude export when it is a non-empty array whose first
 // element has a `chat_messages` array and does NOT have a `mapping` key (which
 // would mark it as a ChatGPT export).
@@ -164,12 +150,36 @@ function claudeMemoryConfidence(parsed: unknown): number {
   return 0.4;
 }
 
-function isMemoryFilename(name: string): boolean {
-  return MEMORY_FILENAMES.includes(name.toLowerCase());
+/** Folders a Claude export ships next to its JSON files. */
+const CLAUDE_EXPORT_DIRS = ['projects', 'files', 'attachments'];
+
+/**
+ * Does the folder hold the Claude export and nothing else? Only then may it
+ * claim as confidently as the file inside it. A folder of loose uploads that
+ * happens to include conversations.json would otherwise be claimed whole, and
+ * the photos and documents beside it never reach the catch-all importer. Any
+ * top-level JSON file counts as the export's: Anthropic publishes no list of
+ * them, and one more (say an artifacts file) must not cost the projects.
+ */
+function onlyClaudeExportParts(names: string[]): boolean {
+  return names.every((n) => {
+    const lower = n.toLowerCase();
+
+    return lower.startsWith('.') || lower.endsWith('.json') || CLAUDE_EXPORT_DIRS.includes(lower);
+  });
 }
 
-function findName(names: string[], wanted: (n: string) => boolean): string | undefined {
-  return names.find((n) => wanted(n.toLowerCase()));
+/** The text Claude extracted from each attachment, under its file name. */
+function extractedSections(attachments: ClaudeAttachment[] | undefined): string[] {
+  if (!Array.isArray(attachments)) {
+    return [];
+  }
+
+  return attachments.flatMap((a) => {
+    const body = a && typeof a === 'object' ? firstText(a.extracted_content) : undefined;
+
+    return body ? [`--- ${firstText(a.file_name) || 'attachment'} ---\n${body}`] : [];
+  });
 }
 
 /** First non-empty trimmed string among the candidates, else undefined. */
@@ -181,16 +191,6 @@ function firstText(...candidates: (string | undefined)[]): string | undefined {
   }
 
   return undefined;
-}
-
-function toDate(v: string | undefined): Date | undefined {
-  if (!v) {
-    return undefined;
-  }
-
-  const d = new Date(v);
-
-  return isNaN(d.getTime()) ? undefined : d;
 }
 
 export class ClaudeFileImporter implements FileImporter {
@@ -210,11 +210,11 @@ export class ClaudeFileImporter implements FileImporter {
     if (st.isFile()) {
       const base = path.basename(root).toLowerCase();
       if (base === 'conversations.json') {
-        return isClaudeExport(await readJson(root)) ? { confidence: 0.95 } : { confidence: 0 };
+        return isClaudeExport(await readJsonFile(root)) ? { confidence: 0.95 } : { confidence: 0 };
       }
 
       if (isMemoryFilename(base)) {
-        const conf = claudeMemoryConfidence(await readJson(root));
+        const conf = claudeMemoryConfidence(await readJsonFile(root));
 
         return conf > 0 ? { confidence: conf } : { confidence: 0 };
       }
@@ -230,24 +230,38 @@ export class ClaudeFileImporter implements FileImporter {
         names = [];
       }
 
+      const exportOnly = onlyClaudeExportParts(names);
       const conv = findName(names, (n) => n === 'conversations.json');
       if (conv) {
         // conversations.json decides ownership of the whole directory: when it
         // is another vendor's shape the memories file next to it is theirs too.
-        if (isClaudeExport(await readJson(path.join(root, conv)))) {
-          return { confidence: 0.9 };
+        // As confident as conversations.json alone, so recognition keeps the
+        // directory (an equal nested match does not replace it) and the import
+        // reaches projects/ beside it. At 0.9 the file won and the projects
+        // landed as plain files. A folder holding more than the export stays
+        // at 0.9, so the file wins there and the rest of the folder is left
+        // to the catch-all importer.
+        const parsed = await readJsonFile(path.join(root, conv));
+        if (isClaudeExport(parsed)) {
+          return { confidence: exportOnly ? 0.95 : 0.9 };
         }
 
-        return { confidence: 0, dir_threshold: 0.7 };
+        // An account with no conversations still exports `[]`; its memories
+        // and projects decide below. Any other shape is another vendor's.
+        if (!Array.isArray(parsed) || parsed.length > 0) {
+          return { confidence: 0, dir_threshold: 0.7 };
+        }
       }
 
       const mem = findName(names, isMemoryFilename);
       if (mem && !findName(names, (n) => CHATGPT_SIBLINGS.includes(n))) {
-        const conf = claudeMemoryConfidence(await readJson(path.join(root, mem)));
+        const conf = claudeMemoryConfidence(await readJsonFile(path.join(root, mem)));
         if (conf > 0) {
           const marked = !!findName(names, (n) => CLAUDE_SIBLINGS.includes(n));
 
-          return { confidence: marked ? 0.85 : Math.min(conf, 0.85) };
+          // A marked export folder ties the memories file (0.9) so recognition
+          // keeps the folder and the import reaches projects beside it.
+          return { confidence: marked ? (exportOnly ? 0.9 : 0.85) : Math.min(conf, 0.85) };
         }
       }
 
@@ -273,6 +287,7 @@ export class ClaudeFileImporter implements FileImporter {
     let convPath: string | undefined;
     let memPath: string | undefined;
     let projectsDir: string | undefined;
+    let projectsFile: string | undefined;
     if (stat.isFile()) {
       const base = path.basename(root).toLowerCase();
       if (base === 'conversations.json') {
@@ -298,6 +313,11 @@ export class ClaudeFileImporter implements FileImporter {
         memPath = path.join(root, mem);
       }
 
+      const projectsJson = findName(names, (n) => n === 'projects.json');
+      if (projectsJson) {
+        projectsFile = path.join(root, projectsJson);
+      }
+
       const projects = findName(names, (n) => n === 'projects');
       if (projects) {
         const abs = path.join(root, projects);
@@ -316,11 +336,35 @@ export class ClaudeFileImporter implements FileImporter {
     }
 
     if (memPath) {
-      await this.importMemories(memPath, params);
+      await importMemoriesFile(memPath, params, {
+        idPrefix: 'claude',
+        source: 'Claude',
+        label: 'Claude memories',
+        preferEntryTitle: true,
+      });
     }
 
     if (projectsDir) {
       await this.importProjects(projectsDir, params);
+    }
+
+    if (projectsFile) {
+      await this.importProjectsFile(projectsFile, params);
+    }
+  }
+
+  /** A single `projects.json`: an array of the same objects `projects/` holds one per file. */
+  private async importProjectsFile(fpath: string, params: ImportParams): Promise<void> {
+    const parsed = await readJsonFile(fpath, { log: params.log, label: 'Claude projects' });
+    if (!Array.isArray(parsed)) {
+      return;
+    }
+
+    for (const p of parsed) {
+      if (p && typeof p === 'object' && !Array.isArray(p)) {
+        // No file name to fall back on: a project without a uuid is keyed on its content.
+        this.pushProject(p as ClaudeProject, '', params);
+      }
     }
   }
 
@@ -413,28 +457,6 @@ export class ClaudeFileImporter implements FileImporter {
     return media;
   }
 
-  private async importMemories(fpath: string, params: ImportParams): Promise<void> {
-    let raw: string;
-    try {
-      raw = await fs.promises.readFile(fpath, 'utf8');
-    } catch (e) {
-      params.log?.('error', 'Failed to read Claude memories', { error: (e as Error).message });
-
-      return;
-    }
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      return;
-    }
-
-    for (const m of parseMemoryEntries(parsed)) {
-      this.pushMemory(m, params);
-    }
-  }
-
   /** One `<uuid>.json` per Claude Project inside the sibling `projects/` dir. */
   private async importProjects(dir: string, params: ImportParams): Promise<void> {
     let names: string[];
@@ -483,7 +505,7 @@ export class ClaudeFileImporter implements FileImporter {
   private pushProject(p: ClaudeProject, sourceFile: string, params: ImportParams): void {
     const rawName = firstText(p.name);
     const name = rawName || 'Untitled project';
-    const ts = toDate(p.updated_at) ?? toDate(p.created_at);
+    const ts = parseFlexibleDate(p.updated_at) ?? parseFlexibleDate(p.created_at);
     if (!timeframeContains(params.timeframe, ts)) {
       return;
     }
@@ -534,37 +556,12 @@ export class ClaudeFileImporter implements FileImporter {
         id: `claude:project:${key}`,
         classification: 'note',
         timestamp: ts,
-        content: { filename: 'project.txt', mediaType: 'text/plain', data: async () => Buffer.from(text) },
+        content: textContent('project.txt', text),
         metadata: {
           Kind: 'project',
           Title: name,
           Source: 'Claude',
           Text: text,
-        },
-      },
-    });
-  }
-
-  private pushMemory(m: MemoryEntry, params: ImportParams): void {
-    const ts = m.created ?? m.updated;
-    if (!timeframeContains(params.timeframe, ts)) {
-      return;
-    }
-
-    const key = m.idHint || crypto.createHash('sha1').update(m.text).digest('hex').slice(0, 24);
-    params.pipeline.push({
-      item: {
-        id: `claude:memory:${key}`,
-        classification: 'note',
-        timestamp: ts,
-        content: { filename: 'memory.txt', mediaType: 'text/plain', data: async () => Buffer.from(m.text) },
-        metadata: {
-          Kind: 'memory',
-          Title: m.title || memoryTitle(m.text),
-          Category: m.category || undefined,
-          Updated: m.updated || undefined,
-          Source: 'Claude',
-          Text: m.text,
         },
       },
     });
@@ -581,7 +578,7 @@ export class ClaudeFileImporter implements FileImporter {
         return;
       }
 
-      const text =
+      const typed =
         msg.text ||
         (Array.isArray(msg.content)
           ? msg.content
@@ -589,6 +586,7 @@ export class ClaudeFileImporter implements FileImporter {
               .map((b) => b.text ?? '')
               .join('\n')
           : '');
+      const text = [typed, ...extractedSections(msg.attachments)].filter(Boolean).join('\n\n');
 
       const ts = msg.created_at ? new Date(msg.created_at) : undefined;
       if (!timeframeContains(params.timeframe, ts)) {
@@ -614,7 +612,7 @@ export class ClaudeFileImporter implements FileImporter {
           id: msg.uuid || `claude:${conv.uuid ?? 'unknown'}:${index}`,
           classification: 'message',
           timestamp: ts,
-          content: { filename: 'message.txt', mediaType: 'text/plain', data: async () => Buffer.from(text) },
+          content: textContent('message.txt', text),
           metadata: {
             Role: sender === 'human' ? 'user' : 'assistant',
             Direction: sender === 'human' ? 'outgoing' : 'incoming',

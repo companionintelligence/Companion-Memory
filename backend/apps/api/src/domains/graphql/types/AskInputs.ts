@@ -155,9 +155,10 @@ export class CreateAskGrantInput {
   /**
    * The linked peer Companion this grant addresses, for a FEDERATED grant.
    *
-   * The raw `ci.peer_links.id`, matching what {@link AskGrantType
-   * .granteePeerLinkId} emits — peer links have no global-id type of their own,
-   * so encoding one here would make the value the API hands out un-resubmittable.
+   * Either the `peer-link` global id (`PeerLinkType.id`, what `createPeerLink`
+   * and `peerLinks` return) or the raw `ci.peer_links.id` that {@link
+   * AskGrantType.granteePeerLinkId} emits, so both values the API hands out
+   * can be resubmitted (`AskResolver#peerLinkIdFrom`).
    */
   @Field(() => ID, { nullable: true })
   granteePeerLinkId?: string;
@@ -316,9 +317,11 @@ export class SendPeerAskInput {
   purpose?: string;
 
   /**
-   * Portal-issued access token whose audience is the PEER box. Supplied by the
-   * caller until Portal token exchange lands; this box never mints or stores it.
+   * Optional Portal-issued access token whose audience is the PEER box; this
+   * box never mints or stores one. Every ask is signed with the sender's own
+   * key whether or not one is given, and with none the signature alone
+   * authenticates it, through the link the peer made for the sender's did:key.
    */
-  @Field(() => String)
-  peerAccessToken!: string;
+  @Field(() => String, { nullable: true })
+  peerAccessToken?: string;
 }

@@ -1,91 +1,23 @@
 /**
- * Identifier normalization — the single source of truth for the rule shared by
- * the importer (which pre-normalizes Person `properties.emails`/`.phones`) and
- * the server (which normalizes raw communication participants and defensively
- * re-normalizes ingested identifiers). The two MUST stay byte-identical or the
- * people-linking lookup silently misses.
+ * Graph participant classification and structured name helpers.
  *
- * Rule:
- *   - email: trim + lowercase.
- *   - phone: last 10 digits of the digit string (drops country code, spaces,
- *     punctuation, '+', leading '1', etc.). Fewer than 10 digits → keep all
- *     digits as-is.
- *
- * Returns `null` when the input is empty/whitespace or (for phone) has no
- * digits, so callers can skip non-matchable values rather than store empties.
+ * Email, phone, and display-name normalization lives in `common/normalizeIdentifier`
+ * so the graph, import, and memory-write paths share one rule without crossing
+ * domain internals or loading the graph module for a pure string operation.
  */
+import { normalizeIdentifier, type IdentifierKind } from '@ci/common/normalizeIdentifier';
 
 import { isNonNameParticipant } from './participantSanity';
 
-export type IdentifierKind = 'email' | 'phone' | 'name';
-
-export function normalizeEmail(raw: string | null | undefined): string | null {
-  if (raw == null) {
-    return null;
-  }
-
-  // Many sources hand us the full RFC 5322 mailbox ("Display Name <addr@x>",
-  // or "<addr@x>") rather than a bare address. Extract the angle-bracketed
-  // address first — otherwise the display name is folded into the identifier
-  // and the same mailbox fragments across many Person entities.
-  const angle = raw.match(/<([^>]+)>/);
-  const candidate = angle ? angle[1] : raw;
-
-  const normalized = candidate.trim().toLowerCase();
-
-  return normalized.length > 0 ? normalized : null;
-}
-
-export function normalizePhone(raw: string | null | undefined): string | null {
-  if (raw == null) {
-    return null;
-  }
-
-  const digits = raw.replace(/\D/g, '');
-  if (digits.length === 0) {
-    return null;
-  }
-
-  // Last 10 digits — strips a leading country code (e.g. US '1') so the same
-  // number written +1 (415) 555-0100 and 4155550100 collapse to one value.
-  return digits.length > 10 ? digits.slice(-10) : digits;
-}
-
-/**
- * Display-name identifier for participants that carry neither an email nor a
- * phone number (chat networks — Facebook Messenger, Instagram — export display
- * names only). NFKD-fold + strip diacritics, lowercase, collapse whitespace,
- * so "José  GARCÍA" and "jose garcia" collapse to one value. Weaker than an
- * email/phone (display names are not globally unique), which is acceptable for
- * the per-user identifier index: the tuple is scoped to owner_user_id, and a
- * chat participant's display name is stable within one user's corpus.
- */
-export function normalizeName(raw: string | null | undefined): string | null {
-  if (raw == null) {
-    return null;
-  }
-
-  const normalized = raw
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  return normalized.length > 0 ? normalized : null;
-}
-
-export function normalizeIdentifier(kind: IdentifierKind, raw: string | null | undefined): string | null {
-  if (kind === 'email') {
-    return normalizeEmail(raw);
-  }
-
-  if (kind === 'phone') {
-    return normalizePhone(raw);
-  }
-
-  return normalizeName(raw);
-}
+export {
+  PHONE_EXTENSION_PATTERN,
+  hasPhoneExtension,
+  normalizeEmail,
+  normalizeName,
+  normalizePhone,
+} from '@ci/common/normalizeIdentifier';
+export { normalizeIdentifier };
+export type { IdentifierKind };
 
 /**
  * Structured name parts for a Person's `properties`, split from a display
@@ -145,7 +77,12 @@ const PHONE_SHAPE_REGEX = /^[+()\-.\s\d]+$/;
  */
 const PHONE_MIN_DIGITS = 7;
 
-function isPhoneShaped(trimmed: string): boolean {
+/**
+ * Exported for the owner match in `import/push/self.ts`, which must test a
+ * string as a phone number only when it IS one. Any digits inside a display
+ * name or a mailbox are not a number the owner can be matched on.
+ */
+export function isPhoneShaped(trimmed: string): boolean {
   if (!PHONE_SHAPE_REGEX.test(trimmed)) {
     return false;
   }

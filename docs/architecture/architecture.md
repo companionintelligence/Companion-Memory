@@ -401,7 +401,7 @@ and the [bulk load runbook](../../backend/apps/api/db/postgres/BULK_LOAD_RUNBOOK
 | Common lib | `frontend/packages/common` | Shared hooks, types, GraphQL fragments |
 | ShadCN lib | `frontend/packages/shadcn` | Local copy of the component library |
 | Mobile | `frontend/apps/ios`, `frontend/apps/android` | Capacitor shells around the `@ci/fe-web` SPA; native plugins in `frontend/packages/capacitor-*`. `frontend/apps/mobile` is the pointer README left by the iOS/Android split |
-| Capacitor plugins | `frontend/packages/capacitor-local-hub`, `capacitor-speech`, `capacitor-local-llm` | Loopback sidecar + encrypted capture outbox; on-device dictation/synthesis; on-device LiteRT-LM (Android — iOS ships its own Swift implementation) |
+| Capacitor plugins | `frontend/packages/capacitor-local-hub`, `capacitor-speech`, `capacitor-local-llm` | Loopback sidecar + encrypted capture outbox; on-device dictation/synthesis; on-device LiteRT-LM chat with a downloadable, commit-pinned model catalog (Android here — iOS ships the identical JS contract as an in-app Swift plugin; surfaced in Settings → On-device model and the chat page) |
 | Browser ext. | [CI-Browser-Extension](https://github.com/companionintelligence/CI-Browser-Extension) | Talks to `browser-activity` |
 | XR / Spatial | [CI-Spatial](https://github.com/companionintelligence/CI-Spatial), [CI-Spatial-Atlas](https://github.com/companionintelligence/CI-Spatial-Atlas), [CI-Spatial-Web](https://github.com/companionintelligence/CI-Spatial-Web) and siblings | Use `position` + AR relative coordinates; scans arrive as a GLB upload plus one `capture.scan` event |
 | Wearables / IoT | [CI-Pebble](https://github.com/companionintelligence/CI-Pebble), [CI-OMI](https://github.com/companionintelligence/CI-OMI), [CI-Even-Realities](https://github.com/companionintelligence/CI-Even-Realities) | Register in `devices`; readings land on the `/v1/*` ingest lanes (`ci.position`, `ci.events`). The old `sensors`/`measurements` tables were dropped in Feb 2026 |
@@ -489,7 +489,7 @@ The roadmap below is synthesized from the current repo state (domains present, c
 
 | Theme | Item |
 |---|---|
-| Native shell | The Capacitor apps (`frontend/apps/ios`, `frontend/apps/android`) already carry on-device inference and speech; the local-first PowerSync **client** phase is still unstarted (the service is scaffolded server-side and excluded from the local Compose profile) |
+| Native shell | The Capacitor apps (`frontend/apps/ios`, `frontend/apps/android`) already carry on-device inference (a model manager, offline chat routing and photo input for Gemma 4 — unverified on a real device) and speech; the local-first PowerSync **client** phase is still unstarted (the service is scaffolded server-side and excluded from the local Compose profile) |
 | HBPE | Move from nightly batch to incremental online updates; expose richer prediction reads in `domains/predictions` |
 | Summary | Add monthly + yearly tiers; surface summary timeline in the web SPA |
 | Tools | Grow the **ToolRegistry** (`domains/tools`) beyond today's intent catalog — exposed through `POST /mcp` and `GET /api/intents` |

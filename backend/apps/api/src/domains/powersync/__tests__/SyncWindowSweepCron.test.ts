@@ -83,8 +83,8 @@ describe('SyncWindowSweepCron', () => {
     const first = cron.sweepOnSchedule();
     await cron.sweepOnSchedule();
 
-    // The second call saw `running` and returned without issuing anything, so
-    // only the first statement of the first run is outstanding.
+    // The second call hit the schedule's `exclusive` guard and returned without
+    // issuing anything, so only the first statement of the first run is outstanding.
     expect(query).toHaveBeenCalledTimes(1);
 
     while (pending.length > 0) {
@@ -97,12 +97,10 @@ describe('SyncWindowSweepCron', () => {
 
   it('swallows a failing sweep so the schedule survives it', async () => {
     const query = jest.fn().mockRejectedValue(new Error('deadlock detected'));
-    const log = logger();
-
+    // The decorator swallows the failure (logging it through its own logger),
+    // so the schedule's next tick is not lost to an unhandled rejection.
     await expect(
-      new SyncWindowSweepCron({ query } as unknown as DataSource, log).sweepOnSchedule(),
+      new SyncWindowSweepCron({ query } as unknown as DataSource, logger()).sweepOnSchedule(),
     ).resolves.toBeUndefined();
-
-    expect(log.error).toHaveBeenCalled();
   });
 });

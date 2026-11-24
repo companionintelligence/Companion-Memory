@@ -1,10 +1,12 @@
 import { BadRequestException, UseGuards } from '@nestjs/common';
-import { Args, Float, ID, Int, Mutation, Parent, Query, ResolveField, Resolver } from '@nestjs/graphql';
+import { Args, Float, ID, Info, Int, Mutation, Parent, Query, ResolveField, Resolver } from '@nestjs/graphql';
+import type { GraphQLResolveInfo } from 'graphql';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { isUuidInput, quotedId } from '@ci/common/persistence';
 import { MaxArraySizePipe } from '@ci/common/pipes';
-import { CalendarEventService, adoptIngestIdentity } from '@ci/domains/memory';
+import { CalendarEventService, adoptIngestIdentity, coordinatesOf } from '@ci/domains/memory';
 import { type Person } from '@ci/domains/memory';
 
 import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
@@ -13,6 +15,7 @@ import { type EventMedia, EventMediaLoader } from '../loaders/EventMediaLoader';
 import { PersonLoader } from '../loaders/PersonLoader';
 import { PlaceLoader } from '../loaders/PlaceLoader';
 import { TagLoader } from '../loaders/TagLoader';
+import { selectsField } from '../selectsField';
 import { ContentConnection } from '../types/ContentConnection';
 import { ContentEdge } from '../types/ContentEdge';
 import { ContentType } from '../types/ContentType';
@@ -24,6 +27,7 @@ import { EventConnection } from '../types/EventConnection';
 import { EventEdge } from '../types/EventEdge';
 import { EventType } from '../types/EventType';
 import { GlobalUID } from '../types/GlobalUID';
+import type { OptionalTotal } from '../types/OptionalTotal';
 import { PaginationArgs } from '../types/PaginationArgs';
 import { PersonConnection } from '../types/PersonConnection';
 import { PersonEdge } from '../types/PersonEdge';
@@ -36,6 +40,66 @@ import { Paginator } from '../utils/Paginator';
 
 /** Widest window eventsInRange will serve — a quarter, enough for the month view. */
 const MAX_RANGE_DAYS = 92;
+
+/**
+ * An event's link to a person or place, as the row stores it: a bare uuid.
+ *
+ * The link fields are typed `ID`, and `createPerson` and `createPlace` answer
+ * with a global id (base64 "person:<uuid>"), so that is what a client passes
+ * back. It went to the database as is and failed the uuid cast in
+ * `refuseForeignLinks`, which `formatError` reports as "Internal server error".
+ * A global id of the right type is unwrapped, a bare uuid passes as it always
+ * has, an empty id is left to the writer, and anything else is the caller's
+ * mistake, answered with a 400 that names the field. An empty single id is no
+ * link in createEvent and leaves the link as it is in updateEvent; an empty
+ * entry in the list is a 400 from `refuseForeignLinks`.
+ */
+function linkedEntityId<T extends string | undefined>(field: string, value: T, type: 'person' | 'place'): T {
+  if (!value || isUuidInput(value)) {
+    return value;
+  }
+
+  let decoded: { type: string; id: string } | null = null;
+
+  try {
+    decoded = GlobalUID.decode(value);
+  } catch {
+    // Not a global id either; refused below.
+  }
+
+  if (decoded?.type === type && isUuidInput(decoded.id)) {
+    return decoded.id as T;
+  }
+
+  throw new BadRequestException(`\`${field}\` takes a ${type} id or its uuid; got ${quotedId(value)}`);
+}
+
+function linkedPersonIds(field: string, values: string[] | undefined): string[] | undefined {
+  return values?.map((value) => linkedEntityId(field, value, 'person'));
+}
+
+/**
+ * Refuse `locationCoordinates` that are not a GeoJSON Point before the writer.
+ *
+ * The field is a free JSON object, stored in a `geography(Point, 4326)` column
+ * that reads GeoJSON. `{ lat, lng }` failed in PostGIS ("unknown GeoJSON type")
+ * and answered "Internal server error", and a latitude past 90 was stored
+ * wrapped round to another place without a word.
+ */
+function assertGeoJsonPoint(
+  field: string,
+  value: { type?: string; coordinates?: unknown } | null | undefined,
+): void {
+  // coordinatesOf passes a third coordinate as an altitude, and the 2D column refuses one.
+  if (value == null || (coordinatesOf(value) !== null && (value.coordinates as unknown[]).length === 2)) {
+    return;
+  }
+
+  throw new BadRequestException(
+    `\`${field}\` must be a GeoJSON Point, { "type": "Point", "coordinates": [longitude, latitude] }, ` +
+      'with longitude from -180 to 180 and latitude from -90 to 90',
+  );
+}
 
 /**
  * The `ci.events` row a node's batched fields must be looked up by.
@@ -80,8 +144,11 @@ export class EventResolver {
     }
   }
 
-  /** Map a CreateEventInput (GraphQL) to the service's CreateEventDto. */
-  private toDto(input: CreateEventInput) {
+  /**
+   * Map a CreateEventInput (GraphQL) to the service's CreateEventDto. `at` prefixes the field a
+   * refusal names, so a batch says which of its events it was (`input[3].`).
+   */
+  private toDto(input: CreateEventInput, at = '') {
     return {
       title: input.title,
       description: input.description,
@@ -92,9 +159,9 @@ export class EventResolver {
       duration_minutes: input.durationMinutes,
       location_name: input.locationName,
       location_coordinates: input.locationCoordinates,
-      location_entity_id: input.locationEntityId,
-      participant_entity_ids: input.participantEntityIds,
-      organizer_entity_id: input.organizerEntityId,
+      location_entity_id: linkedEntityId(`${at}locationEntityId`, input.locationEntityId, 'place'),
+      participant_entity_ids: linkedPersonIds(`${at}participantEntityIds`, input.participantEntityIds),
+      organizer_entity_id: linkedEntityId(`${at}organizerEntityId`, input.organizerEntityId, 'person'),
       source_type: input.sourceType,
       // External identities are adopted, not minted: the caller owns its
       // namespace; the registry canonicalizes the system spelling
@@ -118,6 +185,7 @@ export class EventResolver {
     @Args('input') input: CreateEventInput,
   ): Promise<EventType> {
     this.assertTimeOrder(input.startTime, input.endTime);
+    assertGeoJsonPoint('locationCoordinates', input.locationCoordinates);
 
     const serviceContext = toServiceContext(context);
 
@@ -139,13 +207,16 @@ export class EventResolver {
     @Args({ name: 'input', type: () => [CreateEventInput] }, new MaxArraySizePipe())
     input: CreateEventInput[],
   ): Promise<EventType[]> {
-    input.forEach((i) => this.assertTimeOrder(i.startTime, i.endTime));
+    input.forEach((i, index) => {
+      this.assertTimeOrder(i.startTime, i.endTime);
+      assertGeoJsonPoint(`input[${index}].locationCoordinates`, i.locationCoordinates);
+    });
 
     const serviceContext = toServiceContext(context);
 
     const entities = await this.eventService.create(
       serviceContext,
-      input.map((i) => this.toDto(i)),
+      input.map((i, index) => this.toDto(i, `input[${index}].`)),
     );
 
     return entities.map((e) => EventType.toType(e));
@@ -158,6 +229,7 @@ export class EventResolver {
     @Args('input') input: UpdateEventInput,
   ): Promise<EventType | null> {
     this.assertTimeOrder(input.startTime, input.endTime);
+    assertGeoJsonPoint('locationCoordinates', input.locationCoordinates);
 
     const serviceContext = toServiceContext(context);
 
@@ -173,9 +245,9 @@ export class EventResolver {
       duration_minutes: input.durationMinutes,
       location_name: input.locationName,
       location_coordinates: input.locationCoordinates,
-      location_entity_id: input.locationEntityId,
-      participant_entity_ids: input.participantEntityIds,
-      organizer_entity_id: input.organizerEntityId,
+      location_entity_id: linkedEntityId('locationEntityId', input.locationEntityId, 'place'),
+      participant_entity_ids: linkedPersonIds('participantEntityIds', input.participantEntityIds),
+      organizer_entity_id: linkedEntityId('organizerEntityId', input.organizerEntityId, 'person'),
       source_type: input.sourceType,
       // External identities are adopted, not minted: the caller owns its
       // namespace; the registry canonicalizes the system spelling
@@ -268,7 +340,8 @@ export class EventResolver {
   async events(
     @Context() context: RequestContext,
     @Args() pagination: PaginationArgs,
-  ): Promise<EventConnection> {
+    @Info() info?: GraphQLResolveInfo,
+  ): Promise<OptionalTotal<EventConnection>> {
     const serviceContext = toServiceContext(context);
 
     // Keyset, not slice-in-memory: this used to `findAll` the user's entire
@@ -283,6 +356,7 @@ export class EventResolver {
         afterId: pagination.after ? GlobalUID.decode(pagination.after).id : null,
         beforeId: pagination.before ? GlobalUID.decode(pagination.before).id : null,
       },
+      { countTotal: selectsField(info, 'totalCount') },
     );
 
     const edges: EventEdge[] = entities.map((entity) => {
@@ -302,7 +376,7 @@ export class EventResolver {
         startCursor: edges.length > 0 ? edges[0].cursor : null,
         endCursor: edges.length > 0 ? edges[edges.length - 1].cursor : null,
       },
-      totalCount,
+      ...(totalCount != null ? { totalCount } : {}),
     };
   }
 
@@ -329,7 +403,8 @@ export class EventResolver {
   async deletedEvents(
     @Context() context: RequestContext,
     @Args() pagination: PaginationArgs,
-  ): Promise<EventConnection> {
+    @Info() info?: GraphQLResolveInfo,
+  ): Promise<OptionalTotal<EventConnection>> {
     const serviceContext = toServiceContext(context);
 
     const { entities, hasNextPage, hasPreviousPage, totalCount } = await this.eventService.findDeletedPage(
@@ -340,6 +415,7 @@ export class EventResolver {
         afterId: pagination.after ? GlobalUID.decode(pagination.after).id : null,
         beforeId: pagination.before ? GlobalUID.decode(pagination.before).id : null,
       },
+      { countTotal: selectsField(info, 'totalCount') },
     );
 
     const edges: EventEdge[] = entities.map((entity) => {
@@ -359,7 +435,7 @@ export class EventResolver {
         startCursor: edges.length > 0 ? edges[0].cursor : null,
         endCursor: edges.length > 0 ? edges[edges.length - 1].cursor : null,
       },
-      totalCount,
+      ...(totalCount != null ? { totalCount } : {}),
     };
   }
 
@@ -372,7 +448,7 @@ export class EventResolver {
    */
   @Query(() => [EventType], {
     description:
-      'Events overlapping [from, to) — calendar read path. Excludes cancelled/no-show; keeps tentative. Allowlisted types: calendar_event, meeting, appointment, planned_block, plus events with no event_type (user-created and accepted suggestions).',
+      'Events overlapping [from, to) — calendar read path. Excludes cancelled/no-show; keeps tentative. Allowlisted types: calendar_event, meeting, appointment, planned_block, plus events with no event_type (user-created and accepted suggestions) and `event` rows from an imported calendar file (source_system calendar).',
   })
   async eventsInRange(
     @Context() context: RequestContext,

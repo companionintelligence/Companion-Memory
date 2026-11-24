@@ -46,6 +46,13 @@ const formatters = new Map<string, Intl.DateTimeFormat>();
  * Cached, because the grid asks for ~2000 readings per render (96 rhythm slots
  * × 7 days, twice each for the two-pass write) and constructing an
  * `Intl.DateTimeFormat` is the expensive half of that by an order of magnitude.
+ *
+ * A reader, not a label: nobody sees this output, `zonedParts` turns it back
+ * into numbers. So it is pinned to a 0–23 hour whatever the person's time
+ * format — `hourCycle: 'h23'` rather than `hour12: false`, which some engines
+ * resolve to the 1–24 cycle (hence the "24" guard in `zonedParts`, kept for
+ * engines older than the option). The labels the grid shows go through
+ * `useDateTimeFormat()` instead.
  */
 function formatter(zone: string): Intl.DateTimeFormat {
   let cached = formatters.get(zone);
@@ -53,7 +60,7 @@ function formatter(zone: string): Intl.DateTimeFormat {
   if (!cached) {
     cached = new Intl.DateTimeFormat('en-US', {
       timeZone: zone,
-      hour12: false,
+      hourCycle: 'h23',
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',

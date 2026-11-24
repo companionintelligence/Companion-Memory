@@ -6,7 +6,7 @@ import path from 'node:path';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 interface GHRepo {
   full_name?: string;
@@ -150,7 +150,7 @@ export class GitHubFileImporter implements FileImporter {
           id: key ? `github:star:${key}` : undefined,
           classification: 'social',
           timestamp: ts,
-          content: { filename: 'star.txt', mediaType: 'text/plain', data: async () => Buffer.from(content) },
+          content: textContent('star.txt', content),
           metadata: {
             Name: repo.full_name || repo.html_url || undefined,
             Repo: repo.full_name || undefined,

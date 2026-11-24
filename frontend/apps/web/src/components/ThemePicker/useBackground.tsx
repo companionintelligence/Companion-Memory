@@ -1,5 +1,7 @@
 import { createContext, useContext, useEffect, useState } from 'react';
 
+import { useTheme } from './useTheme';
+
 interface TexturePalette {
   background: string;
   accent: string;
@@ -100,7 +102,7 @@ export const TEXTURE_PATTERNS: TexturePattern[] = [
   },
   {
     id: 'micro-dots',
-    name: 'Micro Dots',
+    name: 'Micro dots',
     description: 'Polka Dots',
     size: '48px 48px',
     build: ({ accent }, opacity) => {
@@ -121,7 +123,7 @@ export const TEXTURE_PATTERNS: TexturePattern[] = [
   },
   {
     id: 'cross-hatch',
-    name: 'Cross Hatch',
+    name: 'Cross hatch',
     description: 'Tight grid.',
     size: '64px 64px',
     build: ({ contrast }, opacity) =>
@@ -134,7 +136,7 @@ export const TEXTURE_PATTERNS: TexturePattern[] = [
   },
   {
     id: 'diagonal-lines',
-    name: 'Diagonal Lines',
+    name: 'Diagonal lines',
     description: 'Classic diagonal stripes.',
     size: '56px 56px',
     build: ({ accent }, opacity) =>
@@ -146,7 +148,7 @@ export const TEXTURE_PATTERNS: TexturePattern[] = [
   },
   {
     id: 'overlapping-circles',
-    name: 'Overlapping Circles',
+    name: 'Overlapping circles',
     description: 'Concentric arcs',
     size: '96px 96px',
     build: ({ accent, muted }, opacity) =>
@@ -162,7 +164,7 @@ export const TEXTURE_PATTERNS: TexturePattern[] = [
   },
   {
     id: 'isometric-cubes',
-    name: 'Isometric Cubes',
+    name: 'Isometric cubes',
     description: 'Geometric tessellation',
     size: '96px 96px',
     build: ({ contrast, accent }, opacity) =>
@@ -180,7 +182,7 @@ export const TEXTURE_PATTERNS: TexturePattern[] = [
   },
   {
     id: 'contour-lines',
-    name: 'Contour Lines',
+    name: 'Contour lines',
     description: 'Organic waves',
     size: '160px 160px',
     build: ({ contrast }, opacity) =>
@@ -195,7 +197,7 @@ export const TEXTURE_PATTERNS: TexturePattern[] = [
   },
   {
     id: 'corner-crosses',
-    name: 'Corner Crosses',
+    name: 'Corner crosses',
     description: 'Cross motifs',
     size: '40px 40px',
     build: ({ accent }, opacity) =>
@@ -213,7 +215,7 @@ export const TEXTURE_PATTERNS: TexturePattern[] = [
   },
   {
     id: CONWAY_TEXTURE_ID,
-    name: "Conway's Life",
+    name: "Conway's life",
     description: 'Animated Game of Life seeded per page refresh.',
     size: `${CONWAY_PATTERN_PX}px ${CONWAY_PATTERN_PX}px`,
     repeat: 'repeat',
@@ -406,6 +408,17 @@ class ConwayLifeAnimator implements DynamicTextureController {
 
   start(root: HTMLElement, palette: TexturePalette, opacity: number) {
     if (!isBrowser || !this.canvas || !this.ctx) {
+      return;
+    }
+
+    // Already running on this root: a theme or opacity change only recolours
+    // the board. Reseeding would restart the pattern from noise every time the
+    // theme flips or the opacity slider moves.
+    if (this.root === root) {
+      this.palette = palette;
+      this.opacity = opacity;
+      this.drawAndApply();
+
       return;
     }
 
@@ -654,10 +667,15 @@ export function BackgroundProvider({
     readStoredGlow(glowStorageKey, defaultGlowEnabled),
   );
 
+  // The texture is drawn in the theme's colours, read off the root when it is
+  // applied, so it is redrawn when the theme changes too. ThemeProvider swaps
+  // the root variables in a layout effect, which has run by the time this
+  // passive effect does. Keyed on the same themeState that effect is keyed on.
+  const { themeState } = useTheme();
   useEffect(() => {
     const root = window.document.documentElement;
     applyTextureToRoot(root, backgroundState.textureId, backgroundState.textureOpacity);
-  }, [backgroundState]);
+  }, [backgroundState, themeState]);
 
   const setTexture = (textureId: string) => {
     const resolved = resolveTexturePattern(textureId).id;

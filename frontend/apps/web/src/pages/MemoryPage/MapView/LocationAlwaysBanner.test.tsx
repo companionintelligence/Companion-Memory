@@ -35,7 +35,7 @@ describe('LocationAlwaysBanner', () => {
       </MemoryRouter>,
     );
 
-    expect(screen.queryByText(/Turn on Always/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Turn on Location Sync/)).not.toBeInTheDocument();
   });
 
   it('links to phone Location settings when Always is not on', () => {
@@ -46,7 +46,7 @@ describe('LocationAlwaysBanner', () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByRole('link', { name: 'Turn on Always' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Turn on Location Sync' })).toHaveAttribute(
       'href',
       '/self/settings/location',
     );
@@ -61,6 +61,6 @@ describe('LocationAlwaysBanner', () => {
       </MemoryRouter>,
     );
 
-    expect(screen.queryByText(/Turn on Always/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Turn on Location Sync/)).not.toBeInTheDocument();
   });
 });

@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { Button, cn } from '@ci/shadcn';
 import { Route } from '@ci/shadcn/icons';
 import L from 'leaflet';
 import { CircleMarker, Polyline, Tooltip, useMap as useLeafletMap, useMapEvents } from 'react-leaflet';
 
+import { fitPadding } from '@/components/Map/framing';
 import { gql } from '@/graphql';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 
 import { boundsToBbox, clampBboxSpan } from '../bbox';
 import { useEntityService } from '../useEntityService';
@@ -214,6 +216,7 @@ function usePositionTrack({ enabled }: { enabled: boolean }) {
  */
 export function TraceLayer({ points, colour }: { points: TracePoint[]; colour: string }) {
   const segments = useMemo(() => traceSegments(points), [points]);
+  const fmt = useDateTimeFormat();
 
   return (
     <>
@@ -242,13 +245,17 @@ export function TraceLayer({ points, colour }: { points: TracePoint[]; colour: s
         >
           <Tooltip direction="top" offset={[0, -4]}>
             <span className="text-xs">
-              {new Date(point.startTime).toLocaleString('en-US', {
-                month: 'short',
-                day: 'numeric',
-                year: 'numeric',
-                hour: 'numeric',
-                minute: '2-digit',
-              })}
+              {fmt.dateTime(
+                point.startTime,
+                {
+                  month: 'short',
+                  day: 'numeric',
+                  year: 'numeric',
+                  hour: 'numeric',
+                  minute: '2-digit',
+                },
+                'en-US',
+              )}
               {point.fixCount > 1 && ` · ${point.fixCount.toLocaleString()} fixes`}
             </span>
           </Tooltip>
@@ -266,7 +273,16 @@ export function TraceLayer({ points, colour }: { points: TracePoint[]; colour: s
  * here, and because the event pins must keep working exactly as they did when
  * it is switched off.
  */
-export function PositionTraceLayer({ enabled, fitToTrace }: { enabled: boolean; fitToTrace: boolean }) {
+export function PositionTraceLayer({
+  enabled,
+  fitToTrace,
+  panelInset = 0,
+}: {
+  enabled: boolean;
+  fitToTrace: boolean;
+  /** How much of the map's left edge a panel covers; the trace is framed right of it. */
+  panelInset?: number;
+}) {
   const { points, loading, error, totalFixes, bucketSeconds, hasMore } = usePositionTrack({ enabled });
   const map = useLeafletMap();
   const fitted = useRef(false);
@@ -283,9 +299,9 @@ export function PositionTraceLayer({ enabled, fitToTrace }: { enabled: boolean; 
     fitted.current = true;
     map.fitBounds(
       L.latLngBounds(points.map((point) => [point.latitude, point.longitude] as [number, number])),
-      { padding: [60, 60], maxZoom: 13 },
+      { ...fitPadding(panelInset), maxZoom: 13 },
     );
-  }, [enabled, fitToTrace, points, map]);
+  }, [enabled, fitToTrace, points, map, panelInset]);
 
   if (!enabled) {
     return null;
@@ -309,8 +325,14 @@ export function PositionTraceLayer({ enabled, fitToTrace }: { enabled: boolean; 
 
 /** Says what the trace is showing — and, when downsampled, what it is not. */
 function TraceStatus({ text }: { text: string }) {
+  // On desktop the playback bar runs along the map's bottom edge at the same
+  // z-index and is drawn later, so a status in the bottom corner sat under it.
+  // The bar sets --playback-bar-clearance (see PlaybackBar) to how far up it
+  // reaches, which changes with its provenance line, a Retry button and the
+  // safe-area inset, so the status sits half a rem above whatever that is. With
+  // no bar the property is unset and the fallback keeps it 1rem off the corner.
   return (
-    <div className="pointer-events-none absolute bottom-4 right-4 z-400">
+    <div className="pointer-events-none absolute left-3 right-14 top-24 z-400 device:bottom-[calc(var(--playback-bar-clearance,0.5rem)+0.5rem)] device:left-auto device:right-4 device:top-auto">
       <div className="rounded-md border border-border bg-card/90 px-3 py-1.5 text-xs text-muted-foreground shadow-md">
         {text}
       </div>
@@ -323,37 +345,45 @@ function TraceStatus({ text }: { text: string }) {
  * that separation is the point: a trace of every fix would otherwise swamp the
  * 121 things that actually happened.
  *
- * `className` places it, because the desktop map has a 300px timeline panel
- * pinned to its left edge and the mobile one does not.
+ * Just the button: MapView's top bar places it beside the area-search controls
+ * and keeps the map from reacting to presses on it.
  */
 export function TraceToggleControl({
   enabled,
   onToggle,
-  className,
+  compact = false,
 }: {
   enabled: boolean;
   onToggle: () => void;
-  className?: string;
+  compact?: boolean;
 }) {
-  const stopPropagation = useCallback((el: HTMLDivElement | null) => {
-    if (el) {
-      L.DomEvent.disableClickPropagation(el);
-      L.DomEvent.disableScrollPropagation(el);
-    }
-  }, []);
-
+  // No wrapper of its own: the control sits in the map's top bar (MapTopBar in
+  // MapView), which positions it and keeps its presses off the map.
   return (
-    <div ref={stopPropagation} className={cn('absolute left-3 top-3 z-400', className)}>
-      <Button
-        variant="outline"
-        size="sm"
-        aria-pressed={enabled}
-        onClick={onToggle}
-        className="border-border bg-card text-foreground shadow-md transition-colors duration-150 hover:bg-accent hover:text-accent-foreground dark:border-border dark:bg-card dark:hover:bg-accent"
-      >
-        <Route className="mr-1 h-4 w-4" />
-        {enabled ? 'Hide location history' : 'Show location history'}
-      </Button>
-    </div>
+    <Button
+      variant="outline"
+      size="sm"
+      aria-pressed={enabled}
+      aria-label={enabled ? 'Hide location history' : 'Show location history'}
+      onClick={onToggle}
+      className={cn(
+        'border-border bg-card text-foreground shadow-md transition-colors duration-150 hover:bg-accent hover:text-accent-foreground dark:border-border dark:bg-card dark:hover:bg-accent',
+        compact && 'h-9 px-3 text-xs',
+      )}
+    >
+      <Route className="mr-1 h-4 w-4 shrink-0" />
+      {compact ? (
+        <>
+          History
+          <span className="ml-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
+            {enabled ? 'On' : 'Off'}
+          </span>
+        </>
+      ) : enabled ? (
+        'Hide location history'
+      ) : (
+        'Show location history'
+      )}
+    </Button>
   );
 }

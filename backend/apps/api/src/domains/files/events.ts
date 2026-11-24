@@ -30,6 +30,13 @@ export type FileUploadedPayload = {
   thingCapture: boolean;
   skipDescription?: boolean;
   model?: string;
+  /**
+   * The upload was a deliberate "save to Memory" (the phone's Capture sheet).
+   * Present only when true; see UploadFileDto.memoryCapture.
+   */
+  memoryCapture?: boolean;
+  /** ISO instant the device made the media; only with `memoryCapture`. See UploadFileDto.capturedAt. */
+  capturedAt?: string;
 };
 
 /**
@@ -121,7 +128,8 @@ export type FilePreviewSweepRequestPayload = {
 /**
  * Ask for the browser-playable `PLAYBACK` rendition of one stored video (see
  * `VideoPlaybackService`). Sent by `FilePreviewService` once a video's preview
- * exists, so an upload gets its rendition minutes after landing instead of
+ * exists — and when the poster cannot be made — so an upload gets its rendition
+ * minutes after landing instead of
  * waiting for the nightly `enrich.video_playback` sweep. Consumed by
  * `VideoPlaybackGenerationListener` in this domain.
  */

@@ -6,6 +6,13 @@ function makeListener(file: Record<string, unknown> | null = null) {
   const fileService = { findById: jest.fn().mockResolvedValue(file) };
   const embeddingGenerationService = { generateEmbedding: jest.fn().mockResolvedValue([0.1, 0.2]) };
   const embeddingService = {
+    upsertDocument: jest.fn(
+      async (_ctx: unknown, data: { text: string }, generate: (text: string) => Promise<number[]>) => {
+        await generate(data.text);
+
+        return 'embedded';
+      },
+    ),
     upsert: jest.fn().mockResolvedValue(null),
     remove: jest.fn().mockResolvedValue(true),
   };
@@ -62,9 +69,10 @@ describe('FileSearchIndexListener — every creation-path event indexes the file
 
     await listener.indexFile({ fileId: 'file-1' } as never);
 
-    expect(embeddingService.upsert).toHaveBeenCalledWith(
+    expect(embeddingService.upsertDocument).toHaveBeenCalledWith(
       { userId: 'user-1' },
-      { entityType: 'file', entityId: 'file-1', embedding: [0.1, 0.2] },
+      { entityType: 'file', entityId: 'file-1', text: expect.any(String) },
+      expect.any(Function),
     );
     expect(vectorService.upsert).toHaveBeenCalledWith(
       { userId: 'user-1' },
@@ -77,9 +85,10 @@ describe('FileSearchIndexListener — every creation-path event indexes the file
 
     await listener.indexUploadedFile({ fileId: 'file-1' } as never);
 
-    expect(embeddingService.upsert).toHaveBeenCalledWith(
+    expect(embeddingService.upsertDocument).toHaveBeenCalledWith(
       { userId: 'user-1' },
       expect.objectContaining({ entityType: 'file', entityId: 'file-1' }),
+      expect.any(Function),
     );
   });
 
@@ -88,9 +97,10 @@ describe('FileSearchIndexListener — every creation-path event indexes the file
 
     await listener.updateFile({ fileId: 'file-1' } as never);
 
-    expect(embeddingService.upsert).toHaveBeenCalledWith(
+    expect(embeddingService.upsertDocument).toHaveBeenCalledWith(
       { userId: 'user-1' },
       expect.objectContaining({ entityType: 'file', entityId: 'file-1' }),
+      expect.any(Function),
     );
   });
 });
@@ -101,7 +111,7 @@ describe('FileSearchIndexListener upsert guards', () => {
 
     await listener.indexFile({ fileId: 'ghost' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalled();
   });
 
@@ -110,7 +120,7 @@ describe('FileSearchIndexListener upsert guards', () => {
 
     await listener.indexFile({ fileId: 'file-1' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
   });
 
   it('skips both embedding and vectorization for a file with no searchable metadata', async () => {
@@ -125,7 +135,7 @@ describe('FileSearchIndexListener upsert guards', () => {
 
     await listener.indexFile({ fileId: 'file-2' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(vectorService.upsert).not.toHaveBeenCalled();
   });
 });

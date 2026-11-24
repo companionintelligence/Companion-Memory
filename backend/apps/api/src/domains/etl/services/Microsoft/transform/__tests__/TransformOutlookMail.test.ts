@@ -4,9 +4,48 @@ function makeLogger() {
   return { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), debug: jest.fn(), error: jest.fn() };
 }
 
+/** See TransformGmail.test: page-level doubles that fan out to the per-row spies the assertions read. */
 function build() {
-  const communicationService = { create: jest.fn(async () => ({ id: 'comm-1' })) };
-  const promoteService = { processParticipants: jest.fn(async () => ['entity-1']) };
+  const create = jest.fn(async (_ctx: unknown, _dto: unknown) => ({ id: 'comm-1' }));
+  const communicationService = {
+    create,
+    createManyDetailed: jest.fn(
+      async (ctx: unknown, dtos: unknown[], _options: unknown) =>
+        await Promise.all(dtos.map(async (dto) => ({ entity: await create(ctx, dto), inserted: true }))),
+    ),
+  };
+  const processParticipants = jest.fn(async (..._args: unknown[]) => ['entity-1']);
+  const promoteService = {
+    processParticipants,
+    promoteParticipantGroups: jest.fn(
+      async (
+        ctx: { userId: string },
+        input: {
+          connectionId: string;
+          source: string;
+          groups: Array<{
+            participants: unknown[];
+            relationshipType: string;
+            startDate?: Date;
+            endDate?: Date;
+          }>;
+        },
+      ) =>
+        await Promise.all(
+          input.groups.map((group) =>
+            processParticipants(
+              group.participants,
+              ctx.userId,
+              input.connectionId,
+              input.source,
+              group.relationshipType,
+              group.startDate,
+              group.endDate,
+            ),
+          ),
+        ),
+    ),
+  };
 
   const service = new OutlookMailTransformService(
     communicationService as never,

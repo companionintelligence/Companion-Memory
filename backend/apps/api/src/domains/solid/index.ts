@@ -27,6 +27,7 @@ import { UserModule } from '@ci/domains/user';
 
 import { StorageController } from './controllers/StorageController';
 import { WebIdController } from './controllers/WebIdController';
+import { SolidProtocolGuard } from './guards/SolidProtocolGuard';
 import { ContainerService } from './services/ContainerService';
 import { EntityProjectionService } from './services/EntityProjectionService';
 import { ProfileDocumentService } from './services/ProfileDocumentService';
@@ -38,7 +39,13 @@ import { WebIdService } from './services/WebIdService';
 @Module({
   imports: [UserModule, MemoryModule],
   controllers: [WebIdController, StorageController],
-  providers: [WebIdService, ProfileDocumentService, EntityProjectionService, ContainerService],
+  providers: [
+    SolidProtocolGuard,
+    WebIdService,
+    ProfileDocumentService,
+    EntityProjectionService,
+    ContainerService,
+  ],
   exports: [WebIdService, ProfileDocumentService, EntityProjectionService, ContainerService],
 })
 export class SolidModule {}

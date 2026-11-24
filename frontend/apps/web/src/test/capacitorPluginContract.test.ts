@@ -1,12 +1,14 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { localHubPlugin } from '@ci/common/src/utils/localHub';
+import { SECURE_STORE_KEYS } from '@ci/common/src/utils/nativeBridge';
 import { speechPlugin } from '@ci/common/src/utils/speech';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { LocalHubWeb } from '../../../../packages/capacitor-local-hub/src/web';
+import { LOCAL_LLM_MODELS } from '../../../../packages/capacitor-local-llm/src/definitions';
 import { LocalLlmWeb } from '../../../../packages/capacitor-local-llm/src/web';
 import { SpeechWeb } from '../../../../packages/capacitor-speech/src/web';
 
@@ -84,6 +86,11 @@ interface PluginUnderTest {
    * returned an empty list.
    */
   anchorMethod: string;
+  /**
+   * Declared methods with no Android half on purpose. Each needs a JS wrapper that never
+   * calls it off iOS, or the call rejects on Android as unimplemented.
+   */
+  iosOnly?: readonly string[];
 }
 
 const PLUGINS: PluginUnderTest[] = [
@@ -93,13 +100,18 @@ const PLUGINS: PluginUnderTest[] = [
     androidPlugin: 'android/src/main/java/com/companionintelligence/localhub/LocalHubPlugin.kt',
     iosPlugin: 'ios/Sources/LocalHubPlugin/LocalHubPlugin.swift',
     anchorMethod: 'secureGet',
+    // `startSignificantLocationUpdates` / `stopSignificantLocationUpdates` are on both
+    // halves: significant-change monitoring on iOS, the plugin's motion-gated tracker on
+    // Android (location/).
   },
   {
     pkg: 'capacitor-local-llm',
     interfaceName: 'LocalLlmPlugin',
     androidPlugin: 'android/src/main/java/com/companionintelligence/localllm/LocalLlmPlugin.kt',
-    // Deliberately Android-only — see the package description. If an iOS half is ever
-    // added, this null (and the "no ios/ directory" assertion below) must change with it.
+    // The PACKAGE is Android-only (no `ios/`, not in the Podfile). iOS ships the same JS contract as
+    // an in-app Swift plugin instead, which the dedicated `LocalLLM — the iOS half` block below checks
+    // against the same `definitions.ts`. If the Swift half ever moves into this package, this null
+    // (and the "no ios/ directory" assertion above) must change with it.
     iosPlugin: null,
     anchorMethod: 'generate',
   },
@@ -109,6 +121,13 @@ const PLUGINS: PluginUnderTest[] = [
     androidPlugin: 'android/src/main/java/com/companionintelligence/speech/SpeechPlugin.kt',
     iosPlugin: 'ios/Sources/SpeechPlugin/SpeechPlugin.swift',
     anchorMethod: 'startListening',
+  },
+  {
+    pkg: 'capacitor-app-lock',
+    interfaceName: 'AppLockPlugin',
+    androidPlugin: 'android/src/main/java/com/companionintelligence/applock/AppLockPlugin.kt',
+    iosPlugin: 'ios/Sources/AppLockPlugin/AppLockPlugin.swift',
+    anchorMethod: 'unlock',
   },
 ];
 
@@ -236,13 +255,20 @@ describe.each(PLUGINS)('$pkg — every declared method exists natively', (plugin
 
   it('Android exposes every method as an @PluginMethod', () => {
     const exposed = kotlinPluginMethods(read(join(PACKAGES, plugin.pkg, plugin.androidPlugin)));
+    const iosOnly = plugin.iosOnly ?? [];
     const required = declared.filter(
-      (m) => !BRIDGE_PROVIDED.includes(m) && !ANDROID_BASE_PROVIDED.includes(m),
+      (m) => !BRIDGE_PROVIDED.includes(m) && !ANDROID_BASE_PROVIDED.includes(m) && !iosOnly.includes(m),
     );
 
     // Same anchor, for the Kotlin parser this time.
     expect(exposed).toContain(plugin.anchorMethod);
     expect(required.filter((m) => !exposed.includes(m))).toEqual([]);
+
+    // A stale iOS-only entry (renamed, or given an Android half since) must not hide a method.
+    for (const method of iosOnly) {
+      expect(declared).toContain(method);
+      expect(exposed).not.toContain(method);
+    }
   });
 
   it('iOS lists every method in pluginMethods', () => {
@@ -268,6 +294,289 @@ describe.each(PLUGINS)('$pkg — every declared method exists natively', (plugin
     expect(listed).toContain(plugin.anchorMethod);
     expect(required.filter((m) => !listed.includes(m))).toEqual([]);
   });
+});
+
+describe('LocalLLM — the in-app iOS half and the native catalogs', () => {
+  const IOS_LLM_DIR = join(ROOT, 'frontend/apps/ios/ios/App/App/LocalLLM');
+  const KOTLIN_MODELS = join(
+    PACKAGES,
+    'capacitor-local-llm/android/src/main/java/com/companionintelligence/localllm/LocalLlmModels.kt',
+  );
+
+  const declared = declaredMethods('capacitor-local-llm', 'LocalLlmPlugin');
+
+  it('iOS registers under the same bridge name as registerPlugin(…)', () => {
+    const swift = read(join(IOS_LLM_DIR, 'LocalLLMPlugin.swift'));
+
+    expect(/\bjsName\s*=\s*"([^"]+)"/.exec(swift)?.[1]).toBe(registeredName('capacitor-local-llm'));
+  });
+
+  it('iOS lists every declared method in pluginMethods — an unlisted @objc func is unreachable from JS', () => {
+    const listed = swiftPluginMethods(read(join(IOS_LLM_DIR, 'LocalLLMPlugin.swift')));
+    const required = declared.filter((m) => !BRIDGE_PROVIDED.includes(m));
+
+    // The methods this change added must be in both halves — name them so a regression reads clearly.
+    for (const method of ['cancelDownload', 'getLoadedModel', 'resetConversation']) {
+      expect(declared).toContain(method);
+      expect(listed).toContain(method);
+    }
+
+    expect(required.filter((m) => !listed.includes(m))).toEqual([]);
+  });
+
+  /** `field: "value"` / `field = "value"` → the value, within one model block. */
+  const stringField = (block: string, field: string) =>
+    new RegExp(`\\b${field}\\s*[:=]\\s*"([^"]*)"`).exec(block)?.[1];
+
+  /** `field: 4_294_967_296` / `field = 4_294_967_296L` → the number. */
+  const numberField = (block: string, field: string) => {
+    const match = new RegExp(`\\b${field}\\s*[:=]\\s*([\\d_]+)L?`).exec(block)?.[1];
+
+    return match === undefined ? undefined : Number(match.replace(/_/g, ''));
+  };
+
+  /** Split a native catalog into one text block per `modelId`, so each field is read from its own model. */
+  const modelBlocks = (source: string) => {
+    const starts = [...source.matchAll(/\bmodelId\s*[:=]\s*"([^"]+)"/g)];
+
+    return starts.map((match, i) => ({
+      modelId: match[1],
+      block: source.slice(match.index, starts[i + 1]?.index ?? source.length),
+    }));
+  };
+
+  const expectedFor = (platform: 'android' | 'ios') =>
+    Object.values(LOCAL_LLM_MODELS)
+      .filter((model) => (model.platforms as readonly string[]).includes(platform))
+      .map((model) => model.modelId);
+
+  it.each([
+    ['Kotlin', KOTLIN_MODELS, 'android' as const],
+    ['Swift', join(IOS_LLM_DIR, 'LocalLLMModels.swift'), 'ios' as const],
+  ])(
+    'the %s catalog carries exactly the models its platform ships, with matching id, size, commit and RAM floor',
+    (_label, file, platform) => {
+      const blocks = modelBlocks(read(file));
+
+      // Vacuity guard: a regex that matched nothing would make every comparison below pass on empty sets.
+      // (iOS legitimately ships nothing since 2026-10-13, so the guard applies where something is expected.)
+      if (expectedFor(platform).length > 0) {
+        expect(blocks.length).toBeGreaterThan(0);
+      }
+
+      expect(blocks.map((b) => b.modelId).sort()).toEqual(expectedFor(platform).sort());
+
+      for (const { modelId, block } of blocks) {
+        const spec = LOCAL_LLM_MODELS[modelId as keyof typeof LOCAL_LLM_MODELS];
+
+        expect(numberField(block, 'sizeBytes'), `${modelId} sizeBytes`).toBe(spec.sizeBytes);
+        expect(stringField(block, 'commitHash'), `${modelId} commitHash`).toBe(spec.commitHash);
+        expect(numberField(block, 'minDeviceMemoryBytes'), `${modelId} minDeviceMemoryBytes`).toBe(
+          spec.minDeviceMemoryBytes,
+        );
+        expect(numberField(block, 'gpuMinDeviceMemoryBytes'), `${modelId} gpuMinDeviceMemoryBytes`).toBe(
+          spec.gpuMinDeviceMemoryBytes,
+        );
+
+        // The file name is the last path segment of the pinned URL — the one the download is written to.
+        const fileName = spec.url.split('/').pop()?.split('?')[0];
+
+        expect(stringField(block, 'fileName'), `${modelId} fileName`).toBe(fileName);
+      }
+    },
+  );
+
+  it('iOS pins each download to the same URL the JS catalog offers', () => {
+    const swift = read(join(IOS_LLM_DIR, 'LocalLLMModels.swift'));
+
+    for (const { modelId, block } of modelBlocks(swift)) {
+      const url = /string:\s*"([^"]+)"/.exec(block)?.[1];
+
+      expect(url, `${modelId} url`).toBe(LOCAL_LLM_MODELS[modelId as keyof typeof LOCAL_LLM_MODELS].url);
+    }
+  });
+});
+
+/**
+ * The iOS half of `LocalLLM` lives in the app target, not in an npm package, so the `packageClassList` that `cap sync`
+ * regenerates into `capacitor.config.json` never names it (`@capacitor/cli` `util/iosplugin.js` only reads the `ios/`
+ * sources of installed packages), and Capacitor 7 dropped the runtime scan that used to find such classes. The one thing
+ * that puts it on the bridge is `MainViewController`'s `registerPluginInstance(_:)`, and that needs three separate
+ * pieces to stay joined — the class, the storyboard that instantiates it, and the Xcode project that compiles it. Drop
+ * any one and the app still builds and launches; Settings → On-device model just reads "On-device models run in the iOS
+ * and Android apps." on a phone (what the 2026-10-02 iOS Simulator QA found). None of them is generated, so `cap sync`
+ * cannot undo them.
+ */
+describe('LocalLLM — the iOS app registers its in-app plugin with the Capacitor bridge', () => {
+  const IOS_APP = join(ROOT, 'frontend/apps/ios/ios/App');
+  const APP_SOURCES = join(IOS_APP, 'App');
+  const pbxproj = () => read(join(IOS_APP, 'App.xcodeproj/project.pbxproj'));
+
+  /** The `customClass` / `customModule` the storyboard gives its initial view controller. */
+  function storyboardRoot(): { customClass?: string; customModule?: string } {
+    const storyboard = read(join(APP_SOURCES, 'Base.lproj/Main.storyboard'));
+    const initialId = /\binitialViewController="([^"]+)"/.exec(storyboard)?.[1];
+
+    expect(initialId, 'Main.storyboard names an initialViewController').toBeTruthy();
+
+    const tag = new RegExp(`<viewController\\b[^>]*\\bid="${initialId}"[^>]*>`).exec(storyboard)?.[0] ?? '';
+
+    return {
+      customClass: /\bcustomClass="([^"]+)"/.exec(tag)?.[1],
+      customModule: /\bcustomModule="([^"]+)"/.exec(tag)?.[1],
+    };
+  }
+
+  /** The Swift file, directly under `App/App`, declaring `class <name>: CAPBridgeViewController`. */
+  function rootControllerSource(name: string): { file: string; source: string } {
+    const declaration = new RegExp(`\\bclass\\s+${name}\\s*:\\s*CAPBridgeViewController\\b`);
+
+    for (const file of readdirSync(APP_SOURCES).filter((entry) => entry.endsWith('.swift'))) {
+      const source = read(join(APP_SOURCES, file));
+
+      if (declaration.test(source)) {
+        return { file, source };
+      }
+    }
+
+    throw new Error(
+      `no Swift file under frontend/apps/ios/ios/App/App declares ${name}: CAPBridgeViewController`,
+    );
+  }
+
+  it('the storyboard root is an in-app CAPBridgeViewController subclass — the stock class has no registration hook', () => {
+    const { customClass, customModule } = storyboardRoot();
+
+    expect(customClass).toBeTruthy();
+    // The stock class cannot register an in-app plugin; only a subclass's `capacitorDidLoad()` can.
+    expect(customClass).not.toBe('CAPBridgeViewController');
+    // The app module, resolved from the target — not Capacitor's, where no such subclass exists.
+    expect(customModule).toBe('App');
+  });
+
+  it('that class registers LocalLLMPlugin by instance from capacitorDidLoad() — registerPluginType is a no-op here', () => {
+    const { customClass } = storyboardRoot();
+    const { source } = rootControllerSource(customClass ?? '');
+    const hook = /override\s+func\s+capacitorDidLoad\(\)\s*\{([\s\S]*?)\n\s*\}/.exec(source)?.[1] ?? '';
+
+    expect(hook).toContain('registerPluginInstance(LocalLLMPlugin())');
+    // With the default `autoRegisterPlugins` Capacitor 7's `registerPluginType` returns at once, so it would compile,
+    // run and register nothing.
+    expect(hook).not.toContain('registerPluginType');
+  });
+
+  it('SceneDelegate still takes its window from that storyboard, so the subclass is what actually runs', () => {
+    const scene = read(join(APP_SOURCES, 'SceneDelegate.swift'));
+
+    expect(scene).toContain('UIStoryboard(name: "Main", bundle: nil)');
+    expect(scene).toContain('instantiateInitialViewController()');
+  });
+
+  it('the Xcode project compiles that file into the same target as the plugin it registers', () => {
+    const { customClass } = storyboardRoot();
+    const { file } = rootControllerSource(customClass ?? '');
+    const project = pbxproj();
+
+    /** `<buildFileId>` of `<name> in Sources` and the `PBXFileReference` it points at. */
+    const buildFile = (name: string) => {
+      const match = new RegExp(
+        `([0-9A-F]{24}) /\\* ${name.replace('.', '\\.')} in Sources \\*/ = \\{isa = PBXBuildFile; fileRef = ([0-9A-F]{24})`,
+      ).exec(project);
+
+      expect(match, `${name} has a "in Sources" PBXBuildFile entry in project.pbxproj`).toBeTruthy();
+
+      return { id: match![1], fileRef: match![2] };
+    };
+
+    /** The `files = ( … )` list of the PBXSourcesBuildPhase that compiles `buildFileId`. */
+    const sourcesPhaseOf = (buildFileId: string) =>
+      [...project.matchAll(/isa = PBXSourcesBuildPhase;[\s\S]*?files = \(([\s\S]*?)\);/g)]
+        .map((match) => match[1])
+        .find((files) => files.includes(buildFileId));
+
+    const controller = buildFile(file);
+    const plugin = buildFile('LocalLLMPlugin.swift');
+
+    expect(project).toMatch(
+      new RegExp(`${controller.fileRef} /\\* ${file.replace('.', '\\.')} \\*/ = \\{isa = PBXFileReference;`),
+    );
+    // A file reference with no build phase entry compiles nowhere: the storyboard would then name a class that does not
+    // exist in the binary, and UIKit falls back to a blank plain view controller.
+    expect(sourcesPhaseOf(controller.id), `${file} is in a Sources build phase`).toBeDefined();
+    expect(sourcesPhaseOf(controller.id)).toBe(sourcesPhaseOf(plugin.id));
+  });
+});
+
+/**
+ * The intent catalog is the one URL the phone and the appliance must agree on, and nothing links them: the proxy strips
+ * a leading `/api`, Nest mounts controllers at literal paths, and the Swift and Kotlin clients each hard-code a string.
+ * Both clients asked for `/api/api/intents` — right while `IntentsController` baked its own `api/` into its mount, a 404
+ * from the day #2653 unbaked it — so every on-device model quietly ran with no tools (the 2026-10-02 iOS QA). The server's
+ * own `controllerGatewayPrefix.test.ts` cannot see the clients; this reads both sides.
+ */
+describe('LocalLLM — the native clients reach the appliance at paths its controllers actually mount', () => {
+  const BACKEND_CONTROLLERS = join(ROOT, 'backend/apps/api/src/domains');
+  const IOS_CLIENT = join(ROOT, 'frontend/apps/ios/ios/App/App/LocalLLM/CompanionIntentClient.swift');
+  const ANDROID_CLIENT = join(
+    PACKAGES,
+    'capacitor-local-llm/android/src/main/java/com/companionintelligence/localllm/intents/CompanionIntentClient.kt',
+  );
+
+  /** What a controller's `@Controller(…)` mounts, reached through the proxy: it strips `/api`, Nest sets no prefix. */
+  function publicPaths(controllerFile: string): string[] {
+    const decorator = /^@Controller\(\s*(\[[^\]]*\]|'[^']*'|"[^"]*")\s*\)/m.exec(
+      read(join(BACKEND_CONTROLLERS, controllerFile)),
+    );
+
+    expect(decorator, `${controllerFile} has an @Controller(…) decorator`).toBeTruthy();
+
+    return (decorator![1].match(/['"]([^'"]*)['"]/g) ?? []).map((quoted) => `/api/${quoted.slice(1, -1)}`);
+  }
+
+  const catalogPaths = publicPaths('agent/controllers/IntentsController.ts');
+  const mcpPaths = publicPaths('mcp/controllers/McpController.ts');
+
+  it('the server really does mount the catalog at the bare `intents` and MCP at `mcp` (a baked-in api/ would break both)', () => {
+    expect(catalogPaths).toContain('/api/intents');
+    expect(mcpPaths).toEqual(['/api/mcp']);
+  });
+
+  it.each([
+    [
+      'Swift',
+      () => {
+        const source = read(IOS_CLIENT);
+        const catalog = /authorized\(path:\s*"([^"]+)",\s*query:\s*"tier=local"\)/.exec(source)?.[1];
+        const calls = [...source.matchAll(/authorized\(path:\s*"([^"?]+)"\s*\)/g)].map((m) => m[1]);
+
+        return { catalog, calls };
+      },
+    ],
+    [
+      'Kotlin',
+      () => {
+        const source = read(ANDROID_CLIENT);
+        const catalog = /\bget\("([^"?]+)\?tier=local"\)/.exec(source)?.[1];
+        const calls = [...source.matchAll(/\bopenConnection\("([^"?]+)"\)/g)].map((m) => m[1]);
+
+        return { catalog, calls };
+      },
+    ],
+  ])(
+    'the %s client asks for the catalog and MCP at the proxy URLs of the controllers that serve them',
+    (_label, parse) => {
+      const { catalog, calls } = parse();
+
+      expect(catalog, 'the client fetches the catalog with ?tier=local').toBeTruthy();
+      expect(catalogPaths).toContain(catalog);
+      // Vacuity guard: the handshake and `tools/call` are both POSTs to the one MCP path.
+      expect(calls.length).toBeGreaterThanOrEqual(2);
+
+      for (const call of calls) {
+        expect(mcpPaths).toContain(call);
+      }
+    },
+  );
 });
 
 describe('the bridge key @ci/common reads matches the registered name', () => {
@@ -305,6 +614,108 @@ describe('the bridge key @ci/common reads matches the registered name', () => {
 
     expect(nativeBridge).toContain(`plugins()?.${registeredName('capacitor-local-llm')}`);
   });
+});
+
+/**
+ * The LocalHub credential store takes writes from anything that reaches the bridge. On
+ * Android's legacy bridge (which the app ran for background location until 2026-10-26) that
+ * was every frame in the WebView, so `secureSet` accepts only the app's own keys, on both
+ * platforms -- and keeps doing so, whichever bridge a shell runs.
+ */
+describe('LocalHub secureSet — only the keys the app itself writes', () => {
+  const hubDir = join(PACKAGES, 'capacitor-local-hub');
+  const kotlin = read(
+    join(hubDir, 'android/src/main/java/com/companionintelligence/localhub/LocalHubPlugin.kt'),
+  );
+  const swift = read(join(hubDir, 'ios/Sources/LocalHubPlugin/LocalHubPlugin.swift'));
+  const quoted = (block: string | undefined) =>
+    [...(block ?? '').matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
+  const between = (source: string, from: string, to: string) =>
+    source.slice(source.indexOf(from), source.indexOf(to, source.indexOf(from)));
+
+  it('Android, iOS and @ci/common list the same keys', () => {
+    const android = quoted(/WRITABLE_SECURE_KEYS = setOf\(([^)]*)\)/.exec(kotlin)?.[1]);
+    const ios = quoted(/writableSecureKeys: Set<String> = \[([^\]]*)\]/.exec(swift)?.[1]);
+
+    expect(android).toEqual([...SECURE_STORE_KEYS].sort());
+    expect(ios).toEqual([...SECURE_STORE_KEYS].sort());
+  });
+
+  it('every credential useAuth stores is on the list, and so is the mirrored origin', () => {
+    const useAuth = read(join(ROOT, 'frontend/apps/web/src/hooks/useAuth.ts'));
+    const stored = [...useAuth.matchAll(/const API_KEY\w*_STORAGE = '([^']+)'/g)].map((m) => m[1]);
+
+    expect(stored.length).toBeGreaterThanOrEqual(3);
+    expect(SECURE_STORE_KEYS).toEqual(expect.arrayContaining([...stored, 'ci.apiBaseUrl']));
+  });
+
+  it('both plugins refuse a key off the list before anything is written', () => {
+    const android = between(kotlin, 'fun secureSet(', 'fun secureRemove(');
+    const ios = between(swift, 'func secureSet(', 'func secureRemove(');
+
+    expect(android.indexOf('!in WRITABLE_SECURE_KEYS')).toBeGreaterThan(-1);
+    expect(android.indexOf('!in WRITABLE_SECURE_KEYS')).toBeLessThan(android.indexOf('credentialStore.set('));
+    expect(ios.indexOf('writableSecureKeys.contains(key)')).toBeGreaterThan(-1);
+    expect(ios.indexOf('writableSecureKeys.contains(key)')).toBeLessThan(ios.indexOf('secureStore.set('));
+  });
+});
+
+/**
+ * The outbox `owner` stamp and the sign-out clear exist on both platforms: the web flusher
+ * depends on the sidecar storing and returning `owner`, and sign-out on `DELETE /api/outbox`.
+ * Neither native half can be built or run here, so the source is what is checked.
+ */
+describe('LocalHub outbox — owner stamp and sign-out clear on both platforms', () => {
+  const hubDir = join(PACKAGES, 'capacitor-local-hub');
+  const androidDir = join(hubDir, 'android/src/main/java/com/companionintelligence/localhub');
+  const iosDir = join(hubDir, 'ios/Sources/LocalHubPlugin');
+
+  it('Android adds the column for new and upgraded databases, and keeps the plaintext import on v1 columns', () => {
+    const store = read(join(androidDir, 'OutboxStore.kt'));
+
+    expect(store).toMatch(/\$COLUMN_LAST_ERROR TEXT,\s*\$COLUMN_OWNER TEXT/);
+    expect(store).toContain('ALTER TABLE $TABLE_NAME ADD COLUMN $COLUMN_OWNER TEXT');
+    expect(store).toContain('DATABASE_VERSION = 2');
+    expect(between(store, 'MIGRATION_COLUMNS = arrayOf(', ')')).not.toContain('COLUMN_OWNER');
+  });
+
+  it('iOS adds the column for new tables and for ones created before it', () => {
+    const store = read(join(iosDir, 'OutboxStore.swift'));
+
+    expect(store).toMatch(/last_error TEXT,\s*owner TEXT/);
+    expect(store).toContain('ALTER TABLE outbox ADD COLUMN owner TEXT;');
+  });
+
+  it('both servers take owner on enqueue, return it on items, and clear the collection on DELETE', () => {
+    const android = read(join(androidDir, 'LocalHubServer.kt'));
+    const ios = read(join(iosDir, 'LocalHubServer.swift'));
+
+    expect(android).toContain('outbox.enqueue(kind, payload.toString(), capturedAt, idempotencyKey, owner)');
+    expect(android).toContain('.put("owner", item.owner ?: JSONObject.NULL)');
+    expect(android).toContain('segments.isEmpty() && method == Method.DELETE -> handleClear()');
+    expect(ios).toMatch(/idempotencyKey: idempotencyKey,\s*owner: owner/);
+    expect(ios).toContain('"owner": item.owner ?? NSNull()');
+    expect(ios).toMatch(/case \("DELETE", 0\):[\s\S]{0,120}store\.deleteAll\(\)/);
+  });
+
+  it('Android opens a link marked external without the sign-in Auth Tab', () => {
+    // Provider pages from the gallery are not a sign-in. In the Auth Tab, any `companion://`
+    // they navigated to would come back to the app as a sign-in result.
+    const plugin = between(
+      read(join(androidDir, 'LocalHubPlugin.kt')),
+      'fun openUrl(',
+      'fun startAuthSession(',
+    );
+
+    expect(plugin).toContain('val external = call.getBoolean("external", false) == true');
+    expect(plugin).toContain('if (external || !AuthTabSession.launch(uri)) {');
+  });
+
+  function between(source: string, from: string, to: string): string {
+    const start = source.indexOf(from);
+
+    return source.slice(start, source.indexOf(to, start + from.length));
+  }
 });
 
 describe('LocalHubWeb — the fallback that runs in a browser tab and the Tauri window', () => {
@@ -348,6 +759,13 @@ describe('LocalHubWeb — the fallback that runs in a browser tab and the Tauri 
     await expect(hub.startAuthSession()).rejects.toMatchObject({ code: 'UNAVAILABLE' });
     await expect(hub.openAppSettings()).rejects.toMatchObject({ code: 'UNAVAILABLE' });
   });
+
+  it('discoverLanAppliances() resolves unsupported on web rather than throwing', async () => {
+    await expect(hub.discoverLanAppliances()).resolves.toEqual({
+      appliances: [],
+      supported: false,
+    });
+  });
 });
 
 describe('LocalLlmWeb — the fallback generateOffline() checks before going remote', () => {
@@ -372,6 +790,13 @@ describe('LocalLlmWeb — the fallback generateOffline() checks before going rem
     await expect(llm.unloadModel()).resolves.toBeUndefined();
     await expect(llm.cancel()).resolves.toBeUndefined();
     await expect(llm.deleteModel()).resolves.toBeUndefined();
+    await expect(llm.cancelDownload()).resolves.toBeUndefined();
+    // "New chat" calls this unconditionally, whether or not a model is loaded.
+    await expect(llm.resetConversation()).resolves.toBeUndefined();
+  });
+
+  it('getLoadedModel() reports nothing loaded rather than throwing', async () => {
+    await expect(llm.getLoadedModel()).resolves.toEqual({ loaded: false });
   });
 
   it('the methods that need a real engine reject as unavailable', async () => {
@@ -472,5 +897,141 @@ describe('SpeechWeb — the fallback must never reach the browser speech APIs', 
     expect(capability.available).toBe(false);
     expect(capability.offlineVoiceAvailable).toBe(false);
     expect(capability.reason).toBeTruthy();
+  });
+});
+
+/**
+ * The committed iOS project must name what `cap sync` and Xcode will build. Two files drift from the sources next to
+ * them without any compiler noticing until a Mac builds the app: the Xcode project (a Swift file added, renamed or
+ * deleted on disk but not in `project.pbxproj` compiles nowhere, or points at nothing) and `Podfile.lock` (`cap sync`
+ * rewrites it from the plugins, so a stale one leaves every sync with a dirty tree, and an Xcode run that skips the sync
+ * stops at "The sandbox is not in sync with the Podfile.lock"). Both went stale in the 0.18.0 LiteRT-LM bump and the
+ * app-lock plugin, and the iOS app did not build from `main` for days.
+ */
+describe('the committed iOS project matches its sources', () => {
+  const IOS = join(ROOT, 'frontend/apps/ios/ios/App');
+  const APP_SOURCES = join(IOS, 'App');
+
+  /** Every `.swift` under `dir`, relative to `base`, sorted. */
+  function swiftFiles(dir: string, base = dir): string[] {
+    return readdirSync(dir, { withFileTypes: true })
+      .flatMap((entry) =>
+        entry.isDirectory()
+          ? swiftFiles(join(dir, entry.name), base)
+          : entry.name.endsWith('.swift')
+            ? [join(dir, entry.name).slice(base.length + 1)]
+            : [],
+      )
+      .sort();
+  }
+
+  /**
+   * The files the `App` target's Sources phase compiles — the phase that lists `AppDelegate.swift` — as paths relative to
+   * `App/`'s parent, each resolved the way Xcode does: the build file's `fileRef`, then the `path` of that reference
+   * under the `path` of every group above it. `null` stands for an entry that does not resolve to a file reference.
+   */
+  function compiledByApp(): { path: string | null; name: string }[] {
+    const project = read(join(IOS, 'App.xcodeproj/project.pbxproj'));
+    const phase = [...project.matchAll(/isa = PBXSourcesBuildPhase;[\s\S]*?files = \(([\s\S]*?)\);/g)]
+      .map((match) => match[1])
+      .find((files) => files.includes('AppDelegate.swift in Sources'));
+
+    expect(phase, 'the App target has a Sources build phase').toBeDefined();
+
+    const unquote = (value: string) => value.replace(/^"|"$/g, '');
+    const fileRefOf = new Map(
+      [
+        ...project.matchAll(
+          /([0-9A-F]{24}) \/\* [^*]* \*\/ = \{isa = PBXBuildFile; fileRef = ([0-9A-F]{24})/g,
+        ),
+      ].map((match) => [match[1], match[2]] as const),
+    );
+    const fileRefPath = new Map(
+      [
+        ...project.matchAll(
+          /([0-9A-F]{24}) \/\* [^*]* \*\/ = \{isa = PBXFileReference;[^}]*?\bpath = ("[^"]*"|[^;]+);/g,
+        ),
+      ].map((match) => [match[1], unquote(match[2])] as const),
+    );
+    const parentOf = new Map<string, string>();
+    const groupPath = new Map<string, string>();
+
+    for (const group of project.matchAll(
+      /([0-9A-F]{24})(?: \/\*[^*]*\*\/)? = \{\s*isa = PBXGroup;([\s\S]*?)\n\t\t\};/g,
+    )) {
+      const [, id, body] = group;
+      const path = body.match(/\n\t\t\tpath = ("[^"]*"|[^;]+);/);
+
+      if (path) {
+        groupPath.set(id, unquote(path[1]));
+      }
+
+      for (const child of body.match(/children = \(([\s\S]*?)\);/)?.[1].matchAll(/([0-9A-F]{24})/g) ?? []) {
+        parentOf.set(child[1], id);
+      }
+    }
+
+    return [...phase!.matchAll(/([0-9A-F]{24}) \/\* (\S+\.swift) in Sources \*\//g)].map(
+      ([, buildFile, name]) => {
+        const reference = fileRefOf.get(buildFile);
+        const own = reference ? fileRefPath.get(reference) : undefined;
+
+        if (!reference || own === undefined) {
+          return { path: null, name };
+        }
+
+        const segments = [own];
+
+        for (let id = parentOf.get(reference); id; id = parentOf.get(id)) {
+          const path = groupPath.get(id);
+
+          if (path) {
+            segments.unshift(path);
+          }
+        }
+
+        return { path: segments.join('/'), name };
+      },
+    );
+  }
+
+  it('compiles every Swift file under App/App, and nothing that is not there', () => {
+    const onDisk = swiftFiles(APP_SOURCES, IOS);
+    const compiled = compiledByApp();
+
+    expect(
+      compiled.filter((entry) => entry.path === null).map((entry) => entry.name),
+      'Sources entries whose file reference cannot be resolved',
+    ).toEqual([]);
+
+    const paths = compiled.map((entry) => entry.path!);
+
+    expect(new Set(paths).size, 'no file is compiled twice').toBe(paths.length);
+    expect(
+      onDisk.filter((file) => !paths.includes(file)),
+      'Swift files on disk that no Sources phase compiles',
+    ).toEqual([]);
+    expect(
+      paths.filter((path) => !existsSync(join(IOS, path))),
+      'Sources entries for files that no longer exist',
+    ).toEqual([]);
+  });
+
+  it('Podfile.lock covers every pod the Podfile declares', () => {
+    const podfile = read(join(IOS, 'Podfile'));
+    const lock = read(join(IOS, 'Podfile.lock'));
+    const declared = [...podfile.matchAll(/^\s*pod '([^']+)'/gm)].map((match) => match[1]);
+
+    expect(declared.length).toBeGreaterThan(0);
+
+    for (const pod of declared) {
+      expect(
+        lock,
+        `${pod} is in Podfile.lock's DEPENDENCIES — run \`yarn cap sync ios\` and commit the lock`,
+      ).toMatch(new RegExp(`^ {2}- "?${pod} \\(from `, 'm'));
+      expect(lock, `${pod} is in Podfile.lock's EXTERNAL SOURCES`).toMatch(
+        new RegExp(`^ {2}${pod}:\\n {4}:path:`, 'm'),
+      );
+    }
   });
 });

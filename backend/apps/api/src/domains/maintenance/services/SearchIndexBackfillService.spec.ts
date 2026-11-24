@@ -1,4 +1,5 @@
 import { BrowserActivityCreatedEvent } from '@ci/domains/browser-activity/events';
+import { ThreadCreatedEvent } from '@ci/domains/conversations/events';
 import { FileCreatedEvent } from '@ci/domains/files/events';
 import {
   CommunicationCreatedEvent,
@@ -7,13 +8,17 @@ import {
   EventCreatedEvent,
   ItemCreatedEvent,
   PersonCreatedEvent,
+  PlaceCreatedEvent,
 } from '@ci/domains/memory/events';
+import { NoteCreatedEvent } from '@ci/domains/notes/events';
 import { STAGE_ID_LIST } from '@ci/domains/pipeline';
+import { TaskCreatedEvent } from '@ci/domains/planning/events';
 
 import {
   BACKFILLABLE_ENTITIES,
   PIPELINE_COVERED_STAGES,
   SearchIndexBackfillService,
+  backfillEventPayload,
   normalizeBackfillEntityTypes,
 } from './SearchIndexBackfillService';
 
@@ -130,7 +135,21 @@ describe('PIPELINE_COVERED_STAGES', () => {
     // double-check against ci.pipeline_state for concept, the same safe fallback
     // `missingIds` already uses for the others. Anything ELSE missing from the
     // map is a regression: the pipeline is the indexing path.
-    const uncovered = ['position', 'product', 'receipt', 'concept'];
+    // `note`, `thread`, `task` and `place` are indexed live by their listeners
+    // and have no pipeline stage; their lanes exist only to give rows written
+    // before ci_search.mobile_search_documents a device document. `file-chunk`
+    // (2026-10-23) is the same: indexed live on DocumentParsedEvent, no stage.
+    const uncovered = [
+      'position',
+      'product',
+      'receipt',
+      'concept',
+      'note',
+      'thread',
+      'task',
+      'place',
+      'file-chunk',
+    ];
 
     expect(Object.keys(PIPELINE_COVERED_STAGES).sort()).toEqual(
       BACKFILLABLE_ENTITIES.filter((type) => !uncovered.includes(type)).sort(),
@@ -167,6 +186,11 @@ describe('SearchIndexBackfillService', () => {
         position: 0,
         product: 0,
         receipt: 0,
+        note: 0,
+        thread: 0,
+        task: 0,
+        place: 0,
+        'file-chunk': 0,
       },
       // No embeddings configured for this DS → drain count is 0 for every type.
       embedded: 0,
@@ -182,6 +206,11 @@ describe('SearchIndexBackfillService', () => {
         position: 0,
         product: 0,
         receipt: 0,
+        note: 0,
+        thread: 0,
+        task: 0,
+        place: 0,
+        'file-chunk': 0,
       },
     });
 
@@ -405,6 +434,43 @@ describe('SearchIndexBackfillService', () => {
     expect(sweptTypes).toEqual(new Set(['item']));
   });
 
+  it('re-emits note, thread and place by id, and task with its owner (the task listener scopes its read by it)', async () => {
+    const { service, sendMany, ds } = makeService({
+      note: [['n1'], []],
+      thread: [['t1'], []],
+      place: [['l1'], []],
+      task: [['k1'], []],
+    });
+    // The sweep selects the owner column for task; the shared mock returns ids only.
+    const defaultQuery = ds.query.getMockImplementation()!;
+
+    ds.query.mockImplementation(async (sql: string, params?: unknown[]) => {
+      const rows = (await defaultQuery(sql, params)) as Array<{ id: string }>;
+
+      return params?.[0] === 'task' && /AS owner/.test(sql)
+        ? rows.map((row) => ({ ...row, owner: 'u1' }))
+        : rows;
+    });
+
+    await service.backfill({ entityTypes: ['note', 'thread', 'task', 'place'], batchSize: 10 });
+
+    expect(sendMany).toHaveBeenCalledWith(SEARCH_INDEX_QUEUE, [
+      { name: NoteCreatedEvent, data: { noteId: 'n1' } },
+    ]);
+    expect(sendMany).toHaveBeenCalledWith(SEARCH_INDEX_QUEUE, [
+      { name: ThreadCreatedEvent, data: { threadId: 't1' } },
+    ]);
+    expect(sendMany).toHaveBeenCalledWith(SEARCH_INDEX_QUEUE, [
+      { name: PlaceCreatedEvent, data: { placeId: 'l1' } },
+    ]);
+    expect(sendMany).toHaveBeenCalledWith(SEARCH_INDEX_QUEUE, [
+      { name: TaskCreatedEvent, data: { taskId: 'k1', userId: 'u1' } },
+    ]);
+    // Only the task lane selects an owner column (on every page it reads).
+    const ownerSelects = ds.query.mock.calls.filter(([sql]) => /AS owner/.test(sql as string));
+    expect(new Set(ownerSelects.map(([, params]) => (params as unknown[])[0]))).toEqual(new Set(['task']));
+  });
+
   it('omits the errors field entirely on a clean sweep', async () => {
     const { service } = makeService({ communication: [['c1'], []] });
 
@@ -525,5 +591,35 @@ describe('SearchIndexBackfillService', () => {
 
     expect(result.perType.communication).toBe(0);
     expect(result.errors).toEqual({ communication: 'boom' });
+  });
+});
+
+describe('backfillEventPayload', () => {
+  it("sends the id under the listener's field name, plus the owner when the spec names one", () => {
+    expect(backfillEventPayload({ event: 'x', idField: 'noteId' }, { id: 'n1' })).toEqual({ noteId: 'n1' });
+    expect(
+      backfillEventPayload(
+        { event: 'x', idField: 'taskId', owner: { field: 'userId', column: 'user_id' } },
+        { id: 't1', owner: 'u1' },
+      ),
+    ).toEqual({ taskId: 't1', userId: 'u1' });
+  });
+
+  it('a file chunk re-drives DocumentParsedEvent for one chunk of its file, as its owner', () => {
+    // The lane exists so chunks parsed before 2026-10-23 get a device document;
+    // the listener reads chunkIds (a list), userId and fileId.
+    expect(
+      backfillEventPayload(
+        {
+          event: 'document.parsed',
+          idField: 'chunkIds',
+          idAsList: true,
+          owner: { field: 'userId', column: 'user_id' },
+          extra: { fileId: 'file_id' },
+        },
+        { id: 'c1', owner: 'u1', extra: { fileId: 'f1' } },
+      ),
+    ).toEqual({ chunkIds: ['c1'], userId: 'u1', fileId: 'f1' });
+    expect(BACKFILLABLE_ENTITIES).toContain('file-chunk');
   });
 });

@@ -1,44 +1,95 @@
-import { BadRequestException, Injectable, Optional } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, Logger, Optional } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
   DataSource,
   In,
   IsNull,
   Repository,
+  type EntityManager,
   type FindOptionsOrder,
   type FindOptionsWhere,
   type ObjectLiteral,
   type SelectQueryBuilder,
 } from 'typeorm';
+import type { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 import { v7 as uuidv7 } from 'uuid';
 
 import { type ServiceContext, SYSTEM_USER, type UserServiceContext } from '@ci/common/context';
 import { HbpeNotifyService } from '@ci/common/hbpe';
 import {
+  type HourlyActivityOptions,
+  touchedHourlyBucketsSql,
   type BulkInsertResult,
+  type KeysetCountOptions,
   type KeysetPage,
   type KeysetPageArgs,
   appendRecordSources,
   bulkInsertIdempotent,
+  countAffected,
+  keysetOrderOf,
   keysetPaginate,
+  keysetSeek,
   INGEST_REFRESH_COLUMNS,
+  type OwnedLink,
+  refuseForeignLinks,
 } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
-import { EventCreatedEvent, EventUpdatedEvent, EventRemovedEvent } from '@ci/domains/memory/events';
+import { FileRemovedEvent } from '@ci/domains/files/events';
+import { LiveChangesService } from '@ci/domains/live-changes';
+import {
+  ContentRemovedEvent,
+  EventCreatedEvent,
+  EventRemovedEvent,
+  EventUpdatedEvent,
+} from '@ci/domains/memory/events';
 import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
 
 import { BaseEntity } from '../entities/BaseEntity';
 import { EventBaseEntity } from '../entities/EventBaseEntity';
-import { EventEntity, Event } from '../entities/EventEntity';
+import { EventEntity, Event, type RecurrenceDefinition } from '../entities/EventEntity';
 import { PlaceEntity } from '../entities/PlaceEntity';
-import { ledgerPlatform } from '../identity';
+import { FEDERATED_SYSTEMS, ledgerPlatform } from '../identity';
 import { expandAll } from '../recurrence/expandAll';
+import { recurrenceRuleRejection } from '../recurrence/parseRecurrence';
 import { dropExistingOverrides, resolveExpansionZone } from '../recurrence/queries';
 import type { OccurrenceSpec } from '../recurrence/types';
-import { CreateEventDto, UpdateEventDto, SearchEventDto } from '../types';
+import { CreateEventDto, UpdateEventDto, SearchEventDto, type SourceAssertedField } from '../types';
 
-import { CtiAggregate } from './CtiAggregate';
+import { CtiAggregate, detailChanged } from './CtiAggregate';
+import { resolveEventLocationReopener } from './eventLocationReopener';
+import { type PurgedEventAggregates, purgeEventAggregates } from './eventPurge';
+import { resolveEventStatusReopener } from './eventStatusReopener';
+import { resolveEventTimeReopener } from './eventTimeReopener';
+import { STORED_OBJECTS, StoredObjectsDeletedError, type StoredObjects } from './filePurge';
 import { GraphDeltaWriter } from './GraphDeltaWriter';
+import {
+  type EventWhen,
+  type StoredWhen,
+  type TitleMerge,
+  mergeSourceTitle,
+  mergeSourceWhen,
+  recurrenceOf,
+  sameTimes,
+  sameWhen,
+} from './sourceFieldMerge';
+import {
+  type DeliveredLocation,
+  type SourceLocation,
+  type StoredLocation,
+  SOURCE_LOCATION_VOCABULARY,
+  confidenceOf,
+  coordinatesOf,
+  heardLocation,
+  locationBaseOf,
+  locationBaseRecord,
+  mergeSourceLocation,
+  normalizeLocationName,
+  sameCoordinates,
+  sameLocation,
+} from './sourceLocationMerge';
+import { DEFAULT_EVENT_STATUS, mergeSourceStatus } from './sourceStatusMerge';
+import { nothingWrapped, type WrappedFilesPurged } from './wrappedFilePurge';
 
 interface Options {
   limit?: number;
@@ -58,12 +109,19 @@ interface Options {
   connectors?: string[];
   /** "Who": person name patterns matched (ILIKE) against linked Person entities. */
   people?: string[];
-  /** "Where": place name patterns matched (ILIKE) against the linked Location entity / location_name. */
+  /**
+   * "Where" (by name): place name patterns matched (ILIKE) against the linked
+   * Location entity / location_name. ORed with `areas`: an event matches by
+   * name OR by falling inside a rectangle, never both at once.
+   */
   places?: string[];
   /** "Where": when true, only events with geographic coordinates are returned. */
   hasLocation?: boolean;
-  /** "Where" (viewport): bounding box [minLon, minLat, maxLon, maxLat] (EPSG:4326). */
-  bbox?: number[];
+  /**
+   * "Where" (map areas): bounding boxes, each [minLon, minLat, maxLon, maxLat]
+   * (EPSG:4326), ORed — an event matches inside any of them, or by `places`.
+   */
+  areas?: number[][];
   /**
    * Restrict to this explicit set of event ids, ANDed with every other filter.
    * The map's pin read uses it to intersect a text-query / tag candidate set
@@ -188,6 +246,32 @@ export const MAX_EXPANDED_OCCURRENCES = 1000;
 const SCHEDULE_EVENT_TYPES = ['calendar_event', 'meeting', 'appointment', 'planned_block'] as const;
 
 /**
+ * Calendar files (.ics) brought in through Import, which the allowlist above
+ * cannot name by type alone.
+ *
+ * The file importer (`datasources/calendar.ts`, importer `calendar`) writes
+ * every VEVENT as `event`, a type it shares with Facebook events and Google
+ * reservations. Adding `event` to the allowlist would put those on the grid
+ * too, so the source has to say it is a calendar. Without this arm an imported
+ * calendar never showed at all, and on a box with no Google or Outlook
+ * connection that is every calendar the person has.
+ *
+ * The importer stores a timed series' RRULE, EXDATE and RDATE lines in
+ * `metadata.recurrenceRule`, the way Google sync does, so an imported series
+ * expands like a synced one (see `seriesRuleOf`). An all-day series keeps none
+ * yet (see `parseIcsEvents`). Neither does one imported before the rule was
+ * kept. Both are drawn at their DTSTART only. Importing the file again
+ * finds the row already there and leaves it as it is.
+ */
+const IMPORTED_CALENDAR_EVENT_SQL = `(event.event_type = 'event' AND event.source_system = '${FEDERATED_SYSTEMS.calendar}')`;
+
+/** The event-type half of every schedule read: the allowlist, NULL, or an imported calendar file. */
+const SCHEDULE_EVENT_TYPE_SQL = `(event.event_type IS NULL OR event.event_type IN (:...scheduleEventTypes) OR ${IMPORTED_CALENDAR_EVENT_SQL})`;
+
+/** A row carries an RRULE in one of the two places `seriesRuleOf` reads it from. */
+const SERIES_RULE_PRESENT_SQL = `((event.metadata -> 'recurrenceRule') IS NOT NULL OR (event.recurrence_pattern -> 'rrule') IS NOT NULL)`;
+
+/**
  * "This event did not happen" — the one status vocabulary the calendar and the
  * planner share.
  *
@@ -231,6 +315,373 @@ function isLivePlannedBlock(row: EventEntity): boolean {
   return !(DEAD_EVENT_STATUSES as readonly string[]).includes(status);
 }
 
+/** Whether a status says the event did not happen ({@link DEAD_EVENT_STATUSES}); none counts as the column default. */
+function isDeadStatus(status: string | null | undefined): boolean {
+  return (DEAD_EVENT_STATUSES as readonly string[]).includes(status ?? DEFAULT_EVENT_STATUS);
+}
+
+/**
+ * Whether a status change moved an event across the line between "still
+ * counts" and "called off", in either direction. Those are the only status
+ * changes the pipeline's decisions on whether the event happened have to hear
+ * about (eventStatusReopener.ts): `confirmed` → `tentative` changes none of
+ * them, and `cancelled` → `no_show` leaves it called off.
+ */
+function crossedLiveLine(from: string | null | undefined, to: string | null | undefined): boolean {
+  return isDeadStatus(from) !== isDeadStatus(to);
+}
+
+/**
+ * Whether an identity belongs to a SOURCE — a calendar connection, the
+ * importer, a capture client — whose later re-deliveries may move the row's
+ * status (see sourceStatusMerge.ts).
+ *
+ * Planning is excluded: it is the one server-minted identity that reaches
+ * createOne (`platformIdentity('planning', 'task', id)` → `task:<uuid>`). The
+ * planner is not a source whose view can drift from the row's; its blocks have
+ * their own lifecycle (`restorePlannedBlock`), and a live one is still handed
+ * back verbatim.
+ */
+function isSourceOwned(sourceId: string | null | undefined, sourceType: string | null | undefined): boolean {
+  return Boolean(sourceId) && sourceType !== 'planning';
+}
+
+/**
+ * `time_source` for an instant the writer stamped because it had none — the
+ * `TIME_SOURCES.INGEST` value of pipeline/stages/clean/TemporalRepairStage
+ * (memory cannot import the pipeline). Such a time is nobody's word on when
+ * the event happens, so a re-delivery carrying one moves nothing.
+ */
+const INGEST_TIME_SOURCE = 'ingest';
+
+const recurrenceLogger = new Logger('CalendarEventService');
+
+/**
+ * `item` without a recurrence rule this appliance refuses to expand.
+ *
+ * Every create funnels through here: GraphQL `createEvent(s)`, Google Calendar
+ * sync (which stores `recurrence` verbatim in `metadata.recurrenceRule`), the
+ * .ics import lane, bulk ingest. A rule rrule would walk forever, or one outside
+ * RFC 5545's ranges, is dropped and the event kept: it then shows once, as its
+ * master row, which is what read-time expansion would have fallen back to
+ * anyway. Dropping rather than refusing keeps one bad rule from failing a whole
+ * sync or import batch. See recurrence/ruleChecks.ts.
+ */
+function withoutRefusedRecurrence(item: CreateEventDto): CreateEventDto {
+  const ruleReason = recurrenceRuleRejection(item.metadata?.recurrenceRule);
+  const patternReason = recurrenceRuleRejection(item.recurrence_pattern?.rrule);
+
+  if (!ruleReason && !patternReason) {
+    return item;
+  }
+
+  recurrenceLogger.warn(
+    `Stored an event from ${item.source_system ?? 'an unnamed source'} without its recurrence rule ` +
+      `(${ruleReason ?? patternReason}); it will show once instead of repeating`,
+  );
+
+  const next: CreateEventDto = { ...item };
+
+  if (ruleReason && item.metadata) {
+    const { recurrenceRule: _refused, ...metadata } = item.metadata;
+    next.metadata = metadata;
+  }
+
+  if (patternReason && item.recurrence_pattern) {
+    const { rrule: _refused, ...pattern } = item.recurrence_pattern;
+    next.recurrence_pattern = pattern;
+  }
+
+  return next;
+}
+
+/** An event's links that name another row, as a create or an update carries them. */
+interface EventLinkFields {
+  location_entity_id?: string | null;
+  organizer_entity_id?: string | null;
+  participant_entity_ids?: readonly string[] | null;
+  task_id?: string | null;
+  parent_event_id?: string | null;
+}
+
+/**
+ * What an event links to, for {@link refuseForeignLinks}: the links an import of the account's
+ * export checks. The keys on `location_entity_id` and `task_id` only ask that the row exists, and
+ * the organizer, guest and parent columns have none.
+ */
+function eventLinks(rows: readonly EventLinkFields[]): OwnedLink[] {
+  const entity = (field: string, ids: OwnedLink['ids']): OwnedLink => ({
+    field,
+    table: 'ci.entities',
+    key: 'entity_id',
+    ownerColumn: 'owner_user_id',
+    ids,
+  });
+  const location = rows.map((row) => row.location_entity_id);
+  const organizer = rows.map((row) => row.organizer_entity_id);
+  const participants = rows.flatMap((row) => row.participant_entity_ids ?? []);
+
+  return [
+    entity('location_entity_id', location),
+    entity('organizer_entity_id', organizer),
+    entity('participant_entity_ids', participants),
+    {
+      field: 'task_id',
+      table: 'ci.tasks',
+      key: 'id',
+      ownerColumn: 'user_id',
+      ids: rows.map((row) => row.task_id),
+    },
+    {
+      field: 'parent_event_id',
+      table: 'ci.events',
+      key: 'event_id',
+      ownerColumn: 'user_id',
+      ids: rows.map((row) => row.parent_event_id),
+    },
+  ];
+}
+
+/**
+ * The links a create stores, read the way toEntityFields reads them: an empty id is no link
+ * there, so it is none here either. `parent_event_id` is set by an update alone.
+ */
+function createdEventLinks(items: readonly CreateEventDto[]): OwnedLink[] {
+  return eventLinks(
+    items.map(({ location_entity_id, organizer_entity_id, participant_entity_ids, task_id }) => ({
+      location_entity_id: location_entity_id || null,
+      organizer_entity_id: organizer_entity_id || null,
+      participant_entity_ids,
+      task_id: task_id || null,
+    })),
+  );
+}
+
+/** The metadata keys a series' recurrence is read from (parseRecurrence.ts), and the only ones the refresh rewrites. */
+const RECURRENCE_METADATA_KEYS = ['recurrenceRule', 'recurrenceTimeZone'] as const;
+
+/** A delivered time, with what travels onto the row when that time is applied. */
+interface DeliveredWhen extends EventWhen {
+  /** `is_all_day`, applied with the times (a meeting turned into an all-day event changes both). */
+  isAllDay?: boolean;
+  /** `is_recurring`, applied with the recurrence. */
+  isRecurring?: boolean;
+  /** The delivery's own reading of its instant; NULL (unexamined) when it states none. */
+  timeSource: string | null;
+  timePrecision: string | null;
+  /** The delivered {@link RECURRENCE_METADATA_KEYS} that are present; an absent one is removed. */
+  recurrenceKeys: Record<string, unknown>;
+}
+
+/**
+ * What one re-delivery says about the fields its source owns: only the fields
+ * it actually says. A field left out is not refreshed.
+ */
+interface SourceDelivery {
+  status?: string;
+  when?: DeliveredWhen;
+  title?: string;
+  location?: DeliveredLocation;
+}
+
+/**
+ * The fields a create DTO asserts, for the refresh of a row it finds already
+ * stored.
+ *
+ * A status counts only when one was sent (the column DEFAULT is nobody's
+ * assertion), a time only when it is not an ingest stamp, and a delivery that
+ * names `source_asserts` speaks for those fields alone — a cancelled occurrence
+ * rebuilt from its series fills in a time and a title its source never sent.
+ */
+function sourceDeliveryOf(item: CreateEventDto): SourceDelivery {
+  const claimed = item.source_asserts ? new Set<SourceAssertedField>(item.source_asserts) : null;
+  const says = (field: SourceAssertedField): boolean => claimed === null || claimed.has(field);
+  const delivery: SourceDelivery = {};
+
+  if (item.status != null && says('status')) {
+    delivery.status = item.status;
+  }
+
+  if (item.start_time && item.time_source !== INGEST_TIME_SOURCE && says('time')) {
+    const recurrenceKeys: Record<string, unknown> = {};
+
+    for (const key of RECURRENCE_METADATA_KEYS) {
+      if (item.metadata?.[key] !== undefined) {
+        recurrenceKeys[key] = item.metadata[key];
+      }
+    }
+
+    delivery.when = {
+      startTime: new Date(item.start_time),
+      endTime: item.end_time ? new Date(item.end_time) : null,
+      recurrence: recurrenceOf(item.metadata),
+      ...(item.is_all_day !== undefined ? { isAllDay: item.is_all_day } : {}),
+      ...(item.is_recurring !== undefined ? { isRecurring: item.is_recurring } : {}),
+      timeSource: item.time_source ?? null,
+      timePrecision: item.time_precision ?? null,
+      recurrenceKeys,
+    };
+  }
+
+  if (item.title != null && says('title')) {
+    delivery.title = item.title;
+  }
+
+  // The place is the one field a delivery can state by saying nothing: no name
+  // is a source that says the event has none (the organizer cleared it, or
+  // replaced it with a meeting link the transforms drop).
+  if (says('location')) {
+    delivery.location = locationOf(item);
+  }
+
+  return delivery;
+}
+
+/**
+ * The `changed_fields` a moved place adds to the event's graph delta: each part
+ * that changed, as the row had it and as it now is, and the place link that
+ * went with them.
+ */
+function locationDelta(
+  from: StoredLocation,
+  to: SourceLocation,
+  linkedTo: string | null,
+): Record<string, { old?: unknown; new?: unknown }> {
+  return {
+    ...(from.name !== to.name ? { location_name: { old: from.name, new: to.name } } : {}),
+    ...(sameCoordinates(from.coordinates, to.coordinates)
+      ? {}
+      : { location_coordinates: { old: from.coordinates, new: to.coordinates } }),
+    ...(linkedTo !== null ? { location_entity_id: { old: linkedTo, new: null } } : {}),
+  };
+}
+
+/**
+ * The `metadata` a person's write to the place leaves behind: the same bag with
+ * the pipeline's marks that write supersedes taken out, or null when it
+ * supersedes none.
+ *
+ * The stages tag what they write (`metadata.location_source`, and
+ * `metadata.promote` for the place link) and read the tag as "mine, and
+ * replaceable". A person who has since rewritten the value did not leave that
+ * tag behind on purpose: left in place it lets the next `enrich.geocode` or
+ * `enrich.event_reverse` generation overwrite the correction, and it makes the
+ * source's next move read the person's value as the pipeline's, which is the
+ * one thing the location refresh (sourceLocationMerge.ts) must not do. Only the
+ * marks the write supersedes go: a point replaces the tags that describe a
+ * point, a name the tag that describes a name, a link the link's marker. A
+ * caller that sends `metadata` itself owns the bag and is left alone.
+ */
+function metadataWithoutSupersededMarks(data: UpdateEventDto): (() => string) | null {
+  if (data.metadata) {
+    return null;
+  }
+
+  const { geocoded, approximate, estimated, reverseGeocoded } = SOURCE_LOCATION_VOCABULARY;
+  const tags = [
+    ...(data.location_coordinates ? [geocoded, approximate, estimated] : []),
+    ...(data.location_name ? [reverseGeocoded] : []),
+  ];
+
+  if (tags.length === 0 && !data.location_entity_id) {
+    return null;
+  }
+
+  let bag = `COALESCE(metadata, '{}'::jsonb)`;
+
+  if (tags.length > 0) {
+    bag = `CASE WHEN metadata->>'location_source' IN (${tags.map((tag) => `'${tag}'`).join(', ')})
+                 THEN (${bag} - 'location_source') ELSE ${bag} END`;
+  }
+
+  if (data.location_entity_id) {
+    bag = `(${bag} - 'promote')`;
+  }
+
+  return () => bag;
+}
+
+/** What a create DTO says about the place: a name and a point, each possibly absent, and the confidence of the point. */
+function locationOf(
+  item: Pick<CreateEventDto, 'location_name' | 'location_coordinates' | 'confidence_score'>,
+): DeliveredLocation {
+  return {
+    name: normalizeLocationName(item.location_name),
+    coordinates: coordinatesOf(item.location_coordinates),
+    confidence: confidenceOf(item.confidence_score),
+  };
+}
+
+/** A row's time base, or null when it has none (`source_start_time` unset). */
+function baseWhenOf(row: {
+  sourceStartTime: Date | null;
+  sourceEndTime: Date | null;
+  sourceRecurrence: RecurrenceDefinition | null;
+}): EventWhen | null {
+  return row.sourceStartTime
+    ? {
+        startTime: row.sourceStartTime,
+        endTime: row.sourceEndTime ?? null,
+        recurrence: row.sourceRecurrence ?? null,
+      }
+    : null;
+}
+
+/**
+ * Whether every field a delivery asserts equals the base already stored for
+ * it — the usual re-delivery (the organizer edited the agenda), which then
+ * costs no lock and no write. Read off a row loaded without a lock: a stale
+ * read only sends a delivery to the locked path, which decides again.
+ */
+function deliveredBefore(existing: EventEntity, delivery: SourceDelivery): boolean {
+  if (delivery.status !== undefined && existing.sourceStatus !== delivery.status) {
+    return false;
+  }
+
+  if (delivery.when) {
+    const base = baseWhenOf(existing);
+
+    if (base === null || !sameWhen(base, delivery.when)) {
+      return false;
+    }
+  }
+
+  if (delivery.location) {
+    const base = locationBaseOf(existing.sourceLocation);
+
+    if (base === null || !sameLocation(base, heardLocation(base, delivery.location))) {
+      return false;
+    }
+  }
+
+  return delivery.title === undefined || existing.sourceTitle === delivery.title;
+}
+
+/** The columns {@link CalendarEventService.refreshFromSource} reads under the row lock. */
+interface LockedEventRow {
+  status: string;
+  source_status: string | null;
+  is_deleted: boolean;
+  start_time: Date;
+  end_time: Date | null;
+  source_start_time: Date | null;
+  source_end_time: Date | null;
+  source_recurrence: RecurrenceDefinition | null;
+  recurrence_rule: unknown;
+  recurrence_time_zone: string | null;
+  start_time_original: Date | null;
+  end_time_original: Date | null;
+  last_moved_at: Date | null;
+  source_title: string | null;
+  location_name: string | null;
+  location_lng: number | null;
+  location_lat: number | null;
+  location_entity_id: string | null;
+  location_source: string | null;
+  promoted_by: string | null;
+  source_location: unknown;
+}
+
 /**
  * Spanning-aggregate service for the events CTI split: an event is ONE logical
  * entity persisted as a `ci.entities` base row (discriminated 'Event', the
@@ -239,6 +690,14 @@ function isLivePlannedBlock(row: EventEntity): boolean {
  * transaction; reads compose the egress {@link Event} from the pair with one
  * batched base-row fetch.
  */
+/** The entries of `areas` that are usable map areas: exactly four finite numbers each. */
+function validAreas(areas: number[][] | undefined): [number, number, number, number][] {
+  return (areas ?? []).filter(
+    (area): area is [number, number, number, number] =>
+      Array.isArray(area) && area.length === 4 && area.every((value) => Number.isFinite(value)),
+  );
+}
+
 @Injectable()
 export class CalendarEventService {
   private readonly aggregate: CtiAggregate<EventEntity, EventBaseEntity>;
@@ -252,6 +711,26 @@ export class CalendarEventService {
     private readonly dataSource: DataSource,
     private readonly graphDeltaWriter: GraphDeltaWriter,
     @Optional() private readonly hbpeNotify?: HbpeNotifyService,
+    /**
+     * Resolves EVENT_TIME_REOPENER and EVENT_STATUS_REOPENER (bound by
+     * PipelineModule) when a write moves an event's time, or calls it off or
+     * reinstates it — a source's re-delivery, or a person's `update` or
+     * `reschedule`. See eventTimeReopener.ts and eventStatusReopener.ts.
+     * Optional only so suites can construct the service by hand; such a write
+     * without it throws.
+     */
+    @Optional() private readonly moduleRef?: ModuleRef,
+    /**
+     * The object store, which {@link purge} deletes the stored files of a photo from. Optional so that a
+     * service built without one still does everything else; a purge that would have to delete stored
+     * bytes and has no store is refused before it changes anything.
+     */
+    @Optional() @Inject(STORED_OBJECTS) private readonly storedObjects?: StoredObjects,
+    /**
+     * Tells the user's other open calendars to re-read. Optional for hand-built
+     * suites, and LAST so the suites that construct this positionally keep working.
+     */
+    @Optional() private readonly liveChanges?: LiveChangesService,
   ) {
     this.aggregate = new CtiAggregate({
       detailRepository: this.eventRepository,
@@ -457,6 +936,37 @@ export class CalendarEventService {
       delete (toCreate as Record<string, unknown>).status;
     }
 
+    // Not a column. It qualifies a re-delivery (see sourceDeliveryOf).
+    delete (toCreate as Record<string, unknown>).source_asserts;
+
+    // The merge bases for the refresh in createOne: what the SOURCE said, kept
+    // beside what the row shows, so a later re-delivery can tell the source's
+    // old value from a user's edit (sourceStatusMerge.ts, sourceFieldMerge.ts).
+    // Only on an identity a source owns.
+    if (isSourceOwned(item.source_id, item.source_type)) {
+      // Only a status the source actually sent: the column DEFAULT is nobody's
+      // assertion.
+      if (item.status != null) {
+        toCreate.sourceStatus = item.status;
+      }
+
+      // Every time and title the row is written with, including an ingest
+      // stamp and a cancelled occurrence's filled-in ones: nobody else wrote
+      // them, so a later delivery that does state them must find the row
+      // still showing its base, and land.
+      toCreate.sourceStartTime = item.start_time;
+      toCreate.sourceEndTime = item.end_time ?? null;
+      toCreate.sourceRecurrence = recurrenceOf(item.metadata);
+
+      if (item.title != null) {
+        toCreate.sourceTitle = item.title;
+      }
+
+      // The place as the delivery stated it, including none: a row first synced
+      // with no place must find its base when the organizer adds one.
+      toCreate.sourceLocation = locationBaseRecord(locationOf(item));
+    }
+
     return toCreate;
   }
 
@@ -489,7 +999,12 @@ export class CalendarEventService {
     // Idempotency: (source_type, source_system, source_id) is the stable
     // provenance triple capture sources carry. Re-ingesting the same event
     // — flaky-client retries, a full importer re-sync — must NOT create a
-    // duplicate. When the triple is present, return the existing row.
+    // duplicate. When the triple is present, return the existing row. What a
+    // re-delivery may still change on it is what its source owns — the
+    // status, the time and the title — and only where the source's own value
+    // moved and nobody else has changed it since (returnExisting /
+    // refreshFromSource): a meeting cancelled, moved or renamed after its first
+    // sync must not stay as it first arrived forever.
     //
     // Deliberately NOT filtered by `isDeleted`: `events_source_identity_uniq`
     // covers tombstoned rows too, so skipping one here would send the insert
@@ -524,9 +1039,7 @@ export class CalendarEventService {
           return this.restorePlannedBlock(context, existing.id, item);
         }
 
-        await this.ledgerArrival(context, existing.id, item);
-
-        return this.composeOne(existing);
+        return this.returnExisting(context, existing, item);
       }
     }
 
@@ -575,9 +1088,7 @@ export class CalendarEventService {
       if (sourceWhere && (err as { code?: string })?.code === '23505') {
         const existing = await this.eventRepository.findOne({ where: sourceWhere });
         if (existing) {
-          await this.ledgerArrival(context, existing.id, item);
-
-          return this.composeOne(existing);
+          return this.returnExisting(context, existing, item);
         }
       }
 
@@ -589,6 +1100,7 @@ export class CalendarEventService {
       eventId: eventResult.id,
     });
     await this.hbpeNotify?.notifyEvents(eventResult.userId, eventResult.startTime);
+    await this.liveChanges?.publish(eventResult.userId, 'calendar');
 
     return EventEntity.toEgressType(eventResult, {
       name: item.title,
@@ -640,6 +1152,487 @@ export class CalendarEventService {
   }
 
   /**
+   * A re-delivery of a row that already exists: ledger the arrival and hand the
+   * row back, with whatever its source owns brought up to date when the row
+   * belongs to a source and that source's value moved (see
+   * {@link refreshFromSource}). Nothing else on the row is touched — the
+   * find-or-return contract above.
+   */
+  private async returnExisting(
+    context: UserServiceContext,
+    existing: EventEntity,
+    item: CreateEventDto,
+  ): Promise<Event> {
+    const current = isSourceOwned(item.source_id, item.source_type)
+      ? await this.refreshFromSource(context, existing, sourceDeliveryOf(item))
+      : existing;
+
+    await this.ledgerArrival(context, existing.id, item);
+
+    return this.composeOne(current);
+  }
+
+  /**
+   * Apply what the row's SOURCE just delivered for the fields it owns — the
+   * status, the time, the title and the place — each by a three-way merge
+   * against what that source delivered last time (sourceStatusMerge.ts,
+   * sourceFieldMerge.ts, sourceLocationMerge.ts). A value someone else set
+   * stands; the source's own earlier value gives way.
+   *
+   * Lock first, decide second. The merge reads the row version this
+   * transaction holds the lock on, so a user's edit that commits while a sync
+   * is in flight is seen and kept; deciding from `existing` — read before the
+   * lock — would overwrite it. The title lives on the base row
+   * (`ci.entities`), so that row is locked too, AFTER the events row: the
+   * order every write to the aggregate takes (CtiAggregate), so a sync and a
+   * user's rename cannot deadlock.
+   *
+   * A moved time is applied the way `update` applies one: the graph delta, the
+   * update event, and HBPE told about the day it left and the day it lands on.
+   * It also clears what `clean.temporal_repair` recorded about the OLD time
+   * and re-opens the decisions stages made on it, in this transaction (see
+   * eventTimeReopener.ts). It does not stamp `last_moved_at`, which says a
+   * person moved the row (sourceFieldMerge.ts reads it). A status that calls
+   * the event off, or reinstates it, settles the pipeline's decisions on
+   * whether it happened in the same transaction (eventStatusReopener.ts).
+   *
+   * A moved place replaces the name and the point in one statement, together
+   * with what is derived from them: the confidence that rode with the point,
+   * the pipeline's tags, an estimate's markers, and the link to a Location
+   * `promote.place` made. The Event −LOCATED_AT→ Place edge the edge leg
+   * projected from that link is deleted in the same transaction, because the
+   * projection only ever inserts, and the pipeline's decisions on the old place
+   * are re-opened (eventLocationReopener.ts). The Location row itself, and its
+   * footprint, are left to the stages: a place's footprint is already a
+   * high-water mark when links are withdrawn.
+   *
+   * A tombstone follows its source as well, so the trash's Undo brings back
+   * what the source says NOW rather than what it said when the row was
+   * deleted. But `is_deleted` is never written, and nothing is published for a
+   * tombstone — no graph delta, no update event, no HBPE notification: to
+   * every reader it is gone, and the deletion outlives the sync.
+   *
+   * @returns the stored row, re-read when anything was written.
+   */
+  private async refreshFromSource(
+    context: UserServiceContext,
+    existing: EventEntity,
+    delivery: SourceDelivery,
+  ): Promise<EventEntity> {
+    // The usual re-delivery — the organizer edited the agenda, nothing this
+    // refreshes moved — costs nothing: the source said all of it last time.
+    if (deliveredBefore(existing, delivery)) {
+      return existing;
+    }
+
+    const id = existing.id;
+
+    const outcome = await this.eventRepository.manager.transaction(async (manager) => {
+      const [row] = (await manager.query(
+        `SELECT status, source_status, is_deleted,
+                start_time, end_time, source_start_time, source_end_time, source_recurrence,
+                metadata->'recurrenceRule' AS recurrence_rule,
+                metadata->>'recurrenceTimeZone' AS recurrence_time_zone,
+                start_time_original, end_time_original, last_moved_at,
+                source_title,
+                location_name,
+                ST_X(location_coordinates::geometry) AS location_lng,
+                ST_Y(location_coordinates::geometry) AS location_lat,
+                location_entity_id,
+                metadata->>'location_source' AS location_source,
+                metadata->'promote'->>'stage' AS promoted_by,
+                source_location
+           FROM ci.events
+          WHERE event_id = $1 AND user_id = $2
+            FOR UPDATE`,
+        [id, context.userId],
+      )) as LockedEventRow[];
+
+      if (!row) {
+        return null;
+      }
+
+      const status =
+        delivery.status === undefined
+          ? null
+          : mergeSourceStatus({ status: row.status, sourceStatus: row.source_status }, delivery.status);
+
+      const shown: StoredWhen = {
+        startTime: row.start_time,
+        endTime: row.end_time,
+        recurrence: recurrenceOf({
+          recurrenceRule: row.recurrence_rule,
+          recurrenceTimeZone: row.recurrence_time_zone,
+        }),
+        startTimeOriginal: row.start_time_original,
+        endTimeOriginal: row.end_time_original,
+        lastMovedAt: row.last_moved_at,
+      };
+      const when = delivery.when
+        ? mergeSourceWhen(
+            shown,
+            baseWhenOf({
+              sourceStartTime: row.source_start_time,
+              sourceEndTime: row.source_end_time,
+              sourceRecurrence: row.source_recurrence,
+            }),
+            delivery.when,
+          )
+        : null;
+
+      // The base row only when the title can move: a repeated title needs no
+      // second lock.
+      let title: TitleMerge | null = null;
+      let shownTitle: string | null = null;
+
+      if (delivery.title !== undefined && row.source_title !== delivery.title) {
+        const [base] = (await manager.query(`SELECT name FROM ci.entities WHERE entity_id = $1 FOR UPDATE`, [
+          id,
+        ])) as Array<{ name: string | null }>;
+        shownTitle = base?.name ?? null;
+        title = mergeSourceTitle(shownTitle, row.source_title, delivery.title);
+      }
+
+      const shownLocation: StoredLocation = {
+        name: normalizeLocationName(row.location_name),
+        coordinates:
+          row.location_lng === null || row.location_lat === null
+            ? null
+            : coordinatesOf({ type: 'Point', coordinates: [row.location_lng, row.location_lat] }),
+        source: row.location_source,
+        linked: row.location_entity_id !== null,
+        linkedBy: row.promoted_by,
+      };
+      const location = delivery.location
+        ? mergeSourceLocation(shownLocation, locationBaseOf(row.source_location), delivery.location)
+        : null;
+
+      if (!status && !when && !title && !location) {
+        return null;
+      }
+
+      const statusChanged = status?.statusChanged ?? false;
+      const timesChanged = when?.timesChanged ?? false;
+      const recurrenceChanged = when?.recurrenceChanged ?? false;
+      const titleChanged = title?.changed ?? false;
+      const placeMoved = location?.apply != null;
+      const visible = statusChanged || timesChanged || recurrenceChanged || titleChanged || placeMoved;
+
+      // One UPDATE, built from what moved. A new base alone changes nothing any
+      // reader sees, so `updated_at` moves only with a visible change: that is
+      // what incremental consumers key on. A rename bumps it too, as `update`
+      // does for a title-only patch.
+      const params: unknown[] = [id, context.userId];
+      const sets: string[] = [];
+      const assign = (column: string, value: unknown, cast = ''): void => {
+        params.push(value);
+        sets.push(`${column} = $${params.length}${cast}`);
+      };
+
+      // `metadata` is edited by more than one part of the merge (the series'
+      // rule, the pipeline's location tags), and a column may be assigned once
+      // per UPDATE, so each part wraps the expression the last one built.
+      let metadata = `COALESCE(metadata, '{}'::jsonb)`;
+
+      if (status) {
+        assign('status', status.status);
+        assign('source_status', status.sourceStatus);
+      }
+
+      if (when && delivery.when) {
+        assign('source_start_time', when.base.startTime);
+        assign('source_end_time', when.base.endTime);
+        assign(
+          'source_recurrence',
+          when.base.recurrence ? JSON.stringify(when.base.recurrence) : null,
+          '::jsonb',
+        );
+
+        if (timesChanged) {
+          assign('start_time', when.when.startTime);
+          assign('end_time', when.when.endTime);
+          // What the clean stage recorded described the old time: the source
+          // has replaced it, so the new one is unexamined until the stage —
+          // re-opened below — looks at it. An undo through the old
+          // start_time_original would put back a time the source has left.
+          assign('time_source', delivery.when.timeSource);
+          assign('time_precision', delivery.when.timePrecision);
+          sets.push('start_time_original = NULL', 'end_time_original = NULL');
+
+          if (delivery.when.isAllDay !== undefined) {
+            assign('is_all_day', delivery.when.isAllDay);
+          }
+        }
+
+        if (recurrenceChanged) {
+          params.push(JSON.stringify(delivery.when.recurrenceKeys));
+          // Parenthesized whole: `||` binds looser than `-`, so a later step that
+          // removes a key from this expression would otherwise remove it from the
+          // right-hand side only.
+          metadata = `((${metadata} - ${RECURRENCE_METADATA_KEYS.map((key) => `'${key}'`).join(' - ')}) || $${
+            params.length
+          }::jsonb)`;
+
+          if (delivery.when.isRecurring !== undefined) {
+            assign('is_recurring', delivery.when.isRecurring);
+          }
+        }
+      }
+
+      if (title) {
+        assign('source_title', title.base);
+      }
+
+      if (location) {
+        assign('source_location', JSON.stringify(locationBaseRecord(location.base)), '::jsonb');
+      }
+
+      if (location?.apply) {
+        const { location: placed, confidence } = location.apply;
+
+        assign('location_name', placed.name);
+
+        if (placed.coordinates) {
+          params.push(placed.coordinates[0], placed.coordinates[1]);
+          sets.push(
+            `location_coordinates = ST_SetSRID(ST_MakePoint($${params.length - 1}, $${params.length}), 4326)::geography`,
+          );
+        } else {
+          sets.push('location_coordinates = NULL');
+        }
+
+        // What the point's precision was, and what the pipeline derived from the
+        // old name and point: none of it describes the new place. The link goes
+        // with the pair it was made from, and the edge projected from it is
+        // deleted below. An estimate's markers go only where they are the
+        // estimator's (`inference_sources` is replaced wholesale by it, so
+        // `temporal_nn` is its mark); anything else in them is someone else's.
+        assign('confidence_score', confidence);
+        sets.push(
+          'location_entity_id = NULL',
+          `is_inferred = CASE WHEN inference_sources->>'method' = 'temporal_nn' THEN false ELSE is_inferred END`,
+          `inference_sources = CASE WHEN inference_sources->>'method' = 'temporal_nn' THEN '{}'::jsonb ELSE inference_sources END`,
+        );
+        metadata = `(${metadata} - 'location_source' - 'promote')`;
+      }
+
+      if (metadata !== `COALESCE(metadata, '{}'::jsonb)`) {
+        sets.push(`metadata = ${metadata}`);
+      }
+
+      if (visible) {
+        sets.push('updated_at = now()');
+      }
+
+      await manager.query(
+        `UPDATE ci.events SET ${sets.join(', ')} WHERE event_id = $1 AND user_id = $2`,
+        params,
+      );
+
+      if (title && titleChanged) {
+        await manager.query(`UPDATE ci.entities SET name = $2, updated_at = now() WHERE entity_id = $1`, [
+          id,
+          title.title,
+        ]);
+      }
+
+      if (timesChanged) {
+        await resolveEventTimeReopener(this.moduleRef).reopenTimeDecisions([id], manager);
+      }
+
+      if (location?.apply) {
+        // The link was derived from the place that just changed (a link anyone
+        // else made would have kept the location out of the merge), and so was
+        // the edge projected from it.
+        if (row.location_entity_id !== null) {
+          await this.retractPlaceEdge(manager, context.userId, id, row.location_entity_id);
+        }
+
+        await resolveEventLocationReopener(this.moduleRef).reopenLocationDecisions([id], manager);
+      }
+
+      // A cancellation takes back the location the estimator lent the event; a
+      // reinstatement offers it to the estimator again. A status the merge left
+      // alone (the user's stands) is the stored one, so it crosses nothing. A
+      // tombstone's status follows its source like any other, so the same
+      // applies to one — quietly.
+      if (status && crossedLiveLine(row.status, status.status)) {
+        await resolveEventStatusReopener(this.moduleRef).reopenStatusDecisions([id], manager);
+      }
+
+      const published = visible && !row.is_deleted;
+      // HBPE reads the status, the time and the title of an event; the place is
+      // not a token feature, so a place alone is not worth a re-serialization.
+      const hbpeRelevant = statusChanged || timesChanged || recurrenceChanged || titleChanged;
+
+      if (published) {
+        const name = title
+          ? title.title
+          : ((
+              (await manager.query(`SELECT name FROM ci.entities WHERE entity_id = $1`, [id])) as Array<{
+                name: string | null;
+              }>
+            )[0]?.name ?? null);
+
+        await this.graphDeltaWriter.entityUpdated({
+          entityId: id,
+          entityType: 'Event',
+          name,
+          changedFields: {
+            ...(statusChanged && status ? { status: { old: row.status, new: status.status } } : {}),
+            ...(timesChanged && when
+              ? {
+                  start_time: { old: row.start_time, new: when.when.startTime },
+                  end_time: { old: row.end_time, new: when.when.endTime },
+                }
+              : {}),
+            ...(recurrenceChanged && when
+              ? { recurrence: { old: shown.recurrence, new: when.when.recurrence } }
+              : {}),
+            ...(titleChanged && title ? { name: { old: shownTitle, new: title.title } } : {}),
+            ...(location?.apply
+              ? locationDelta(shownLocation, location.apply.location, row.location_entity_id)
+              : {}),
+          },
+          ownerUserId: context.userId,
+          changeSource: 'CalendarEventService.refreshFromSource',
+          changeReason: "re-delivered by the event's source",
+          // The source changed it, not the user.
+          changedByUserId: null,
+          manager,
+        });
+      }
+
+      return { published, hbpeRelevant, movedFrom: timesChanged ? row.start_time : null };
+    });
+
+    if (!outcome) {
+      return existing;
+    }
+
+    const reloaded = (await this.eventRepository.findOne({ where: { id } })) ?? existing;
+
+    if (outcome.published) {
+      await this.signallingEventService.send(EventUpdatedEvent, { eventId: id });
+
+      if (outcome.hbpeRelevant) {
+        // Both days a move touches: the one the event left and the one it lands on.
+        await this.hbpeNotify?.notifyEvents(
+          reloaded.userId,
+          outcome.movedFrom ? [outcome.movedFrom, reloaded.startTime] : reloaded.startTime,
+        );
+        await this.liveChanges?.publish(reloaded.userId, 'calendar');
+      }
+    }
+
+    return reloaded;
+  }
+
+  /**
+   * A person has just moved this event's start or end (`update`, `reschedule`):
+   * what the pipeline recorded about the OLD time no longer describes the row.
+   * Take it back, on `manager`, the transaction that moved it.
+   *
+   * What the move does to the clean stage's record of the old time:
+   *
+   *  - It clears all four columns the stage writes: `time_source`,
+   *    `time_precision`, `start_time_original` and `end_time_original`. The
+   *    stage documents its undo as `SET start_time = start_time_original WHERE
+   *    start_time_original IS NOT NULL`; left in place, that would put the
+   *    time the source had before the repair over the one the person has just
+   *    typed. And it writes the pair `COALESCE(start_time_original,
+   *    start_time)` — once, on the first repair — so with the old one still
+   *    there, a later repair of the new time would keep the stale original for
+   *    good. `time_source` ('repaired', or 'ingest' on an undated event the
+   *    person has now dated) and `time_precision` describe the old instant just
+   *    as much. Cleared, the time reads as unexamined, which is what NULL
+   *    means on a fresh insert, until the stage looks at it again. The source
+   *    refresh does the same for a source's move.
+   *  - It keeps `last_moved_at`, which the callers stamp. That column is how
+   *    the merge (sourceFieldMerge.ts) tells a person's time from the one the
+   *    stage left, and it reads the stamp, not these columns.
+   *  - It re-opens the stage, and the location estimate's, so both look at the
+   *    new time (eventTimeReopener.ts).
+   *
+   * Only when the start or end moved. The Plan page's edit sends both times on
+   * every save, a rename included, and a save that repeats the stored time has
+   * moved nothing: erasing the record of a repair that still holds would lose
+   * it for no reason. (Such a save still stamps `last_moved_at`, as it always
+   * has.)
+   */
+  private async settleTimeMove(manager: EntityManager, id: string): Promise<void> {
+    await manager.query(
+      `UPDATE ci.events
+          SET time_source = NULL, time_precision = NULL,
+              start_time_original = NULL, end_time_original = NULL
+        WHERE event_id = $1
+          AND (time_source IS NOT NULL OR time_precision IS NOT NULL
+               OR start_time_original IS NOT NULL OR end_time_original IS NOT NULL)`,
+      [id],
+    );
+
+    await resolveEventTimeReopener(this.moduleRef).reopenTimeDecisions([id], manager);
+  }
+
+  /**
+   * Delete the Event −LOCATED_AT→ Place edge `promote.edge_event` projected from
+   * an event's place link, and record that it is gone.
+   *
+   * The projection only ever inserts (`ON CONFLICT DO NOTHING`), so nothing but
+   * the writer that withdraws the link can take the edge back, and one left
+   * behind would tell every graph read that the meeting is at the old place.
+   * Only the matrix's own edge: another rule can draw the same pair (a
+   * receipt's `receipt.event_at_place`), and that one is justified by its
+   * receipt, not by the event's place. The place is read through its merge
+   * survivor, which is what the projection resolves an endpoint to.
+   *
+   * A `deleted` delta stays in the log for the edge's creation, which a summary
+   * may already have read (the log is append-only; see the repair migrations).
+   */
+  private async retractPlaceEdge(
+    manager: EntityManager,
+    userId: string,
+    eventId: string,
+    placeId: string,
+  ): Promise<void> {
+    const gone = (await manager.query(
+      `WITH gone AS (
+         DELETE FROM ci.relationships r
+          USING ci.entities l
+          WHERE l.entity_id = $3
+            AND r.owner_user_id = $1
+            AND r.from_entity_id = $2
+            AND r.to_entity_id = COALESCE(l.merged_into_entity_id, l.entity_id)
+            AND r.relationship_type = 'LOCATED_AT'
+            AND r.properties->>'rule' = 'event.happened_at'
+          RETURNING r.relationship_id, r.relationship_type, r.from_entity_id, r.to_entity_id
+       )
+       SELECT relationship_id, relationship_type, from_entity_id, to_entity_id FROM gone`,
+      [userId, eventId, placeId],
+    )) as Array<{
+      relationship_id: string;
+      relationship_type: string;
+      from_entity_id: string;
+      to_entity_id: string;
+    }>;
+
+    await this.graphDeltaWriter.recordMany(
+      gone.map((edge) => ({
+        nodeType: 'relationship' as const,
+        changeType: 'deleted' as const,
+        relationshipId: edge.relationship_id,
+        relationshipType: edge.relationship_type,
+        fromEntityId: edge.from_entity_id,
+        toEntityId: edge.to_entity_id,
+        ownerUserId: userId,
+        changeSource: 'CalendarEventService.refreshFromSource',
+        changeReason: "the event's place moved at its source",
+      })),
+      manager,
+    );
+  }
+
+  /**
    * Ledger one arrival of an event (insert, dedup hit, or lost race — all
    * three evidence the record; see ci.record_sources). No-op on an incomplete
    * triple. Mirrors CommunicationService.ledgerArrival.
@@ -670,11 +1663,13 @@ export class CalendarEventService {
   }
 
   async create(context: UserServiceContext, data: CreateEventDto | CreateEventDto[]): Promise<Event[]> {
+    await refuseForeignLinks(this.dataSource, context.userId, createdEventLinks([data].flat()), 'event');
+
     if (!Array.isArray(data)) {
-      return [await this.createOne(context, data)];
+      return [await this.createOne(context, withoutRefusedRecurrence(data))];
     }
 
-    return this.createManyBatched(context, data);
+    return this.createManyBatched(context, data.map(withoutRefusedRecurrence));
   }
 
   /**
@@ -688,7 +1683,139 @@ export class CalendarEventService {
     context: UserServiceContext,
     data: CreateEventDto[],
   ): Promise<Array<BulkInsertResult<Event>>> {
-    return this.createManyBatchedDetailed(context, data);
+    await refuseForeignLinks(this.dataSource, context.userId, createdEventLinks(data), 'event');
+
+    return this.createManyBatchedDetailed(context, data.map(withoutRefusedRecurrence));
+  }
+
+  /**
+   * Apply a status an event's SOURCE now reports to a row the caller has
+   * already found — the door for a re-delivery too thin to go through
+   * {@link create}. Google's stub for a deleted event is its id and
+   * `status: 'cancelled'`: no start time to create with, and usually no
+   * iCalUID to find the row by.
+   *
+   * The same merge as a re-delivery through `create` ({@link refreshFromSource}),
+   * for the status alone: a status the user set stands, a tombstone stays one,
+   * and nothing is ever inserted.
+   *
+   * @returns the stored event, or `null` when the caller owns no such row, or
+   *   owns one no source does (a planned block, an event the user made).
+   */
+  async applyStatusFromSource(
+    context: UserServiceContext,
+    id: string,
+    status: string,
+  ): Promise<Event | null> {
+    const existing = await this.eventRepository.findOne({ where: { id, userId: context.userId } });
+
+    if (!existing || !isSourceOwned(existing.sourceId, existing.sourceType)) {
+      return null;
+    }
+
+    return this.composeOne(await this.refreshFromSource(context, existing, { status }));
+  }
+
+  /**
+   * Stored events by identity, keyed by `source_id` — TOMBSTONES INCLUDED.
+   *
+   * For an ingest path working out what a source's re-delivery refers to, not
+   * for anything a user reads. Such a caller has to see a row the user
+   * deleted: the identity is still taken, and a cancellation still lands on it
+   * (quietly — see {@link refreshFromSource}). One `source_id IN (…)`, so the
+   * read lands on events_source_identity_uniq.
+   */
+  async findSourceRows(
+    context: UserServiceContext,
+    sourceSystem: string,
+    sourceIds: readonly string[],
+  ): Promise<Map<string, Event>> {
+    const ids = [...new Set(sourceIds)];
+
+    if (ids.length === 0) {
+      return new Map();
+    }
+
+    const rows = await this.eventRepository.find({
+      where: { userId: context.userId, sourceSystem, sourceId: In(ids) },
+    });
+
+    return new Map((await this.composeMany(rows)).map((event) => [event.sourceId as string, event]));
+  }
+
+  /**
+   * Stored events one connection wrote, keyed by the provider's own event id
+   * (`metadata.rawEventId`) — TOMBSTONES INCLUDED, for the same reason as
+   * {@link findSourceRows}.
+   *
+   * Rows are keyed by iCalUID (cross-pipeline identity), but the payloads that
+   * cancel them often carry only the provider's id: a cancelled occurrence
+   * names its series by the master's Google id (`recurringEventId`), a deleted
+   * Google event is its own id and a status, and an Outlook tombstone
+   * (`@removed`) is the Graph id and nothing else. This is the way back from one
+   * to the other; {@link recordProviderEventId} keeps it current. Scoped to the
+   * connection (idx_events_connection_id), so one account's ids can never
+   * resolve to another's rows.
+   */
+  async findByProviderEventIds(
+    context: UserServiceContext,
+    connectionId: string,
+    providerEventIds: readonly string[],
+  ): Promise<Map<string, Event>> {
+    const ids = [...new Set(providerEventIds)];
+
+    if (ids.length === 0) {
+      return new Map();
+    }
+
+    const rows = await this.eventRepository
+      .createQueryBuilder('event')
+      .where('event.user_id = :userId', { userId: context.userId })
+      .andWhere('event.connection_id = :connectionId', { connectionId })
+      .andWhere(`event.metadata->>'rawEventId' IN (:...providerEventIds)`, { providerEventIds: ids })
+      .getMany();
+
+    return new Map((await this.composeMany(rows)).map((event) => [String(event.metadata.rawEventId), event]));
+  }
+
+  /**
+   * Point {@link findByProviderEventIds} at the provider's CURRENT id for a row
+   * this connection wrote — the id an id-only re-delivery will name it by.
+   *
+   * A re-delivery through {@link create} hands the stored row back without
+   * touching its metadata, so a row keeps the `rawEventId` it was inserted with:
+   * none, if its transform did not record one then (Outlook's, before it kept
+   * the Graph id), and a stale one once the provider re-ids the event (Graph
+   * does, unless asked for immutable ids, when an event moves to another
+   * calendar). Only that key is written, and only on a row of this connection —
+   * the finder is scoped to the connection, so an id on another's row would
+   * resolve nothing. Readers see no change, so `updated_at` stays and nothing is
+   * published.
+   *
+   * @returns whether the stored id changed.
+   */
+  async recordProviderEventId(
+    context: UserServiceContext,
+    id: string,
+    connectionId: string,
+    providerEventId: string,
+  ): Promise<boolean> {
+    const changed = await countAffected(
+      this.eventRepository.manager,
+      `WITH recorded AS (
+         UPDATE ci.events
+            SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{rawEventId}', to_jsonb($4::text))
+          WHERE event_id = $1
+            AND user_id = $2
+            AND connection_id = $3
+            AND metadata->>'rawEventId' IS DISTINCT FROM $4::text
+         RETURNING 1
+       )
+       SELECT count(*)::int AS count FROM recorded`,
+      [id, context.userId, connectionId, providerEventId],
+    );
+
+    return changed > 0;
   }
 
   /**
@@ -835,6 +1962,8 @@ export class CalendarEventService {
       context.userId,
       results.map(({ entity }) => entity.startTime),
     );
+    // One hint per bulk call, not per row, for the same reason as above.
+    await this.liveChanges?.publish(context.userId, 'calendar');
 
     return results.map(({ entity, inserted }) => ({
       entity: EventEntity.toEgressType(entity, bases.get(entity.id)),
@@ -863,7 +1992,8 @@ export class CalendarEventService {
    * NULL arm is load-bearing, not a fallthrough: events the user creates through
    * EventResolver and events materialized by CandidateService when a schedule
    * suggestion is accepted both leave `event_type` unset, and dropping them
-   * would empty the calendar of exactly the entries the user put there.
+   * would empty the calendar of exactly the entries the user put there. Imported
+   * calendar files get their own arm too (IMPORTED_CALENDAR_EVENT_SQL).
    *
    * ═══ RECURRING SERIES ARE EXPANDED HERE, AND ONLY HERE ═══
    * `ci.events` holds one row per recurring SERIES, not one per occurrence —
@@ -898,7 +2028,7 @@ export class CalendarEventService {
       .andWhere('event.start_time >= :lowerBound', { lowerBound })
       .andWhere('event.start_time < :to', { to })
       .andWhere('COALESCE(event.end_time, event.start_time) >= :from', { from })
-      .andWhere('(event.event_type IS NULL OR event.event_type IN (:...scheduleEventTypes))', {
+      .andWhere(SCHEDULE_EVENT_TYPE_SQL, {
         scheduleEventTypes: [...SCHEDULE_EVENT_TYPES],
       })
       .orderBy('event.start_time', 'ASC')
@@ -952,6 +2082,12 @@ export class CalendarEventService {
    * Everything else — the tombstone check, LIVE_EVENT_SQL and the event-type
    * allowlist — is repeated verbatim so an occurrence can never appear on the
    * grid under rules its own master would have been hidden by.
+   *
+   * One extra filter: the row has to hold a rule where `seriesRuleOf` looks for
+   * one. `is_recurring` alone also marks Outlook's server-expanded instances and
+   * every series imported from an .ics before the importer kept the rule. None
+   * of those can expand. Left in, they spent the MAX_RECURRING_MASTERS budget
+   * and could push an older series that does have a rule out of it.
    */
   private recurringMasters(userId: string, to: Date): Promise<EventEntity[]> {
     return this.dataSource
@@ -960,8 +2096,9 @@ export class CalendarEventService {
       .where('event.is_deleted = false')
       .andWhere(LIVE_EVENT_SQL)
       .andWhere('event.is_recurring = true')
+      .andWhere(SERIES_RULE_PRESENT_SQL)
       .andWhere('event.start_time < :to', { to })
-      .andWhere('(event.event_type IS NULL OR event.event_type IN (:...scheduleEventTypes))', {
+      .andWhere(SCHEDULE_EVENT_TYPE_SQL, {
         scheduleEventTypes: [...SCHEDULE_EVENT_TYPES],
       })
       .andWhere('event.user_id = :userId', { userId })
@@ -1065,6 +2202,10 @@ export class CalendarEventService {
    * there — `PlannedBlockService.scheduleTaskAt` passes `{ isAuto: false }` for
    * exactly that reason. Omit it (the plain `rescheduleEvent` GraphQL mutation
    * does) to leave `isAuto` as it was.
+   *
+   * A move that changes the start or the end also takes back what the pipeline
+   * recorded about the old time, in the same transaction
+   * ({@link CalendarEventService.settleTimeMove}).
    */
   async reschedule(
     context: ServiceContext,
@@ -1094,9 +2235,14 @@ export class CalendarEventService {
     // Thursday is still 90 minutes, even though the caller only names a start.
     const priorSpanMs =
       event.endTime && event.startTime ? event.endTime.getTime() - event.startTime.getTime() : 0;
+    const newEnd = endTime ?? (priorSpanMs > 0 ? new Date(startTime.getTime() + priorSpanMs) : null);
+    // Against what is stored, before the row takes the new values: a drop on the
+    // slot it already holds moves nothing (settleTimeMove).
+    const moved = !sameTimes(event, { startTime, endTime: newEnd });
+    const previousStart = event.startTime;
 
     event.startTime = startTime;
-    event.endTime = endTime ?? (priorSpanMs > 0 ? new Date(startTime.getTime() + priorSpanMs) : null);
+    event.endTime = newEnd;
     event.lastMovedAt = new Date();
 
     if (opts?.isAuto !== undefined) {
@@ -1107,9 +2253,20 @@ export class CalendarEventService {
       event.externalSyncStatus = 'pending';
     }
 
-    await this.eventRepository.save(event);
+    // The move and what the pipeline decided on the old time commit together.
+    await this.eventRepository.manager.transaction(async (manager) => {
+      await manager.getRepository(EventEntity).save(event);
+
+      if (moved) {
+        await this.settleTimeMove(manager, event.id);
+      }
+    });
 
     await this.signallingEventService.send(EventUpdatedEvent, { eventId: event.id });
+    // Both days, as in update(): the move empties a slot on the old day and
+    // fills one on the new, and HBPE re-serializes only the days it is told.
+    await this.hbpeNotify?.notifyEvents(event.userId, [previousStart, event.startTime]);
+    await this.liveChanges?.publish(event.userId, 'calendar');
 
     return this.findById(context, id);
   }
@@ -1140,12 +2297,17 @@ export class CalendarEventService {
    * library that is six figures of rows hydrated to serve a page of 20.
    *
    * The scope repeats findAll's two predicates rather than sharing them,
-   * because `keysetPaginate` runs its own COUNT for `totalCount`: if the count
-   * and the page disagreed on which rows exist, the connection would advertise
-   * pages that never arrive.
+   * because `keysetPaginate` runs its own COUNT for `totalCount` (when the
+   * caller wants one): if the count and the page disagreed on which rows
+   * exist, the connection would advertise pages that never arrive.
    */
-  async findPage(context: UserServiceContext, args: KeysetPageArgs): Promise<KeysetPage<Event>> {
+  async findPage(
+    context: UserServiceContext,
+    args: KeysetPageArgs,
+    options: KeysetCountOptions = {},
+  ): Promise<KeysetPage<Event>> {
     const page = await keysetPaginate(this.eventRepository, args, {
+      ...options,
       alias: 'event',
       timeProp: 'startTime',
       userId: context.userId,
@@ -1181,8 +2343,13 @@ export class CalendarEventService {
    * Same keyset pagination and the same planned_block exclusion as
    * {@link findPage}, so the two pages cannot disagree about what an event is.
    */
-  async findDeletedPage(context: UserServiceContext, args: KeysetPageArgs): Promise<KeysetPage<Event>> {
+  async findDeletedPage(
+    context: UserServiceContext,
+    args: KeysetPageArgs,
+    options: KeysetCountOptions = {},
+  ): Promise<KeysetPage<Event>> {
     const page = await keysetPaginate(this.eventRepository, args, {
+      ...options,
       alias: 'event',
       timeProp: 'startTime',
       userId: context.userId,
@@ -1205,6 +2372,10 @@ export class CalendarEventService {
    * disappears immediately rather than waiting on the async un-index.
    */
   async findByIds(context: ServiceContext, ids: string[]): Promise<(Event | null)[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+
     const result = await this.eventRepository.find({
       where: {
         id: In(ids),
@@ -1237,18 +2408,86 @@ export class CalendarEventService {
     return result ? this.composeOne(result) : null;
   }
 
+  /**
+   * Why `data` must not be stored as an edit of event `id`, or null.
+   *
+   * A rule this appliance refuses is still accepted when the patch only hands
+   * back the rule the row already stores. `metadata` is replaced whole, so a
+   * caller changing one key sends the rest back as it read it
+   * (GeocodeBatchListener's `location_source`), and a row stored before the
+   * write check could otherwise never be patched again. Read time refuses that
+   * stored rule on its own (parseRecurrence), so passing it through adds nothing
+   * to expand. The row is read only when a refused rule is present, and only
+   * the caller's own, as {@link findById} scopes it.
+   */
+  private async refusedRecurrenceEdit(
+    context: ServiceContext,
+    id: string,
+    data: UpdateEventDto,
+  ): Promise<string | null> {
+    const metadataRule = data.metadata?.recurrenceRule;
+    const patternRule = data.recurrence_pattern?.rrule;
+    const metadataReason = recurrenceRuleRejection(metadataRule);
+    const patternReason = recurrenceRuleRejection(patternRule);
+
+    if (!metadataReason && !patternReason) {
+      return null;
+    }
+
+    const stored = await this.eventRepository.findOne({
+      where: { id, ...(context.userId !== SYSTEM_USER && { user: { id: context.userId } }) },
+      select: { id: true, metadata: true, recurrencePattern: true },
+    });
+    const unchanged = (sent: unknown, kept: unknown): boolean =>
+      stored != null && JSON.stringify(sent) === JSON.stringify(kept);
+
+    if (metadataReason && !unchanged(metadataRule, stored?.metadata?.recurrenceRule)) {
+      return metadataReason;
+    }
+
+    if (patternReason && !unchanged(patternRule, stored?.recurrencePattern?.rrule)) {
+      return patternReason;
+    }
+
+    return null;
+  }
+
+  /**
+   * Patch an event. A patch that moves its start or end, or calls it off or
+   * reinstates it, also takes back what the pipeline decided about the old time
+   * or about whether it happened, in the same transaction
+   * ({@link CalendarEventService.settleTimeMove}, eventStatusReopener.ts). The
+   * event it returns is the row as it stands after that.
+   */
   async update(context: ServiceContext, id: string, data: UpdateEventDto): Promise<Event | null> {
+    // An edit is one person's request, not a batch, so a rule that would hang
+    // the calendar is refused outright rather than dropped as on create.
+    const recurrenceReason = await this.refusedRecurrenceEdit(context, id, data);
+
+    if (recurrenceReason) {
+      throw new BadRequestException(`Unsupported recurrence rule: ${recurrenceReason}`);
+    }
+
     const updateData: Partial<EventEntity> = {};
 
     // title/description are base-row data (ci.entities); patched separately
     // below, in the same transaction.
     const basePatch: Partial<Pick<EventBaseEntity, 'name' | 'description'>> = {};
-    if (data.title) {
+    // A title is only written when it has text in it. An emptied one (or one
+    // that is only whitespace) is refused below when the event has a title, so
+    // the page does not say it saved while the old title stays. An event that
+    // never had a title is still saved: the drawer sends its empty title next
+    // to a description edit.
+    const titleEmptied = typeof data.title === 'string' && data.title.trim() === '';
+    if (data.title?.trim()) {
       basePatch.name = data.title;
     }
 
-    if (data.description) {
-      basePatch.description = data.description;
+    // An empty string is how the event page clears the description, so it (or
+    // one that is only whitespace) is stored as no description. A missing or
+    // null field still leaves it alone.
+    if (data.description != null) {
+      basePatch.description = data.description.trim() ? data.description : null;
     }
 
     if (data.event_type) {
@@ -1414,34 +2653,120 @@ export class CalendarEventService {
       updateData.isLocked = data.is_locked;
     }
 
+    await this.refuseForeignUpdateLinks(context, id, {
+      location_entity_id: updateData.locationEntityId,
+      organizer_entity_id: updateData.organizerEntityId,
+      participant_entity_ids: updateData.participantEntityIds,
+      parent_event_id: updateData.parentEventId,
+    });
+
+    // A save that hands back the title or description already stored is not an
+    // edit of it: the event page sends the unchanged title with every save.
+    // Dropped here, it neither rewrites the base row nor reaches Change History
+    // as a rename; what is left is recorded with the value it replaced.
+    const storedBase =
+      titleEmptied || basePatch.name !== undefined || basePatch.description !== undefined
+        ? await this.eventBaseRepository.findOne({
+            where: { id, ...(context.userId !== SYSTEM_USER && { userId: context.userId }) },
+            select: { id: true, name: true, description: true },
+          })
+        : null;
+
+    if (titleEmptied && storedBase?.name?.trim()) {
+      throw new BadRequestException('An event needs a title.');
+    }
+
+    if (storedBase && basePatch.name === storedBase.name) {
+      delete basePatch.name;
+    }
+
+    // Compared as the patch stores it: a row imported with '' and a save that
+    // sends '' back (now null) are both "no description".
+    if (
+      storedBase &&
+      basePatch.description !== undefined &&
+      basePatch.description === (storedBase.description || null)
+    ) {
+      delete basePatch.description;
+    }
+
+    // A person's place takes the pipeline's marks on the value it replaces with
+    // it (see metadataWithoutSupersededMarks).
+    const supersededMarks = metadataWithoutSupersededMarks(data);
+    const detail: QueryDeepPartialEntity<EventEntity> = {
+      ...(updateData as QueryDeepPartialEntity<EventEntity>),
+      ...(supersededMarks ? { metadata: supersededMarks } : {}),
+    };
+
     // One transaction across both halves of the aggregate (see CtiAggregate).
     // A title/description-only patch still bumps ci.events.updated_at so
     // detail-side incremental consumers see the change.
+    let previousStart: Date | null | undefined;
     const updated = await this.aggregate.applyUpdate(
       context,
       id,
       {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        detail: updateData as any, // TypeORM will handle JSON serialization
+        detail, // TypeORM will handle JSON serialization
         base: basePatch,
       },
       {
-        withinTx: async ({ manager }) => {
-          const base = await manager.getRepository(EventBaseEntity).findOne({ where: { id } });
-          await this.graphDeltaWriter.entityUpdated({
-            entityId: id,
-            entityType: 'Event',
-            name: base?.name ?? null,
-            changedFields: {
-              ...(basePatch.name !== undefined ? { name: { new: basePatch.name } } : {}),
-              ...(basePatch.description !== undefined ? { description: { new: basePatch.description } } : {}),
-              ...(Object.keys(updateData).length > 0 ? { detail_updated: { new: true } } : {}),
-            },
-            ownerUserId: typeof context.userId === 'string' ? context.userId : null,
-            changeSource: 'CalendarEventService.update',
-            changedByUserId: typeof context.userId === 'string' ? context.userId : null,
-            manager,
-          });
+        withinTx: async ({ manager, before, after }) => {
+          previousStart = before.startTime;
+          // Judged against the row as this transaction found it, as `moved` is
+          // below: the Plan page's edit sends both times with every save, and a
+          // field handed back as stored is not an edit. `lastMovedAt` is the
+          // stamp such a save leaves, not a change anyone made.
+          const detailEdited = detailChanged(
+            before,
+            after,
+            Object.keys(detail).filter((key) => key !== 'lastMovedAt'),
+          );
+          const changedFields = {
+            ...(basePatch.name !== undefined
+              ? { name: { old: storedBase?.name ?? null, new: basePatch.name } }
+              : {}),
+            ...(basePatch.description !== undefined
+              ? { description: { old: storedBase?.description ?? null, new: basePatch.description } }
+              : {}),
+            ...(detailEdited ? { detail_updated: { new: true } } : {}),
+          };
+
+          // A patch that changed nothing leaves no Change History row.
+          if (Object.keys(changedFields).length > 0) {
+            const base = await manager.getRepository(EventBaseEntity).findOne({ where: { id } });
+            await this.graphDeltaWriter.entityUpdated({
+              entityId: id,
+              entityType: 'Event',
+              name: base?.name ?? null,
+              changedFields,
+              ownerUserId: typeof context.userId === 'string' ? context.userId : null,
+              changeSource: 'CalendarEventService.update',
+              changedByUserId: typeof context.userId === 'string' ? context.userId : null,
+              manager,
+            });
+          }
+
+          // What the pipeline decided about the old time, and about whether the
+          // event happened, taken back in this transaction. Judged against the
+          // row as this transaction found it: a patch that repeats what is
+          // stored changes neither.
+          const moved = after !== null && !sameTimes(before, after);
+          const calledOffOrReinstated = after !== null && crossedLiveLine(before.status, after.status);
+
+          if (moved) {
+            await this.settleTimeMove(manager, id);
+          }
+
+          if (calledOffOrReinstated) {
+            await resolveEventStatusReopener(this.moduleRef).reopenStatusDecisions([id], manager);
+          }
+
+          // `after` was read before either wrote to the row, so the caller is
+          // handed the row as it stands now: cleared markers and a withdrawn
+          // estimate, not the ones the move just replaced.
+          return moved || calledOffOrReinstated
+            ? ((await manager.getRepository(EventEntity).findOne({ where: { id } })) ?? undefined)
+            : undefined;
         },
       },
     );
@@ -1453,7 +2778,12 @@ export class CalendarEventService {
     await this.signallingEventService.send(EventUpdatedEvent, {
       eventId: updated.id,
     });
-    await this.hbpeNotify?.notifyEvents(updated.userId, updated.startTime);
+    // The day it left as well as the day it is on: a retimed event's tokens
+    // stay on its old day until HBPE re-serializes that day, and the payload
+    // is the only way HBPE learns which day it was. The service sends one
+    // notification per distinct UTC day, so an unmoved event costs one.
+    await this.hbpeNotify?.notifyEvents(updated.userId, [previousStart, updated.startTime]);
+    await this.liveChanges?.publish(updated.userId, 'calendar');
 
     // The transaction already reloaded the detail row; one base fetch
     // completes the egress composition.
@@ -1463,18 +2793,54 @@ export class CalendarEventService {
   }
 
   /**
+   * {@link refuseForeignLinks} for an update: the links have to belong to the event's owner,
+   * which is also how a system context, with no user of its own, is checked. An event the
+   * caller cannot see is left to the update, which answers null for it, so the refusal never
+   * tells a caller whose rows the ids it sent are.
+   */
+  private async refuseForeignUpdateLinks(
+    context: ServiceContext,
+    id: string,
+    patch: EventLinkFields,
+  ): Promise<void> {
+    const links = eventLinks([patch]);
+
+    if (links.every(({ ids }) => ids.every((value) => value == null))) {
+      return;
+    }
+
+    const row = await this.eventRepository.findOne({
+      select: { id: true, userId: true },
+      where: { id, ...(context.userId !== SYSTEM_USER && { userId: context.userId }) },
+    });
+
+    if (row) {
+      await refuseForeignLinks(this.dataSource, row.userId, links, 'event');
+    }
+  }
+
+  /**
    * Tombstones an event: `ci.events.is_deleted` is set, both rows stay on disk,
    * and the read paths above stop returning it. The emitted
    * {@link EventRemovedEvent} still drops the row from the search index, so it
    * disappears from the explorer exactly as a physical delete would — but
    * nothing that referenced it is cascaded away and {@link restore} can bring it
    * back verbatim.
+   *
+   * The tombstone covers BOTH halves of the aggregate. Readers of `ci.events`
+   * decide liveness from `is_deleted`, but graph readers only ever see the
+   * `ci.entities` base row and decide it from `is_active` — node reads and
+   * counts in GraphUtilityService, and the deterministic edge matrix, whose
+   * endpoint join would otherwise keep deriving fresh edges onto a deleted
+   * event. Flipping one flag without the other leaves an event that is gone
+   * from one family of readers and present in the other.
    */
   async remove(context: ServiceContext, id: string): Promise<boolean> {
     let removedAt: { userId: string; time: Date | null } | undefined;
     const removed = await this.aggregate.remove(context, id, {
       withinTx: async ({ manager, before }) => {
         removedAt = { userId: before.userId, time: before.startTime };
+        await manager.getRepository(EventBaseEntity).update({ id }, { isActive: false });
         const base = await manager.getRepository(EventBaseEntity).findOne({ where: { id } });
         await this.graphDeltaWriter.entityDeleted({
           entityId: id,
@@ -1497,6 +2863,7 @@ export class CalendarEventService {
     });
     if (removedAt) {
       await this.hbpeNotify?.notifyEvents(removedAt.userId, [removedAt.time]);
+      await this.liveChanges?.publish(removedAt.userId, 'calendar');
     }
 
     return true;
@@ -1507,12 +2874,17 @@ export class CalendarEventService {
    * accidental deletion is recoverable (this is what the "Undo" affordance on
    * the delete toast calls). A no-op for an event that was never deleted.
    *
+   * Reactivates the base row too, the mirror of {@link remove}. A tombstone
+   * written before `remove` deactivated it has an active base row already, so
+   * the write changes nothing there.
+   *
    * @returns the restored event, or `null` when the caller has no tombstoned
    *   event with that id.
    */
   async restore(context: ServiceContext, id: string): Promise<Event | null> {
     const restored = await this.aggregate.restore(context, id, {
       withinTx: async ({ manager, after }) => {
+        await manager.getRepository(EventBaseEntity).update({ id }, { isActive: true });
         const base = await manager.getRepository(EventBaseEntity).findOne({ where: { id } });
         await this.graphDeltaWriter.entityCreated({
           entityId: id,
@@ -1535,8 +2907,94 @@ export class CalendarEventService {
       eventId: id,
     });
     await this.hbpeNotify?.notifyEvents(restored.userId, restored.startTime);
+    await this.liveChanges?.publish(restored.userId, 'calendar');
 
     return this.composeOne(restored);
+  }
+
+  /**
+   * Permanently deletes events, with their attached content and everything that
+   * only exists because of them. This is the other end from {@link remove}:
+   * that moves an event to the trash and {@link restore} brings it back, this
+   * cannot be undone. See {@link purgeEventAggregates} for what goes, and for
+   * what a plain delete of the base row would have left behind, or failed on.
+   *
+   * The photos of an event go with it when nothing else uses them: the files its
+   * content wraps, and the ones linked straight to it. A file that something else
+   * still uses stays, reported in `files.kept` ({@link planWrappedFiles}). Their
+   * objects are deleted from the object store inside the transaction, while the
+   * rows are locked, and before any row is.
+   *
+   * It works on an event in any state, including one already in the trash, so
+   * "empty the trash" is the same call. An event that arrived from a source that
+   * syncs again will arrive again: only the tombstone, which this removes, stood
+   * in the way of that.
+   *
+   * Everything is one transaction. Search is told afterwards, HBPE is told to
+   * re-serialise the days the events were on, and the ids that were not the
+   * caller's, or no longer exist, are simply left out of the result.
+   *
+   * @throws {StoredObjectsDeletedError} if the stored files were deleted and the rows
+   *   then could not be. The events named in it are still there, and purging them
+   *   again finishes the job. Anything that failed before that left everything as it was.
+   * @returns the ids that were purged, the content that went with them, and what was
+   *   done about the files.
+   */
+  async purge(
+    context: UserServiceContext,
+    ids: string[],
+  ): Promise<{ eventIds: string[]; contentIds: string[]; files: WrappedFilesPurged }> {
+    const requested = Array.from(new Set(ids));
+
+    if (requested.length === 0) {
+      return { eventIds: [], contentIds: [], files: nothingWrapped() };
+    }
+
+    // Named by the purge itself once the objects are gone, and read here rather than there
+    // because the commit that follows can fail too.
+    let objectsGoneFor: string[] = [];
+    let purged: PurgedEventAggregates;
+
+    try {
+      purged = await this.eventRepository.manager.transaction((manager) =>
+        purgeEventAggregates(manager, context.userId, requested, {
+          objects: this.storedObjects,
+          onObjectsDeleted: (named) => {
+            objectsGoneFor = named;
+          },
+        }),
+      );
+    } catch (error) {
+      throw objectsGoneFor.length > 0 ? new StoredObjectsDeletedError(objectsGoneFor, error) : error;
+    }
+
+    // The index rows were deleted in the transaction. These tell anything else
+    // that listens, and are what announces a removal everywhere else in the app.
+    for (const event of purged.events) {
+      await this.signallingEventService.send(EventRemovedEvent, { eventId: event.id });
+    }
+
+    for (const contentId of purged.contentIds) {
+      await this.signallingEventService.send(ContentRemovedEvent, { contentId });
+    }
+
+    for (const fileId of purged.files.fileIds) {
+      await this.signallingEventService.send(FileRemovedEvent, { fileId });
+    }
+
+    if (purged.events.length > 0) {
+      await this.hbpeNotify?.notifyEvents(
+        context.userId,
+        purged.events.map((event) => event.startTime),
+      );
+      await this.liveChanges?.publish(context.userId, 'calendar');
+    }
+
+    return {
+      eventIds: purged.events.map((event) => event.id),
+      contentIds: purged.contentIds,
+      files: purged.files,
+    };
   }
 
   async search(context: ServiceContext, query: SearchEventDto): Promise<Event[]> {
@@ -1655,11 +3113,8 @@ export class CalendarEventService {
     // itself being genuinely located and appearing correctly in the explorer
     // (which resolves the same fallback client-side — see
     // MapView.getEntityCoordinates).
-    const needsLocationCoordinate =
-      options.hasLocation === true ||
-      (options.bbox != null &&
-        options.bbox.length === 4 &&
-        options.bbox.every((value) => Number.isFinite(value)));
+    const areas = validAreas(options.areas);
+    const needsLocationCoordinate = options.hasLocation === true || areas.length > 0;
 
     if (needsLocationCoordinate) {
       query = query.leftJoin(
@@ -1676,20 +3131,36 @@ export class CalendarEventService {
       );
     }
 
-    // "Where" (viewport): the event's coordinates fall inside the bounding box
-    // [minLon, minLat, maxLon, maxLat] (EPSG:4326). The geography column is cast
-    // to geometry so the planar ST_MakeEnvelope / ST_Within pair applies (and the
-    // functional GIST index on the cast can serve it). NULL coordinates are
-    // excluded by ST_Within, so this also implies located-only. Ignored unless
-    // exactly four finite numbers are supplied.
-    if (options.bbox && options.bbox.length === 4 && options.bbox.every((value) => Number.isFinite(value))) {
-      const [minLon, minLat, maxLon, maxLat] = options.bbox;
+    // "Where" (map areas): the event's coordinates fall inside ANY of the
+    // bounding boxes, each [minLon, minLat, maxLon, maxLat] (EPSG:4326) — a trip
+    // to London and Paris is two rectangles ORed, not one box over the Channel.
+    // The geography column is cast to geometry so the planar ST_MakeEnvelope /
+    // ST_Within pair applies (and the functional GIST index on the cast can
+    // serve it). NULL coordinates are excluded by ST_Within. An entry that is
+    // not four finite numbers is dropped. Applied below, ORed with the place
+    // names: the Where popover offers both, and "100 Duranzo Aisle + Map
+    // Areas (2)" means at that address OR inside a rectangle, so an event with
+    // only a named place still matches.
+    const whereClauses: string[] = [];
+    const whereParams: Record<string, unknown> = {};
 
-      query = query.andWhere(
-        'ST_Within(COALESCE(event.location_coordinates, location_entity.location_point)::geometry, ' +
-          'ST_MakeEnvelope(:minLon, :minLat, :maxLon, :maxLat, 4326))',
-        { minLon, minLat, maxLon, maxLat },
-      );
+    if (areas.length > 0) {
+      const clauses: string[] = [];
+
+      areas.forEach(([minLon, minLat, maxLon, maxLat], index) => {
+        clauses.push(
+          'ST_Within(COALESCE(event.location_coordinates, location_entity.location_point)::geometry, ' +
+            `ST_MakeEnvelope(:minLon${index}, :minLat${index}, :maxLon${index}, :maxLat${index}, 4326))`,
+        );
+        Object.assign(whereParams, {
+          [`minLon${index}`]: minLon,
+          [`minLat${index}`]: minLat,
+          [`maxLon${index}`]: maxLon,
+          [`maxLat${index}`]: maxLat,
+        });
+      });
+
+      whereClauses.push(`(${clauses.join(' OR ')})`);
     }
 
     // "Who": the event's participants/organizer resolve to a Person entity whose
@@ -1713,15 +3184,24 @@ export class CalendarEventService {
     // "Where" (by place): the event's Location entity (or denormalised
     // location_name) matches any of the given place patterns.
     if (options.places && options.places.length > 0) {
-      query = query.andWhere(
-        `(
+      whereClauses.push(`(
           event.location_entity_id IN (
             SELECT entity_id FROM ci.entities
             WHERE owner_user_id = :userId AND entity_type = 'Location' AND name ILIKE ANY(:placePatterns)
           )
           OR event.location_name ILIKE ANY(:placePatterns)
-        )`,
-        { userId: context.userId, placePatterns: options.places.map((name) => `%${name}%`) },
+        )`);
+      Object.assign(whereParams, {
+        userId: context.userId,
+        placePatterns: options.places.map((name) => `%${name}%`),
+      });
+    }
+
+    // One Where predicate: by name OR inside an area. Alone, each reads as before.
+    if (whereClauses.length > 0) {
+      query = query.andWhere(
+        whereClauses.length === 1 ? whereClauses[0] : `(${whereClauses.join(' OR ')})`,
+        whereParams,
       );
     }
 
@@ -1742,23 +3222,26 @@ export class CalendarEventService {
       query = query.limit(options.limit);
     }
 
+    // The direction `order` asks for (its first key, as for the primary sort); the tiebreak and the
+    // keyset below run the same way, so a page is always the rows PAST the cursor in that direction.
+    const direction = keysetOrderOf(options.order);
+
     if (options.order) {
-      for (const [field, direction] of Object.entries(options.order)) {
-        query = query.orderBy(`event.${field}`, direction as 'ASC' | 'DESC');
+      for (const [field, fieldDirection] of Object.entries(options.order)) {
+        query = query.orderBy(`event.${field}`, fieldDirection as 'ASC' | 'DESC');
       }
 
       // Deterministic tiebreak so same-timestamp rows have a stable total order
       // that the keyset cursor below can page through.
-      query = query.addOrderBy('event.event_id', 'DESC');
+      query = query.addOrderBy('event.event_id', direction);
     }
 
-    // Composite keyset: page strictly past (afterTime, afterId). Matches the
-    // (start_time DESC, event_id DESC) order so a same-timestamp cluster larger
-    // than one fetch is walked through instead of re-returning its top rows.
+    // Composite keyset: page strictly past (afterTime, afterId) in (start_time, event_id), in
+    // `order` — see keysetSeek. A same-timestamp cluster larger than one fetch is walked through
+    // instead of re-returning its top rows.
     if (options.afterTime && options.afterId) {
       query = query.andWhere(
-        '(event.start_time < :afterTime OR (event.start_time = :afterTime AND event.event_id < :afterId))',
-        { afterTime: options.afterTime, afterId: options.afterId },
+        ...keysetSeek('event.start_time', 'event.event_id', direction, options.afterTime, options.afterId),
       );
     }
 
@@ -1939,16 +3422,36 @@ export class CalendarEventService {
    * Hourly UTC activity buckets for the activity rollup: events counted by
    * `startTime`, per user.
    */
-  async aggregateHourlyActivity(): Promise<HourlyEventCount[]> {
-    const rows: Array<{ user_id: string; bucket_start: Date; count: number }> = await this.eventRepository
+  async aggregateHourlyActivity(options: HourlyActivityOptions = {}): Promise<HourlyEventCount[]> {
+    const live = 'event.is_deleted = false';
+    const query = this.eventRepository
       .createQueryBuilder('event')
       .select('event.userId', 'user_id')
       .addSelect(`date_trunc('hour', event.startTime, 'UTC')`, 'bucket_start')
-      .addSelect('COUNT(*)::int', 'count')
-      .where('event.is_deleted = false')
+      // Incrementally, a bucket is recounted over every row it holds, live or
+      // not, so one whose events were all deleted comes back as 0 and is pruned.
+      .addSelect(options.changedSince ? `COUNT(*) FILTER (WHERE ${live})::int` : 'COUNT(*)::int', 'count')
       .groupBy('user_id')
-      .addGroupBy('bucket_start')
-      .getRawMany();
+      .addGroupBy('bucket_start');
+
+    if (options.changedSince) {
+      query.where(
+        touchedHourlyBucketsSql(
+          { user: 'event.userId', bucket: 'event.startTime' },
+          {
+            table: 'ci.events',
+            userColumn: 'user_id',
+            bucketColumn: 'start_time',
+            changed: 'src.updated_at',
+          },
+        ),
+        { changedSince: options.changedSince },
+      );
+    } else {
+      query.where(live);
+    }
+
+    const rows: Array<{ user_id: string; bucket_start: Date; count: number }> = await query.getRawMany();
 
     return rows.map((row) => ({ userId: row.user_id, bucketStart: row.bucket_start, count: row.count }));
   }

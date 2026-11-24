@@ -19,16 +19,66 @@ describe('AppSchema', () => {
     expect(() => AppSchema.validate()).not.toThrow();
   });
 
-  it('declares every table from sync-rules.yaml', () => {
+  // One device record per entity (2026-10-21): the managed tables are the
+  // writable notes and saved searches (2026-10-26), the tags and the tag join;
+  // everything else the phone shows comes from the raw documents table below. `events`, `entities`,
+  // `files`, `threads` and `messages` were synced and never read, and left
+  // the sync rules and this schema together — one of them reappearing here
+  // means the replica grew back by accident.
+  it('declares exactly the managed tables sync-rules.yaml still sends, plus the local-only preview ledger', () => {
     const names = AppSchema.tables.map((t) => t.name).sort();
 
-    expect(names).toEqual(['entities', 'events', 'files', 'messages', 'notes', 'tags', 'threads']);
+    expect(names).toEqual(['attachments', 'entity_tag', 'notes', 'saved_searches', 'tags']);
+    expect(AppSchema.tables.find((t) => t.name === 'attachments')?.localOnly).toBe(true);
   });
 
   // Column sets mirror infrastructure/powersync/sync-rules.yaml's `data` selects
   // exactly (minus `id`, which every Table gets implicitly).
   it('notes matches the user_data bucket select', () => {
     expect(columnNames('notes').sort()).toEqual(['content', 'created_at', 'title', 'updated_at', 'user_id']);
+  });
+
+  it('saved_searches matches the user_data bucket select', () => {
+    expect(columnNames('saved_searches').sort()).toEqual([
+      'created_at',
+      'description',
+      'entity_types',
+      'filters',
+      'is_public',
+      'is_seed',
+      'name',
+      'query',
+      'share_token',
+      'tags',
+      'updated_at',
+      'user_id',
+    ]);
+  });
+
+  it('mobile_search_documents is a raw table whose put binds every column the device keeps', () => {
+    // The sync rule sends id, entity_type, entity_id, title, body, occurred_at,
+    // related_id, detail — and nothing else, since every synced column is also
+    // kept in PowerSync's oplog copy.
+    expect(AppSchema.rawTables.map((t) => t.name)).toEqual(['mobile_search_documents']);
+
+    const raw = AppSchema.rawTables[0];
+
+    expect(raw.put?.params).toEqual([
+      'Id',
+      { Column: 'entity_type' },
+      { Column: 'entity_id' },
+      { Column: 'title' },
+      { Column: 'body' },
+      { Column: 'occurred_at' },
+      { Column: 'related_id' },
+      { Column: 'detail' },
+    ]);
+    expect(raw.put?.sql).toContain('ON CONFLICT(id) DO UPDATE');
+    // A re-sent row must refresh the record half too, not just the text.
+    expect(raw.put?.sql).toContain('related_id = excluded.related_id');
+    expect(raw.put?.sql).toContain('detail = excluded.detail');
+    expect(raw.delete?.params).toEqual(['Id']);
+    expect(raw.clear).toBe('DELETE FROM mobile_search_documents');
   });
 
   it('tags matches the user_data bucket select', () => {
@@ -42,99 +92,13 @@ describe('AppSchema', () => {
     ]);
   });
 
-  it('threads matches the user_data bucket select (thread_id aliased to id)', () => {
-    expect(columnNames('threads').sort()).toEqual([
-      'created_at',
-      'is_archived',
-      'last_message_at',
-      'status',
-      'summary',
-      'title',
-      'updated_at',
-      'user_id',
-    ]);
-  });
+  it('entity_tag matches the entity_tags bucket select (bigint id sent as text), indexed for the offline tag filter', () => {
+    expect(columnNames('entity_tag').sort()).toEqual(['created_at', 'entity_id', 'entity_type', 'tag_id']);
 
-  it('messages matches the user_data bucket select (message_id aliased to id)', () => {
-    expect(columnNames('messages').sort()).toEqual([
-      'content',
-      'content_type',
-      'created_at',
-      'role',
-      'sequence_number',
-      'thread_id',
-      'updated_at',
-      'user_id',
-    ]);
-  });
+    const table = AppSchema.tables.find((t) => t.name === 'entity_tag')!;
+    const indexed = table.indexes.map((index) => index.columns.map((column) => column.name));
 
-  it('events matches the user_data bucket select (event_id aliased to id)', () => {
-    expect(columnNames('events').sort()).toEqual([
-      'capture_tick_id',
-      'category',
-      'created_at',
-      'end_time',
-      'event_type',
-      'is_all_day',
-      'is_inferred',
-      'is_predicted',
-      'is_private',
-      'observed_at',
-      'parent_event_id',
-      'priority',
-      'sharing_level',
-      'source_id',
-      'source_system',
-      'source_type',
-      'start_time',
-      'status',
-      'sync_period',
-      'task_id',
-      'updated_at',
-      'user_id',
-    ]);
-  });
-
-  // The two columns this asserts the ABSENCE of are the point of the projection,
-  // not an oversight. `metadata` is the raw capture payload — window titles, cwd,
-  // established connections — and never syncs; `duration_minutes` is GENERATED and
-  // Postgres does not replicate it under this publication (pubgencols='n'), so
-  // declaring it would create a column that silently stays null forever.
-  it('events does not mirror the raw capture payload or the generated column', () => {
-    expect(columnNames('events')).not.toContain('metadata');
-    expect(columnNames('events')).not.toContain('duration_minutes');
-  });
-
-  it('entities matches the user_data bucket select (entity_id aliased to id)', () => {
-    expect(columnNames('entities').sort()).toEqual([
-      'created_at',
-      'description',
-      'entity_type',
-      'is_active',
-      'is_archived',
-      'linked_id',
-      'linked_table',
-      'name',
-      'sync_period',
-      'updated_at',
-      'user_id',
-    ]);
-  });
-
-  // ci.entities is the whole entity graph server-side — people, places, things,
-  // with names, birth dates, geography and dossiers. Only the Event-typed slice
-  // syncs, and only the columns needed to label an event. Anything here that
-  // looks like the rest of that table means the projection widened by accident.
-  it('entities carries no personal-graph columns', () => {
-    for (const column of [
-      'first_name',
-      'last_name',
-      'birth_date',
-      'dossier',
-      'location_point',
-      'search_vector',
-    ]) {
-      expect(columnNames('entities')).not.toContain(column);
-    }
+    expect(indexed).toContainEqual(['entity_type', 'entity_id']);
+    expect(indexed).toContainEqual(['tag_id']);
   });
 });

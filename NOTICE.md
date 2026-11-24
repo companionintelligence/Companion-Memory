@@ -5,6 +5,44 @@ upstream projects legally require us to reproduce. It is not a full dependency
 list — see [THIRD_PARTY.md](THIRD_PARTY.md) for that, and [CREDITS.md](CREDITS.md)
 for acknowledgements.
 
+<!-- hand-authored: do not regenerate this section -->
+## Upstream-derived code and test data
+
+The licence texts named below are in [`LICENSES/`](LICENSES/).
+
+- **IdentiKey test vectors.** Three binary test vectors under
+  `backend/apps/api/src/domains/identikey/__tests__/fixtures/auth-v1/` are copied unmodified from
+  [identikey/identikey-protocol](https://github.com/identikey/identikey-protocol)
+  (`crates/identikey-auth/tests/fixtures/`, commit `e4fe668c7e6b21d6fb103d755dffcef86dd286e1`). That
+  directory's `README.md` records their checksums and how the other vectors beside them were produced.
+- **IdentiKey dCBOR codec.** `backend/apps/api/src/domains/identikey/encoding/dcbor.ts` is a TypeScript
+  translation, with changes, of `crates/identikey-auth/src/cbor.rs` in the same repository (as at commit
+  `e4fe668c7e6b21d6fb103d755dffcef86dd286e1`; the file is unchanged there since `241f313cbda9`).
+
+  Both are Copyright © 2026 Identikey Inc. (<https://identikey.io>). Upstream licenses them under your
+  choice of Apache-2.0 or BSD-2-Clause-Patent. They are used here under the BSD-2-Clause Plus Patent
+  License, whose text, with that copyright notice, is in `LICENSES/BSD-2-Clause-Patent.txt`.
+- **DIDComm Messaging specification vectors.** `backend/apps/api/src/domains/didcomm/__tests__/vectors.ts`
+  is generated from Appendices A to C of
+  [decentralized-identity/didcomm-messaging](https://github.com/decentralized-identity/didcomm-messaging)
+  (`docs/spec-files/appendix.md`, commit `c78bcc4`), Apache-2.0 (`LICENSES/Apache-2.0.txt`). Changed
+  here: the secrets' `"kid "` members (with a trailing space in the source) are normalized to `"kid"`.
+- **DIDComm reference-implementation vectors.**
+  `backend/apps/api/src/domains/didcomm/__tests__/rustVectors.ts` is generated, unchanged, from
+  `src/test_vectors/` of [sicpa-dlab/didcomm-rust](https://github.com/sicpa-dlab/didcomm-rust) (commit
+  `4388350`), Apache-2.0 (`LICENSES/Apache-2.0.txt`).
+- **Portable Web Spaces worked example.** `PWS_AUTHZ_WORKED_EXAMPLE` in
+  `backend/apps/api/src/domains/pws/__tests__/referenceVectors.ts` is copied from the Authorization
+  Profile in [w3c-ccg/portable-web-spaces-spec](https://github.com/w3c-ccg/portable-web-spaces-spec)
+  (commit `ed033eb`), MIT licence, Copyright (c) 2026 Digital Credentials Consortium. The licence text
+  with that notice is in `LICENSES/MIT-portable-web-spaces-spec.txt`. The specification text is also
+  published under the W3C Software and Document License 2023.
+- **CLDR Windows time zone mapping.** The table in `backend/apps/api/src/common/time/windowsZones.ts`
+  is the `territory="001"` rows of `common/supplemental/windowsZones.xml` from
+  [unicode-org/cldr](https://github.com/unicode-org/cldr) (commit `c4bb2c199c53`), Copyright © 1991-2013
+  Unicode, Inc., under the Unicode License V3 (`LICENSES/Unicode-3.0.txt`).
+<!-- end hand-authored -->
+
 ## Copyleft and reciprocal-licence dependencies
 
 These dependencies carry obligations beyond retaining a notice. Review before

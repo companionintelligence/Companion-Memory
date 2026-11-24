@@ -1,3 +1,5 @@
+import { fileURLToPath } from 'node:url';
+
 import globals from 'globals';
 import importPlugin from 'eslint-plugin-import';
 
@@ -57,7 +59,8 @@ export default [
     languageOptions: {
       parserOptions: {
         projectService: true,
-        tsconfigRootDir: new URL('.', import.meta.url),
+        // A path string, not a URL: typescript-estree throws on any non-string value.
+        tsconfigRootDir: fileURLToPath(new URL('.', import.meta.url)),
       },
     },
 

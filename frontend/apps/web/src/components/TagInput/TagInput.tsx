@@ -23,6 +23,7 @@ interface Props {
   readOnly?: boolean;
   className?: string;
   inputPlaceholder?: string;
+  inputAriaLabel?: string;
   singleLine?: boolean;
   /**
    * Existing tag labels to autocomplete from. When provided, a dropdown of
@@ -44,6 +45,7 @@ export function TagInput({
   readOnly = false,
   className,
   inputPlaceholder,
+  inputAriaLabel,
   singleLine = false,
   suggestions,
   onTagAdded,
@@ -223,6 +225,7 @@ export function TagInput({
                 render={({ field }) => (
                   <Input
                     {...field}
+                    aria-label={inputAriaLabel}
                     onKeyDown={handleKeyDown}
                     onFocus={() => setFocused(true)}
                     // Delay so a suggestion click registers before the list unmounts.
@@ -237,7 +240,7 @@ export function TagInput({
                       '!p-0 h-5',
                       'focus:!border-transparent focus:!ring-0 focus-visible:!ring-0 focus-visible:!border-transparent',
                       'disabled:!bg-transparent',
-                      'resize-none text-sm leading-none',
+                      'resize-none text-base leading-none md:text-sm',
                       singleLine && '!min-w-0',
                     )}
                   />

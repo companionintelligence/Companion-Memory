@@ -2,21 +2,35 @@ import { setApiKey } from '@ci/common/src/utils/apiAuth';
 import { setApiBaseUrl } from '@ci/common/src/utils/apiBase';
 import { FetchJsonError } from '@ci/common/src/utils/fetchJson';
 import {
+  clearOutbox,
   enqueueOutboxItem,
   getOutboxItem,
   listOutbox,
+  outboxOwnerStamp,
   recordOutboxAttempt,
   removeOutboxItem,
   retryOutboxItem,
   type OutboxItem,
 } from '@ci/common/src/utils/outbox';
-import { flushOutbox, isPermanentFlushFailure, registerOutboxKind } from '@ci/common/src/utils/outboxFlush';
+import {
+  clearOutboxAfterSignOut,
+  countUnsentBeforeSignOut,
+  drainOutboxBeforeSignOut,
+  flushOutbox,
+  isPermanentFlushFailure,
+  oweIngestFinish,
+  registerOutboxKind,
+  resetIngestFinishState,
+  settleIngestFinish,
+  type FlushOutboxSummary,
+} from '@ci/common/src/utils/outboxFlush';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 type GlobalWithWindow = { window?: unknown };
 
 const HUB_BASE = 'http://127.0.0.1:4100';
 const HUB_TOKEN = 'tok-abc';
+const DEVICE_KEY = 'device-key-for-owner';
 
 function setWindow(value: unknown): void {
   (globalThis as GlobalWithWindow).window = value;
@@ -26,9 +40,14 @@ function urlOf(input: RequestInfo): string {
   return typeof input === 'string' ? input : (input as Request).url;
 }
 
-/** Native shell with the LocalHub plugin present. Returns the `start` spy. */
+/**
+ * Native shell with the LocalHub plugin present, signed in as {@link DEVICE_KEY} (the outbox
+ * queues and drains only under an account). Returns the `start` spy.
+ */
 function setNativeWindow() {
   const start = vi.fn(async () => ({ baseUrl: HUB_BASE, token: HUB_TOKEN }));
+
+  setApiKey(DEVICE_KEY);
 
   setWindow({
     Capacitor: {
@@ -102,7 +121,7 @@ function item(overrides: Partial<OutboxItem> & Pick<OutboxItem, 'id' | 'seq'>): 
  * behaviors the contract cares about: FIFO by `seq`, idempotent enqueue, MAX_ATTEMPTS
  * escalation to `needs_attention`, and rows only ever leaving on an explicit delete.
  */
-function fakeSidecar(seed: OutboxItem[] = [], options: { max?: number } = {}) {
+function fakeSidecar(seed: OutboxItem[] = [], options: { max?: number; reassign?: boolean } = {}) {
   const max = options.max ?? 5000;
   const store = new Map(seed.map((entry) => [entry.id, { ...entry }]));
   const byKey = new Map<string, string>();
@@ -147,6 +166,7 @@ function fakeSidecar(seed: OutboxItem[] = [], options: { max?: number } = {}) {
         payload: Record<string, unknown>;
         capturedAt: string;
         idempotencyKey: string;
+        owner?: string;
       };
       const existingId = byKey.get(body.idempotencyKey);
 
@@ -171,6 +191,7 @@ function fakeSidecar(seed: OutboxItem[] = [], options: { max?: number } = {}) {
         kind: body.kind,
         capturedAt: body.capturedAt,
         payload: body.payload,
+        owner: body.owner ?? null,
       });
 
       nextSeq += 1;
@@ -183,6 +204,28 @@ function fakeSidecar(seed: OutboxItem[] = [], options: { max?: number } = {}) {
         capturedAt: created.capturedAt,
         seq: created.seq,
       });
+    }
+
+    if (call.method === 'DELETE' && !id) {
+      const deleted = store.size;
+
+      store.clear();
+
+      return jsonResponse(200, { deleted });
+    }
+
+    if (call.method === 'POST' && id === 'owner' && !verb && options.reassign !== false) {
+      const { from, to } = call.body as { from: string[]; to: string };
+      let updated = 0;
+
+      for (const entry of store.values()) {
+        if (entry.owner != null && from.includes(entry.owner)) {
+          entry.owner = to;
+          updated += 1;
+        }
+      }
+
+      return jsonResponse(200, { updated });
     }
 
     const target = id ? store.get(id) : undefined;
@@ -273,6 +316,7 @@ describe('outbox client — happy paths against a mocked sidecar', () => {
       payload: { lat: 1, lng: 2 },
       capturedAt: '2026-08-13T09:59:00.000Z',
       idempotencyKey: 'key-1',
+      owner: outboxOwnerStamp(),
     });
   });
 
@@ -488,7 +532,14 @@ describe('flushOutbox — draining', () => {
 
     const summary = await flushOutbox();
 
-    expect(summary).toEqual({ attempted: 3, succeeded: 3, failed: 0, unavailable: false, aborted: false });
+    expect(summary).toEqual({
+      attempted: 3,
+      skipped: 0,
+      succeeded: 3,
+      failed: 0,
+      unavailable: false,
+      aborted: false,
+    });
 
     const flushed = calls.filter((call) => call.url === '/api/position').map((call) => call.body);
     expect(flushed).toEqual([{ n: 1 }, { n: 2 }, { n: 3 }]);
@@ -609,18 +660,548 @@ describe('flushOutbox — draining', () => {
     expect(store.get('b')).toMatchObject({ status: 'pending', attempts: 0 });
   });
 
+  it('runs a follow-up drain for a call that lands while the drain in flight is being aborted', async () => {
+    setNativeWindow();
+    const controller = new AbortController();
+    const { handler, store } = fakeSidecar([
+      item({ id: 'a', seq: 1 }),
+      item({ id: 'b', seq: 2 }),
+      item({ id: 'c', seq: 3 }),
+    ]);
+    let second: Promise<FlushOutboxSummary> | null = null;
+    let third: Promise<FlushOutboxSummary> | null = null;
+    const calls = installFetch(
+      route(handler, (call) => {
+        // The mode flickers after the first send: the running drain is aborted, and in
+        // the same breath two triggers arrive (the mode coming back, a resume). Joining
+        // the aborted drain used to swallow both — nothing drained b and c until the next
+        // transition, which could be half an hour away.
+        if (call.url === '/api/position' && second == null) {
+          controller.abort();
+          second = flushOutbox();
+          third = flushOutbox();
+        }
+
+        return applianceAccepts(call);
+      }),
+    );
+
+    const first = await flushOutbox({ signal: controller.signal });
+
+    expect(first).toMatchObject({ attempted: 1, succeeded: 1, aborted: true });
+    expect(second).not.toBeNull();
+    // One follow-up, shared by every call that landed in the window.
+    expect(third).toBe(second);
+
+    const followUp = await second!;
+
+    expect(followUp).toMatchObject({ attempted: 2, succeeded: 2, aborted: false });
+    expect(calls.filter((call) => call.url === '/api/position')).toHaveLength(3);
+    expect(store.size).toBe(0);
+  });
+
+  it('still joins a healthy drain: a follow-up is only for an aborted one', async () => {
+    setNativeWindow();
+    const { handler } = fakeSidecar([item({ id: 'a', seq: 1 }), item({ id: 'b', seq: 2 })]);
+    let joined: Promise<FlushOutboxSummary> | null = null;
+    const calls = installFetch(
+      route(handler, (call) => {
+        if (call.url === '/api/position' && joined == null) {
+          joined = flushOutbox({ signal: new AbortController().signal });
+        }
+
+        return applianceAccepts(call);
+      }),
+    );
+
+    const first = await flushOutbox();
+
+    expect(await joined!).toBe(first);
+    expect(calls.filter((call) => call.path === '/api/outbox?status=pending')).toHaveLength(1);
+  });
+
   it('reports unavailable on web without attempting anything', async () => {
     setWindow({});
     const calls = installFetch(() => jsonResponse(200, {}));
 
     await expect(flushOutbox()).resolves.toEqual({
       attempted: 0,
+      skipped: 0,
       succeeded: 0,
       failed: 0,
       unavailable: true,
       aborted: false,
     });
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe('outbox owner stamp: a capture only ever uploads to the account it was taken for', () => {
+  it('stamps an enqueue with the signed-in key and server, and the stamp tells them apart', async () => {
+    setNativeWindow();
+    setApiBaseUrl('https://memory-a.example.com');
+    const { handler, store } = fakeSidecar();
+    installFetch(handler);
+
+    await enqueueOutboxItem({ kind: 'position', payload: {} });
+    const asA = outboxOwnerStamp();
+
+    setApiKey('another-device-key');
+    const otherKey = outboxOwnerStamp();
+    setApiKey(DEVICE_KEY);
+    setApiBaseUrl('https://memory-b.example.com');
+    const otherServer = outboxOwnerStamp();
+
+    expect([...store.values()][0].owner).toBe(asA);
+    expect(asA).toContain('https://memory-a.example.com');
+    expect(asA).not.toContain(DEVICE_KEY);
+    expect(new Set([asA, otherKey, otherServer]).size).toBe(3);
+  });
+
+  it('queues nothing on a phone with nobody signed in', async () => {
+    setNativeWindow();
+    setApiKey(null);
+    const { handler, store } = fakeSidecar();
+    const calls = installFetch(handler);
+
+    const result = await enqueueOutboxItem({ kind: 'position', payload: { lat: 1 } });
+
+    expect(result).toMatchObject({ ok: false, reason: 'error' });
+    expect(store.size).toBe(0);
+    expect(calls.some((call) => call.method === 'POST')).toBe(false);
+  });
+
+  it('leaves a row stamped for another account where it is: not sent, no attempt spent', async () => {
+    setNativeWindow();
+    const { handler, store } = fakeSidecar([
+      item({ id: 'theirs', seq: 1, owner: 'https://memory.example.com 00000000000000' }),
+    ]);
+    const calls = installFetch(route(handler, applianceAccepts));
+
+    const summary = await flushOutbox();
+
+    expect(summary).toMatchObject({ attempted: 0, skipped: 1, succeeded: 0, failed: 0 });
+    expect(calls.some((call) => !call.url.startsWith(HUB_BASE))).toBe(false);
+    // Not even its payload was read.
+    expect(calls.some((call) => call.path === '/api/outbox/theirs')).toBe(false);
+    expect(store.get('theirs')).toMatchObject({ status: 'pending', attempts: 0 });
+  });
+
+  it('sends a row stamped for this session, and one queued before stamping existed', async () => {
+    setNativeWindow();
+    const { handler, store } = fakeSidecar([
+      item({ id: 'mine', seq: 1, owner: outboxOwnerStamp(), payload: { n: 1 } }),
+      item({ id: 'legacy', seq: 2, owner: null, payload: { n: 2 } }),
+    ]);
+    const calls = installFetch(route(handler, applianceAccepts));
+
+    const summary = await flushOutbox();
+
+    expect(summary).toMatchObject({ attempted: 2, skipped: 0, succeeded: 2 });
+    expect(calls.filter((call) => call.url === '/api/position').map((call) => call.body)).toEqual([
+      { n: 1 },
+      { n: 2 },
+    ]);
+    expect(store.size).toBe(0);
+  });
+
+  it('sends nothing at all with nobody signed in', async () => {
+    setNativeWindow();
+    setApiKey(null);
+    const { handler, store } = fakeSidecar([item({ id: 'legacy', seq: 1, owner: null })]);
+    const calls = installFetch(route(handler, applianceAccepts));
+
+    const summary = await flushOutbox();
+
+    expect(summary).toMatchObject({ attempted: 0, skipped: 1 });
+    expect(calls.some((call) => !call.url.startsWith(HUB_BASE))).toBe(false);
+    expect(store.get('legacy')).toMatchObject({ attempts: 0 });
+  });
+
+  it('re-checks right before sending: a sign-out while the row is read keeps it home', async () => {
+    setNativeWindow();
+    const { handler, store } = fakeSidecar([item({ id: 'a', seq: 1, owner: outboxOwnerStamp() })]);
+    const calls = installFetch(
+      route((call) => {
+        if (call.method === 'GET' && call.path === '/api/outbox/a') {
+          // The session ends between the list and the send.
+          setApiKey(null);
+        }
+
+        return handler(call);
+      }, applianceAccepts),
+    );
+
+    const summary = await flushOutbox();
+
+    expect(summary).toMatchObject({ attempted: 0, skipped: 1 });
+    expect(calls.some((call) => !call.url.startsWith(HUB_BASE))).toBe(false);
+    expect(store.get('a')).toMatchObject({ attempts: 0 });
+  });
+});
+
+/** A localStorage stand-in, for the ledger of which account each stamp was made under. */
+function memoryStorage(): Storage {
+  const values = new Map<string, string>();
+
+  return {
+    get length() {
+      return values.size;
+    },
+    clear: () => values.clear(),
+    getItem: (key: string) => values.get(key) ?? null,
+    key: (index: number) => [...values.keys()][index] ?? null,
+    removeItem: (key: string) => {
+      values.delete(key);
+    },
+    setItem: (key: string, value: string) => {
+      values.set(key, String(value));
+    },
+  };
+}
+
+/** {@link setNativeWindow}, plus a localStorage. Returns the storage. */
+function setNativeWindowWithStorage(storage: Storage = memoryStorage()): Storage {
+  setNativeWindow();
+  Object.assign((globalThis as GlobalWithWindow).window as object, { localStorage: storage });
+
+  return storage;
+}
+
+/** An appliance that answers `me` as `accountFor(the key the request carried)` and takes every send. */
+function applianceAs(accountFor: (key: string | undefined) => string | null): Handler {
+  return (call) => {
+    if (call.url.endsWith('/api/graphql')) {
+      const id = accountFor(call.headers['x-api-key']);
+
+      return jsonResponse(200, { data: { me: id ? { id } : null } });
+    }
+
+    return applianceAccepts(call);
+  };
+}
+
+describe('outbox owner ledger: a new key for the same account picks up what the old one queued', () => {
+  it("sends the rows queued under the account's earlier key, once that key is gone", async () => {
+    setNativeWindowWithStorage();
+    const { handler, store } = fakeSidecar();
+    const calls = installFetch(
+      route(
+        handler,
+        applianceAs(() => 'account-1'),
+      ),
+    );
+
+    // Online under the first key: Memory says whose it is.
+    await flushOutbox();
+    const firstStamp = outboxOwnerStamp();
+
+    // Offline, two notes queue under that key. Then "Sign out everywhere" revokes it, and the
+    // phone signs in again as the same account on the same Memory.
+    store.set('a', item({ id: 'a', seq: 1, owner: firstStamp, payload: { n: 1 } }));
+    store.set('b', item({ id: 'b', seq: 2, owner: firstStamp, payload: { n: 2 } }));
+    setApiKey('second-key-same-account');
+    calls.length = 0;
+
+    const summary = await flushOutbox();
+
+    expect(calls.find((call) => call.path === '/api/outbox/owner')?.body).toEqual({
+      from: [firstStamp],
+      to: outboxOwnerStamp(),
+    });
+    expect(summary).toMatchObject({ attempted: 2, succeeded: 2, skipped: 0 });
+    expect(calls.filter((call) => call.url === '/api/position').map((call) => call.body)).toEqual([
+      { n: 1 },
+      { n: 2 },
+    ]);
+    expect(store.size).toBe(0);
+
+    // The old key is settled: later drains neither ask Memory again nor call the sidecar.
+    calls.length = 0;
+    await flushOutbox();
+    expect(calls.some((call) => call.url.endsWith('/api/graphql'))).toBe(false);
+    expect(calls.some((call) => call.path === '/api/outbox/owner')).toBe(false);
+  });
+
+  it("never moves another account's rows onto this one", async () => {
+    setNativeWindowWithStorage();
+    const { handler, store } = fakeSidecar();
+    const calls = installFetch(
+      route(
+        handler,
+        applianceAs((key) => (key === DEVICE_KEY ? 'account-1' : 'account-2')),
+      ),
+    );
+
+    await flushOutbox();
+    const firstStamp = outboxOwnerStamp();
+    store.set('theirs', item({ id: 'theirs', seq: 1, owner: firstStamp }));
+
+    setApiKey('someone-elses-key');
+    calls.length = 0;
+    const summary = await flushOutbox();
+
+    expect(calls.some((call) => call.path === '/api/outbox/owner')).toBe(false);
+    expect(summary).toMatchObject({ attempted: 0, skipped: 1 });
+    expect(store.get('theirs')).toMatchObject({ owner: firstStamp, attempts: 0 });
+  });
+
+  it('never moves rows queued for the same account on a different Memory', async () => {
+    setNativeWindowWithStorage();
+    setApiBaseUrl('https://memory-a.example.com');
+    const { handler, store } = fakeSidecar();
+    const calls = installFetch(
+      route(
+        handler,
+        applianceAs(() => 'account-1'),
+      ),
+    );
+
+    await flushOutbox();
+    const onA = outboxOwnerStamp();
+    store.set('for-a', item({ id: 'for-a', seq: 1, owner: onA }));
+
+    setApiBaseUrl('https://memory-b.example.com');
+    setApiKey('key-on-b');
+    calls.length = 0;
+    await flushOutbox();
+
+    expect(calls.some((call) => call.path === '/api/outbox/owner')).toBe(false);
+    expect(store.get('for-a')).toMatchObject({ owner: onA });
+  });
+
+  it('records nothing when Memory does not say whose the key is', async () => {
+    const storage = setNativeWindowWithStorage();
+    const { handler, store } = fakeSidecar();
+    const calls = installFetch(
+      route(
+        handler,
+        applianceAs(() => null),
+      ),
+    );
+
+    await flushOutbox();
+    store.set('a', item({ id: 'a', seq: 1, owner: outboxOwnerStamp() }));
+    const firstStamp = outboxOwnerStamp();
+    setApiKey('second-key');
+    calls.length = 0;
+    await flushOutbox();
+
+    expect(storage.length).toBe(0);
+    expect(calls.some((call) => call.path === '/api/outbox/owner')).toBe(false);
+    expect(store.get('a')).toMatchObject({ owner: firstStamp });
+  });
+
+  it('keeps trying while the sidecar predates the route, without holding up the drain', async () => {
+    setNativeWindowWithStorage();
+    const { handler, store } = fakeSidecar([], { reassign: false });
+    const calls = installFetch(
+      route(
+        handler,
+        applianceAs(() => 'account-1'),
+      ),
+    );
+
+    await flushOutbox();
+    const firstStamp = outboxOwnerStamp();
+    store.set('old', item({ id: 'old', seq: 1, owner: firstStamp }));
+    setApiKey('second-key');
+
+    await flushOutbox();
+    calls.length = 0;
+    const summary = await flushOutbox();
+
+    expect(calls.filter((call) => call.path === '/api/outbox/owner')).toHaveLength(1);
+    expect(summary).toMatchObject({ attempted: 0, skipped: 1 });
+    expect(store.get('old')).toMatchObject({ owner: firstStamp });
+  });
+
+  it('sign-out forgets every recorded key along with the rows', async () => {
+    const storage = setNativeWindowWithStorage();
+    const { handler } = fakeSidecar();
+    installFetch(
+      route(
+        handler,
+        applianceAs(() => 'account-1'),
+      ),
+    );
+
+    await flushOutbox();
+    expect(storage.length).toBe(1);
+
+    setApiKey(null);
+    await clearOutboxAfterSignOut();
+
+    expect(storage.length).toBe(0);
+  });
+});
+
+describe('sign-out and the outbox', () => {
+  it('clears every row through DELETE /api/outbox', async () => {
+    setNativeWindow();
+    const { handler, store } = fakeSidecar([
+      item({ id: 'a', seq: 1 }),
+      item({ id: 'b', seq: 2, status: 'needs_attention' }),
+    ]);
+    const calls = installFetch(handler);
+
+    await expect(clearOutbox()).resolves.toEqual({ ok: true, value: 2 });
+    expect(store.size).toBe(0);
+    expect(calls.find((call) => call.method === 'DELETE')?.path).toBe('/api/outbox');
+  });
+
+  it('drains under the outgoing account before the key goes, then settles what it owes', async () => {
+    setNativeWindow();
+    resetIngestFinishState();
+    const { handler, store } = fakeSidecar([
+      item({ id: 'a', seq: 1, kind: 'positions', owner: outboxOwnerStamp(), payload: { records: [] } }),
+    ]);
+    const calls = installFetch(route(handler, applianceAccepts));
+
+    await drainOutboxBeforeSignOut();
+
+    const onward = calls.filter((call) => !call.url.startsWith(HUB_BASE));
+    expect(onward.map((call) => call.url)).toEqual(['/api/v1/positions', '/api/v1/ingest/finish']);
+    expect(onward.every((call) => call.headers['x-api-key'] === DEVICE_KEY)).toBe(true);
+    expect(store.size).toBe(0);
+  });
+
+  it('spends no attempt on a send that failed only because the appliance was out of reach', async () => {
+    setNativeWindow();
+    const { handler, store } = fakeSidecar([
+      item({ id: 'offline', seq: 1, owner: outboxOwnerStamp() }),
+      item({ id: 'refused', seq: 2, owner: outboxOwnerStamp() }),
+    ]);
+    const calls = installFetch(
+      route(handler, (call) => {
+        if (call.body?.note === 'refused') {
+          return jsonResponse(400, { message: 'Bad Request' });
+        }
+
+        throw new TypeError('Failed to fetch');
+      }),
+    );
+
+    await drainOutboxBeforeSignOut();
+
+    // Both were tried. The offline one is left exactly as it was, so a sign-out the person
+    // then cancels costs it nothing; a refusal that will never pass is still recorded.
+    expect(calls.filter((call) => call.url === '/api/position')).toHaveLength(2);
+    expect(store.get('offline')).toMatchObject({ status: 'pending', attempts: 0, lastError: null });
+    expect(store.get('refused')).toMatchObject({ status: 'needs_attention', attempts: 1 });
+  });
+
+  it('counts every row sign-out would delete, including ones this session cannot send', async () => {
+    setNativeWindow();
+    const mine = outboxOwnerStamp();
+    const { handler } = fakeSidecar([
+      item({ id: 'waiting', seq: 1, owner: mine }),
+      item({ id: 'parked', seq: 2, owner: mine, status: 'needs_attention', attempts: 5 }),
+      item({ id: 'older-build', seq: 3, owner: null }),
+      // Queued under a key the phone no longer has. Sign-out deletes it too, so the person is
+      // asked about it rather than have it vanish.
+      item({ id: 'earlier-key', seq: 4, owner: 'https://memory.example.com 00000000000000' }),
+    ]);
+    installFetch(handler);
+
+    await expect(countUnsentBeforeSignOut()).resolves.toBe(4);
+  });
+
+  it('counts nothing where there is no queue to read', async () => {
+    setWindow({});
+    setApiKey(DEVICE_KEY);
+    const calls = installFetch(() => jsonResponse(500));
+
+    await expect(countUnsentBeforeSignOut()).resolves.toBe(0);
+    expect(calls).toHaveLength(0);
+
+    // A sidecar that does not answer is not a reason to hold sign-out either.
+    setNativeWindow();
+    await expect(countUnsentBeforeSignOut()).resolves.toBe(0);
+  });
+
+  it('gives up on the drain at the deadline instead of holding sign-out open', async () => {
+    setNativeWindow();
+    const { handler } = fakeSidecar([item({ id: 'a', seq: 1 })]);
+    let answer: (response: Response) => void = () => {};
+
+    // An appliance that never answers on its own.
+    const hung = new Promise<Response>((resolve) => {
+      answer = resolve;
+    });
+    installFetch(route(handler, () => hung as unknown as Response));
+
+    const started = Date.now();
+    await drainOutboxBeforeSignOut(50);
+
+    expect(Date.now() - started).toBeLessThan(2_000);
+
+    // Let the abandoned drain finish, so the next test does not join it.
+    answer(jsonResponse(201, {}));
+    await flushOutbox();
+  });
+
+  it('after sign-out, nothing queued and no enrichment owed is left for the next account', async () => {
+    setNativeWindow();
+    oweIngestFinish(['reverse_position']);
+    const { handler, store } = fakeSidecar([item({ id: 'a', seq: 1 })]);
+    installFetch(route(handler, applianceAccepts));
+
+    setApiKey(null);
+    await clearOutboxAfterSignOut();
+
+    expect(store.size).toBe(0);
+
+    // The next account signs in: there is no finish left to send on the old one's behalf.
+    // Forced, so the debounce cannot be what keeps it quiet.
+    setApiKey('next-account-key');
+    const calls = installFetch(route(handler, applianceAccepts));
+    await settleIngestFinish({ force: true });
+    expect(calls.some((call) => call.url === '/api/v1/ingest/finish')).toBe(false);
+  });
+
+  it('a send still in flight when sign-out clears leaves no enrichment owed to the next account', async () => {
+    setNativeWindow();
+    resetIngestFinishState();
+    const { handler } = fakeSidecar([
+      item({ id: 'a', seq: 1, kind: 'positions', owner: outboxOwnerStamp(), payload: { records: [] } }),
+    ]);
+
+    let answer: (response: Response) => void = () => {};
+
+    let sent: () => void = () => {};
+
+    const posted = new Promise<void>((resolve) => {
+      sent = resolve;
+    });
+    // The appliance accepts the row, but only answers once sign-out has run, and refuses
+    // anything that arrives without a key.
+    installFetch(
+      route(handler, (call) => {
+        if (!call.headers['x-api-key']) {
+          return jsonResponse(401, { error: 'unauthorized' });
+        }
+
+        sent();
+
+        return new Promise<Response>((resolve) => {
+          answer = resolve;
+        }) as unknown as Response;
+      }),
+    );
+
+    const drained = flushOutbox();
+    await posted;
+
+    setApiKey(null);
+    await clearOutboxAfterSignOut();
+    answer(jsonResponse(201, {}));
+    await drained;
+
+    setApiKey('next-account-key');
+    const calls = installFetch(route(handler, applianceAccepts));
+    await settleIngestFinish({ force: true });
+    expect(calls.some((call) => call.url === '/api/v1/ingest/finish')).toBe(false);
   });
 });
 

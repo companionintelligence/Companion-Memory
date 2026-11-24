@@ -272,6 +272,27 @@ describeWithDatabase(`TagService rename/delete against a live Postgres (${availa
     });
   });
 
+  describe('replaceEntityTags', () => {
+    it("replaces one entity's tag set atomically without touching another user's tags", async () => {
+      const entityId = randomUUID();
+      const old = await seedTag(userA, 'other');
+      const kept = await seedTag(userA, 'gym');
+      const theirs = await seedTag(userB, 'private');
+
+      await assign(old, 'place', entityId);
+      await assign(kept, 'place', entityId);
+      await assign(theirs, 'place', entityId);
+
+      await service.replaceEntityTags(contextA, { type: 'place', id: entityId }, ['Gym', 'Social']);
+
+      const mine = await service.getTagsForEntity(contextA, { type: 'place', id: entityId });
+
+      expect(mine.map((tag) => tag.label).sort()).toEqual(['gym', 'social']);
+      expect(await assignmentsFor(old)).toEqual([]);
+      expect(await assignmentsFor(theirs)).toEqual([{ entity_type: 'place', entity_id: entityId }]);
+    });
+  });
+
   it('keeps a merged-into label re-usable, which a soft delete would not', async () => {
     // The point of hard-deleting: tagging something with the label again has
     // to work immediately afterwards.

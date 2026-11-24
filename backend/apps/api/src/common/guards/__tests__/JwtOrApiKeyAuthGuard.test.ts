@@ -1,10 +1,31 @@
-import { InternalServerErrorException, UnauthorizedException, type ExecutionContext } from '@nestjs/common';
+import {
+  ForbiddenException,
+  InternalServerErrorException,
+  UnauthorizedException,
+  type ExecutionContext,
+} from '@nestjs/common';
 import type { Reflector } from '@nestjs/core';
 
-import { REQUIRE_SCOPES_KEY } from '@ci/common/decorators';
+import { REQUIRE_CAPABILITY_KEY, REQUIRE_SCOPES_KEY } from '@ci/common/decorators';
 
 import { JwtOrApiKeyAuthGuard } from '../JwtOrApiKeyAuthGuard';
-import type { PortalTokenVerifier } from '../PortalTokenVerifier';
+import type { PortalPrincipal, PortalTokenVerifier } from '../PortalTokenVerifier';
+
+/** The user's full authority: a token addressed to this appliance. */
+const fullPrincipal = (user: { id: string; role?: string }): PortalPrincipal => ({
+  user,
+  limits: null,
+  credentialRoutes: true,
+  admin: true,
+});
+
+/** A capture client, or a token not addressed to this appliance. */
+const capturePrincipal = (user: { id: string; role?: string }): PortalPrincipal => ({
+  user,
+  limits: { scopes: ['capture'], capability: 'write' },
+  credentialRoutes: false,
+  admin: false,
+});
 
 /**
  * Nothing exercised this guard's OWN branching logic before this file — the
@@ -126,7 +147,10 @@ describe('JwtOrApiKeyAuthGuard.canActivate — portal short-circuit ordering', (
   it('a valid portal token short-circuits to true WITHOUT ever calling the JWT/api-key fallback', async () => {
     const spy = spyOnMixinCanActivate();
     const user = { id: 'portal-user' };
-    const portal = makePortal({ enabled: true, verifyAndProvision: jest.fn().mockResolvedValue(user) });
+    const portal = makePortal({
+      enabled: true,
+      verifyAndProvision: jest.fn().mockResolvedValue(fullPrincipal(user)),
+    });
     const guard = new JwtOrApiKeyAuthGuard(portal, makeReflector());
     const req: Record<string, unknown> = { headers: { authorization: 'Bearer good-token' } };
 
@@ -134,6 +158,8 @@ describe('JwtOrApiKeyAuthGuard.canActivate — portal short-circuit ordering', (
 
     expect(spy).not.toHaveBeenCalled();
     expect(req.user).toBe(user);
+    expect(req.apiKeyScopes).toBeUndefined();
+    expect(req.portalPrincipal).toEqual({ admin: true });
     expect(portal.verifyAndProvision).toHaveBeenCalledWith('good-token');
   });
 
@@ -204,5 +230,60 @@ describe('JwtOrApiKeyAuthGuard.canActivate — scope enforcement runs only when 
     const req = { headers: {}, method: 'GET', apiKeyScopes: ['other'] };
 
     await expect(guard.canActivate(httpContext(req))).resolves.toBe(false);
+  });
+});
+
+/**
+ * A Portal bearer that is not the user's full authority (a capture client, or a token not addressed
+ * to this appliance) used to return before any enforcement ran, so it reached every route a
+ * session can. It is now confined exactly like an api key with the same scopes and capability.
+ */
+describe('JwtOrApiKeyAuthGuard.canActivate — a limited Portal bearer is confined like an api key', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  const limitedGuard = (reflector: Reflector) =>
+    new JwtOrApiKeyAuthGuard(
+      makePortal({
+        enabled: true,
+        verifyAndProvision: jest.fn().mockResolvedValue(capturePrincipal({ id: 'owner', role: 'admin' })),
+      }),
+      reflector,
+    );
+  const bearerRequest = (): Record<string, unknown> => ({
+    method: 'POST',
+    headers: { authorization: 'Bearer capture-token' },
+  });
+
+  it('admits it on a capture route and records the scopes and capability it holds', async () => {
+    const req = bearerRequest();
+
+    await expect(limitedGuard(makeReflector(['capture'])).canActivate(httpContext(req))).resolves.toBe(true);
+    expect(req.apiKeyScopes).toEqual(['capture']);
+    expect(req.apiKeyCapability).toBe('write');
+    expect(req.portalPrincipal).toEqual({ admin: false });
+  });
+
+  it('refuses it on a route that grants no scope (GraphQL, settings, everything else)', async () => {
+    await expect(
+      limitedGuard(makeReflector(undefined)).canActivate(httpContext(bearerRequest())),
+    ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('refuses it on a route for another scope', async () => {
+    await expect(
+      limitedGuard(makeReflector(['memory'])).canActivate(httpContext(bearerRequest())),
+    ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('refuses it where the route needs more than write', async () => {
+    const reflector = {
+      getAllAndOverride: jest.fn((key: string) =>
+        key === REQUIRE_SCOPES_KEY ? ['capture'] : key === REQUIRE_CAPABILITY_KEY ? 'full' : undefined,
+      ),
+    } as unknown as Reflector;
+
+    await expect(limitedGuard(reflector).canActivate(httpContext(bearerRequest()))).rejects.toThrow(
+      ForbiddenException,
+    );
   });
 });

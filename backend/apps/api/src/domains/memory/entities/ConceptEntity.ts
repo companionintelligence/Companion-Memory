@@ -22,6 +22,14 @@ export class ConceptEntity extends BaseEntity {
   @Column({ type: 'text', name: 'linked_id', nullable: true })
   linkedId!: string | null;
 
+  /**
+   * `ci.entities.is_active`. False once the user asked Memory to forget the
+   * concept (`memory.forget` in archive mode), and on a merge tombstone. Search,
+   * the explorer and the concept list leave such a row out.
+   */
+  @Column({ type: 'boolean', name: 'is_active', default: true })
+  isActive!: boolean;
+
   // Derived helpers populated from properties JSONB
   type!: string | null;
 
@@ -57,6 +65,7 @@ export class ConceptEntity extends BaseEntity {
       searchContent: entity.searchContent,
       linkedTable: entity.linkedTable,
       linkedId: entity.linkedId,
+      isActive: entity.isActive,
       userId: entity.userId ?? null,
       createdAt: entity.createdAt,
       updatedAt: entity.updatedAt,

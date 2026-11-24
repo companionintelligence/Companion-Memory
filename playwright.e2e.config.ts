@@ -37,11 +37,11 @@ export default defineConfig({
   //
   // A shared state file cannot work against this API: sessions are bound to
   // `ip + user_agent` AND the token rotates on the `/api/authenticate/refresh`
-  // the app makes on load, with only a 30s grace window
-  // (`auth.session.refreshGracePeriod`). One file replayed across a four-minute
-  // serial suite goes stale partway through, and the specs that follow fail on
-  // page assertions while the real cause is a 401 nobody sees. See that
-  // fixture's header.
+  // the app makes on load, with only a 2-minute grace window
+  // (`auth.session.refreshGracePeriod`) that also ends when the new token
+  // refreshes. One file replayed across a four-minute serial suite goes stale
+  // partway through and the specs that follow fail on page assertions while
+  // the real cause is a 401 nobody sees. See that fixture's header.
   use: {
     baseURL,
     actionTimeout: 10_000,

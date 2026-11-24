@@ -1,7 +1,6 @@
-import { SCHEDULE_CRON_OPTIONS } from '@nestjs/schedule/dist/schedule.constants';
-
 import type { FeatureService } from '@ci/common/feature';
 import type { LoggerService } from '@ci/common/logging';
+import { SCHEDULE_CRON_OPTIONS } from '@ci/common/schedule/metadataKeys';
 import type { EventService } from '@ci/domains/events';
 
 import { AGENT_MEMORY_QUEUE, AGENT_MEMORY_QUEUE_OPTIONS } from '../../constants';

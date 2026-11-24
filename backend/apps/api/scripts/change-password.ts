@@ -40,6 +40,11 @@ import { UserEntity } from '@ci/domains/user';
     });
 
     user.password = await bcrypt.hash(password, config.auth.local.saltRounds);
+    // Somebody knows this password now, so AccountController.requireReauth must ask
+    // for it. Left null — as it is on a Hub- or Portal-provisioned account this is
+    // often run to rescue — the account would keep proving itself by a recent
+    // sign-in alone.
+    user.passwordSetAt = new Date();
 
     try {
       await db.transaction(async (manager) => {

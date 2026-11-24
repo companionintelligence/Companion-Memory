@@ -322,9 +322,12 @@ export class GoogleContactsTransformService {
           last_synced_at: new Date().toISOString(),
         };
 
-        await this.personService.update({ userId }, existingEntity.id, {
-          properties: updatedProperties,
-        });
+        await this.personService.update(
+          { userId },
+          existingEntity.id,
+          { properties: updatedProperties },
+          { source: 'TransformGoogleContacts.processContact' },
+        );
 
         this.logger.log('Updated existing contact entity', {
           contactEntityId,

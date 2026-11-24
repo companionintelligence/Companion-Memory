@@ -18,6 +18,35 @@
 > threat analysis itself is unaffected:** every ceiling, tier, exemption and default it argues
 > about is unchanged.
 >
+> **Δ 2026-11-15 — four passages re-read at `744ace035`.** In T1, #2414 (merged 2026-08-27
+> UTC, in v2026.8.26 and every later release) added `ci.household_tiers`: an owner can give
+> another local account any tier, `stranger` included, with `setHouseholdTier`, and
+> `resolveTier` uses that tier. The Grant Manager offers the same choice beside a local account
+> that holds a grant in force. A local asker with no tier set still gets `household`. The same
+> PR added tests that pin the household exemption (D6). T1's
+> *Every local asker is `household`, unconditionally* and
+> *There is no way to demote a housemate* paragraphs, its *Mutation evidence*, the
+> *Zero current tests break* clause in its proposal 1 and T6's
+> *The safest tier is unreachable* bullet describe `fe5075a79`, as do the *cannot be demoted*
+> and *breaks no test* clauses in §12's decision 1 and the *therefore receive `household`*
+> clause in decision 2. T1's proposal 5 is done. In T2, #2442 (merged 2026-08-30
+> UTC, in every v2026.11 release) gave `redacted` its own availability branch, so a `trusted`
+> peer gets free slots only, shrunk inward to a 30-minute grid, and no busy intervals (D2).
+> T2's *So `redacted` is not a redaction for this archetype* paragraph, its *Latent code bug*
+> sentence and its *Mutation evidence* describe `fe5075a79`. T2's proposals 1 and 2 are done,
+> and proposal 3 is done for `trusted` only: a `family` peer still gets unrounded instants. The
+> Δ 2026-08-23 line that the threat analysis is unaffected stopped holding for T1 when #2414
+> merged and for T2 when #2442 merged: the tier ceilings are the same, but an owner can now set
+> a local account's tier, and the `redacted` rung now returns less for
+> availability. In T5, both rate limiters have kept their windows in `ConsumptionStore`
+> (Postgres by default) since #2475, so T5's proposal 2 is done, and
+> `AskRateLimitService.consumeDisclosureBudget` (#3066) has no caller outside its tests. In T6,
+> `peers.audience` gates only Portal-token asks: a signed `did:keri:D<x>` or `did:key` ask
+> needs `peers.memoryEndpoint` and a link for that keyid instead. The references in the T5 and
+> T6 passages (T5's *Rate limits bound rate* and *There is no total*, and T6's
+> *Inbound federation is off* bullet) were read at that commit. T1's and T2's file:line
+> references are still those of `fe5075a79`, and the rest of T1, T2, T5 and T6 was not re-read.
+>
 > **This document is not reassuring, and that is the point.** A threat model whose conclusion
 > is "we are fine" has not been written, it has been performed. What follows names the
 > things this feature is genuinely excellent at defending, and then names — with file and
@@ -53,8 +82,8 @@ two of the six are inherent to the product concept and can only be mitigated.
 
 | # | Threat | Class | Worst case today |
 |---|---|---|---|
-| T1 | Coercion / intimate-partner abuse | Design gap | The person who shares the appliance is by construction the most privileged asker, with no ceiling, no cooling period, and no way to demote them |
-| T2 | Stalking via availability | Design gap (+ under-classification) | A `trusted` or `family` peer receives real calendar interval boundaries over 31-day windows, auto-answered, 14 400 times a day |
+| T1 | Coercion / intimate-partner abuse | Design gap | The person who shares the appliance is by default the most privileged asker, with no ceiling and no cooling period. The owner can demote them |
+| T2 | Stalking via availability | Design gap (+ under-classification) | A `family` peer receives real calendar interval boundaries, and a `trusted` peer free slots on a 30-minute grid, over 31-day windows, auto-answered, 14 400 times a day |
 | T3 | Social engineering at the consent moment | Code bug + design gap | Unbounded asker-authored text renders directly above the Approve button |
 | T4 | Prompt injection into the owner's archive | **Not present today** | Traced end to end; no LLM is on the ask path. Two named tripwires would create one |
 | T5 | Cumulative disclosure | Design gap | Rate limits bound rate, not total. There is no disclosure budget of any kind |
@@ -73,8 +102,8 @@ is not its owner.* That framing is the whole risk.
 
 | Actor | How they authenticate | Tier they receive |
 |---|---|---|
-| Local user on the same box | `JwtOrApiKeyAuthGuard` | `household` — unconditionally (`AskResolver.ts:744-750`) |
-| Portal-brokered principal | `PortalTokenService.verifyAndProvision` (`JwtOrApiKeyAuthGuard.ts:35`) | `household` — a JIT-provisioned local account is indistinguishable from a housemate |
+| Local user on the same box | `JwtOrApiKeyAuthGuard` | ~~`household` — unconditionally (`AskResolver.ts:744-750`)~~ `household` unless the owner has set another tier for that account (#2414) |
+| Portal-brokered principal | `PortalTokenService.verifyAndProvision` (`JwtOrApiKeyAuthGuard.ts:35`) | `household` unless the owner has set another tier for that account — a JIT-provisioned local account is indistinguishable from a housemate |
 | Linked peer box | Portal OIDC token, attributed by `(iss,sub)` | The tier the owner assigned the link, default `peer` (`PeerLinkService.ts:65`) |
 | Unlinked caller | Verified token, no link | Refused; rate-limited before the link lookup (`PeerAskController.ts:59-61`) |
 
@@ -161,7 +190,9 @@ be assigned to a remote box.
 `household` (`PeerLinkEntity.ts:34`, with a compile-time proof at `:51-59` that it stays
 excluded), and a local asker has no peer link at all — so there is no row, no column and no
 mutation that could store "this housemate is only `trusted`". The tier is a `return`
-statement.
+statement. *(Δ 2026-11-15: this paragraph and the `resolveTier` excerpt above describe
+`fe5075a79`. Since #2414 an owner can set the tier of another local account, and one with no
+tier set is still `household`.)*
 
 **The only private lever is a `block` grant, and it is unreachable from the UI.** A block
 grant *is* genuinely private — the asker cannot distinguish `declined` from `pending`
@@ -263,7 +294,7 @@ tier's `'*'` fallback:
 |---|---|---|
 | `household` | `full` | Real busy + free intervals |
 | `family` | `full` | **Real busy + free intervals** |
-| `trusted` | `redacted` | **Real busy + free intervals** — `redacted` and `full` are the same branch (`:758-765`) |
+| `trusted` | `redacted` | ~~**Real busy + free intervals** — `redacted` and `full` are the same branch (`:758-765`)~~ Free slots only, shrunk inward to a 30-minute grid. No busy array, but the gaps between slots still give the busy time to the half hour (D2, fixed in #2442) |
 | `peer` | `summary` | Slot count + longest gap, no instants |
 | `stranger` | `boolean` | "some free time" / "no free time" |
 
@@ -561,20 +592,20 @@ most in exactly the relationships that last: family, ex-partners, employers.
 
 ### What the code does today
 
-**Rate limits bound rate, and are per-process and in-memory.**
+**Rate limits bound rate.** Both limiters keep their windows in `ConsumptionStore` (Postgres
+by default since #2475), so a budget is shared across replicas and survives a restart.
 
-- Local: 20 asks per rolling minute per asker (`AskRateLimitService.ts:8-9`), state in a
-  `Map` (`:19`).
+- Local: 20 asks per rolling minute per asker (`AskRateLimitService.ts:7-8`).
 - Inbound peer: 10 asks/min plus a separate 30 polls/min per `(issuer, subject)`
-  (`PeerRateLimitService.ts:10-11, 29`), also a `Map` (`:46`). Both files say so: *"a shared
-  store can back it when the ask path goes multi-instance"*.
+  (`PeerRateLimitService.ts:10-11, 29`).
 
-So the ceiling is **28 800 local asks and 14 400 peer asks per day**, and it resets on
-restart.
+So the ceiling is **28 800 local asks and 14 400 peer asks per day**.
 
-**There is no total.** Grepping `domains/asks` and `domains/peers` for `budget`, `quota`,
-`cumulative` returns only the rate-limiter's own comments. `AskAuditService.listForResponder`
-(`AskAuditService.ts:63-70`) reads every row with no aggregation. The audit **has the data
+**There is no total.** `AskRateLimitService.consumeDisclosureBudget` (#3066) keeps a rolling
+24-hour disclosure count per `(owner, asker)` in the same store, but nothing outside its own
+tests calls it. `AskAuditService.listForResponder`
+(`AskAuditService.ts:165`) reads at most 5 000 rows (`MAX_AUDIT_ROWS`), newest first, and what
+folds them (`summaryForResponder`, `usageByGrant`) only reports. The audit **has the data
 to compute a budget** — `disclosed_entities`, `disclosed_count`, `backing_entities`,
 `consent_basis`, `peer_handle` (`AskAuditEntity.ts:18-80`) — and nothing consumes it.
 
@@ -687,8 +718,14 @@ The peer-facing defaults are genuinely conservative and each is deliberate:
 - **A missing or revoked link is `stranger`,** not a wider fallback
   (`AskResolver.ts:749`), and an unknown tier falls back to `stranger` too
   (`policy.ts:152`).
-- **Federation is off unless an operator binds `peers.audience`**
-  (`PeerAskController.ts:35-37`), independently of the feature flag.
+- **Inbound federation is off until an operator configures it,** independently of the
+  feature flag. `peers.audience` gates Portal-token asks: each is refused with a 503 until it
+  is bound (`PeerAskController.authenticate`). A signed `did:keri:D<x>` or `did:key` ask
+  carries no token and does not consult `peers.audience`. It needs `peers.memoryEndpoint` (a
+  503 until it is set) and a link the owner made for exactly that keyid, and it is bound to
+  this box by the signed `@target-uri`, which is rebuilt from `peers.memoryEndpoint`, and a
+  single-use nonce (`PeerAskController.assertSignature`; see
+  [`peer-federation.md`](peer-federation.md#keyids-that-name-themselves-didkey-and-didkeridx)).
 - **Blocks beat auto; nulls resolve toward denial on both sides**
   (`grantMatch.ts:39-47, 206-252`).
 
@@ -783,8 +820,8 @@ Documented here per the working agreement for this PR; **none are implemented in
 | # | Location | Defect | Proposed fix |
 |---|---|---|---|
 | D1 | `backend/apps/api/src/domains/graphql/types/AskInputs.ts:37` | `AskQueryInput.prompt` has no length bound; there is no global `ValidationPipe` (`main.ts`), so the GraphQL body limit of `10mb` (`BodyParserMiddleware.ts:19`) is the only cap. The federated path bounds the same field to 500 (`protocol.ts:104`), as does `askGrammar.ts:104`. | `@MaxLength(500)` + `@IsString()` and a `ValidationPipe` on the ask mutations, or an explicit check in `AskService.submit`. Pin with a 501-character test expecting a 400 |
-| D2 | `backend/apps/api/src/domains/peers/services/PeerAskService.ts` | ~~`clampAvailability` treats `redacted` identically to `full`, so the `trusted` tier's `redacted` ceiling discloses the owner's real calendar boundaries.~~ **FIXED** (CI-Server #2367). `redacted` has its own branch: the busy intervals are dropped entirely and the free slots are coarsened to a half-hour grid, shrinking inward so a coarsened slot is always a subset of a real one. The summary is recomputed from the coarsened set so it cannot state a count the arrays contradict, and `disclosedCount` reports the slots that survived quantization rather than the pre-clamp total. Pinned by five tests plus a ladder-monotonicity check that measures each rung's information content by differential (does the output distinguish two calendars differing in exactly one property) rather than by inspecting strings — all six fail when the fix is reverted |
-| D3 | `backend/apps/api/src/domains/peers/services/PeerAskService.spec.ts` | ~~The test titled *"still gives a trusted peer the actual intervals"* passes `trustTier: 'family'`.~~ **FIXED** (CI-Server #2367). Retitled to name `family`, and a real `trusted` case added — which matters now that the two tiers genuinely differ, since `trusted`'s calendar ceiling is the `redacted` rung D2 was about. One further test (*"answers an availability ask from the calendar without touching the search index"*) was silently relying on the fixture's `trusted` default to assert unclamped intervals; it is now explicitly pinned to a `family` link, because it tests the SOURCE of an availability answer rather than its rung |
+| D2 | `backend/apps/api/src/domains/peers/services/PeerAskService.ts` | ~~`clampAvailability` treats `redacted` identically to `full`, so the `trusted` tier's `redacted` ceiling discloses the owner's real calendar boundaries.~~ | **FIXED** (#2442, closing CI-Server #2367). `redacted` has its own branch: the busy intervals are dropped entirely and the free slots are coarsened to a half-hour grid, shrinking inward so a coarsened slot is always a subset of a real one. The summary is recomputed from the coarsened set so it cannot state a count the arrays contradict, and `disclosedCount` reports the slots that survived quantization rather than the pre-clamp total. Pinned by five tests plus a ladder-monotonicity check that measures each rung's information content by differential (does the output distinguish two calendars differing in exactly one property) rather than by inspecting strings — all six fail when the fix is reverted |
+| D3 | `backend/apps/api/src/domains/peers/services/PeerAskService.spec.ts` | ~~The test titled *"still gives a trusted peer the actual intervals"* passes `trustTier: 'family'`.~~ | **FIXED** (#2442, closing CI-Server #2367). Retitled to name `family`, and a real `trusted` case added — which matters now that the two tiers genuinely differ, since `trusted`'s calendar ceiling is the `redacted` rung D2 was about. One further test (*"answers an availability ask from the calendar without touching the search index"*) was silently relying on the fixture's `trusted` default to assert unclamped intervals; it is now explicitly pinned to a `family` link, because it tests the SOURCE of an availability answer rather than its rung |
 | D4 | `backend/apps/api/src/domains/asks/askGrammar.ts` (whole file) | The bounded, `.strict()`, "everything here is hostile input" DCQL grammar is exported (`asks/index.ts:98-101`) and called by nothing. `parseAskGrammar` has no non-test caller. The path that actually runs uses the unvalidated `AskQueryInput` | Either route `createAsk` through `parseAskGrammar`, or delete the module. A validation layer nothing calls is worse than none — it reads as protection that is not there |
 | D5 | `backend/apps/api/src/domains/graphql/resolvers/AskResolver.ts:586-595` | `askDisclosureHistory` has no client. The owner's only window onto what was disclosed is unreachable | Add an `ASK_DISCLOSURE_HISTORY` document and a History tab on `AsksPage` |
 | D6 | `backend/apps/api/src/domains/asks/policy.ts:160` | The `household` half of the sensitive-class exemption is pinned by no test — see the mutation evidence in T1 | ✅ **Fixed.** `policy.spec.ts` → "the household exemption (D6)". Re-running the same mutation (deleting `tier !== 'household'`) now fails **2 tests**, where this document measured 544 passed / 0 failed. The tests are written as a statement of the CURRENT decision, not of its correctness — see [`asks-household-default.md`](asks-household-default.md) |

@@ -1,20 +1,35 @@
 import { useState } from 'react';
 
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { useDeviceLayout } from '@ci/common';
 import { Button, IconButton, useToast } from '@ci/shadcn';
 import { AlertCircle, Check, Circle, Loader2, Sparkles, X } from '@ci/shadcn/icons';
 import { Link, useLocation } from 'react-router-dom';
 
 import { useFeatures } from '@/common/feature';
-import { GET_CONNECTIONS } from '@/components/connect/ConnectedAccountsSection';
+import { gql } from '@/graphql';
 import { useCurrentUser, useModel } from '@/hooks';
 import { settingsSectionTarget } from '@/layouts/Main/SecondaryNavigation/selfSections';
 import { dismissGettingStarted, isGettingStartedActive } from '@/lib/gettingStarted';
 import { useActiveImports, useImportApi } from '@/pages/ImportPage/useImportApi';
 
 import { deriveChecklist, type ChecklistStep, type StepStatus } from './firstSync';
+import { RecommendedModelHint } from './RecommendedModelHint';
 import { useFirstSyncStatus } from './useFirstSyncStatus';
+
+/**
+ * The checklist reads ONE number off the connections list. It used to poll
+ * `GET_CONNECTIONS` — every edge, its provider and every endpoint description —
+ * twice a minute on every page for the whole getting-started window, to read
+ * `totalCount`. This asks for the count alone.
+ */
+export const GET_CONNECTION_COUNT = gql(`
+  query GetConnectionCount {
+    connections {
+      totalCount
+    }
+  }
+`);
 
 const STATUS_ICON: Record<StepStatus, { Icon: typeof Check; className: string; spin?: boolean }> = {
   done: { Icon: Check, className: 'text-primary' },
@@ -66,7 +81,7 @@ function GettingStartedBannerBody({ onDismiss }: { onDismiss: () => void }) {
   const importsEnabled = isFeatureEnabled('import.page');
 
   const [{ activeModels, loading: modelsLoading }] = useModel();
-  const { data: connectionData } = useQuery(GET_CONNECTIONS, { pollInterval: 30_000 });
+  const { data: connectionData } = useQuery(GET_CONNECTION_COUNT, { pollInterval: 30_000 });
   const { snapshot, refresh: refreshImports } = useActiveImports(2_000, 30_000, importsEnabled);
   const status = useFirstSyncStatus(true, importsEnabled);
   const { startPush } = useImportApi();
@@ -200,7 +215,12 @@ function GettingStartedBannerBody({ onDismiss }: { onDismiss: () => void }) {
             const stepAction = action(step);
 
             return (
-              <li key={step.id} data-step={step.id} data-status={step.status} className="flex items-start gap-3">
+              <li
+                key={step.id}
+                data-step={step.id}
+                data-status={step.status}
+                className="flex items-start gap-3"
+              >
                 <Icon
                   className={`mt-0.5 h-4 w-4 shrink-0 ${className}${spin ? ' animate-spin' : ''}`}
                   strokeWidth={1.5}
@@ -211,6 +231,10 @@ function GettingStartedBannerBody({ onDismiss }: { onDismiss: () => void }) {
                     {step.title}
                   </p>
                   {step.detail ? <p className="text-xs text-muted-foreground">{step.detail}</p> : null}
+                  {/* Any model that answers ticks this step. Memory Desktop may still recommend another. */}
+                  {step.id === 'model' && step.status === 'done' ? (
+                    <RecommendedModelHint target={modelTarget} recheck={activeModels} />
+                  ) : null}
                 </div>
                 {stepAction ? <div className="shrink-0">{stepAction}</div> : null}
               </li>

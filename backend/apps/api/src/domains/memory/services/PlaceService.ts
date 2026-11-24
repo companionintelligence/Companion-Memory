@@ -1,17 +1,24 @@
 import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository, In, type SelectQueryBuilder } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { isUniqueViolation } from '@ci/common/constants';
 import { type ServiceContext, SYSTEM_USER, type UserServiceContext } from '@ci/common/context';
-import { computeChunkSize } from '@ci/common/persistence';
+import {
+  type KeysetByPage,
+  type KeysetPageArgs,
+  type SeekKey,
+  keysetPaginateBy,
+} from '@ci/common/persistence';
+import { computeChunkSize, keysetSeek } from '@ci/common/persistence';
 import { isGeocodingConfigured } from '@ci/configuration';
 import { EventService } from '@ci/domains/events';
 import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
 
 import { PlaceEntity, type Place, type PlaceKind } from '../entities/PlaceEntity';
 import { PlaceCreatedEvent, PlaceUpdatedEvent, PlaceRemovedEvent } from '../events';
+import { GRAPH_ENTITY_TYPES } from '../graph.types';
 import type { CreatePlaceDto, UpdatePlaceDto } from '../types';
 
 import {
@@ -23,7 +30,145 @@ import {
   placeAppearanceCountSql,
   placeAppearanceListSql,
 } from './appearanceBrowse';
-import { GraphDeltaWriter } from './GraphDeltaWriter';
+import { EVENT_HAPPENED_SQL } from './eventHappened';
+import { GraphDeltaWriter, changedFieldsBetween } from './GraphDeltaWriter';
+import { type PurgedPlaces, purgePlaceAggregates } from './placePurge';
+
+/**
+ * The row types a place is stored under. `PlaceEntity` maps the whole of `ci.entities`, so a lookup
+ * by id alone also finds a Person or a Concept; `update` and `remove` match on these too. Without it,
+ * an id of the owner's own Person let `updatePlace` merge into that Person's properties, where the
+ * owner's settings live under `planner` (the autonomy dial among them).
+ */
+const PLACE_ENTITY_TYPES = In([...GRAPH_ENTITY_TYPES.place]);
+
+/** The index that keeps one Location per owner per 0.001-degree cell. */
+const SNAP_CELL_INDEX = 'entities_location_snap_dedup_uniq';
+
+/**
+ * Whether `err` is a unique violation on {@link SNAP_CELL_INDEX}, or on an index
+ * the driver didn't name. A place with a point can also collide on a name or a
+ * provider id, and "another place is at this spot" would be the wrong reason.
+ */
+function isSnapCellViolation(err: unknown): boolean {
+  if (!isUniqueViolation(err)) {
+    return false;
+  }
+
+  const candidate = err as { constraint?: string; driverError?: { constraint?: string } } | null;
+  const constraint = candidate?.driverError?.constraint ?? candidate?.constraint;
+
+  return constraint == null || constraint === SNAP_CELL_INDEX;
+}
+
+/**
+ * How near a place a photo must have been taken to count as taken there when
+ * nothing links it to the place: the stay radius the Places page clusters
+ * photos and positions with (`DEFAULT_STAY_RADIUS_M`), so every photo of a
+ * cluster someone named is at the place they named.
+ */
+export const PHOTO_AT_PLACE_METERS = 150;
+
+/** Lowercased words joined by single spaces, for matching a place name inside a query. */
+export function placeNameWords(text: string): string {
+  return text
+    .normalize('NFKD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean)
+    .join(' ');
+}
+
+/**
+ * {@link placeNameWords} for a `ci.entities.name` in SQL, close enough to be a
+ * prefilter: lowercased, NFKD with the Latin combining accents (U+0300 to
+ * U+036F) dropped and every run of other characters a single space. A plain
+ * `strpos` on the raw name refused "Peet’s Coffee" (the curly apostrophe a
+ * phone keyboard types) for a place stored as "Peet's Coffee". It refused
+ * "Cafe Reveille" for "Café Réveille" too, before {@link queryNamesPlace} could
+ * see either.
+ */
+function placeNameWordsSql(column: string): string {
+  return `btrim(regexp_replace(regexp_replace(normalize(lower(${column}), NFKD), '[\\u0300-\\u036f]', '', 'g'), '[^[:alnum:]]+', ' ', 'g'))`;
+}
+
+/**
+ * Scripts written without spaces between words. A place name in one of them
+ * has no word boundaries to match on, so it is matched anywhere in the query:
+ * "東京タワー" is in "東京タワーの写真" though the query is one run of letters.
+ */
+const UNSPACED_SCRIPT =
+  /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/u;
+
+/**
+ * Whether `query` names the place `name`: the whole name, as whole words,
+ * anywhere in the query. "Blue Bottle Coffee", "photos from blue bottle
+ * coffee" and "Blue Bottle Coffee, SF" name "Blue Bottle Coffee"; "Blue
+ * Bottle" and "coffee" do not and stay a search of the photos' text.
+ */
+export function queryNamesPlace(query: string, name: string): boolean {
+  const nameWords = placeNameWords(name);
+
+  if (nameWords.length < 3) {
+    return false;
+  }
+
+  const queryWords = placeNameWords(query);
+
+  return UNSPACED_SCRIPT.test(nameWords)
+    ? queryWords.includes(nameWords)
+    : ` ${queryWords} `.includes(` ${nameWords} `);
+}
+
+/**
+ * The places a query names, less any whose name is part of another one's: a
+ * query for "Blue Bottle Coffee" names that place and not the user's
+ * "Coffee". "Mom's Home" is not also "Home". Places sharing one name all
+ * stay.
+ */
+function mostSpecificPlaces<T extends { name: string }>(places: T[]): T[] {
+  const names = places.map((place) => placeNameWords(place.name));
+
+  return places.filter(
+    (place, index) =>
+      !names.some((other, j) => j !== index && other !== names[index] && queryNamesPlace(other, place.name)),
+  );
+}
+
+/**
+ * "This event's coordinate was measured", for raw SQL that aliases
+ * `ci.events` as `event`. The location estimator copies a coordinate onto an
+ * event from another one up to a day away. A photo with an estimate was not
+ * taken where the estimate says. The two markers are the ones
+ * `KnownPlacesService.buildKnownPlaces` leaves out: `location_source` is
+ * `estimated`, or `reverse_geocoded` over an estimate whose
+ * `inference_sources.method` is `temporal_nn` (the legacy reverse-geocode leg
+ * renamed the first). They are copies of that service's literals and must
+ * stay identical to them.
+ */
+const MEASURED_LOCATION_SQL = `(COALESCE(event.metadata->>'location_source', '') <> 'estimated'
+       AND NOT (COALESCE(event.metadata->>'location_source', '') = 'reverse_geocoded'
+                AND COALESCE(event.inference_sources->>'method', '') = 'temporal_nn'))`;
+
+/**
+ * The relationship types a known place rides on (`KnownPlacesService`'s
+ * `KNOWN_PLACE_RELATIONSHIP_TYPES`, copied because that service imports this
+ * one). The name the user gave a place on the Places page is the
+ * relationship's `properties.label` (beside its `aliases`). It is not always
+ * the Location's own name.
+ */
+const KNOWN_PLACE_RELATIONSHIP_TYPES = ['LIVES_IN', 'WORKS_AT', 'VISITED'];
+
+/** What {@link PlaceService.photosAtNamedPlace} found. */
+export interface PhotosAtNamedPlace {
+  /** The places the query names, each under the name it matched by. */
+  places: Array<{ id: string; name: string }>;
+  /** The newest photos and videos taken at any of them, at most the `limit` asked for. */
+  fileIds: string[];
+  /** How many photos and videos were taken at them in all. */
+  total: number;
+}
 
 /** One Google-style address component ({long_name, short_name, types[]}). */
 interface AddressComponent {
@@ -32,7 +177,12 @@ interface AddressComponent {
   types?: string[];
 }
 
-/** Aggregated event stats for a place (PlaceType.visitStats). */
+/**
+ * Aggregated event stats for a place (PlaceType.visitStats). Only events that
+ * happened are visits (see {@link EVENT_HAPPENED_SQL}): a deleted, predicted or
+ * cancelled event linked to the place is neither counted nor a first or last
+ * visit date.
+ */
 export interface PlaceVisitStats {
   visitCount: number;
   firstVisitAt: Date | null;
@@ -43,7 +193,9 @@ export interface PlaceVisitStats {
    * promotion for this user has work outstanding, so an event that WILL
    * eventually count as a visit here just hasn't been linked yet. A place
    * with a non-zero visitCount is always `confirmed` — enrichment being
-   * behind cannot make an already-counted visit less real.
+   * behind cannot make an already-counted visit less real. A place whose
+   * only linked events did not happen has a visitCount of 0 and is judged
+   * like any other zero.
    */
   status: 'confirmed' | 'pending_enrichment';
 }
@@ -70,6 +222,17 @@ const COMPONENT_HIERARCHY: Array<{ componentType: string; kind: PlaceKind }> = [
   { componentType: 'locality', kind: 'city' },
   { componentType: 'administrative_area_level_1', kind: 'region' },
   { componentType: 'country', kind: 'country' },
+];
+
+/**
+ * The places list's order: by trimmed name with the nameless last, newest first
+ * among equals, and the id so the order is total. What `findAll` sorts by and
+ * what `findPage` seeks on.
+ */
+const PLACE_LIST_ORDER: readonly SeekKey[] = [
+  { expr: `NULLIF(btrim(COALESCE(place.name, '')), '')`, order: 'ASC', nulls: 'LAST', nullable: true },
+  { expr: 'place.created_at', order: 'DESC', read: 'CAST(place.created_at AS text)' },
+  { expr: 'place.id', order: 'DESC' },
 ];
 
 @Injectable()
@@ -130,10 +293,12 @@ export class PlaceService {
     const placeId = input.placeId?.trim() || null;
 
     // 1. Provider place_id is the primary identity when available: venue
-    // renames and name variants converge on the same row.
+    // renames and name variants converge on the same row. A place merged into
+    // another keeps its own place_id unless the kept one took it, and stands for
+    // the kept place: the resolution lands there, as Places shows only that one.
     if (placeId) {
       const byPlaceId: Array<{ entity_id: string }> = await this.placeRepository.manager.query(
-        `SELECT entity_id
+        `SELECT COALESCE(merged_into_entity_id, entity_id) AS entity_id
            FROM ci.entities
           WHERE entity_type = 'Location'
             AND owner_user_id = $1
@@ -191,8 +356,9 @@ export class PlaceService {
     // races safely with concurrent callers for the same cell. Loser sees zero
     // rows affected; both fall through to the SELECT below and return the same
     // id. location_point carries FULL precision (snap lives only in the index).
-    // A bounded feature is an area, not an address: keep place_kind honest so
-    // the hierarchy and the UI don't label a whole city "address".
+    // A bounded feature is an area. A bare point is not a kind: labeling every
+    // geocode "address" is what made the places list a stack of Address badges.
+    // The street stays on the name; the user picks a kind.
     const bounds = normalizeBounds(input.bounds);
 
     await this.placeRepository.manager.query(
@@ -210,7 +376,7 @@ export class PlaceService {
         JSON.stringify(properties),
         input.lng,
         input.lat,
-        bounds ? 'neighborhood' : 'address',
+        bounds ? 'neighborhood' : null,
         bounds != null,
         bounds?.west ?? 0,
         bounds?.south ?? 0,
@@ -220,9 +386,10 @@ export class PlaceService {
     );
 
     // Read back the canonical row (whether we inserted or hit a conflict).
-    // Predicate matches entities_location_snap_dedup_uniq.
+    // Predicate matches entities_location_snap_dedup_uniq, which keeps a place
+    // merged into another while it holds its pin: that one resolves to the kept place.
     const rows: Array<{ entity_id: string; was_new: boolean }> = await this.placeRepository.manager.query(
-      `SELECT entity_id, entity_id = $1 AS was_new
+      `SELECT COALESCE(merged_into_entity_id, entity_id) AS entity_id, entity_id = $1 AS was_new
          FROM ci.entities
         WHERE entity_type = 'Location'
           AND owner_user_id = $2
@@ -242,7 +409,7 @@ export class PlaceService {
       // so resolve it by place_id rather than failing the whole resolution.
       if (placeId) {
         const winner: Array<{ entity_id: string }> = await this.placeRepository.manager.query(
-          `SELECT entity_id
+          `SELECT COALESCE(merged_into_entity_id, entity_id) AS entity_id
              FROM ci.entities
             WHERE entity_type = 'Location'
               AND owner_user_id = $1
@@ -385,18 +552,28 @@ export class PlaceService {
     // COALESCE throughout: enrichment only FILLS gaps. A boundary a user drew
     // by hand, or a tighter one from an earlier resolution, is never replaced
     // by a provider box.
+    //
+    // Live places only. The lookups above resolve a place merged into another
+    // to the kept one, and this guards the rest: a merge takes the pin off the
+    // place the kept one took it from. Filling that gap would hand the pin back
+    // to the merged-away place, in the cell the kept place now holds, and the
+    // unique snap-cell index would fail the whole resolution.
     const bounds = normalizeBounds(rawBounds);
 
     await this.placeRepository.manager.query(
       `UPDATE ci.entities
           SET location_point = COALESCE(location_point, ST_SetSRID(ST_MakePoint($3, $4), 4326)::geography),
-              place_kind = COALESCE(place_kind, 'address'),
+              place_kind = CASE
+                WHEN place_kind IS NOT NULL THEN place_kind
+                WHEN $5::boolean THEN 'neighborhood'
+                ELSE NULL
+              END,
               location_boundary = COALESCE(
                 location_boundary,
                 CASE WHEN $5::boolean
                      THEN ST_MakeEnvelope($6, $7, $8, $9, 4326)::geography
                      ELSE NULL END)
-        WHERE entity_id = $1 AND owner_user_id = $2`,
+        WHERE entity_id = $1 AND owner_user_id = $2 AND merged_into_entity_id IS NULL`,
       [
         entityId,
         context.userId,
@@ -416,6 +593,7 @@ export class PlaceService {
           `UPDATE ci.entities e
               SET properties = properties || jsonb_build_object('place_id', $3::text)
             WHERE e.entity_id = $1 AND e.owner_user_id = $2
+              AND e.merged_into_entity_id IS NULL
               AND e.properties->>'place_id' IS NULL
               AND NOT EXISTS (
                 SELECT 1 FROM ci.entities other
@@ -484,11 +662,13 @@ export class PlaceService {
 
       // Hang the place under the most specific admin node (never itself — an
       // admin-level place can resolve to its own hierarchy node).
+      // Never a place merged into another: the merge left it without a parent.
       if (parentId && parentId !== entityId) {
         await this.placeRepository.manager.query(
           `UPDATE ci.entities
               SET parent_place_id = $3
-            WHERE entity_id = $1 AND owner_user_id = $2 AND parent_place_id IS NULL`,
+            WHERE entity_id = $1 AND owner_user_id = $2 AND parent_place_id IS NULL
+              AND merged_into_entity_id IS NULL`,
           [entityId, context.userId, parentId],
         );
       }
@@ -512,28 +692,123 @@ export class PlaceService {
     // Providers return partial address_components (a result with locality but
     // no admin_area_level_1 is common outside the US), so the same city can be
     // resolved first without a parent and later with one; without this the
-    // keyed lookup below would miss and mint a duplicate city node.
+    // keyed lookup below would miss and mint a duplicate city node. Never a
+    // place merged into another: a merge leaves it without a parent, and
+    // adopting it would hang new places under a tombstone. Never when the
+    // parent already has a live node of that kind and name either: the
+    // unparented one is its twin, and giving it the parent would collide with
+    // that node on entities_admin_place_uniq and leave the place unparented.
+    //
+    // Read back through a CTE: a bare UPDATE … RETURNING resolves to the pair
+    // [rows, rowCount], whose length is always 2 and whose [0] is the rows
+    // array — so every call with a parent used to return `undefined` without
+    // minting the node, and the chain broke below it (see
+    // __tests__/PlaceService.hierarchy.integration.spec.ts).
+    //
+    // The outer WHERE repeats the live and unparented checks: the subquery runs
+    // once, before the row lock, so a merge that commits in between would
+    // otherwise still have its fresh tombstone adopted.
     if (parentId) {
       const adopted: Array<{ entity_id: string }> = await this.placeRepository.manager.query(
-        `UPDATE ci.entities
-            SET parent_place_id = $4
-          WHERE entity_id = (
-            SELECT entity_id
-              FROM ci.entities
-             WHERE entity_type = 'Location'
-               AND owner_user_id = $1
-               AND place_kind = $2
-               AND lower(btrim(name)) = lower(btrim($3))
-               AND parent_place_id IS NULL
-             ORDER BY created_at ASC
-             LIMIT 1)
-          RETURNING entity_id`,
+        `WITH adopted AS (
+           UPDATE ci.entities
+              SET parent_place_id = $4
+            WHERE parent_place_id IS NULL
+              AND merged_into_entity_id IS NULL
+              AND entity_id = (
+              SELECT entity_id
+                FROM ci.entities
+               WHERE entity_type = 'Location'
+                 AND owner_user_id = $1
+                 AND place_kind = $2
+                 AND lower(btrim(name)) = lower(btrim($3))
+                 AND parent_place_id IS NULL
+                 AND merged_into_entity_id IS NULL
+                 AND NOT EXISTS (
+                   SELECT 1
+                     FROM ci.entities k
+                    WHERE k.entity_type = 'Location'
+                      AND k.owner_user_id = $1
+                      AND k.place_kind = $2
+                      AND lower(btrim(k.name)) = lower(btrim($3))
+                      AND k.parent_place_id = $4
+                      AND k.merged_into_entity_id IS NULL)
+               ORDER BY created_at ASC
+               LIMIT 1)
+            RETURNING entity_id
+         )
+         SELECT entity_id FROM adopted`,
         [context.userId, kind, name, parentId],
       );
 
       if (adopted.length > 0) {
         return adopted[0].entity_id;
       }
+    }
+
+    // Live rows only, as entities_admin_place_uniq keys them: a place merged
+    // into another can share the key with the live node. Read first, so a node
+    // that already exists (nearly every call) costs one statement.
+    const liveNode = async (): Promise<string | null> => {
+      const rows: Array<{ entity_id: string }> = await this.placeRepository.manager.query(
+        `SELECT entity_id
+           FROM ci.entities
+          WHERE entity_type = 'Location'
+            AND owner_user_id = $1
+            AND place_kind = $2
+            AND lower(btrim(name)) = lower(btrim($3))
+            AND COALESCE(parent_place_id, '00000000-0000-0000-0000-000000000000'::uuid)
+                = COALESCE($4::uuid, '00000000-0000-0000-0000-000000000000'::uuid)
+            AND merged_into_entity_id IS NULL
+          LIMIT 1`,
+        [context.userId, kind, name, parentId],
+      );
+
+      return rows[0]?.entity_id ?? null;
+    };
+
+    const live = await liveNode();
+    if (live) {
+      return live;
+    }
+
+    // A place merged into another no longer holds the key, so when only such a
+    // place matches, the insert below would mint a new live node: the duplicate
+    // the person merged away, back in Places. Follow it to the place it was
+    // merged into instead, when that is a live node of the same kind and no live
+    // node holds the key itself.
+    const followed: Array<{ entity_id: string }> = await this.placeRepository.manager.query(
+      `SELECT kept.entity_id
+         FROM ci.entities merged
+         JOIN ci.entities kept ON kept.entity_id = merged.merged_into_entity_id
+        WHERE merged.entity_type = 'Location'
+          AND merged.owner_user_id = $1
+          AND merged.place_kind = $2
+          AND lower(btrim(merged.name)) = lower(btrim($3))
+          AND COALESCE(merged.parent_place_id, '00000000-0000-0000-0000-000000000000'::uuid)
+              = COALESCE($4::uuid, '00000000-0000-0000-0000-000000000000'::uuid)
+          AND kept.entity_type = 'Location'
+          AND kept.owner_user_id = $1
+          AND kept.place_kind = merged.place_kind
+          AND kept.merged_into_entity_id IS NULL
+          AND kept.is_active IS DISTINCT FROM FALSE
+          AND NOT EXISTS (
+            SELECT 1
+              FROM ci.entities live
+             WHERE live.entity_type = 'Location'
+               AND live.owner_user_id = $1
+               AND live.place_kind = merged.place_kind
+               AND lower(btrim(live.name)) = lower(btrim($3))
+               AND COALESCE(live.parent_place_id, '00000000-0000-0000-0000-000000000000'::uuid)
+                   = COALESCE($4::uuid, '00000000-0000-0000-0000-000000000000'::uuid)
+               AND live.merged_into_entity_id IS NULL)
+        ORDER BY merged.updated_at DESC
+        LIMIT 1`,
+      [context.userId, kind, name, parentId],
+    );
+
+    if (followed.length > 0) {
+      return followed[0].entity_id;
     }
 
     const newId = uuidv7();
@@ -545,24 +820,14 @@ export class PlaceService {
       [newId, context.userId, name, JSON.stringify({ source: 'geocode_hierarchy' }), kind, parentId],
     );
 
-    const rows: Array<{ entity_id: string }> = await this.placeRepository.manager.query(
-      `SELECT entity_id
-         FROM ci.entities
-        WHERE entity_type = 'Location'
-          AND owner_user_id = $1
-          AND place_kind = $2
-          AND lower(btrim(name)) = lower(btrim($3))
-          AND COALESCE(parent_place_id, '00000000-0000-0000-0000-000000000000'::uuid)
-              = COALESCE($4::uuid, '00000000-0000-0000-0000-000000000000'::uuid)
-        LIMIT 1`,
-      [context.userId, kind, name, parentId],
-    );
+    // Whether this call inserted it or another won the race.
+    const resolved = await liveNode();
 
-    if (rows.length === 0) {
+    if (!resolved) {
       throw new Error(`findOrCreateAdminPlace: failed to resolve ${kind} "${name}"`);
     }
 
-    return rows[0].entity_id;
+    return resolved;
   }
 
   /**
@@ -576,7 +841,8 @@ export class PlaceService {
    *
    * Only places that actually HAVE a footprint can match: a venue known only as
    * a point is not a container. Ordering by area means a park inside a city
-   * outranks the city.
+   * outranks the city. Places merged into another are left out, as in
+   * {@link findAll}.
    */
   async placesContaining(
     context: UserServiceContext,
@@ -589,6 +855,8 @@ export class PlaceService {
          FROM ci.entities
         WHERE entity_type = 'Location'
           AND owner_user_id = $1
+          AND merged_into_entity_id IS NULL
+          AND is_active IS DISTINCT FROM FALSE
           AND location_boundary IS NOT NULL
           AND ST_Covers(location_boundary, ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography)
         ORDER BY ST_Area(location_boundary) ASC
@@ -612,6 +880,10 @@ export class PlaceService {
    * Places within `radiusMeters` of a point, nearest first. Runs on the
    * partial GIST index over location_point (geography ST_DWithin measures
    * meters directly).
+   *
+   * A place merged into another keeps its point, so it is left out here as in
+   * {@link findAll}: a capture's place name and a scanned thing's place come
+   * from this, and must not land on the merged-away row.
    */
   async placesNear(
     context: UserServiceContext,
@@ -627,6 +899,8 @@ export class PlaceService {
            FROM ci.entities
           WHERE entity_type = 'Location'
             AND owner_user_id = $1
+            AND merged_into_entity_id IS NULL
+            AND is_active IS DISTINCT FROM FALSE
             AND location_point IS NOT NULL
             AND ST_DWithin(location_point, ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography, $4)
           ORDER BY distance_meters ASC
@@ -655,8 +929,193 @@ export class PlaceService {
   }
 
   /**
+   * Photos and videos taken at a place the query names ({@link queryNamesPlace}),
+   * newest first, for `media.findPhotos`: at most `limit` of them plus how
+   * many there are in all.
+   *
+   * A photo's text never names the place it was taken at: its search row is
+   * its file name and, once described, what it shows. So "photos from Blue
+   * Bottle Coffee" found none of the seven photos the place was named from on
+   * the Places page, because their events carry GPS and no
+   * `location_entity_id`. A photo is at a place when its event is linked to the
+   * place, lies inside the place's boundary, or was taken within
+   * {@link PHOTO_AT_PLACE_METERS} of its point. Only an event that happened
+   * ({@link EVENT_HAPPENED_SQL}) and whose coordinate was measured
+   * ({@link MEASURED_LOCATION_SQL}) counts. Imported and phone-captured photos
+   * reach their event through `metadata.FileId`, CI-Capture's through
+   * `files.event_id`.
+   *
+   * A place is named by its own name or by the label or an alias the user gave
+   * it on the Places page. When one named place's name is part of another's,
+   * only the longer one counts ({@link mostSpecificPlaces}).
+   *
+   * `kind: 'photos'` leaves videos out, as a photo ask's text search does.
+   */
+  async photosAtNamedPlace(
+    context: UserServiceContext,
+    query: string,
+    limit: number,
+    { kind = 'media' }: { kind?: 'photos' | 'media' } = {},
+  ): Promise<PhotosAtNamedPlace> {
+    const trimmed = query.trim();
+    const none: PhotosAtNamedPlace = { places: [], fileIds: [], total: 0 };
+
+    if (trimmed.length < 3) {
+      return none;
+    }
+
+    // A loose prefilter: the raw name inside the raw query, or the name's
+    // words inside the query's. queryNamesPlace decides.
+    const candidates: Array<{ id: string; name: string }> = await this.placeRepository.manager.query(
+      `SELECT DISTINCT c.id, btrim(c.name) AS name
+         FROM (
+           SELECT entity_id AS id, name
+             FROM ci.entities
+            WHERE entity_type = 'Location'
+              AND owner_user_id = $1
+              AND is_active IS DISTINCT FROM FALSE
+              AND merged_into_entity_id IS NULL
+           UNION ALL
+           SELECT r.to_entity_id, given.name
+             FROM ci.relationships r
+             JOIN ci.users u ON u.entity_id = r.from_entity_id AND u.id = $1
+             JOIN ci.entities l
+               ON l.entity_id = r.to_entity_id
+              AND l.owner_user_id = $1
+              AND l.entity_type = 'Location'
+              AND l.is_active IS DISTINCT FROM FALSE
+              AND l.merged_into_entity_id IS NULL
+            CROSS JOIN LATERAL (
+              SELECT r.properties->>'label' AS name
+              UNION ALL
+              SELECT alias
+                FROM jsonb_array_elements_text(
+                       CASE WHEN jsonb_typeof(r.properties->'aliases') = 'array'
+                            THEN r.properties->'aliases' ELSE '[]'::jsonb END) AS alias
+            ) given
+            WHERE r.owner_user_id = $1
+              AND r.relationship_type = ANY($4::text[])
+              AND r.is_active
+         ) c
+        WHERE length(btrim(c.name)) >= 3
+          AND (strpos(lower($2), lower(btrim(c.name))) > 0
+               OR strpos($3, ${placeNameWordsSql('c.name')}) > 0)`,
+      [context.userId, trimmed, placeNameWords(trimmed), KNOWN_PLACE_RELATIONSHIP_TYPES],
+    );
+
+    // One entry per place, under the longest name it matched by.
+    const byId = new Map<string, { id: string; name: string }>();
+
+    for (const candidate of candidates) {
+      const kept = byId.get(candidate.id);
+
+      if (queryNamesPlace(trimmed, candidate.name) && (!kept || candidate.name.length > kept.name.length)) {
+        byId.set(candidate.id, candidate);
+      }
+    }
+
+    const places = mostSpecificPlaces([...byId.values()]);
+
+    if (places.length === 0) {
+      return none;
+    }
+
+    // Each way an event can be at a place is its own arm, so each can use its
+    // index: events_location_entity_idx for the link and the geometry GIST
+    // index on location_coordinates for the two spatial tests, through a
+    // bounding box wide enough for the radius at the place's latitude (110 km
+    // per degree is less than a degree of latitude anywhere) before the exact
+    // geography test.
+    const rows: Array<{ file_id: string; total: string }> = await this.placeRepository.manager.query(
+      `WITH place AS (
+         SELECT entity_id, location_point, location_boundary
+           FROM ci.entities
+          WHERE owner_user_id = $1 AND entity_id = ANY($2::uuid[])
+       ),
+       at_place AS (
+         SELECT event.event_id, event.start_time, event.metadata->>'FileId' AS file_id
+           FROM ci.events event
+          WHERE event.user_id = $1
+            AND event.location_entity_id = ANY($2::uuid[])
+            AND ${EVENT_HAPPENED_SQL}
+            AND ${MEASURED_LOCATION_SQL}
+         UNION
+         SELECT event.event_id, event.start_time, event.metadata->>'FileId'
+           FROM place p
+           JOIN ci.events event
+             ON event.location_coordinates::geometry && ST_Expand(
+                  p.location_point::geometry,
+                  $3 / 110000.0 / GREATEST(cos(radians(ST_Y(p.location_point::geometry))), 0.01))
+            AND ST_DWithin(event.location_coordinates, p.location_point, $3)
+          WHERE p.location_point IS NOT NULL
+            AND event.location_coordinates IS NOT NULL
+            AND event.user_id = $1
+            AND ${EVENT_HAPPENED_SQL}
+            AND ${MEASURED_LOCATION_SQL}
+         UNION
+         SELECT event.event_id, event.start_time, event.metadata->>'FileId'
+           FROM place p
+           JOIN ci.events event
+             ON event.location_coordinates::geometry && p.location_boundary::geometry
+            AND ST_Covers(p.location_boundary, event.location_coordinates)
+          WHERE p.location_boundary IS NOT NULL
+            AND event.location_coordinates IS NOT NULL
+            AND event.user_id = $1
+            AND ${EVENT_HAPPENED_SQL}
+            AND ${MEASURED_LOCATION_SQL}
+       ),
+       linked AS (
+         -- Cast only a FileId shaped like a uuid: a bad one would fail the
+         -- whole query. Comparing as text would scan every user's files.
+         SELECT CASE WHEN a.file_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                     THEN a.file_id::uuid END AS file_id,
+                a.start_time
+           FROM at_place a
+         UNION ALL
+         SELECT f.id, a.start_time
+           FROM at_place a
+           JOIN ci.files f ON f.event_id = a.event_id
+       )
+       SELECT f.id AS file_id, count(*) OVER () AS total
+         FROM linked l
+         JOIN ci.files f ON f.id = l.file_id
+        WHERE f.user_id = $1
+          AND f.deleted_at IS NULL
+          AND f.variant = 'ORIGINAL'
+          AND (f.content_type LIKE 'image/%' OR ($5::boolean AND f.content_type LIKE 'video/%'))
+        GROUP BY f.id
+        ORDER BY MAX(l.start_time) DESC, f.id
+        LIMIT GREATEST($4::int, 1)`,
+      [context.userId, places.map((place) => place.id), PHOTO_AT_PLACE_METERS, limit, kind === 'media'],
+    );
+
+    return {
+      places,
+      fileIds: rows.slice(0, Math.max(limit, 0)).map((row) => row.file_id),
+      total: rows.length > 0 ? Number(rows[0].total) : 0,
+    };
+  }
+
+  /**
    * Aggregated visit stats for a batch of places from events.location_entity_id
    * (indexed by events_location_entity_idx). One grouped query per batch.
+   *
+   * Only an event that happened is a visit ({@link EVENT_HAPPENED_SQL}), and
+   * that is decided here, on the read, rather than left to whoever wrote the
+   * link. `promote.place` refuses such events and withdrew its own earlier
+   * links, but the legacy GeocodeBatchListener and the importers link them
+   * anyway, and an event cancelled after it was linked keeps its link, which
+   * the sweep no longer offers. Counted, they added visits that never took
+   * place and moved the first and last visit dates.
+   *
+   * `status` follows from the count and is not changed by that. A place whose
+   * only linked events did not happen is a zero like any other: `confirmed`
+   * when no enrichment is outstanding for the user, `pending_enrichment` while
+   * some is. The outstanding-work test below is per user and does not look at
+   * which event the work is for, so a ledger row left on an event that was
+   * deleted or cancelled after it failed can hold every zero of that user at
+   * `pending_enrichment`. That errs towards not stating a zero that is not yet
+   * known, and it was already so for deleted events.
    */
   async getVisitStats(context: ServiceContext, placeIds: string[]): Promise<Map<string, PlaceVisitStats>> {
     const out = new Map<string, PlaceVisitStats>();
@@ -695,13 +1154,15 @@ export class PlaceService {
 
     const rows: Array<{ place_id: string; n: string; first_at: Date | null; last_at: Date | null }> =
       await this.placeRepository.manager.query(
-        `SELECT location_entity_id AS place_id,
+        `SELECT event.location_entity_id AS place_id,
                 COUNT(*) AS n,
-                MIN(start_time) AS first_at,
-                MAX(start_time) AS last_at
-           FROM ci.events
-          WHERE user_id = $1 AND location_entity_id = ANY($2::uuid[])
-          GROUP BY location_entity_id`,
+                MIN(event.start_time) AS first_at,
+                MAX(event.start_time) AS last_at
+           FROM ci.events event
+          WHERE event.user_id = $1
+            AND event.location_entity_id = ANY($2::uuid[])
+            AND ${EVENT_HAPPENED_SQL}
+          GROUP BY event.location_entity_id`,
         [context.userId, placeIds],
       );
 
@@ -752,7 +1213,26 @@ export class PlaceService {
           },
         });
 
-        const placeResult = await this.placeRepository.save(place);
+        let placeResult: PlaceEntity;
+
+        try {
+          placeResult = await this.placeRepository.save(place);
+        } catch (err) {
+          if (place.locationPoint && isSnapCellViolation(err)) {
+            throw await this.nearbyPlaceConflict(context.userId, place.locationPoint.coordinates);
+          }
+
+          // Another unique index: in practice entities_admin_place_uniq, a
+          // second city (or region, country) of the same name under the same
+          // parent. Say so the way `update` does instead of an internal error.
+          if (isUniqueViolation(err)) {
+            throw new ConflictException(
+              'A place with that name already exists. Choose a different name, or edit the existing place.',
+            );
+          }
+
+          throw err;
+        }
 
         if (emitCreated) {
           await this.eventService.send(PlaceCreatedEvent, {
@@ -765,9 +1245,96 @@ export class PlaceService {
         // they were just persisted. Populate them from the saved row.
         placeResult.loadPropertiesFromJsonb();
 
+        await this.graphDeltaWriter.entityCreated({
+          entityId: placeResult.id,
+          entityType: 'Location',
+          name: placeResult.name,
+          description: placeResult.description,
+          properties: placeResult.properties,
+          ownerUserId: context.userId,
+          changeSource: 'PlaceService.create',
+          changedByUserId: context.userId,
+        });
+
         return PlaceEntity.toEgressType(placeResult);
       }),
     );
+  }
+
+  /**
+   * The error for a new place whose point lands in the same 0.001-degree cell
+   * as one the owner already has. `entities_location_snap_dedup_uniq` allows one
+   * Location per cell (about 110 m), so the INSERT fails with 23505, which the
+   * GraphQL layer would otherwise mask as "Internal server error". Name the place
+   * that holds the cell so the person knows which one to edit instead.
+   *
+   * A place merged into another keeps its point unless the kept place took it,
+   * so it can still hold its cell although Places no longer lists it. Point at
+   * the place it was merged into, the one the person can find and edit, without
+   * claiming that place sits here: a merge can join places far apart. An
+   * archived place is named by nobody.
+   *
+   * The name is a courtesy: with no user to scope the lookup to (a system
+   * context), or when the lookup itself fails, the conflict still goes out
+   * without one rather than being replaced by the lookup's own error.
+   */
+  private async nearbyPlaceConflict(ownerUserId: unknown, coordinates: number[]): Promise<ConflictException> {
+    const holder = typeof ownerUserId === 'string' ? await this.cellHolder(ownerUserId, coordinates) : null;
+    const rule = 'Memory keeps one place per spot about 100 m across';
+
+    if (holder?.merged) {
+      return new ConflictException(
+        `This spot is held by a place you merged into "${holder.name}". ${rule}, so edit "${holder.name}" instead, or move this one farther away.`,
+      );
+    }
+
+    return new ConflictException(
+      holder
+        ? `"${holder.name}" is already saved at this spot. ${rule}, so edit that place instead, or move this one farther away.`
+        : `Another place is already saved at this spot. ${rule}, so move this one farther away.`,
+    );
+  }
+
+  /**
+   * The place to name for `coordinates`' cell (see {@link nearbyPlaceConflict}):
+   * the one holding it, or the one it was merged into. Null when there is no
+   * name to give or the lookup fails.
+   */
+  private async cellHolder(
+    ownerUserId: string,
+    coordinates: number[],
+  ): Promise<{ name: string; merged: boolean } | null> {
+    const [lng, lat] = coordinates;
+    let rows: Array<{ name: string | null; merged: boolean }>;
+
+    try {
+      rows = await this.placeRepository.manager.query(
+        `SELECT CASE
+                  WHEN held.merged_into_entity_id IS NOT NULL THEN kept.name
+                  WHEN held.is_active IS DISTINCT FROM FALSE THEN held.name
+                END AS name,
+                held.merged_into_entity_id IS NOT NULL AS merged
+           FROM ci.entities held
+           LEFT JOIN ci.entities kept
+             ON kept.entity_id = held.merged_into_entity_id
+            AND kept.owner_user_id = held.owner_user_id
+            AND kept.merged_into_entity_id IS NULL
+            AND kept.is_active IS DISTINCT FROM FALSE
+          WHERE held.entity_type = 'Location'
+            AND held.owner_user_id = $1
+            AND held.location_point IS NOT NULL
+            AND ST_SnapToGrid(held.location_point::geometry, 0.001) =
+                ST_SnapToGrid(ST_SetSRID(ST_MakePoint($2, $3), 4326), 0.001)
+          LIMIT 1`,
+        [ownerUserId, lng, lat],
+      );
+    } catch {
+      return null;
+    }
+
+    const name = rows[0]?.name?.trim();
+
+    return name ? { name, merged: rows[0].merged === true } : null;
   }
 
   /**
@@ -822,32 +1389,78 @@ export class PlaceService {
     const ids = entities.map((entity) => entity.id);
     const rows = await this.placeRepository.find({
       where: { id: In(ids) },
-      relations: ['user'],
+      relations: { user: true },
     });
     const byId = new Map(rows.map((row) => [row.id, row]));
 
     return entities.map((entity) => PlaceEntity.toEgressType(byId.get(entity.id) ?? entity));
   }
 
-  /** List places; `query` filters by name (ILIKE substring). */
+  /**
+   * List places; `query` filters by name (ILIKE substring).
+   *
+   * No `user` join: nothing reads it off a listed place (`PlaceType` has no
+   * user field; `userId` comes from the row's own `owner_user_id`), and the
+   * join hydrated a `UserEntity` per row for nothing.
+   */
   async findAll(context: UserServiceContext, options: { query?: string } = {}): Promise<Place[]> {
-    let qb = this.placeRepository
-      .createQueryBuilder('place')
-      .leftJoinAndSelect('place.user', 'user')
-      .where('place.entity_type = :entityType', { entityType: 'Location' })
-      .andWhere('place.owner_user_id = :userId', { userId: context.userId });
+    let qb = this.listScope(this.placeRepository.createQueryBuilder('place'), context, options.query);
 
-    const query = options.query?.trim();
-    if (query) {
-      qb = qb.andWhere('place.name ILIKE :q', { q: `%${query}%` });
-    }
+    PLACE_LIST_ORDER.forEach((key, i) => {
+      qb =
+        i === 0
+          ? qb.orderBy(key.expr, key.order, key.nulls === 'LAST' ? 'NULLS LAST' : undefined)
+          : qb.addOrderBy(key.expr, key.order, key.nulls === 'LAST' ? 'NULLS LAST' : undefined);
+    });
 
-    const rows = await qb
-      .orderBy(`NULLIF(btrim(COALESCE(place.name, '')), '')`, 'ASC', 'NULLS LAST')
-      .addOrderBy('place.created_at', 'DESC')
-      .getMany();
+    const rows = await qb.getMany();
 
     return rows.map((row) => PlaceEntity.toEgressType(row));
+  }
+
+  /**
+   * One page of {@link findAll}'s list, in its order, read with a `LIMIT` and a
+   * seek past the cursor row instead of every place the user has — the search
+   * box's typeahead asks for eight on every keystroke. `totalCount` is counted
+   * only when `countTotal` is set; a cursor that matches no row yields an empty
+   * page, as `keysetPaginate` does.
+   */
+  async findPage(
+    context: UserServiceContext,
+    args: KeysetPageArgs,
+    options: { query?: string; countTotal?: boolean } = {},
+  ): Promise<KeysetByPage<Place>> {
+    const page = await keysetPaginateBy(this.placeRepository, args, {
+      alias: 'place',
+      keys: PLACE_LIST_ORDER,
+      idExpr: 'place.id',
+      countTotal: options.countTotal,
+      scope: (qb) => this.listScope(qb, context, options.query),
+    });
+
+    return { ...page, entities: page.entities.map((row) => PlaceEntity.toEgressType(row)) };
+  }
+
+  /** The rows {@link findAll} and {@link findPage} list: the caller's live, unmerged places, optionally by name. */
+  private listScope(
+    qb: SelectQueryBuilder<PlaceEntity>,
+    context: UserServiceContext,
+    query: string | undefined,
+  ): SelectQueryBuilder<PlaceEntity> {
+    qb = qb
+      .where('place.entity_type = :entityType', { entityType: 'Location' })
+      .andWhere('place.owner_user_id = :userId', { userId: context.userId })
+      // A place merged into another stays as a tombstone row pointing at the
+      // kept one; it is not a place of its own any more.
+      .andWhere('place.merged_into_entity_id IS NULL')
+      .andWhere('place.is_active IS DISTINCT FROM FALSE');
+
+    const needle = query?.trim();
+    if (needle) {
+      qb = qb.andWhere('place.name ILIKE :q', { q: `%${needle}%` });
+    }
+
+    return qb;
   }
 
   async findById(context: ServiceContext, id: string): Promise<Place | null> {
@@ -860,13 +1473,17 @@ export class PlaceService {
           },
         }),
       },
-      relations: ['user'],
+      relations: { user: true },
     });
 
     return result ? PlaceEntity.toEgressType(result) : null;
   }
 
   async findByIds(context: ServiceContext, ids: string[]): Promise<(Place | null)[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+
     const result = await this.placeRepository.find({
       where: {
         id: In(ids),
@@ -876,7 +1493,7 @@ export class PlaceService {
           },
         }),
       },
-      relations: ['user'],
+      relations: { user: true },
     });
 
     const map = new Map(result.map((entity) => [entity.id, PlaceEntity.toEgressType(entity)]));
@@ -912,19 +1529,23 @@ export class PlaceService {
       .createQueryBuilder('place')
       .select('place.id', 'id')
       .where('place.entity_type = :entityType', { entityType: 'Location' })
-      .andWhere('place.owner_user_id = :userId', { userId: context.userId });
+      .andWhere('place.owner_user_id = :userId', { userId: context.userId })
+      // A place the user asked Memory to forget, or merged into another, is not
+      // one of their places any more (findAll leaves both out the same way).
+      .andWhere('place.is_active IS DISTINCT FROM FALSE');
 
-    // Composite keyset: page strictly past (afterTime, afterId) in
-    // (updated_at DESC, entity_id DESC) — see ContentService.getEntitiesForContents.
+    // Composite keyset: page strictly past (afterTime, afterId) in (updated_at, entity_id), in
+    // `order` — see keysetSeek.
+    const order = options.order ?? 'DESC';
+
     if (options.afterTime && options.afterId) {
       query = query.andWhere(
-        '(place.updated_at < :afterTime OR (place.updated_at = :afterTime AND place.entity_id < :afterId))',
-        { afterTime: options.afterTime, afterId: options.afterId },
+        ...keysetSeek('place.updated_at', 'place.entity_id', order, options.afterTime, options.afterId),
       );
     }
 
-    // Deterministic tiebreak so same-timestamp rows page consistently.
-    query = query.orderBy('place.updated_at', options.order ?? 'DESC').addOrderBy('place.entity_id', 'DESC');
+    // Deterministic tiebreak so same-timestamp rows page consistently: the id runs the way the time does.
+    query = query.orderBy('place.updated_at', order).addOrderBy('place.entity_id', order);
 
     if (options.limit) {
       query = query.limit(options.limit);
@@ -938,7 +1559,8 @@ export class PlaceService {
   /**
    * Date-windowed Places browse: one row per place, timestamped at MIN(event
    * start_time in the window) where this place is `location_entity_id`. Ingest
-   * wall-clock events are excluded. Places with no real visit in the window
+   * wall-clock events are excluded, and so are events that did not happen
+   * ({@link EVENT_HAPPENED_SQL}). Places with no real visit in the window
    * drop out. See appearanceBrowse.ts.
    */
   private async listPlacesByAppearance(
@@ -991,7 +1613,8 @@ export class PlaceService {
     let query = this.placeRepository
       .createQueryBuilder('place')
       .where('place.entity_type = :entityType', { entityType: 'Location' })
-      .andWhere('place.owner_user_id = :userId', { userId: context.userId });
+      .andWhere('place.owner_user_id = :userId', { userId: context.userId })
+      .andWhere('place.is_active IS DISTINCT FROM FALSE');
 
     if (options.startTime) {
       query = query.andWhere('place.updated_at >= :startTime', { startTime: options.startTime });
@@ -1040,9 +1663,12 @@ export class PlaceService {
   async update(context: ServiceContext, id: string, data: UpdatePlaceDto): Promise<Place | null> {
     const { properties, latitude, longitude, place_kind, parent_place_id, ...rest } = data;
 
+    // Places only (see PLACE_ENTITY_TYPES): without the type, `updatePlace` could rename the
+    // owner's own Person or write its `planner` settings through its free-form properties.
     const place = await this.placeRepository.findOne({
       where: {
         id: id,
+        entityType: PLACE_ENTITY_TYPES,
         ...(context.userId !== SYSTEM_USER && {
           user: {
             id: context.userId,
@@ -1087,6 +1713,7 @@ export class PlaceService {
         result = await this.placeRepository.update(
           {
             id,
+            entityType: PLACE_ENTITY_TYPES,
             ...(context.userId !== SYSTEM_USER && {
               user: {
                 id: context.userId,
@@ -1101,6 +1728,12 @@ export class PlaceService {
           },
         );
       } catch (err) {
+        // A new point in another place's 0.001-degree cell: a different name
+        // would not get past entities_location_snap_dedup_uniq, so say what will.
+        if (typed.locationPoint && isSnapCellViolation(err)) {
+          throw await this.nearbyPlaceConflict(context.userId, typed.locationPoint.coordinates);
+        }
+
         if (isUniqueViolation(err)) {
           throw new ConflictException(
             'A place with that name already exists at this location. Choose a different name, or edit the existing place.',
@@ -1114,6 +1747,46 @@ export class PlaceService {
         return null;
       }
 
+      // Only what moved: the place form sends every field back on each save.
+      // `!== undefined`, not `??`: an explicit null description is a clear the
+      // UPDATE above wrote.
+      const name = rest.name !== undefined ? rest.name : place.name;
+      const description = rest.description !== undefined ? rest.description : place.description;
+      const changedFields = {
+        ...changedFieldsBetween({ name: place.name, description: place.description }, { name, description }, [
+          'name',
+          'description',
+        ]),
+        ...changedFieldsBetween(
+          {
+            coordinates: place.locationPoint?.coordinates ?? null,
+            place_kind: place.placeKind,
+            parent_place_id: place.parentPlaceId,
+          },
+          {
+            coordinates: typed.locationPoint
+              ? typed.locationPoint.coordinates
+              : (place.locationPoint?.coordinates ?? null),
+            place_kind: typed.placeKind !== undefined ? typed.placeKind : place.placeKind,
+            parent_place_id: typed.parentPlaceId !== undefined ? typed.parentPlaceId : place.parentPlaceId,
+          },
+          ['coordinates', 'place_kind', 'parent_place_id'],
+        ),
+        ...changedFieldsBetween(place.properties ?? {}, props, Object.keys(properties ?? {})),
+      };
+
+      if (Object.keys(changedFields).length > 0) {
+        await this.graphDeltaWriter.entityUpdated({
+          entityId: id,
+          entityType: place.entityType,
+          name,
+          changedFields,
+          ownerUserId: typeof context.userId === 'string' ? context.userId : null,
+          changeSource: 'PlaceService.update',
+          changedByUserId: typeof context.userId === 'string' ? context.userId : null,
+        });
+      }
+
       await this.eventService.send(PlaceUpdatedEvent, {
         placeId: id,
       });
@@ -1125,9 +1798,11 @@ export class PlaceService {
   }
 
   async remove(context: ServiceContext, id: string): Promise<boolean> {
+    // Places only (see PLACE_ENTITY_TYPES), so `deletePlace` cannot delete a Person or a Concept.
     const place = await this.placeRepository.findOne({
       where: {
         id: id,
+        entityType: PLACE_ENTITY_TYPES,
         ...(context.userId !== SYSTEM_USER && {
           user: {
             id: context.userId,
@@ -1140,34 +1815,117 @@ export class PlaceService {
       return false;
     }
 
-    // Re-parent children to the deleted node's own parent BEFORE deleting.
-    // parent_place_id is ON DELETE SET NULL, and nulling an admin child's
-    // parent can collide with a parentless same-name node on
-    // entities_admin_place_uniq — which would abort the cascade and make the
-    // place undeletable. Grafting also preserves the containment chain
-    // (city keeps its country when the region is removed).
-    await this.placeRepository.manager.query(
-      `UPDATE ci.entities
-          SET parent_place_id = $3
-        WHERE parent_place_id = $1
-          AND ($2::uuid IS NULL OR owner_user_id = $2)`,
-      [id, context.userId === SYSTEM_USER ? null : context.userId, place.parentPlaceId ?? null],
-    );
+    const ownerUserId = context.userId === SYSTEM_USER ? null : context.userId;
 
-    await this.placeRepository.delete({
-      id,
-      ...(context.userId !== SYSTEM_USER && {
-        user: {
-          id: context.userId,
-        },
-      }),
+    // One transaction, so the merged-away places never go without the place.
+    // The place is locked first: a merge into it locks it too, so one that is
+    // committing new merged-away places either lands before the delete below
+    // reads them or waits until the place is gone. Its parent is read under
+    // the lock: such a merge can have given it one since the read above.
+    const mergedIds = await this.placeRepository.manager.transaction(async (manager) => {
+      const [locked]: Array<{ parent_place_id: string | null }> = await manager.query(
+        `SELECT parent_place_id FROM ci.entities WHERE entity_id = $1 FOR UPDATE`,
+        [id],
+      );
+
+      // The places merged into this one go with it, as in `purge`, at any depth
+      // of a legacy chain. merged_into_entity_id is ON DELETE SET NULL too, and
+      // that would put them back into entities_admin_place_uniq, which leaves
+      // only merged-away places out. A merge leaves each merged-away city without
+      // a parent, so two of one name, or one and a later unparented city of that
+      // name, would collide and refuse the delete.
+      const merged: Array<{ entity_id: string }> = await manager.query(
+        `WITH RECURSIVE family AS (
+           SELECT entity_id
+             FROM ci.entities
+            WHERE merged_into_entity_id = $1
+              AND entity_type = ANY($3::text[])
+              AND ($2::uuid IS NULL OR owner_user_id = $2)
+           UNION
+           SELECT e.entity_id
+             FROM ci.entities e
+             JOIN family f ON e.merged_into_entity_id = f.entity_id
+            WHERE e.entity_type = ANY($3::text[])
+              AND ($2::uuid IS NULL OR e.owner_user_id = $2)
+         )
+         SELECT entity_id FROM family WHERE entity_id <> $1`,
+        [id, ownerUserId, [...GRAPH_ENTITY_TYPES.place]],
+      );
+      const duplicateIds = merged.map((row) => row.entity_id);
+
+      // Re-parent children to the deleted node's own parent BEFORE deleting.
+      // parent_place_id is ON DELETE SET NULL, and nulling an admin child's
+      // parent can collide with a parentless same-name node on
+      // entities_admin_place_uniq, which would abort the cascade and make the
+      // place undeletable. Grafting also preserves the containment chain
+      // (city keeps its country when the region is removed). The children of
+      // the merged-away places too: older versions could hang a place under one.
+      await manager.query(
+        `UPDATE ci.entities
+            SET parent_place_id = $3
+          WHERE parent_place_id = ANY($1::uuid[])
+            AND NOT (entity_id = ANY($1::uuid[]))
+            AND ($2::uuid IS NULL OR owner_user_id = $2)`,
+        [[id, ...duplicateIds], ownerUserId, locked?.parent_place_id ?? null],
+      );
+
+      if (duplicateIds.length > 0) {
+        await manager.query(`DELETE FROM ci.entities WHERE entity_id = ANY($1::uuid[])`, [duplicateIds]);
+      }
+
+      await manager.getRepository(PlaceEntity).delete({
+        id,
+        entityType: PLACE_ENTITY_TYPES,
+        ...(context.userId !== SYSTEM_USER && {
+          user: {
+            id: context.userId,
+          },
+        }),
+      });
+
+      return duplicateIds;
     });
 
-    await this.eventService.send(PlaceRemovedEvent, {
-      placeId: id,
-    });
+    // The merged-away places went too, as `purge` announces them.
+    for (const placeId of [id, ...mergedIds]) {
+      await this.eventService.send(PlaceRemovedEvent, { placeId });
+    }
 
     return true;
+  }
+
+  /**
+   * Permanently deletes places, with everything that only exists because of them.
+   * This is `memory.forget`'s `archive_and_delete` for a place node, and the other
+   * end from {@link remove}: see {@link purgePlaceAggregates} for what goes, for how
+   * the children are grafted onto the nearest place that stays (as `remove` does),
+   * and for what is left because it is a record in its own right.
+   *
+   * The duplicates that were merged into a place go with it, and are named in the
+   * result separately because nobody asked for them.
+   *
+   * Everything is one transaction. Search is told afterwards, once for every place
+   * that went, and the ids that were not the caller's, or no longer exist, are
+   * simply left out of the result.
+   */
+  async purge(context: UserServiceContext, ids: string[]): Promise<PurgedPlaces> {
+    const requested = Array.from(new Set(ids));
+
+    if (requested.length === 0) {
+      return { placeIds: [], duplicateIds: [] };
+    }
+
+    const purged = await this.placeRepository.manager.transaction((manager) =>
+      purgePlaceAggregates(manager, context.userId, requested),
+    );
+
+    // The index rows were deleted in the transaction. This tells anything else
+    // that listens, and is what announces a removal everywhere else in the app.
+    for (const placeId of [...purged.placeIds, ...purged.duplicateIds]) {
+      await this.eventService.send(PlaceRemovedEvent, { placeId });
+    }
+
+    return purged;
   }
 }
 

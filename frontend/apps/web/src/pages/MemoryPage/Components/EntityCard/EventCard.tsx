@@ -3,6 +3,7 @@ import { Calendar, Clock, MapPin, Play } from '@ci/shadcn/icons';
 
 import { PendingImage } from '@/components/PendingImage';
 import { gql, useFragment, type FragmentType } from '@/graphql';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 
 import { useEntityService } from '../../useEntityService';
 import { resolveStaticUrl } from '../EntityDetails/EntityDetailScaffold';
@@ -26,9 +27,6 @@ export const EVENT_FRAGMENT = gql(`
     title
     description
     sourceSystem
-    # The connector's catch-all for what has no column — for a social.like
-    # event that is the liked Page's URL, which the drawer offers as a link.
-    metadata
     startTime
     endTime
     timeSource
@@ -38,6 +36,10 @@ export const EVENT_FRAGMENT = gql(`
         id
         name
         properties
+        # Full precision from the place's location_point. The drawer falls
+        # back to these when the event has no point of its own.
+        latitude
+        longitude
       }
     }
     previewUrl
@@ -53,23 +55,12 @@ export const EVENT_FRAGMENT = gql(`
     tags {
       label
     }
-    # What the event is about, for events that ARE a watch/listen/read: the
-    # first linked content rows, with their resolved preview and player.
-    contents(first: 3) {
-      edges {
-        node {
-          id
-          title
-          contentUrl: url
-          ...RichMediaData
-        }
-      }
-    }
   }
 `);
 
 export function EventCard({ entity }: Props) {
   const data = useFragment(EVENT_FRAGMENT, entity);
+  const fmt = useDateTimeFormat();
   const [, { setActiveEntity }] = useEntityService();
   // startTime is NOT NULL, so this is always truthy — but for an
   // ingest-sourced record (see INGEST_TIME_SOURCE above) it is the import
@@ -141,7 +132,7 @@ export function EventCard({ entity }: Props) {
             <span className="text-sm italic text-muted-foreground">Date unknown</span>
           ) : (
             <span className="text-sm tabular-nums text-card-foreground">
-              {formatEventTimeRange(data.startTime, data.endTime)}
+              {formatEventTimeRange(data.startTime, data.endTime, fmt)}
             </span>
           )}
         </div>

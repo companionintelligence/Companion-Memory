@@ -4,6 +4,8 @@ import { IMPORT_STAGE_CONCURRENCY } from '../constants';
 import type { ImportRun } from '../entities/ImportRunEntity';
 import type { ImportStage } from '../entities/ImportStageEntity';
 
+import { isStageStalled } from './stageLiveness';
+
 /**
  * The live picture of everything importing right now, assembled once.
  *
@@ -123,6 +125,15 @@ export interface ActiveStage {
    * which has not started waiting on anything yet.
    */
   elapsedMs: number | null;
+  /** The claim's last sign of life — heartbeat or progress write. */
+  heartbeatAt: string | null;
+  /**
+   * `running`, but silent past `IMPORT_STAGE_STALLED_SECONDS`: its worker is
+   * gone or wedged. A separate flag rather than a new `queueState`, because the
+   * stage still holds its slot — which is exactly what `running` says — and
+   * because every consumer already switches on the four states it has.
+   */
+  stalled: boolean;
 }
 
 export interface ActiveRun {
@@ -153,6 +164,8 @@ export interface ActiveRun {
   finishedAt: string | null;
   /** Live for an unfinished run; final for a finished one. */
   elapsedMs: number | null;
+  /** Any of its stages is {@link ActiveStage.stalled}. */
+  stalled: boolean;
   stages: ActiveStage[];
 }
 
@@ -197,6 +210,8 @@ export interface ActiveImportSnapshot {
     blocked: number;
     /** How long the longest-waiting stage has been waiting. The stall/normal tell. */
     longestWaitMs: number | null;
+    /** Running stages whose heartbeat has gone silent — see {@link ActiveStage.stalled}. */
+    stalled: number;
   };
   runs: ActiveRun[];
   /**
@@ -244,6 +259,7 @@ export function idleSnapshot(now: Date = new Date()): ActiveImportSnapshot {
       waiting: 0,
       blocked: 0,
       longestWaitMs: null,
+      stalled: 0,
     },
     runs: [],
     truncated: false,
@@ -327,6 +343,35 @@ export function buildActiveSnapshot(input: ActiveSnapshotInput): ActiveImportSna
     const stages = (stagesByRun.get(run.id) ?? []).slice().sort((left, right) => left.seq - right.seq);
     const startedAt = run.startedAt ?? null;
     const finishedAt = run.finishedAt ?? null;
+    const activeStages: ActiveStage[] = stages.map((stage) => {
+      const entry = classified.get(stage.id);
+      const state = entry?.state ?? 'blocked';
+      const readyAt = entry?.readyAt ?? null;
+
+      return {
+        id: stage.id,
+        seq: stage.seq,
+        kind: stage.kind,
+        status: stage.status,
+        phase: stage.phase,
+        processed: Number(stage.processed),
+        total: stage.total == null ? null : Number(stage.total),
+        weight: stage.weight,
+        itemsPerSec: stage.itemsPerSec,
+        etaSeconds: stage.etaSeconds,
+        durationMs: stage.durationMs == null ? null : Number(stage.durationMs),
+        error: stage.error,
+        detail: stage.detail ?? {},
+        startedAt: stage.startedAt?.toISOString() ?? null,
+        finishedAt: stage.finishedAt?.toISOString() ?? null,
+        queueState: state,
+        queuePosition: queuePositions.get(stage.id) ?? null,
+        waitingSince: state === 'waiting' ? (readyAt?.toISOString() ?? null) : null,
+        elapsedMs: stageElapsed(stage, state, readyAt, nowMs),
+        heartbeatAt: stage.updatedAt?.toISOString() ?? null,
+        stalled: isStageStalled(stage, now),
+      };
+    });
 
     return {
       id: run.id,
@@ -344,33 +389,8 @@ export function buildActiveSnapshot(input: ActiveSnapshotInput): ActiveImportSna
       startedAt: startedAt?.toISOString() ?? null,
       finishedAt: finishedAt?.toISOString() ?? null,
       elapsedMs: elapsed(startedAt, finishedAt, nowMs),
-      stages: stages.map((stage) => {
-        const entry = classified.get(stage.id);
-        const state = entry?.state ?? 'blocked';
-        const readyAt = entry?.readyAt ?? null;
-
-        return {
-          id: stage.id,
-          seq: stage.seq,
-          kind: stage.kind,
-          status: stage.status,
-          phase: stage.phase,
-          processed: Number(stage.processed),
-          total: stage.total == null ? null : Number(stage.total),
-          weight: stage.weight,
-          itemsPerSec: stage.itemsPerSec,
-          etaSeconds: stage.etaSeconds,
-          durationMs: stage.durationMs == null ? null : Number(stage.durationMs),
-          error: stage.error,
-          detail: stage.detail ?? {},
-          startedAt: stage.startedAt?.toISOString() ?? null,
-          finishedAt: stage.finishedAt?.toISOString() ?? null,
-          queueState: state,
-          queuePosition: queuePositions.get(stage.id) ?? null,
-          waitingSince: state === 'waiting' ? (readyAt?.toISOString() ?? null) : null,
-          elapsedMs: stageElapsed(stage, state, readyAt, nowMs),
-        };
-      }),
+      stalled: activeStages.some((stage) => stage.stalled),
+      stages: activeStages,
     };
   });
 
@@ -411,6 +431,7 @@ export function buildActiveSnapshot(input: ActiveSnapshotInput): ActiveImportSna
       waiting: waiting.length,
       blocked: queueStates.filter((entry) => entry.state === 'blocked').length,
       longestWaitMs: longestWait == null ? null : nowMs - longestWait.getTime(),
+      stalled: runs.reduce((sum, run) => sum + run.stages.filter((stage) => stage.stalled).length, 0),
     },
     runs,
     truncated: input.truncated ?? false,

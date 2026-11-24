@@ -19,7 +19,6 @@ import {
   Badge,
   Button,
   Calendar,
-  Card,
   Checkbox,
   Dialog,
   IconButton,
@@ -31,7 +30,17 @@ import {
 import { CalendarIcon, Check, ClipboardCopy, KeyRound, Lock, Pencil, Plus, Trash, X } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 
+import { useNeedsWebSignIn, WebSignInRequired } from '@/components/WebSignInRequired';
 import { useAuth } from '@/hooks';
+
+import {
+  SettingsCard,
+  SettingsEmpty,
+  SettingsLoading,
+  SettingsNotice,
+  SettingsRow,
+  SettingsSection,
+} from '../kit';
 
 interface ApiKeyResponse {
   id: string;
@@ -56,9 +65,10 @@ interface CreateApiKeyResponse extends ApiKeyResponse {
  * Scopes a user-created key can carry, labelled for the create dialog.
  *
  * Enforcement is deny-by-default on a NON-EMPTY selection: a scoped key may only reach routes that
- * declare one of its scopes. Leaving every box unchecked omits `scopes` from the request, which the
- * API reads as the grandfathered "full access" case — and stays the default, because endpoints
- * without a declared scope (bulk ingest, GraphQL) refuse scoped keys outright.
+ * declare one of its scopes. "All areas" omits `scopes` from the request, which the API reads as the
+ * grandfathered unscoped case. It has to stay on offer, because endpoints without a declared scope
+ * (bulk ingest, GraphQL) refuse scoped keys outright. But it is a box the user ticks, not what an
+ * untouched dialog mints: with nothing ticked, Create stays disabled.
  *
  * Paths are the ones a client actually calls, which are `/api/`-prefixed across the board — the
  * gateway rewrites `^/api/(.*)` to `/$1`, so `/api/mcp` and `/api/memory` reach controllers mounted
@@ -103,18 +113,20 @@ const CAPABILITY_OPTIONS = [
   {
     value: API_KEY_CAPABILITY_WRITE,
     label: 'Read & write',
-    description: 'Also record new memories and update existing ones.',
+    description:
+      'Also record new memories and make most edits. An edit that can remove something, such as changing a person’s contact details or renaming a tag, needs “Read, write & delete”.',
   },
   {
     value: API_KEY_CAPABILITY_FULL,
-    // NOT "Full access". On this screen that phrase already means something else — the badge on a
-    // key with no scopes, i.e. full *surface* — and one row can carry both. Two different powers
-    // under one phrase, side by side, is the ambiguity worth spending words to avoid.
+    // NOT "Full access". That phrase reads as "every area" too (the badge on a key with no scopes
+    // says "All areas"), and one row can carry both. Two different powers under one phrase, side by
+    // side, is the ambiguity worth spending words to avoid.
     //
     // CI-Hub uses this same wording for the same stored value, so a user who grants an agent access
     // to both appliances meets one vocabulary rather than two dialects.
     label: 'Read, write & delete',
-    description: 'Also delete memories and other stored data. Deletions cannot be undone.',
+    description:
+      'Also delete memories and other stored data, merge people and make edits that remove data. Deletions cannot be undone.',
   },
 ] as const;
 
@@ -173,12 +185,21 @@ export function ApiKeysSection() {
   const [keys, setKeys] = useState<ApiKeyResponse[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Set only by the list load failing. `error` is shared with create/update/delete, so it cannot say
+  // whether an empty list is real or just what a failed load left behind.
+  const [loadFailed, setLoadFailed] = useState(false);
+  // The native shell holds only a device key, and `/api/keys` takes a session JWT or a Portal bearer —
+  // never a key, so a leaked one cannot mint successors that outlive its revocation.
+  const needsWebSignIn = useNeedsWebSignIn();
 
   // Create dialog
   const [createOpen, setCreateOpen] = useState(false);
   const [createName, setCreateName] = useState('');
   const [createExpiresAt, setCreateExpiresAt] = useState<Date | undefined>(undefined);
   const [createScopes, setCreateScopes] = useState<string[]>([]);
+  // "All areas" is its own explicit choice. An empty selection used to mean it silently, so a name
+  // and a click on Create minted a key that reaches every endpoint.
+  const [createAllAreas, setCreateAllAreas] = useState(false);
   const [createCapability, setCreateCapability] = useState<ApiKeyCapability>(DEFAULT_API_KEY_CAPABILITY);
   const [createLoading, setCreateLoading] = useState(false);
 
@@ -214,18 +235,25 @@ export function ApiKeysSection() {
     try {
       setLoading(true);
       setError(null);
+      setLoadFailed(false);
       const data = await fetchJson<ApiKeyResponse[]>('/api/keys', { headers: headers() });
       setKeys(data ?? []);
     } catch {
       setError('Failed to load API keys');
+      setLoadFailed(true);
     } finally {
       setLoading(false);
     }
   }, [headers]);
 
   useEffect(() => {
+    // A request that can only 401 is not worth sending; the notice below says why.
+    if (needsWebSignIn) {
+      return;
+    }
+
     fetchKeys();
-  }, [fetchKeys]);
+  }, [fetchKeys, needsWebSignIn]);
 
   /**
    * Reset the form whenever the dialog closes. Without this a cancelled dialog reopens holding the
@@ -239,16 +267,33 @@ export function ApiKeysSection() {
       setCreateName('');
       setCreateExpiresAt(undefined);
       setCreateScopes([]);
+      setCreateAllAreas(false);
       // Reset the level too — a 'full' chosen for one key must not silently carry into the next.
       setCreateCapability(DEFAULT_API_KEY_CAPABILITY);
     }
   };
 
   const toggleCreateScope = (scope: string) => {
+    // Picking an area means "only these", so it ends an earlier "All areas".
+    setCreateAllAreas(false);
     setCreateScopes((current) =>
       current.includes(scope) ? current.filter((s) => s !== scope) : [...current, scope],
     );
   };
+
+  const toggleCreateAllAreas = () => {
+    const next = !createAllAreas;
+
+    setCreateAllAreas(next);
+
+    // "All areas" and a list of areas are two different answers, so picking it clears the list.
+    if (next) {
+      setCreateScopes([]);
+    }
+  };
+
+  // Create needs an answer to "where can this key reach": some areas, or all of them.
+  const hasAreaChoice = createAllAreas || createScopes.length > 0;
 
   // The one scope combination that looks valid and is not: the server confines a scope-limited key
   // off the GraphQL data plane, and gates the native intent tools behind `intents`. So `mcp` on its
@@ -260,10 +305,11 @@ export function ApiKeysSection() {
   // requires it, and one that declares nothing requires what its shape implies (GraphQL mutations and
   // non-GET verbs write, queries and GETs read). So read-only now means read-only for an unscoped key
   // too; what scopes add on top is confinement to particular areas, which is worth saying.
-  const readWithoutScopes = createCapability === API_KEY_CAPABILITY_READ && createScopes.length === 0;
+  const readWithoutScopes = createCapability === API_KEY_CAPABILITY_READ && createAllAreas;
 
   const handleCreate = async () => {
-    if (!createName.trim()) {
+    // Enter in the name field reaches here too, so the disabled button is not the only guard.
+    if (!createName.trim() || !hasAreaChoice) {
       return;
     }
 
@@ -274,8 +320,8 @@ export function ApiKeysSection() {
         body.expires_at = createExpiresAt.toISOString();
       }
 
-      // Omitted when empty so the key keeps the grandfathered full-access meaning.
-      if (createScopes.length > 0) {
+      // Omitted for "All areas", which the API reads as an unscoped key.
+      if (!createAllAreas && createScopes.length > 0) {
         body.scopes = createScopes;
       }
 
@@ -407,167 +453,167 @@ export function ApiKeysSection() {
     return new Date(expiresAt) < new Date();
   };
 
+  if (needsWebSignIn) {
+    return (
+      <SettingsSection
+        title="API keys"
+        description="Create keys to grant other applications access to your account."
+      >
+        <WebSignInRequired>
+          API keys are created, listed and revoked from a web sign-in only. This app signs in with its own
+          device key, and a key is never allowed to mint or revoke keys — that way a leaked key cannot outlive
+          its revocation. Open Companion Memory in a web browser and sign in to manage your keys.
+        </WebSignInRequired>
+      </SettingsSection>
+    );
+  }
+
   return (
-    <>
-      <div className="mb-6 flex items-center justify-between">
-        <div>
-          <h2 className="text-xl font-semibold">API Keys</h2>
-          <p className="text-sm text-muted-foreground mt-1">
-            Create keys to grant other applications access to your account.
-          </p>
-        </div>
-        {/* Icon-only trigger: without an explicit label it reaches assistive tech as an unnamed button. */}
-        <IconButton
-          variant="outline"
-          label={t('SETTINGS_API_KEY_CREATE')}
-          onClick={() => setCreateOpen(true)}
+    <SettingsSection
+      title="API keys"
+      description="Create keys to grant other applications access to your account."
+      actions={
+        <Button variant="outline" onClick={() => setCreateOpen(true)}>
+          <Plus aria-hidden="true" />
+          {t('SETTINGS_API_KEY_CREATE')}
+        </Button>
+      }
+    >
+      {error ? <SettingsNotice tone="error">{error}</SettingsNotice> : null}
+
+      {revealedKey ? (
+        <SettingsNotice
+          tone="success"
+          title="Your new API key has been created."
+          action={
+            <IconButton
+              variant="ghost"
+              size="icon-sm"
+              label={t('SETTINGS_API_KEY_DISMISS_BANNER')}
+              onClick={() => {
+                setRevealedKey(null);
+                setCopied(false);
+              }}
+            >
+              <X />
+            </IconButton>
+          }
         >
-          <Plus className="h-4 w-4" />
-        </IconButton>
-      </div>
+          <div className="mt-2 flex items-center gap-1.5 rounded-md border bg-background p-1.5 text-foreground shadow-xs">
+            <Input
+              readOnly
+              value={revealedKey}
+              className="!ml-1 !h-auto !flex-1 !rounded-none !border-0 !bg-transparent !p-0 font-mono text-base !shadow-none !ring-0 focus-visible:!border-transparent focus-visible:!ring-0 md:text-sm"
+            />
+            <IconButton
+              variant="ghost"
+              size="icon-sm"
+              label={t('SETTINGS_API_KEY_COPY')}
+              onClick={() => copyToClipboard(revealedKey)}
+              className="transition-transform duration-200 ease-out active:scale-90"
+            >
+              {copied ? <Check className="text-teal-700 dark:text-teal-300" /> : <ClipboardCopy />}
+            </IconButton>
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">The key value won&apos;t be shown again.</p>
+        </SettingsNotice>
+      ) : null}
 
-      {error && (
-        <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-400">
-          {error}
-        </div>
-      )}
-
-      {/* Revealed key banner */}
-      {revealedKey && (
-        <Card className="mb-4 border-green-200 dark:border-green-800 relative">
-          <IconButton
-            variant="ghost"
-            label={t('SETTINGS_API_KEY_DISMISS_BANNER')}
-            className="absolute top-3 right-3 h-6 w-6"
-            onClick={() => {
-              setRevealedKey(null);
-              setCopied(false);
-            }}
-          >
-            <X className="h-3 w-3" />
-          </IconButton>
-          <Card.Content className="space-y-4">
-            <p className="text-sm font-medium text-green-700 dark:text-green-400 pr-8">
-              Your new API key has been created.
-            </p>
-            <div className="flex items-center gap-1.5 p-1.5 border shadow-xs rounded-md bg-background">
-              <Input
-                readOnly
-                value={revealedKey}
-                className="!flex-1 !border-0 !ring-0 !shadow-none !bg-transparent !p-0 !ml-1 !h-auto !rounded-none font-mono text-sm focus-visible:!ring-0 focus-visible:!border-transparent"
-              />
-              <IconButton
-                variant="ghost"
-                size="sm"
-                label={t('SETTINGS_API_KEY_COPY')}
-                onClick={() => copyToClipboard(revealedKey)}
-                className="cursor-pointer h-8 w-8 p-0 active:scale-90 transition-transform duration-200 ease-out will-change-transform"
-              >
-                {copied ? (
-                  <Check className="h-4 w-4 text-green-600" />
-                ) : (
-                  <ClipboardCopy className="h-4 w-4" />
-                )}
-              </IconButton>
-            </div>
-            <p className="text-xs text-muted-foreground">The key value won't be shown again.</p>
-          </Card.Content>
-        </Card>
-      )}
-
-      {/* Key list */}
       {loading ? (
-        <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">Loading…</div>
+        <SettingsCard>
+          <SettingsLoading />
+        </SettingsCard>
       ) : keys.length === 0 ? (
-        <Card>
-          <Card.Content className="flex flex-col items-center justify-center py-12 text-center">
-            <p className="text-sm text-muted-foreground">No API keys created yet.</p>
-          </Card.Content>
-        </Card>
+        // A failed load leaves the list empty. The banner above already says so; "No API keys
+        // created yet." under it would contradict it.
+        loadFailed ? null : (
+          <SettingsCard>
+            <SettingsEmpty icon={<KeyRound />} title="No API keys created yet." />
+          </SettingsCard>
+        )
       ) : (
-        <div className="space-y-3">
+        <SettingsCard>
           {keys.map((key) => (
-            <Card key={key.id}>
-              <Card.Content className="flex items-center justify-between">
-                <div className="min-w-0 flex-1 space-y-4">
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium truncate">{key.name}</span>
-                    {isExpired(key.expires_at) && (
-                      <Badge variant="destructive" className="text-xs">
-                        Expired
-                      </Badge>
-                    )}
-                  </div>
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    {isHubManagedKey(key) ? (
-                      <Badge
-                        variant="outline"
-                        className="border-emerald-500/30 bg-emerald-500/10 text-xs text-emerald-600 dark:text-emerald-400"
-                      >
-                        <Lock />
-                        Managed by Companion Hub
-                      </Badge>
-                    ) : key.scopes.length === 0 ? (
-                      <Badge variant="outline" className="text-xs">
-                        <KeyRound />
-                        Full access
-                      </Badge>
-                    ) : (
-                      key.scopes.map((scope) => (
-                        <Badge key={scope} variant="outline" className="text-xs">
-                          {scope}
-                        </Badge>
-                      ))
-                    )}
-                    {/* Shown for every key, including Hub-managed and full-surface ones: the scope
-                        badges say where a key reaches, and without this the row never says whether
-                        it can delete what it finds there. */}
-                    <Badge
-                      variant="outline"
-                      className={`text-xs ${CAPABILITY_BADGE_CLASS[capabilityOf(key)]}`}
-                    >
-                      {CAPABILITY_LABELS[capabilityOf(key)]}
-                    </Badge>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                    <span>
-                      Key: <code className="font-mono">{key.prefix}…</code>
-                    </span>
-                    <span>Created {formatDate(key.created_at)}</span>
-                    {key.expires_at && <span>Expires {formatDate(key.expires_at)}</span>}
-                    {key.last_used_at && <span>Last used {formatDate(key.last_used_at)}</span>}
-                  </div>
-                </div>
-                <div className="ml-4 flex items-center gap-1">
+            <SettingsRow
+              key={key.id}
+              label={<span className="block truncate">{key.name}</span>}
+              meta={
+                isExpired(key.expires_at) ? (
+                  <Badge variant="destructive" className="text-xs">
+                    Expired
+                  </Badge>
+                ) : null
+              }
+              align="start"
+              control={
+                <>
                   <IconButton
                     variant="ghost"
-                    className="h-8 w-8"
                     onClick={() => openEdit(key)}
                     label={t('SETTINGS_API_KEY_EDIT', { name: key.name })}
                     tooltip={isHubManagedKey(key) ? t('SETTINGS_API_KEY_HUB_MANAGED') : undefined}
                   >
-                    <Pencil className="h-4 w-4" />
+                    <Pencil />
                   </IconButton>
                   <IconButton
                     variant="ghost"
-                    className="h-8 w-8 text-red-600 hover:text-red-700"
+                    className="text-destructive hover:text-destructive"
                     onClick={() => openDelete(key)}
                     label={t('SETTINGS_API_KEY_DELETE', { name: key.name })}
                   >
-                    <Trash className="h-4 w-4" />
+                    <Trash />
                   </IconButton>
+                </>
+              }
+            >
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {isHubManagedKey(key) ? (
+                    <Badge
+                      variant="outline"
+                      className="border-emerald-500/30 bg-emerald-500/10 text-xs text-emerald-600 dark:text-emerald-400"
+                    >
+                      <Lock />
+                      Managed by Companion Hub
+                    </Badge>
+                  ) : key.scopes.length === 0 ? (
+                    <Badge variant="outline" className="text-xs">
+                      <KeyRound />
+                      All areas
+                    </Badge>
+                  ) : (
+                    key.scopes.map((scope) => (
+                      <Badge key={scope} variant="outline" className="text-xs">
+                        {scope}
+                      </Badge>
+                    ))
+                  )}
+                  {/* Shown for every key, including Hub-managed and full-surface ones: the scope
+                      badges say where a key reaches, and without this the row never says whether
+                      it can delete what it finds there. */}
+                  <Badge variant="outline" className={`text-xs ${CAPABILITY_BADGE_CLASS[capabilityOf(key)]}`}>
+                    {CAPABILITY_LABELS[capabilityOf(key)]}
+                  </Badge>
                 </div>
-              </Card.Content>
-            </Card>
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                  <span>
+                    Key: <code className="font-mono">{key.prefix}…</code>
+                  </span>
+                  <span>Created {formatDate(key.created_at)}</span>
+                  {key.expires_at && <span>Expires {formatDate(key.expires_at)}</span>}
+                  {key.last_used_at && <span>Last used {formatDate(key.last_used_at)}</span>}
+                </div>
+              </div>
+            </SettingsRow>
           ))}
-        </div>
+        </SettingsCard>
       )}
 
       {/* Create dialog */}
       <Dialog open={createOpen} onOpenChange={handleCreateOpenChange}>
         <Dialog.Content>
           <Dialog.Header>
-            <Dialog.Title>Create API Key</Dialog.Title>
+            <Dialog.Title>Create API key</Dialog.Title>
           </Dialog.Header>
           <div className="space-y-4 py-2">
             <div className="grid gap-2">
@@ -614,6 +660,22 @@ export function ApiKeysSection() {
             <div className="grid gap-2">
               <Label>Access</Label>
               <div className="space-y-2 rounded-md border p-3">
+                <div className="flex items-start gap-3">
+                  <Checkbox
+                    id="apiKeyScope-all"
+                    aria-describedby="apiKeyScope-all-description"
+                    checked={createAllAreas}
+                    onCheckedChange={toggleCreateAllAreas}
+                  />
+                  <div className="grid gap-0.5 text-sm leading-none">
+                    <Label htmlFor="apiKeyScope-all" className="cursor-pointer font-medium">
+                      All areas
+                    </Label>
+                    <span id="apiKeyScope-all-description" className="text-muted-foreground text-xs">
+                      Every endpoint your account can reach, including bulk ingest and GraphQL
+                    </span>
+                  </div>
+                </div>
                 {SCOPE_OPTIONS.map((scope) => (
                   // The description is wired up with aria-describedby rather than folded into the
                   // label: an aria-label naming the checkbox would suppress it entirely, leaving
@@ -645,9 +707,11 @@ export function ApiKeysSection() {
                   the exact outcome the warning exists to prevent. */}
               <div role="status" className="grid gap-2">
                 <p className="text-muted-foreground text-xs">
-                  {createScopes.length === 0
-                    ? 'No selection grants full access — the key can reach every endpoint your account can.'
-                    : 'The key is limited to the selected areas and is refused everywhere else, including bulk ingest and GraphQL.'}
+                  {createAllAreas
+                    ? 'The key can reach every endpoint your account can, at the level you pick below.'
+                    : createScopes.length === 0
+                      ? 'Pick the areas this key can reach, or All areas.'
+                      : 'The key is limited to the selected areas and is refused everywhere else, including bulk ingest and GraphQL.'}
                 </p>
                 {/* MCP without Intents authenticates and opens a session, then advertises zero tools
                     — which agents report as "this server has no tools" rather than as a permissions
@@ -655,7 +719,7 @@ export function ApiKeysSection() {
                     debug an empty tool list. */}
                 {mcpWithoutIntents ? (
                   <p className="text-xs font-medium text-amber-600 dark:text-amber-500">
-                    MCP alone advertises no tools. Add Intents, or leave every box unchecked for full access.
+                    MCP alone advertises no tools. Add Intents, or pick All areas.
                   </p>
                 ) : null}
                 {readWithoutScopes ? (
@@ -706,7 +770,7 @@ export function ApiKeysSection() {
             <Button variant="outline" onClick={() => handleCreateOpenChange(false)}>
               Cancel
             </Button>
-            <Button onClick={handleCreate} disabled={!createName.trim() || createLoading}>
+            <Button onClick={handleCreate} disabled={!createName.trim() || !hasAreaChoice || createLoading}>
               {createLoading ? 'Creating…' : 'Create'}
             </Button>
           </Dialog.Footer>
@@ -721,7 +785,7 @@ export function ApiKeysSection() {
           {editStep === 'form' ? (
             <>
               <Dialog.Header>
-                <Dialog.Title>Edit API Key</Dialog.Title>
+                <Dialog.Title>Edit API key</Dialog.Title>
                 <Dialog.Description>
                   The key value does not change, so anything using it keeps working — with the access you
                   choose here.
@@ -803,8 +867,8 @@ export function ApiKeysSection() {
                 </Dialog.Title>
                 <Dialog.Description>
                   {editCapability === API_KEY_CAPABILITY_FULL
-                    ? 'Anything holding this key will be able to delete memories and other stored data. Deletions cannot be undone.'
-                    : 'Anything holding this key will be able to record new memories and update existing ones. It will still be refused deletions.'}
+                    ? 'Anything holding this key will be able to delete memories and other stored data, merge people and make edits that remove data. Deletions cannot be undone.'
+                    : 'Anything holding this key will be able to record new memories and make most edits. It will still be refused deletions, merges and edits that remove data.'}
                 </Dialog.Description>
               </Dialog.Header>
               <Dialog.Footer>
@@ -828,14 +892,14 @@ export function ApiKeysSection() {
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <Dialog.Content>
           <Dialog.Header>
-            <Dialog.Title>Delete API Key</Dialog.Title>
+            <Dialog.Title>Delete API key?</Dialog.Title>
             <Dialog.Description>
               Are you sure you want to delete the <strong>{deleteKey?.name}</strong> key? Any integrations
               using this key will stop working. This action cannot be undone.
             </Dialog.Description>
           </Dialog.Header>
           {deleteKey && isHubManagedKey(deleteKey) && (
-            <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300">
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-200">
               This key is managed by Companion Hub for a connected app. Deleting it here will break that app's
               memory connection — to disconnect cleanly, use <strong>Disconnect Memory</strong> on the app's
               page in Hub instead.
@@ -851,6 +915,6 @@ export function ApiKeysSection() {
           </Dialog.Footer>
         </Dialog.Content>
       </Dialog>
-    </>
+    </SettingsSection>
   );
 }

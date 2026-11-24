@@ -1,11 +1,24 @@
+import { setApiKey } from '@ci/common';
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CatalogueEntry, CataloguePage } from './catalogue';
 import { useReflectionCatalogue } from './useReflectionCatalogue';
 
-vi.mock('@/hooks', () => ({
-  useAuth: () => [{ authToken: 'tok', expired: false, loading: false, error: null }, {}],
+// The real `useSessionAuth` runs on top of this, so the catalogue is exercised for both a
+// web JWT session and the native shell, whose only credential is an API key.
+const h = vi.hoisted(() => ({
+  auth: {
+    authToken: 'tok' as string | null,
+    authenticated: true,
+    expired: false,
+    loading: false,
+    error: null,
+  },
+}));
+
+vi.mock('@/hooks/useAuth', () => ({
+  useAuth: () => [h.auth, {}],
 }));
 
 function entry(overrides: Partial<CatalogueEntry> = {}): CatalogueEntry {
@@ -54,7 +67,16 @@ function setFetch(handler: (url: string, init?: RequestInit) => Response | Promi
   return mock;
 }
 
-afterEach(() => vi.unstubAllGlobals());
+beforeEach(() => {
+  h.auth.authToken = 'tok';
+  h.auth.authenticated = true;
+  h.auth.expired = false;
+});
+
+afterEach(() => {
+  setApiKey(null);
+  vi.unstubAllGlobals();
+});
 
 describe('useReflectionCatalogue', () => {
   it('loads the active page on mount', async () => {
@@ -186,5 +208,71 @@ describe('useReflectionCatalogue', () => {
     });
 
     expect(result.current[0].savingId).toBeNull();
+  });
+
+  /**
+   * ═══ THE CATALOGUE WAS SKELETONS FOREVER ON THE PHONE ═══
+   *
+   * `authToken` is the web JWT, null in the Capacitor app — whose durable credential is a
+   * keystore API key `fetchJson` attaches as `x-api-key`. The effect returned before it
+   * fetched, with `loading` starting true, so the list never rendered and a new reflection
+   * never refreshed it. `/questions/*` is `JwtOrApiKeyAuthGuard`: the key is accepted.
+   */
+  describe('native shell (API key, no web JWT)', () => {
+    beforeEach(() => {
+      h.auth.authToken = null;
+      setApiKey('device-key');
+    });
+
+    /** The headers the n-th stubbed request went out with. */
+    const headersOfCall = (fetchMock: ReturnType<typeof setFetch>, index: number) =>
+      (fetchMock.mock.calls[index]?.[1] as RequestInit | undefined)?.headers as Record<string, string>;
+
+    it('loads the page with the device key and sends no bearer', async () => {
+      const fetchMock = setFetch(() => ok(pageOf([entry()])));
+
+      const { result } = renderHook(() => useReflectionCatalogue());
+
+      await waitFor(() => expect(result.current[0].page?.data).toHaveLength(1));
+      expect(result.current[0].loading).toBe(false);
+      expect(result.current[0].error).toBeNull();
+
+      const headers = headersOfCall(fetchMock, 0);
+      expect(headers['x-api-key']).toBe('device-key');
+      expect(headers).not.toHaveProperty('Authorization');
+    });
+
+    it('creates a reflection and then refreshes the list', async () => {
+      const fetchMock = setFetch((_url, init) => (init?.method === 'POST' ? ok({}) : ok(pageOf([]))));
+
+      const { result } = renderHook(() => useReflectionCatalogue());
+      await waitFor(() => expect(result.current[0].page).not.toBeNull());
+      const gets = () => fetchMock.mock.calls.filter(([, init]) => !(init as RequestInit)?.method).length;
+      const before = gets();
+
+      await act(async () => {
+        await result.current[1].create({ text: 'What is your shoe size?', category: null, answerTier: null });
+      });
+
+      const postIndex = fetchMock.mock.calls.findIndex(
+        ([, init]) => (init as RequestInit)?.method === 'POST',
+      );
+      expect(headersOfCall(fetchMock, postIndex)['x-api-key']).toBe('device-key');
+      expect(headersOfCall(fetchMock, postIndex)).not.toHaveProperty('Authorization');
+
+      // The list used to stay as it was: the refresh effect returned before fetching.
+      await waitFor(() => expect(gets()).toBeGreaterThan(before));
+    });
+
+    it('still sends the bearer on the web, where there is a JWT', async () => {
+      h.auth.authToken = 'jwt-abc';
+      setApiKey(null);
+      const fetchMock = setFetch(() => ok(pageOf([entry()])));
+
+      const { result } = renderHook(() => useReflectionCatalogue());
+
+      await waitFor(() => expect(result.current[0].page).not.toBeNull());
+      expect(headersOfCall(fetchMock, 0).Authorization).toBe('Bearer jwt-abc');
+    });
   });
 });

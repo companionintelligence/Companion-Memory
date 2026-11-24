@@ -82,14 +82,12 @@ export class TaskEntity {
   sourceRef!: string | null;
 
   /**
-   * KNOWN GAP (as of migration 20260828120000_hbpe_life_forecast): added for
-   * HBPE's completed-task token reader (`get_completed_tasks_for_day` in
-   * `backend/apps/hbpe/src/ci/hbpe/data_client.py`, which filters on this
-   * being non-null and non-'UNKNOWN'), but no writer exists anywhere in this
-   * repo — no DTO field, resolver, or service ever sets it. Every row is
-   * NULL, so that HBPE query is structurally empty until a writer ships.
-   * data_client.py short-circuits the empty scan rather than fixing this;
-   * the real fix is a classifier wired into task creation/completion.
+   * Canonical 8-class HBPE L0 behavioral label (`WORK`, `EXERCISE`, `SOCIAL`,
+   * `ERRAND`, `LEISURE`, `TRANSIT`, `SLEEP`, `UNKNOWN`). Populated by
+   * `TaskService` via `classifyTaskL0` (`domains/planning/engine/taskL0Classifier.ts`)
+   * on task creation, update, and completion so HBPE's completed-task token
+   * reader (`get_completed_tasks_for_day` in `data_client.py`) and schedule
+   * candidate projections receive classified tasks.
    */
   @Column({ type: 'text', name: 'l0_class', nullable: true })
   l0Class!: string | null;

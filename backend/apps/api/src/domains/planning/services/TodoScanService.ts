@@ -1,29 +1,55 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
-import { z } from 'zod';
 
 import { type UserServiceContext } from '@ci/common/context';
+import {
+  PLANNING_COMMITMENT_THRESHOLD,
+  planningCommitmentSignal,
+} from '@ci/common/hbpe/planningCommitmentSignal';
 import { LoggerService } from '@ci/common/logging';
 import { OllamaService } from '@ci/domains/llm/services/OllamaService';
+import { AGENT_TURN_MESSAGE_CATEGORY } from '@ci/domains/memory';
+import { ContrastiveDecisionService } from '@ci/domains/model-routing';
 import { PersonalizationService } from '@ci/domains/personalization';
 import { SearchService } from '@ci/domains/search-next';
 
+import {
+  collapseDuplicateProposed,
+  proposedTitles,
+  sweepStaleProposed,
+} from '../engine/proposedHousekeeping';
+import {
+  MAX_SCAN_CALLS_PER_TICK,
+  cognitiveCap,
+  inputTokenBudget,
+  operatingKey,
+  packBatch,
+  scanOperatingPoints,
+  sourceLoad,
+  startingItems,
+} from '../engine/scanBatchPolicy';
+import { completeScan, consolidateScan, resolveScanProfile } from '../engine/scanCompletion';
+import { confidenceForScan, formatMemoryHit, isEchoTitle, memoryHitText } from '../engine/scanItemQuality';
+import {
+  type ScanCandidate,
+  type ScanTodo,
+  classifyPrompt,
+  decisionResponseSchema,
+  interpretClassify,
+} from '../engine/scanTurn';
 import {
   SCAN_DEDUP_LIMIT,
   SCAN_DEDUP_STATUSES,
   claimedSourceIds,
   findSimilarTitle,
   formatAlreadyTracked,
-  newerDuplicateIds,
 } from '../engine/taskTitleSimilarity';
-import type { Task } from '../entities/TaskEntity';
 
 import { PlannedBlockService } from './PlannedBlockService';
 import { ProposedTaskReconcileService } from './ProposedTaskReconcileService';
 import { TaskService } from './TaskService';
 
-const MAX_SURFACED = 12;
 // 60s, not 20 — see InboxScanService.ts's SCAN_TIMEOUT_MS for the full
 // reasoning. Confirmed live: a bare one-word Ollama completion against the
 // configured local model took over two minutes on real hardware, and the
@@ -37,85 +63,10 @@ const MAX_SURFACED = 12;
 // constants below): on the operator's chat model, prompt evaluation alone
 // exceeded even 60s, so widening this on its own only moved the abort from
 // 20s to 60s.
-export const SCAN_TIMEOUT_MS = 60_000;
+export { SCAN_TIMEOUT_MS } from '../engine/scanCompletion';
 
-/**
- * Output cap for the scan turn (Ollama `options.num_predict`).
- *
- * The scan asks for grammar-constrained JSON whose `items` array is bounded to
- * {@link MAX_SURFACED} entries, so a complete answer is small — a few hundred
- * tokens at most. Left uncapped, though, "bounded array" does not mean
- * "bounded generation": a model that keeps emitting still runs until the
- * context window fills, and the caller's timeout fires long before that. The
- * cap is set well above a full {@link MAX_SURFACED}-item answer so it truncates
- * only runaway generation, never a legitimate one.
- */
-const SCAN_MAX_OUTPUT_TOKENS = 1_500;
-
-/**
- * Keep the utility model resident (Ollama `keep_alive`).
- *
- * Note what this does NOT do. This scan is daily, and no keep-alive shorter
- * than a day holds a model across that gap, so the first call of a run still
- * pays whatever load is due; the value is not chosen for this scan alone.
- *
- * What an hour buys is the rest of the tier. `InboxScanService` runs every 30
- * minutes and `TodoProcessService` makes many sequential calls per run, all on
- * the same utility model — an hour keeps it warm across that traffic, and keeps
- * this scan's own pg-boss retries from each reloading it inside their budget.
- * Cold start on an otherwise idle appliance is a separate problem and wants a
- * separate fix (a warm-up outside the timed section), not a longer keep-alive.
- */
-const SCAN_KEEP_ALIVE = '1h';
 const MEMORY_LOOKBACK_QUERY =
   'tasks to-dos errands appointments commitments deadlines things I need to do or finish';
-
-const itemSchema = z.object({
-  title: z.string(),
-  detail: z.string().optional(),
-  confidence: z.number().optional(),
-  sourceIndex: z.number().int().positive().optional(),
-});
-
-const responseSchema = z.object({
-  items: z.array(z.unknown()),
-});
-
-const RESPONSE_JSON_SCHEMA: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    items: {
-      type: 'array',
-      // The grammar this schema compiles to is what actually constrains
-      // generation, so an array with no upper bound licenses the model to keep
-      // emitting entries indefinitely. Only MAX_SURFACED of them are ever used
-      // downstream; asking for more is generation the caller pays for and then
-      // discards.
-      //
-      // Enforcement is the SERVER's, not this client's, so it was verified
-      // rather than assumed: asking a model for ten items under a `maxItems: 2`
-      // schema returned exactly two and stopped (`done_reason: stop`).
-      maxItems: MAX_SURFACED,
-      items: {
-        type: 'object',
-        properties: {
-          // Bounded so SCAN_MAX_OUTPUT_TOKENS is provably above a full answer
-          // rather than merely believed to be. MAX_SURFACED items at these
-          // lengths is roughly 900 tokens against a 1,500 cap; unbounded
-          // strings make that arithmetic impossible and put a legitimate
-          // answer at risk of the truncation handled above. These are also
-          // generous for what the UI shows — a task title and a one-line note.
-          title: { type: 'string', maxLength: 120 },
-          detail: { type: 'string', maxLength: 200 },
-          confidence: { type: 'number' },
-          sourceIndex: { type: 'integer' },
-        },
-        required: ['title'],
-      },
-    },
-  },
-  required: ['items'],
-};
 
 /**
  * Scans recent memory for possible to-dos, dedupes against open/done, and
@@ -136,6 +87,7 @@ export class TodoScanService {
     private readonly dataSource: DataSource,
     private readonly proposedReconcile: ProposedTaskReconcileService,
     private readonly logger: LoggerService,
+    @Optional() private readonly decisionService?: ContrastiveDecisionService,
   ) {
     this.logger.setContext(TodoScanService.name);
   }
@@ -156,12 +108,16 @@ export class TodoScanService {
 
     if (hits.length === 0) {
       this.logger.debug('Todo scan found no memory hits', { userId });
-      const sweep = await this.sweepStale(context, []);
+      const sweep = await sweepStaleProposed(this.proposedReconcile, context, {
+        sourceKind: 'memory_scan',
+        titles: [],
+      });
 
       return { ...tallies, ...sweep };
     }
 
-    const tracked = await this.collapseDuplicateProposed(
+    const tracked = await collapseDuplicateProposed(
+      { taskService: this.taskService, logger: this.logger },
       context,
       await this.taskService.findAll(context, {
         status: [...SCAN_DEDUP_STATUSES],
@@ -169,29 +125,101 @@ export class TodoScanService {
       }),
     );
     const claimedEntities = claimedSourceIds(tracked, 'sourceEntityId');
-    const fresh = hits.filter((hit) => !claimedEntities.has(hit.id));
+    const unclaimed = hits.filter((hit) => !claimedEntities.has(hit.id));
+    const fresh = await this.filterSystem1ActionableHits(context, unclaimed);
 
     if (fresh.length === 0) {
       this.logger.debug('Todo scan found no unprocessed memory hits', { userId, seen: hits.length });
-      const sweep = await this.sweepStale(context, proposedTitles(tracked, 'memory_scan'));
+      const sweep = await sweepStaleProposed(this.proposedReconcile, context, {
+        sourceKind: 'memory_scan',
+        titles: proposedTitles(tracked, 'memory_scan'),
+      });
 
       return { ...tallies, ...sweep };
     }
 
-    const memoryBlock = fresh.map((hit, index) => `[${index + 1}] ${hit.text}`).join('\n---\n');
+    const profile = await resolveScanProfile(this.ollamaService);
+    const cap = cognitiveCap(profile.parameterBillions);
+    const key = operatingKey(profile.model, 'memory');
+    let maxItems = scanOperatingPoints.recommend(key, startingItems(profile.contextTokens, cap));
+    const maxInputTokens = inputTokenBudget(profile.contextTokens);
+    const alreadyTracked = formatAlreadyTracked(tracked.map((task) => task.title));
+    const candidates: ScanCandidate[] = [];
+    let calls = 0;
+    let anySuccess = false;
+    let cursor = 0;
 
-    const surfaced = await this.surfaceItems(context, memoryBlock, tracked);
+    while (cursor < fresh.length && calls < MAX_SCAN_CALLS_PER_TICK) {
+      const packed = packBatch(
+        fresh.slice(cursor).map((hit) => ({ hit, ...memorySource(hit) })),
+        { maxItems, maxInputTokens },
+      );
 
-    if (surfaced == null) {
+      if (packed.length === 0) {
+        break;
+      }
+
+      calls += 1;
+      const outcome = await this.classify(
+        context,
+        packed.map((row) => row.hit),
+        alreadyTracked,
+      );
+
+      if (outcome == null) {
+        maxItems = scanOperatingPoints.noteFailed(key, maxItems);
+
+        if (packed.length === 1) {
+          cursor += 1;
+        }
+
+        continue;
+      }
+
+      anySuccess = true;
+      maxItems = scanOperatingPoints.noteClean(key, packed.length, cap);
+
+      for (const candidate of outcome.candidates) {
+        const hit = packed[candidate.sourceIndex - 1]?.hit;
+
+        if (!hit) {
+          continue;
+        }
+
+        candidates.push({ ...candidate, sourceIndex: candidates.length + 1, sourceId: hit.id });
+      }
+
+      cursor += packed.length;
+    }
+
+    if (!anySuccess) {
       this.logger.log('Todo scan finished', { userId, ...tallies, skippedReconcile: true });
 
       return tallies;
     }
 
-    const sweep = await this.sweepStale(
-      context,
-      surfaced.length > 0 ? surfaced.map((item) => item.title) : proposedTitles(tracked, 'memory_scan'),
-    );
+    let surfaced: ScanTodo[] = [];
+
+    if (candidates.length > 0) {
+      const consolidated = await consolidateScan(this.ollamaService, context, candidates, {
+        label: 'Todo scan',
+        logger: this.logger,
+      });
+
+      if (consolidated == null) {
+        this.logger.log('Todo scan finished', { userId, ...tallies, skippedReconcile: true });
+
+        return tallies;
+      }
+
+      surfaced = consolidated;
+    }
+
+    const sweep = await sweepStaleProposed(this.proposedReconcile, context, {
+      sourceKind: 'memory_scan',
+      titles:
+        surfaced.length > 0 ? surfaced.map((item) => item.title) : proposedTitles(tracked, 'memory_scan'),
+    });
     tallies.redated = sweep.redated;
     tallies.archived = sweep.archived;
 
@@ -199,17 +227,18 @@ export class TodoScanService {
     const acceptedThisRun: string[] = [];
     const claimedThisRun = new Set<string>();
 
-    for (const item of surfaced.slice(0, MAX_SURFACED)) {
+    for (const item of surfaced) {
       const title = item.title.trim();
 
-      if (!title) {
+      if (!title || isEchoTitle(title)) {
         continue;
       }
 
       try {
-        const confidence = clampConfidence(item.confidence);
+        const confidence = confidenceForScan(item.confidence);
         const sourceRef = TaskService.memoryScanSourceRef(title);
-        const source = sourceOf(item.sourceIndex, fresh);
+        const sourceId = candidates.find((candidate) => candidate.sourceIndex === item.sourceIndex)?.sourceId;
+        const source = fresh.find((hit) => hit.id === sourceId);
         const existing =
           (await this.taskService.findBySourceRef(context, 'memory_scan', sourceRef)) ??
           (await this.taskService.findByTitleMatch(context, title));
@@ -295,7 +324,7 @@ export class TodoScanService {
       const results = await this.searchService.search(context, {
         query: MEMORY_LOOKBACK_QUERY,
         mode: 'boosted',
-        maxResults: 20,
+        maxResults: 80,
         // `browser-activity` is indexed into ci_search.vectors for the general
         // search UI but is never projected into ci.entities the way every
         // other IndexableEntity is (Communication/Event/Content/Person/Item/
@@ -321,8 +350,15 @@ export class TodoScanService {
                 left(coalesce(description, ''), 400) AS snippet
            FROM ci.entities
           WHERE entity_id = ANY($1::uuid[])
-            AND owner_user_id = $2::uuid`,
-        [ids, context.userId],
+            AND owner_user_id = $2::uuid
+            -- An agent's reply (stored inbound by POST /memory/turn) is the
+            -- agent's words, not the owner's: a task proposed from one would
+            -- be the agent's echo. What the owner said to the agent stays.
+            AND NOT EXISTS (
+                  SELECT 1 FROM ci.communications c
+                   WHERE c.id = ci.entities.entity_id AND c.category = $3 AND c.direction = 'inbound'
+                )`,
+        [ids, context.userId, AGENT_TURN_MESSAGE_CATEGORY],
       )) as Array<{ id: string; entity_type: string; name: string | null; snippet: string | null }>;
 
       const byId = new Map(rows.map((row) => [row.id, row]));
@@ -339,9 +375,7 @@ export class TodoScanService {
         return [
           {
             id: hit.id,
-            text: [`${row?.entity_type ?? hit.type}: ${title || '(untitled)'}`, snippet]
-              .filter(Boolean)
-              .join('\n'),
+            text: memoryHitText(row?.entity_type ?? hit.type, title || '(untitled)', snippet ?? ''),
           },
         ];
       });
@@ -354,146 +388,72 @@ export class TodoScanService {
     }
   }
 
-  private async collapseDuplicateProposed(context: UserServiceContext, tracked: Task[]): Promise<Task[]> {
-    const dropIds = newerDuplicateIds(tracked);
-
-    if (dropIds.length === 0) {
-      return tracked;
-    }
-
-    for (const id of dropIds) {
-      await this.taskService.declineProposed(context, id);
-    }
-
-    this.logger.log('Collapsed duplicate proposed tasks', {
-      userId: context.userId,
-      archived: dropIds.length,
+  private async classify(
+    context: UserServiceContext,
+    batch: readonly MemoryHit[],
+    alreadyTracked: string,
+  ): Promise<{ candidates: ScanCandidate[] } | null> {
+    const block = batch.map((hit, index) => formatMemoryHit(hit.text, index + 1)).join('\n---\n');
+    const content = await completeScan(this.ollamaService, context, {
+      logger: this.logger,
+      label: 'Todo scan',
+      prompt: classifyPrompt(block, alreadyTracked),
+      schema: decisionResponseSchema(batch.length),
+      items: batch.length,
     });
 
-    const dropped = new Set(dropIds);
+    if (content == null) {
+      return null;
+    }
 
-    return tracked.filter((task) => !dropped.has(task.id));
+    const outcome = interpretClassify(content, batch.length, () => undefined);
+
+    return outcome.ok ? { candidates: outcome.candidates } : null;
   }
 
-  private async sweepStale(
+  private async filterSystem1ActionableHits(
     context: UserServiceContext,
-    titles: readonly string[],
-  ): Promise<{ redated: number; archived: number }> {
-    return this.proposedReconcile.reconcileStaleProposed(context, {
-      sourceKind: 'memory_scan',
-      relevantTitles: titles,
-      relevantSourceRefs: titles.map((title) => TaskService.memoryScanSourceRef(title.trim())),
-    });
+    hits: readonly MemoryHit[],
+  ): Promise<MemoryHit[]> {
+    const actionable: MemoryHit[] = [];
+
+    for (const hit of hits) {
+      if (await this.isSystem1Actionable(context, hit.text)) {
+        actionable.push(hit);
+      }
+    }
+
+    return actionable;
   }
 
   /**
-   * `null` means the model failed — callers skip reconcile so a timeout does
-   * not mass-archive still-open proposals. An empty array is a real "nothing
-   * to surface" result and does sweep.
+   * The System 1 pre-filter's verdict on one memory hit. Undecided (no
+   * pre-filter, or it failed) keeps the hit, unless PLANNING_COMMITMENT_DECISION
+   * is on and HBPE, by the pre-filter's rule, says there is no commitment.
    */
-  private async surfaceItems(
-    context: UserServiceContext,
-    memoryBlock: string,
-    tracked: readonly Task[],
-  ): Promise<Array<z.infer<typeof itemSchema>> | null> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), SCAN_TIMEOUT_MS);
-
-    try {
-      const alreadyTracked = formatAlreadyTracked(tracked.map((task) => task.title));
-      const prompt = [
-        "You extract possible to-do items from a person's recent memory.",
-        'Return only concrete actionable items the person still needs to do.',
-        'Skip completed work, past events with no remaining action, and vague reflections.',
-        'Never propose work that is already tracked, even if the wording differs.',
-        'Each memory item is numbered. Set sourceIndex to that number when the task comes from it.',
-        'JSON: {"items":[{"title":"string","detail":"optional string","confidence":0.0-1.0,"sourceIndex":1}]}',
-        alreadyTracked,
-        '',
-        'Memory:',
-        memoryBlock.slice(0, 6000),
-      ]
-        .filter((line) => line !== '')
-        .join('\n');
-
-      const response = await this.ollamaService.chat(context as never, [{ role: 'user', content: prompt }], {
-        tier: 'utility',
-        enableTools: false,
-        format: RESPONSE_JSON_SCHEMA,
-        signal: controller.signal,
-        // Without these two the timeout above is not a budget the call can
-        // actually meet: generation is otherwise unbounded (see
-        // SCAN_MAX_OUTPUT_TOKENS), and a scan that runs less often than the
-        // backend's 5-minute eviction window reloads the model inside the
-        // budget on nearly every run.
-        maxOutputTokens: SCAN_MAX_OUTPUT_TOKENS,
-        keepAlive: SCAN_KEEP_ALIVE,
-      });
-
-      // A response cut off by the output cap stops mid-grammar, so its JSON is
-      // unterminated and `JSON.parse` throws. Left to the generic handler that
-      // reads as "the model failed", which is both wrong and unactionable: the
-      // model was fine, the CAP was too low, and the operator's fix is to raise
-      // SCAN_MAX_OUTPUT_TOKENS rather than to go looking at the backend. Worth
-      // naming precisely because the failure is otherwise silent and permanent
-      // — every subsequent run truncates in exactly the same place.
-      if (response.done_reason === 'length') {
-        this.logger.warn('Todo scan hit its output cap; raise SCAN_MAX_OUTPUT_TOKENS', {
-          maxOutputTokens: SCAN_MAX_OUTPUT_TOKENS,
+  private async isSystem1Actionable(context: UserServiceContext, text: string): Promise<boolean> {
+    if (this.decisionService) {
+      try {
+        const score = await this.decisionService.scoreIngressCommitment(text, {
+          userId: context.userId,
+          threshold: PLANNING_COMMITMENT_THRESHOLD,
         });
 
-        return null;
+        return score.isCommitment;
+      } catch {
+        // The pre-filter threw, so it has no verdict. Undecided, as below.
       }
-
-      const parsed = responseSchema.safeParse(JSON.parse(response.message.content || '{}'));
-
-      if (!parsed.success) {
-        this.logger.warn('Todo scan LLM returned unparseable items; skipping reconcile');
-
-        return null;
-      }
-
-      const items: Array<{ title: string; detail?: string; confidence?: number }> = [];
-
-      for (const unknownItem of parsed.data.items) {
-        const item = itemSchema.safeParse(unknownItem);
-
-        if (item.success && item.data.title.trim()) {
-          items.push(item.data);
-        }
-      }
-
-      return items;
-    } catch (err) {
-      this.logger.warn('Todo scan LLM failed; skipping reconcile', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-
-      return null;
-    } finally {
-      clearTimeout(timer);
     }
+
+    return (await planningCommitmentSignal(context.userId, text)) !== false;
   }
 }
 
-function proposedTitles(tasks: readonly Task[], sourceKind: string): string[] {
-  return tasks
-    .filter((task) => task.status === 'proposed' && task.sourceKind === sourceKind)
-    .map((task) => task.title);
+interface MemoryHit {
+  id: string;
+  text: string;
 }
 
-function sourceOf<T>(index: number | undefined, items: readonly T[]): T | undefined {
-  if (index == null || index < 1 || index > items.length) {
-    return undefined;
-  }
-
-  return items[index - 1];
-}
-
-function clampConfidence(value: number | undefined): number {
-  if (value == null || Number.isNaN(value)) {
-    return 0.75;
-  }
-
-  return Math.min(1, Math.max(0, value));
+function memorySource(hit: MemoryHit): { id: string; tokens: number; complexity: number } {
+  return { id: hit.id, ...sourceLoad(Buffer.byteLength(hit.text, 'utf8')) };
 }

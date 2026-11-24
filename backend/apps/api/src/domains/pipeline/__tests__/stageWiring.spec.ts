@@ -1,7 +1,16 @@
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { EDGE_PROJECTION_REOPENER } from '@ci/domains/maintenance';
+import { EVENT_LOCATION_REOPENER, EVENT_STATUS_REOPENER, EVENT_TIME_REOPENER } from '@ci/domains/memory';
+
 import { PIPELINE_QUEUE_NAMES, STAGE_ID_LIST, type StageId } from '../constants';
+import { EDGE_STAGES_BY_SOURCE } from '../listeners/GraphEdgeSweepRequestListener';
+import { STAGE_REOPENS, assertStageReopens } from '../reopens';
+import { EdgeProjectionReopenService } from '../services/EdgeProjectionReopenService';
+import { EventLocationReopenService } from '../services/EventLocationReopenService';
+import { EventStatusReopenService } from '../services/EventStatusReopenService';
+import { EventTimeReopenService } from '../services/EventTimeReopenService';
 import { STAGE_REGISTRY } from '../services/StageRegistry';
 import type { Stage } from '../types';
 import { STAGE_VERSIONS, stageVersion } from '../versions';
@@ -337,6 +346,128 @@ describe('every stage agrees with the central declarations', () => {
         expect(typeof stage.instance.source[field]).toBe('string');
         expect(stage.instance.source[field].length).toBeGreaterThan(0);
       }
+    },
+  );
+});
+
+/**
+ * `STAGE_REOPENS` (`reopens.ts`) re-opens the consumer's ledger row for THE SAME
+ * `(entity_type, id)` the producer recorded `done`. Which rows those are is only
+ * visible on the constructed stages — their sources and entity types are class
+ * fields — so it is checked here, against the real classes, rather than at
+ * module load where only ids exist.
+ *
+ * Get it wrong and nothing fails at runtime: `reopen()` under an entity type or
+ * over ids the consumer never keys on matches no row, moves nothing, and the
+ * decision it was meant to re-open stays stale — the bug the map exists to fix,
+ * reintroduced silently.
+ */
+describe('every STAGE_REOPENS edge re-opens the row its producer decided', () => {
+  const EDGES = Object.entries(STAGE_REOPENS).flatMap(([producer, consumers]) =>
+    (consumers ?? []).map((consumer) => [`${producer} → ${consumer}`, producer, consumer] as const),
+  );
+
+  it('declares at least one edge', () => {
+    // Otherwise the it.each below is vacuous and this block passes for nothing.
+    expect(EDGES.length).toBeGreaterThan(0);
+  });
+
+  it.each(EDGES)('%s: both stages sweep the same table by the same id', (_label, producer, consumer) => {
+    const from = DISCOVERED_BY_ID.get(producer)?.instance;
+    const to = DISCOVERED_BY_ID.get(consumer)?.instance;
+
+    expect(from).toBeDefined();
+    expect(to).toBeDefined();
+
+    const key = (stage: Stage) => ({
+      schema: stage.source.schema,
+      table: stage.source.table,
+      idColumn: stage.source.idColumn,
+    });
+
+    expect(key(to as Stage)).toEqual(key(from as Stage));
+  });
+
+  it.each(EDGES)(
+    '%s: the consumer keys its ledger under every entity type the producer records',
+    (_label, producer, consumer) => {
+      const from = DISCOVERED_BY_ID.get(producer)?.instance as Stage;
+      const to = DISCOVERED_BY_ID.get(consumer)?.instance as Stage;
+
+      // The listener re-opens under the producer's SLICE entity type.
+      expect([...to.entityTypes]).toEqual(expect.arrayContaining([...from.entityTypes]));
+    },
+  );
+
+  it('refuses an undeclared id or a stage that re-opens itself, at module load', () => {
+    expect(() => assertStageReopens({ 'promote.plaice': ['promote.edge_event'] })).toThrow(
+      /"promote\.plaice" is a key of STAGE_REOPENS but is not a declared stage id/,
+    );
+    expect(() => assertStageReopens({ 'promote.place': ['promote.edge_evnt'] })).toThrow(
+      /re-opens "promote\.edge_evnt", which is not a declared stage id/,
+    );
+    expect(() => assertStageReopens({ 'promote.place': ['promote.place'] })).toThrow(/re-opens itself/);
+    expect(() => assertStageReopens()).not.toThrow();
+  });
+});
+
+/**
+ * `STAGE_REOPENS`' counterpart for linkage writers that are NOT stages: the
+ * maintenance linkers (the `link_*` legs smart-rotation's `graph_link` runs)
+ * re-open the edge legs themselves through `EDGE_PROJECTION_REOPENER`, which
+ * they resolve lazily and THROW without — so an unbound token here is every
+ * two-hourly link run failing, not a silent gap. Checked off the same `@Module`
+ * metadata Nest boots from.
+ */
+/**
+ * The same for the memory domain's three contracts: `CalendarEventService` asks
+ * the pipeline to settle what it decided about an event's old time
+ * (`EVENT_TIME_REOPENER`), about whether it happened (`EVENT_STATUS_REOPENER`)
+ * and about where (`EVENT_LOCATION_REOPENER`, when a calendar source moves the
+ * place), and THROWS without a binding. A person's edit of an event's time, a
+ * drag on the calendar, a cancellation and a re-delivered place all ask, so an
+ * unbound token is those writes failing, not a silent gap.
+ */
+describe.each([
+  ['EVENT_TIME_REOPENER', EVENT_TIME_REOPENER, EventTimeReopenService],
+  ['EVENT_STATUS_REOPENER', EVENT_STATUS_REOPENER, EventStatusReopenService],
+  ['EVENT_LOCATION_REOPENER', EVENT_LOCATION_REOPENER, EventLocationReopenService],
+] as const)('%s is bound for the writers of an event that are not stages', (_name, token, service) => {
+  it('binds the token to its service, and provides that service', () => {
+    const binding = MODULE_PROVIDERS.find(
+      (provider) =>
+        typeof provider === 'object' &&
+        provider != null &&
+        (provider as { provide?: unknown }).provide === token,
+    );
+
+    expect(binding).toEqual({ provide: token, useExisting: service });
+    expect(MODULE_PROVIDERS).toContain(service);
+  });
+});
+
+describe('EDGE_PROJECTION_REOPENER is bound for the linkage writers that are not stages', () => {
+  it('binds the token to EdgeProjectionReopenService, and provides that service', () => {
+    const binding = MODULE_PROVIDERS.find(
+      (provider) =>
+        typeof provider === 'object' &&
+        provider != null &&
+        (provider as { provide?: unknown }).provide === EDGE_PROJECTION_REOPENER,
+    );
+
+    expect(binding).toEqual({ provide: EDGE_PROJECTION_REOPENER, useExisting: EdgeProjectionReopenService });
+    expect(MODULE_PROVIDERS).toContain(EdgeProjectionReopenService);
+  });
+
+  it.each(Object.entries(EDGE_STAGES_BY_SOURCE))(
+    '%s: the leg a linkage writer re-opens (%s) is a real stage keyed under an entity type',
+    (_source, stageId) => {
+      // EdgeProjectionReopenService re-opens under the stage's own entityTypes;
+      // an empty list would make every re-open a silent no-op.
+      const stage = DISCOVERED_BY_ID.get(stageId)?.instance;
+
+      expect(stage).toBeDefined();
+      expect(stage?.entityTypes.length).toBeGreaterThan(0);
     },
   );
 });

@@ -20,7 +20,7 @@ export type IngestEntityKind =
  * self-heals (the cross-repo handshake itself is out of scope here — nothing
  * reads this over the wire yet).
  */
-export const INGEST_SCHEMA_VERSION = 6;
+export const INGEST_SCHEMA_VERSION = 7;
 
 /**
  * Central, per-entity list of the DB columns a bulk re-ingest of an existing
@@ -90,6 +90,21 @@ export const INGEST_REFRESH_COLUMNS: Record<IngestEntityKind, readonly string[]>
   //    row). The importer sends nulls there; a refresh would un-link every
   //    communication enrichment had already attributed to a person.
   communication: ['direction', 'participants_metadata', 'metadata', 'content', 'preview', 'subject'],
+  // EMPTY, and `status`, the times and the title deliberately not in it. A
+  // re-delivered event's status, time and title ARE refreshed — by the per-row
+  // door, CalendarEventService.createOne, which the calendar connections use —
+  // but not as refresh columns: each is also the user's (updateEvent writes
+  // them all, rescheduleEvent the times), and a same-producer re-push takes a
+  // listed column's new value whenever it is not null, so it would put a
+  // meeting the user moved back where the organizer last had it. createOne
+  // instead merges three ways against what the source delivered last time
+  // (`source_status`, `source_start_time` …, `source_title`;
+  // sourceStatusMerge.ts, sourceFieldMerge.ts). The bulk path records those
+  // bases on INSERT, but still refreshes nothing on conflict: a re-push of a
+  // row already stored leaves it as it was. Closing that needs the same merge
+  // as a conflict action (a merge kind that reads the base), not a column in
+  // this list. The title is on the CTI base row besides, out of this table's
+  // reach.
   event: [],
   // EMPTY ON PURPOSE, and load-bearing: ci.objects is the one ingest table a
   // user edits directly (renaming a thing, correcting its condition, recording
@@ -205,7 +220,15 @@ export const INGEST_MERGE_KINDS: Record<IngestEntityKind, Readonly<Record<string
   // Both bags are object-valued: participants_metadata is `{ from, to, ... }`
   // (the shared contract shape), metadata the parser's catch-all. Merged so a
   // connection's labels and an archive's headers end up on one row.
-  communication: { participants_metadata: 'json', metadata: 'json' },
+  //
+  // `preview` is the one-line clip of `content`. The importer sends it only
+  // when the clip differs from the text (push/inputs.ts): a short one-line
+  // message arrives with none and readers derive it (previewFromContent). Under
+  // 'value' a re-import that changed a long or multi-line message into one
+  // short line kept the OLD preview, which the message list and the message's
+  // name show, while the content moved on. 'derived' (version 7) lets the same
+  // producer's null clear it.
+  communication: { participants_metadata: 'json', metadata: 'json', preview: 'derived' },
   event: {},
   item: {},
   content: {},

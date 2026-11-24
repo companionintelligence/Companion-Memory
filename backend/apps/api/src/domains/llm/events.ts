@@ -1,5 +1,6 @@
 import type { ApiKeyCapability } from '@ci/common/decorators';
 import { defineEvent } from '@ci/domains/events';
+import type { LiveChangesCredential } from '@ci/domains/live-changes';
 
 /**
  * Spatial-memory CV ingestion events.
@@ -92,6 +93,11 @@ export type ChatGeneratePayload = {
   enableTools: boolean;
   enableThinking: boolean;
   capability: ApiKeyCapability;
+  /**
+   * The key or session that asked for the turn. Revoked before or while the turn runs, the turn stops the
+   * way Stop stops it (see `ChatTurnService.execute`). Absent on a job queued before this was recorded.
+   */
+  credential?: LiveChangesCredential;
 };
 
 defineEvent<ChatGeneratePayload>(ChatGenerateEvent);

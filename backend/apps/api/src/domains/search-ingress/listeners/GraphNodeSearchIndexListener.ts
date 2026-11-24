@@ -154,13 +154,11 @@ export class GraphNodeSearchIndexListener {
       return;
     }
 
-    const embedding = await this.embeddingGenerationService.generateEmbedding(searchDocument);
-
-    await this.embeddingService.upsert(context, {
-      entityType,
-      entityId: node.entityId,
-      embedding,
-    });
+    await this.embeddingService.upsertDocument(
+      context,
+      { entityType, entityId: node.entityId, text: searchDocument },
+      (text) => this.embeddingGenerationService.generateEmbedding(text),
+    );
 
     this.logger.log('Generated embedding for graph node', {
       entityId: node.entityId,

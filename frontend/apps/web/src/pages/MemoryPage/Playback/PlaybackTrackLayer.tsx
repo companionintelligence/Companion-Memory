@@ -1,5 +1,6 @@
 import { useEffect, useMemo } from 'react';
 
+import { useReducedMotion } from '@ci/common';
 import L from 'leaflet';
 import { useMap as useLeafletMap } from 'react-leaflet';
 
@@ -7,7 +8,6 @@ import { FLY_DURATION_S, easeToward, needsRecentre, shouldFly } from './camera';
 import { stopsRevealed, type PlaybackState } from './playbackMachine';
 import { interpolateAt, trailPoints } from './positionTrack';
 import { usePlayback, usePlaybackControls } from './usePlayback';
-import { useReducedMotion } from './useReducedMotion';
 
 import './playback.css';
 

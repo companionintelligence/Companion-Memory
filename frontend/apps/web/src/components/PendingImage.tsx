@@ -19,7 +19,13 @@ interface Props {
  */
 export function PendingImage({ src, className, iconClassName, onError }: Props) {
   return (
-    <PendingImageFrame key={src} src={src} className={className} iconClassName={iconClassName} onError={onError} />
+    <PendingImageFrame
+      key={src}
+      src={src}
+      className={className}
+      iconClassName={iconClassName}
+      onError={onError}
+    />
   );
 }
 

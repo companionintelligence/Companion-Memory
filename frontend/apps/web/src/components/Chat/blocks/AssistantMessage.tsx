@@ -3,6 +3,7 @@ import { type RefObject, useMemo } from 'react';
 import { cn } from '@ci/shadcn';
 
 import { Markdown } from '@/components/Markdown';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 
 interface Props {
   content?: string;
@@ -14,6 +15,7 @@ interface Props {
 
 function AssistantMessage({ content, renderEmptyContent = false, streamingRef, createdAt, source }: Props) {
   const trimmedContent = useMemo(() => content?.trim(), [content]);
+  const fmt = useDateTimeFormat();
 
   if (!trimmedContent && !renderEmptyContent) {
     return null;
@@ -22,7 +24,8 @@ function AssistantMessage({ content, renderEmptyContent = false, streamingRef, c
   return (
     <div
       className={cn(
-        'relative rounded-lg rounded-tl-none px-4 py-3 shadow-xs bg-slate-200 dark:bg-secondary text-foreground',
+        'relative min-w-0 max-w-[94%] self-start rounded-xl rounded-tl-sm bg-slate-200 px-3 py-2.5 text-foreground shadow-xs dark:bg-secondary',
+        'device:max-w-none device:self-stretch device:rounded-lg device:rounded-tl-none device:px-4 device:py-3',
         'has-[>.streaming-content:empty]:hidden',
       )}
     >
@@ -38,9 +41,7 @@ function AssistantMessage({ content, renderEmptyContent = false, streamingRef, c
       <div className="streaming-content prose dark:prose-invert max-w-none" ref={streamingRef}>
         {trimmedContent && <Markdown>{trimmedContent}</Markdown>}
         {createdAt && (
-          <div className={cn('pt-1 text-xs text-foreground text-right')}>
-            {new Date(createdAt).toLocaleString()}
-          </div>
+          <div className={cn('pt-1 text-xs text-foreground text-right')}>{fmt.dateTime(createdAt)}</div>
         )}
       </div>
     </div>

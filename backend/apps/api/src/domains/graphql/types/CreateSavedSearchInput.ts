@@ -6,6 +6,15 @@ import { SavedSearchFiltersInput } from './SavedSearchFiltersType';
 
 @InputType()
 export class CreateSavedSearchInput {
+  /**
+   * The search's global id, when the client minted it before the row reached the
+   * server — a phone's offline replica (PowerSync) creates the row under its own id
+   * and replays the create later, and the id must survive so the row syncing back
+   * down is the same row. Omit it for an ordinary create.
+   */
+  @Field(() => String, { nullable: true })
+  id?: string;
+
   @Field(() => String, { nullable: true })
   name!: string;
 

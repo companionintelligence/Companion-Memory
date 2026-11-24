@@ -12,12 +12,16 @@ const CSRF_HEADER_NAME = 'x-csrf-token';
 
 @Injectable()
 export class CsrfGuard implements CanActivate {
+  /** Whether the native app's cookie-less shape (header token alone) is accepted. */
+  protected readonly allowCookieless: boolean = true;
+
   constructor(
     private readonly csrfService: CsrfService,
     private readonly authService: AuthService,
     private readonly logger: LoggerService,
   ) {
-    this.logger.setContext(CsrfGuard.name);
+    // new.target, so a CookieCsrfGuard rejection is logged under its own name.
+    this.logger.setContext(new.target.name);
   }
 
   canActivate(context: ExecutionContext): boolean {
@@ -39,7 +43,7 @@ export class CsrfGuard implements CanActivate {
     const hasCookie = cookieToken != null && cookieToken !== '';
     const hasHeader = headerToken != null && headerToken !== '';
 
-    if (!hasCookie && hasHeader) {
+    if (this.allowCookieless && !hasCookie && hasHeader) {
       if (!this.csrfService.verifyToken(headerToken)) {
         throw new ForbiddenException('Missing or invalid CSRF token');
       }
@@ -71,4 +75,17 @@ export class CsrfGuard implements CanActivate {
 
     return true;
   }
+}
+
+/**
+ * {@link CsrfGuard} without the native cookie-less shortcut: the cookie and header pair, bound to
+ * the session, or nothing.
+ *
+ * For routes only the browser app calls. `POST /authenticate/hub-bridge` is one: the web app primes
+ * the cookie and echoes it before calling, and the native app never calls it (it has no Hub
+ * forward-auth in front of it). The shortcut there only served a caller with no cookie at all.
+ */
+@Injectable()
+export class CookieCsrfGuard extends CsrfGuard {
+  protected override readonly allowCookieless: boolean = false;
 }

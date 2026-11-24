@@ -1,4 +1,4 @@
-import { fetchJson } from '@ci/common';
+import { apiFetch, fetchJson } from '@ci/common';
 
 function authHeaders(authToken: string | null | undefined): HeadersInit {
   return {
@@ -69,7 +69,9 @@ export async function uploadAccountImport(
   file: File,
   confirmEmail: string,
 ): Promise<{ tablesImported: number; rowsImported: number; filesRestored: number; format: string }> {
-  const response = await fetch('/api/account/import/stream', {
+  // `apiFetch`, not bare `fetch`: it runs the write guard (an import while the appliance is
+  // unreachable is refused up front) and resolves the path against the Memory origin.
+  const response = await apiFetch('/api/account/import/stream', {
     method: 'POST',
     headers: {
       ...authHeaders(authToken),

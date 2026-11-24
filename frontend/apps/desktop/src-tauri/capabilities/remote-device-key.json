@@ -1,0 +1,19 @@
+{
+  "identifier": "remote-device-key",
+  "description": "Lets the real CI-Server web app (served remotely at http://127.0.0.1:8642 / http://localhost:8642 after the bootstrap page's window.location.replace()) read, write and remove its device key in the OS keychain: tauri-plugin-ci-auth's secure_get, secure_set and secure_remove, and nothing else from that plugin. The plugin's loopback sign-in commands and its `ci-auth:default` set are deliberately not granted. The web side namespaces every key it stores (`memory:` in @ci/common's nativeBridge.ts). This is the desktop replacement for keeping the key in window.localStorage.",
+  "windows": [
+    "main"
+  ],
+  "local": false,
+  "remote": {
+    "urls": [
+      "http://127.0.0.1:8642",
+      "http://localhost:8642"
+    ]
+  },
+  "permissions": [
+    "ci-auth:allow-secure-get",
+    "ci-auth:allow-secure-set",
+    "ci-auth:allow-secure-remove"
+  ]
+}

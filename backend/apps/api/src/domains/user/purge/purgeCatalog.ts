@@ -1,4 +1,4 @@
-import type { FkDeleteAction, FkEdge, TableRef, UserRefColumn } from './types';
+import type { FkDeleteAction, FkEdge, PhysicalTable, TableRef, UserRefColumn } from './types';
 
 /**
  * Reads the shape of the schema the purge has to work through, straight from
@@ -155,7 +155,57 @@ export async function readUserRefColumns(
   return columns.filter((column) => !excludedSet.has(`${column.schema}.${column.table}.${column.column}`));
 }
 
+/**
+ * References Postgres does not know about, read as if they were `NO ACTION`
+ * foreign keys: the plan then deletes the child rows through the parent rows
+ * the account owns, before the parent goes.
+ *
+ * `hbpe.summary_l1_label.summary_id` names a `ci.summaries` row with no foreign
+ * key (20260903162709_unique_summary_window.sql explains why), and the table has
+ * no user column. Nothing else in the catalog leads to it, so the purge left the
+ * labels of a deleted account's summaries behind; the immediate delete listed
+ * the table by hand. Applied only where both tables exist.
+ */
+const IMPLICIT_REFERENCES: readonly FkEdge[] = [
+  {
+    constraintName: 'implicit:summary_l1_label_summary_id',
+    childSchema: 'hbpe',
+    childTable: 'summary_l1_label',
+    childColumn: 'summary_id',
+    parentSchema: 'ci',
+    parentTable: 'summaries',
+    parentColumn: 'summary_id',
+    deleteAction: 'a',
+  },
+];
+
 export async function readFkEdges(executor: SqlExecutor): Promise<FkEdge[]> {
+  const implicit = (await executor.query(
+    `SELECT n FROM unnest($1::text[]) AS n WHERE to_regclass(n) IS NOT NULL`,
+    [
+      [
+        ...new Set(
+          IMPLICIT_REFERENCES.flatMap((edge) => [
+            `${edge.childSchema}.${edge.childTable}`,
+            `${edge.parentSchema}.${edge.parentTable}`,
+          ]),
+        ),
+      ],
+    ],
+  )) as Array<{ n: string }>;
+  const present = new Set(implicit.map((row) => row.n));
+
+  return [
+    ...(await readCatalogFkEdges(executor)),
+    ...IMPLICIT_REFERENCES.filter(
+      (edge) =>
+        present.has(`${edge.childSchema}.${edge.childTable}`) &&
+        present.has(`${edge.parentSchema}.${edge.parentTable}`),
+    ),
+  ];
+}
+
+async function readCatalogFkEdges(executor: SqlExecutor): Promise<FkEdge[]> {
   const rows = (await executor.query(FK_EDGE_SQL, [IGNORED_SCHEMA_PATTERNS])) as Array<{
     constraint_name: string;
     child_schema: string;
@@ -189,25 +239,39 @@ export async function readFkEdges(executor: SqlExecutor): Promise<FkEdge[]> {
  * of another. Chunks are plain tables, so per-chunk batching is both correct and
  * cheaper to plan.
  *
+ * Each chunk says whether it is compressed: a compressed chunk refuses `ctid`
+ * ("transparent decompression only supports tableoid system column"), so the
+ * caller cannot batch it the same way.
+ *
  * Returns `[target]` unchanged when TimescaleDB is not installed, which is what
  * makes the same code path work against a test database without the extension.
  */
-export async function expandToPhysicalTables(executor: SqlExecutor, target: TableRef): Promise<TableRef[]> {
+export async function expandToPhysicalTables(
+  executor: SqlExecutor,
+  target: TableRef,
+): Promise<PhysicalTable[]> {
+  const table = { schema: target.schema, table: target.table, compressed: false };
   const installed = (await executor.query(
     `SELECT 1 AS present FROM pg_extension WHERE extname = 'timescaledb'`,
   )) as unknown[];
 
   if (installed.length === 0) {
-    return [target];
+    return [table];
   }
 
   const chunks = (await executor.query(
-    `SELECT chunk_schema AS schema, chunk_name AS "table"
+    `SELECT chunk_schema AS schema, chunk_name AS "table", is_compressed AS compressed
        FROM timescaledb_information.chunks
       WHERE hypertable_schema = $1 AND hypertable_name = $2
       ORDER BY 1, 2`,
     [target.schema, target.table],
-  )) as Array<{ schema: string; table: string }>;
+  )) as Array<{ schema: string; table: string; compressed: boolean }>;
 
-  return chunks.length > 0 ? chunks : [target];
+  return chunks.length > 0
+    ? chunks.map((chunk) => ({
+        schema: chunk.schema,
+        table: chunk.table,
+        compressed: chunk.compressed === true,
+      }))
+    : [table];
 }

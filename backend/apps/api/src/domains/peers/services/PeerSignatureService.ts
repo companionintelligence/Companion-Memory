@@ -6,6 +6,7 @@ import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
 import { CONSUMPTION_STORE, type ConsumptionStore } from '@ci/domains/consumption';
 
+import { didKeyIdFor } from '../didKeyId';
 import {
   BODY_COMPONENT,
   PEER_SIGNATURE_ALG,
@@ -23,6 +24,7 @@ import {
   verifyContentDigest,
   verifySignatureBase,
 } from '../httpSignature';
+import { sovereignKeyIdFor } from '../sovereignKeyId';
 
 /**
  * How far a peer's clock may be ahead of ours before a signature is refused.
@@ -53,6 +55,7 @@ export type SignatureFailure =
   | 'malformed'
   | 'unsupported-components'
   | 'bad-digest'
+  | 'body-not-captured'
   | 'expired'
   | 'window-too-long'
   | 'clock-skew'
@@ -61,8 +64,7 @@ export type SignatureFailure =
   | 'bad-signature';
 
 export type VerificationResult =
-  | { ok: true; keyThumbprint: string }
-  | { ok: false; reason: SignatureFailure };
+  { ok: true; keyThumbprint: string } | { ok: false; reason: SignatureFailure };
 
 /**
  * Verifies and produces RFC 9421 signatures on the peer-ask surface.
@@ -85,7 +87,7 @@ export type VerificationResult =
  */
 @Injectable()
 export class PeerSignatureService {
-  private cachedSigningKey: { key: KeyObject; thumbprint: string } | null | undefined;
+  private cachedSigningKey: { key: KeyObject; thumbprint: string; keyid?: string } | null | undefined;
 
   constructor(
     @Inject(CONSUMPTION_STORE)
@@ -108,6 +110,15 @@ export class PeerSignatureService {
    * make a signature check pass over content the sender never signed, because
    * `JSON.stringify` of a parsed object is not guaranteed to reproduce the
    * input byte for byte.
+   *
+   * `transportHasBody` is whether the request ANNOUNCED a body (see
+   * `transportHasBody` in BodyParserMiddleware), and it is required: whether
+   * bytes were captured depends on which parser ran, so it cannot answer
+   * whether there was a body. A body with no captured bytes is refused.
+   *
+   * With no body announced, an absent `rawBody` is read as an empty body, so a
+   * signature whose covered `content-digest` names any other body is refused as
+   * `bad-digest`.
    */
   async verifyInbound(request: {
     method: string;
@@ -115,6 +126,7 @@ export class PeerSignatureService {
     signatureInput?: string;
     signature?: string;
     contentDigestHeader?: string;
+    transportHasBody: boolean;
     rawBody?: string;
     peerPublicJwk: unknown;
     now?: Date;
@@ -134,7 +146,14 @@ export class PeerSignatureService {
       throw error;
     }
 
-    const hasBody = request.rawBody != null && request.rawBody.length > 0;
+    // A body the transport announced but no parser kept the bytes of cannot be
+    // digested, and must never be mistaken for no body: the signature would
+    // then verify over whatever the body was changed to.
+    if (request.transportHasBody && request.rawBody == null) {
+      return { ok: false, reason: 'body-not-captured' };
+    }
+
+    const hasBody = request.transportHasBody || (request.rawBody != null && request.rawBody.length > 0);
 
     // Derived from the REQUEST, never from the signature -- a sender must not
     // be able to drop the body binding by declining to cover it.
@@ -142,7 +161,13 @@ export class PeerSignatureService {
       return { ok: false, reason: 'unsupported-components' };
     }
 
-    if (hasBody && !verifyContentDigest(request.contentDigestHeader, request.rawBody as string)) {
+    // A covered Content-Digest is always checked against the bytes received, so
+    // a signed digest never stands in for a body this box did not keep (RFC 9421
+    // section 7.2.8).
+    if (
+      (hasBody || parsed.params.components.includes(BODY_COMPONENT)) &&
+      !verifyContentDigest(request.contentDigestHeader, request.rawBody ?? '')
+    ) {
       return { ok: false, reason: 'bad-digest' };
     }
 
@@ -174,11 +199,19 @@ export class PeerSignatureService {
       return { ok: false, reason: 'unknown-key' };
     }
 
-    // THE keyid MUST NAME THE KEY WE ARE ABOUT TO VERIFY WITH. Without this the
-    // `keyid` is decorative: a sender could name any key at all and still be
-    // verified against whichever one the link happens to hold, which quietly
-    // turns a key-identified request back into a link-identified one.
-    if (parsed.params.keyid !== thumbprint) {
+    // THE keyid MUST NAME THE KEY WE ARE ABOUT TO VERIFY WITH: its thumbprint, or
+    // the sovereign `did:keri:D<x>` or the `did:key:z6Mk…` that spells out this
+    // very key. Without this the `keyid` is decorative: a sender could name any
+    // key at all and still be verified against whichever one the link happens to
+    // hold. A label on the stored JWK (`kid`, `aid`) is not the key, so it never
+    // counts.
+    const peerJwk = request.peerPublicJwk as Record<string, unknown>;
+    const matchesKey =
+      parsed.params.keyid === thumbprint ||
+      parsed.params.keyid === sovereignKeyIdFor(peerJwk) ||
+      parsed.params.keyid === didKeyIdFor(peerJwk);
+
+    if (!matchesKey) {
       return { ok: false, reason: 'unknown-key' };
     }
 
@@ -224,13 +257,22 @@ export class PeerSignatureService {
    * `peers.requireHttpSignature` is rolling out, and a box with no key must
    * still be able to talk to a peer that does not require one.
    */
-  signOutbound(request: {
-    method: string;
-    targetUri: string;
-    body?: string;
-    now?: Date;
-  }): Record<string, string> | null {
-    const signing = this.signingKey();
+  signOutbound(
+    request: {
+      method: string;
+      targetUri: string;
+      body?: string;
+      now?: Date;
+    },
+    /**
+     * The person sending, from `PeerIdentityService`. Asks are signed with the
+     * sender's own key; without one this falls back to the box key, which is
+     * what the tests that predate per-person keys exercise.
+     */
+    signer?: { key: KeyObject; keyid: string },
+  ): Record<string, string> | null {
+    const box = signer == null ? this.signingKey() : null;
+    const signing = signer ?? (box == null ? null : { key: box.key, keyid: box.keyid ?? box.thumbprint });
     if (signing == null) {
       return null;
     }
@@ -243,7 +285,7 @@ export class PeerSignatureService {
       components: [...REQUIRED_COMPONENTS, ...(hasBody ? [BODY_COMPONENT] : [])],
       created,
       expires: created + OUTBOUND_LIFETIME_MS / 1000,
-      keyid: signing.thumbprint,
+      keyid: signing.keyid,
       alg: PEER_SIGNATURE_ALG,
       // 128 bits, base64url -- comfortably inside NONCE_PATTERN and far beyond
       // any birthday concern over the five minutes a nonce can live.
@@ -266,9 +308,21 @@ export class PeerSignatureService {
     };
   }
 
+  /** Whether this box has a signing key configured. */
+  get hasSigningKey(): boolean {
+    return this.signingKey() != null;
+  }
+
   /** This box's own key thumbprint, for publishing to peers. Null when unconfigured. */
   get publicThumbprint(): string | null {
     return this.signingKey()?.thumbprint ?? null;
+  }
+
+  /** This box's KERI AID if configured in the key. Null when unconfigured. */
+  get publicAid(): string | null {
+    const signing = this.signingKey();
+
+    return signing?.keyid?.startsWith('did:keri:') ? signing.keyid : null;
   }
 
   /**
@@ -278,7 +332,7 @@ export class PeerSignatureService {
    * none" -- so a missing key is resolved once rather than re-parsed and
    * re-warned on every outbound request.
    */
-  private signingKey(): { key: KeyObject; thumbprint: string } | null {
+  private signingKey(): { key: KeyObject; thumbprint: string; keyid?: string } | null {
     if (this.cachedSigningKey !== undefined) {
       return this.cachedSigningKey;
     }
@@ -296,12 +350,24 @@ export class PeerSignatureService {
       // The thumbprint identifies the PUBLIC half; `d` is dropped by taking
       // only the three required OKP members.
       const thumbprint = jwkThumbprint(jwk as Record<string, unknown>);
+      // A `kid` changes the outbound keyid only when it is the sovereign AID or
+      // the `did:key` of this very key. Any other `kid` (a label, a CESR prefix)
+      // is left out, as it always was: peers verify the keyid, and would refuse it.
+      const keyid =
+        typeof jwk.kid === 'string' && (jwk.kid === sovereignKeyIdFor(jwk) || jwk.kid === didKeyIdFor(jwk))
+          ? jwk.kid
+          : undefined;
 
-      this.cachedSigningKey = { key, thumbprint };
+      this.cachedSigningKey = { key, thumbprint, ...(keyid ? { keyid } : {}) };
     } catch (error) {
       // Never throw out of here: a misconfigured key must degrade to "this box
       // does not sign", not take down every outbound ask.
-      this.logger.warn(`peers.signingKeyJwk is unusable, outbound asks will be unsigned: ${String(error)}`);
+      //
+      // Only the error class is logged: a JSON parse error quotes part of its
+      // input, and the input is a private key.
+      this.logger.warn(
+        `peers.signingKeyJwk is unusable (${error instanceof Error ? error.name : 'unknown error'}); outbound asks will be unsigned`,
+      );
       this.cachedSigningKey = null;
     }
 

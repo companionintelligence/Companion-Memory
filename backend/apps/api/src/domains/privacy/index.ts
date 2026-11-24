@@ -16,13 +16,17 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { ApplianceAdminGuard } from '@ci/common/guards';
 import { ConnectionsModule, ConnectionEntity } from '@ci/domains/connections';
 import { SearchIngressModule } from '@ci/domains/search-ingress';
+import { ACCOUNT_GRANT_REVOKER, UserModule } from '@ci/domains/user';
 
 import { ConnectionPrivacyController } from './controllers/ConnectionPrivacyController';
+import { OutboundPolicyController } from './controllers/OutboundPolicyController';
 import { PrivacyController } from './controllers/PrivacyController';
 import { DataDeletionAuditEntity } from './entities/DataDeletionAuditEntity';
 import { DataDeletionService } from './services/DataDeletionService';
+import { OutboundPolicyService } from './services/OutboundPolicyService';
 
 /**
  * @internal
@@ -37,9 +41,21 @@ import { DataDeletionService } from './services/DataDeletionService';
     // never depends on privacy and there is no module cycle.
     ConnectionsModule,
     SearchIngressModule,
+    // UserService, for the confirmation email `POST /users/me/delete` checks, and so that route
+    // can hand administration over before it deletes the appliance's last administrator.
+    UserModule,
   ],
-  providers: [DataDeletionService],
-  controllers: [PrivacyController, ConnectionPrivacyController],
+  // ApplianceAdminGuard is registered so Nest resolves its DataSource here.
+  providers: [
+    DataDeletionService,
+    OutboundPolicyService,
+    ApplianceAdminGuard,
+    // The user domain's account deletes revoke provider grants through this, resolved lazily
+    // (`DELETE /account`, and the purge for any grant still holding a token): that domain cannot
+    // import this one, which depends on it.
+    { provide: ACCOUNT_GRANT_REVOKER, useExisting: DataDeletionService },
+  ],
+  controllers: [PrivacyController, ConnectionPrivacyController, OutboundPolicyController],
   exports: [DataDeletionService],
 })
 export class PrivacyModule {}

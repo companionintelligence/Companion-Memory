@@ -25,6 +25,8 @@
  * should do about it.
  */
 
+import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
+
 /** How the request that produced a disclosure arrived. */
 export interface ChannelFacts {
   /** RFC 7638 thumbprint of the key that signed it. Null = unsigned channel. */
@@ -48,8 +50,8 @@ export type ConsentSource =
  * The lock's four states, weakest first.
  *
  * `open` is deliberately NOT alarming and `sealed` is deliberately not the
- * default: signatures ship off (`peers.requireHttpSignature`), and a local ask
- * never crosses a network boundary at all, so most disclosures are honestly
+ * default: a local ask never crosses a network boundary at all (and a box may
+ * turn `peers.requireHttpSignature` off), so most disclosures are honestly
  * `consented`. A UI that painted the common case as a warning would train
  * people to ignore the warning.
  */
@@ -234,12 +236,36 @@ export function consentSentence(consent: ConsentSource, askerName: string): stri
  * An unparseable value falls back to the raw string. Showing what is stored
  * beats showing "Invalid Date" on somebody's own audit trail.
  */
-export function formatMoment(iso: string): string {
+export function formatMoment(iso: string, fmt: DateTimeFormatter): string {
   const at = new Date(iso);
 
   if (Number.isNaN(at.getTime())) {
     return iso;
   }
 
-  return at.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  return fmt.dateTime(at, { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+/**
+ * Cryptographic provenance bundle returned by `askAuditReceipt(id)` for a single disclosure:
+ * deterministic CESR `I`-prefixed audit SAID + ISO/IEC TS 27560 + DPV v2 consent receipt.
+ */
+export interface AskAuditReceiptData {
+  auditId: string;
+  askId?: string | null;
+  auditSaid: string;
+  receipt: {
+    d: string;
+    schemaVersion: string;
+    recordId: string;
+    piiPrincipalId?: string | null;
+    recipient?: string | null;
+    legalBasis: string;
+    purposes: readonly string[];
+    processing: readonly string[];
+    consentBasis?: string | null;
+    outcome: string;
+    disclosedCount: number;
+    issuedAt: string;
+  };
 }

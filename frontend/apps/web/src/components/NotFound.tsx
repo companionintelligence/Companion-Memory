@@ -12,7 +12,7 @@ export default function NotFoundPage() {
 
   return (
     <div className="flex h-lvh w-full items-center justify-center p-6 md:p-10">
-      <Card className="w-full max-w-md shadow-2xl rounded-2xl border">
+      <Card className="w-full max-w-md border">
         <Card.Header>
           <Card.Title className="text-4xl font-bold text-center">404</Card.Title>
         </Card.Header>
@@ -22,7 +22,7 @@ export default function NotFoundPage() {
           </p>
           <div className="flex justify-center">
             <Button variant="default" asChild>
-              <Link to={homePath}>Go Home</Link>
+              <Link to={homePath}>Go home</Link>
             </Button>
           </div>
         </Card.Content>

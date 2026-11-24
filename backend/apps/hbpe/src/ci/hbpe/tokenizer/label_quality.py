@@ -26,6 +26,9 @@ JUNK_PHRASES = {
     "unknown",
     "unsorted",
     "general",
+    # The labeler prompt's own placeholder. Title-cased it reads as a real
+    # activity ("Tuesday nights you usually have Label") when HBPE has no name.
+    "label",
 }
 
 THINKING_ECHO = {"nothink", "think", "nothinking"}

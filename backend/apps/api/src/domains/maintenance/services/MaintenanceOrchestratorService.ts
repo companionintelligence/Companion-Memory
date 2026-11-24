@@ -3,6 +3,7 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
 import { LoggerService } from '@ci/common/logging';
+import { sleep } from '@ci/common/time/sleep';
 import config from '@ci/configuration';
 import { BACKFILL_JOB_PRIORITY, EventService as SignallingEventService } from '@ci/domains/events';
 import { MediaDimensionsBackfillRequestEvent, MEDIA_DIMENSIONS_QUEUE } from '@ci/domains/files';
@@ -12,6 +13,7 @@ import { PipelineSweepEvent } from '@ci/domains/pipeline/events';
 import { EmbeddingEntity, IndexSkipEntity } from '@ci/domains/search-ingress';
 
 import { ESTIMATE_LOCATION_QUEUE } from '../listeners/EstimateLocationBatchListener';
+import { countMediaDimensionsCandidates } from '../mediaDimensionsCandidates';
 
 import {
   type CommunicationLinkBackfillOptions,
@@ -161,10 +163,6 @@ const MEDIA_DIMENSIONS_DEFAULT_LIMIT = 500;
 
 /** Default cap on the post-search_index embed-drain poll. */
 const DRAIN_DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 /**
  * One-shot enrichment orchestrator: runs the maintenance legs (the individual
@@ -452,10 +450,14 @@ export class MaintenanceOrchestratorService {
         countQuery.andWhere("COALESCE(event.metadata->>'location_source', '') <> 'virtual'");
       }
     } else {
-      // Reverse: coordinates present, name missing.
+      // Reverse: coordinates present, name missing, coordinate not an estimate.
+      // The listener refuses estimated coordinates (see
+      // GeocodeBatchListener.selectReverseCandidates), so counting them would
+      // report — and enqueue — a batch with nothing in it the listener may name.
       countQuery
         .andWhere('event.location_coordinates IS NOT NULL')
-        .andWhere("(event.location_name IS NULL OR btrim(event.location_name) = '')");
+        .andWhere("(event.location_name IS NULL OR btrim(event.location_name) = '')")
+        .andWhere("COALESCE(event.metadata->>'location_source', '') <> 'estimated'");
     }
 
     const estimatedEventCount = Math.min(await countQuery.getCount(), limit);
@@ -553,28 +555,19 @@ export class MaintenanceOrchestratorService {
   }
 
   /**
-   * Enqueue-and-return media-dimensions leg — mirrors POST /api/maintenance/
-   * backfill-media-dimensions: count ORIGINAL image/video files without a
-   * recorded width, enqueue one {@link MediaDimensionsBackfillRequestEvent}.
+   * Enqueue-and-return media-dimensions leg, and the whole of POST
+   * /api/maintenance/backfill-media-dimensions, which delegates here: count the
+   * ORIGINAL image/video files with no width that the `enrich.media_dimensions`
+   * stage still has work for ({@link countMediaDimensionsCandidates}), and
+   * enqueue one {@link MediaDimensionsBackfillRequestEvent} unless that is 0.
    */
-  private async runMediaDimensionsLeg(
+  async runMediaDimensionsLeg(
     userId: string,
     opts: { limit?: number },
   ): Promise<{ jobId: string | null; estimatedFileCount: number; status: 'enqueued' | 'noop' }> {
     const limit = opts.limit ?? MEDIA_DIMENSIONS_DEFAULT_LIMIT;
 
-    const rows = await this.dataSource.query<Array<{ count: string }>>(
-      `SELECT COUNT(*)::bigint AS count
-         FROM ci.files
-        WHERE user_id = $1
-          AND variant = $2
-          AND key IS NOT NULL
-          AND width IS NULL
-          AND (content_type LIKE 'image/%' OR content_type LIKE 'video/%')`,
-      [userId, 'ORIGINAL'],
-    );
-
-    const candidateCount = Number(rows[0]?.count ?? 0);
+    const candidateCount = await countMediaDimensionsCandidates(this.dataSource, userId);
     const estimatedFileCount = Math.min(candidateCount, limit);
 
     if (estimatedFileCount === 0) {

@@ -11,14 +11,7 @@ export type ObjectCondition = 'new' | 'like_new' | 'good' | 'fair' | 'poor' | 'b
  * widening one without the other fails the write, so change both together.
  */
 export type ObjectLifecycleState =
-  | 'active'
-  | 'stored'
-  | 'lent_out'
-  | 'lost'
-  | 'disposed'
-  | 'consumed'
-  | 'returned'
-  | 'archived';
+  'active' | 'stored' | 'lent_out' | 'lost' | 'disposed' | 'consumed' | 'returned' | 'archived';
 
 /** How this unit's identity was established. Mirrors objects_identity_method_check. */
 export type ObjectIdentityMethod = 'user' | 'barcode' | 'receipt' | 'vision' | 'import' | 'inferred';

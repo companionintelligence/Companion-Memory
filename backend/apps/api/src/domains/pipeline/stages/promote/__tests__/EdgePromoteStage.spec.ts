@@ -101,10 +101,9 @@ describe('EdgePromoteStage', () => {
       const sweptSources = new Set<string>();
       for (const stage of stages) {
         const service = makeService();
-        const observed = new (stage.constructor as new (
-          s: DeterministicEdgeBackfillService,
-          l: never,
-        ) => typeof stage)(service, makeLogger());
+        const observed = new (
+          stage.constructor as new (s: DeterministicEdgeBackfillService, l: never) => typeof stage
+        )(service, makeLogger());
         await observed.run(CTX, ['probe-id']);
         sweptSources.add(service.materializeForSourceIds.mock.calls[0][1]);
       }

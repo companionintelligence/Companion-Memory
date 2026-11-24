@@ -1,17 +1,18 @@
 import { useState } from 'react';
 
-import { useQuery } from '@apollo/client';
+import { useQuery } from '@apollo/client/react';
 import { Activity } from '@ci/shadcn/icons';
 import { useSearchParams } from 'react-router-dom';
 
 import { gql } from '@/graphql';
+import { filterValueLabel } from '@/lib/sourceNames';
 import {
   readCsvParam,
   validateExactFilterValue,
   writeCsvFilterParam,
 } from '@/pages/MemoryPage/Components/ExplorerToolbar/filterParams';
 
-import { FilterValuePicker } from './FilterValuePicker';
+import { FilterValuePicker, type FilterValuePickerProps } from './FilterValuePicker';
 
 // "Activity" — the event-type dimension (visited, messaged, called, ate,
 // traveled, purchased, ...), written to `?eventTypes=`. Populated from the
@@ -38,9 +39,11 @@ interface Props {
   modal?: boolean;
   /** Dimension name on the trigger ("Activity: all"). */
   label?: string;
+  /** Opens the picker from the caller's own element (the phone filter sheet's row). */
+  renderTrigger?: FilterValuePickerProps['renderTrigger'];
 }
 
-export function ActivityFilter({ modal = true, label = 'Activity' }: Props) {
+export function ActivityFilter({ modal = true, label = 'Activity', renderTrigger }: Props) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [open, setOpen] = useState(false);
 
@@ -65,6 +68,7 @@ export function ActivityFilter({ modal = true, label = 'Activity' }: Props) {
       values={values}
       options={data?.eventTypes ?? []}
       optionsKnown={data != null}
+      formatValue={filterValueLabel}
       loading={loading}
       onOpenChange={setOpen}
       onAdd={(value) => {
@@ -81,6 +85,7 @@ export function ActivityFilter({ modal = true, label = 'Activity' }: Props) {
       searchPlaceholder="Search activities…"
       emptyText="No activities match"
       unknownValueHint="No event has this activity type, so this filter matches nothing."
+      renderTrigger={renderTrigger}
     />
   );
 }

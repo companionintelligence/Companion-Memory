@@ -74,6 +74,27 @@ export function getApiBaseUrl(): string {
 }
 
 /**
+ * Whether the page's own code comes from the Memory the API calls go to.
+ *
+ * True for the web app, which Memory serves and which calls it same-origin, and for the desktop
+ * app, whose window navigates to the web app as Memory's gateway serves it. False for the native
+ * Capacitor shells: they carry the code in the bundle (`capacitor://localhost`, `https://localhost`)
+ * and only call Memory, so whether Memory answers says nothing about whether the page can load its
+ * own code.
+ */
+export function pageServedByApi(): boolean {
+  if (!apiBaseUrl || typeof window === 'undefined') {
+    return true;
+  }
+
+  try {
+    return new URL(apiBaseUrl).origin === window.location.origin;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Resolve a relative API path (`/api/...`) against the configured origin.
  * Absolute URLs are returned untouched, so callers can pass either.
  */
@@ -83,6 +104,26 @@ export function buildApiUrl(path: string): string {
   }
 
   return `${apiBaseUrl}${path}`;
+}
+
+/**
+ * The origin a link that LEAVES this app should carry: a share link or its QR
+ * code, a webhook address someone pastes into another system.
+ *
+ * Web and desktop: the page's own origin, exactly as before. The native Capacitor
+ * shell is the exception: it serves the bundle from `capacitor://localhost` (iOS)
+ * or `https://localhost` (Android), an origin that exists only inside this
+ * WebView, so a link built from `window.location.origin` is dead on every other
+ * device. The Memory the app is connected to serves the web UI as well as the
+ * API, so its origin is the one that opens elsewhere. Empty until a server has
+ * been configured.
+ */
+export function getWebOrigin(): string {
+  if (isNativePlatform()) {
+    return getApiBaseUrl();
+  }
+
+  return typeof window !== 'undefined' ? window.location.origin : '';
 }
 
 /**
@@ -148,6 +189,21 @@ export function isIosPlatform(): boolean {
   const cap = (window as unknown as { Capacitor?: { getPlatform?: () => string } }).Capacitor;
 
   return cap?.getPlatform?.() === 'ios';
+}
+
+/**
+ * True only inside the Android Capacitor shell. Web, iOS, and tests without a
+ * `getPlatform` stub stay false. Pair with {@link isIosPlatform} when copy or a
+ * flow differs per OS; "not iOS" alone would also match a desktop browser.
+ */
+export function isAndroidPlatform(): boolean {
+  if (!isNativePlatform()) {
+    return false;
+  }
+
+  const cap = (window as unknown as { Capacitor?: { getPlatform?: () => string } }).Capacitor;
+
+  return cap?.getPlatform?.() === 'android';
 }
 
 /**
@@ -229,6 +285,23 @@ export function initApiBaseUrl(): void {
     setApiBaseUrl(stored || readBuildDefault());
   } catch {
     setApiBaseUrl(readBuildDefault());
+  }
+}
+
+/**
+ * The origin the app saved when it was paired, or null when none is saved.
+ *
+ * Unlike {@link getApiBaseUrl} this never answers with the build default. Only the app's
+ * own pages can write it (the WebView's localStorage), which is what makes it the copy to
+ * trust over the keystore mirror `syncNativeIntentConfig` keeps for App Intents.
+ */
+export function getPersistedApiBaseUrl(): string | null {
+  try {
+    const stored = window.localStorage.getItem(STORAGE_KEY);
+
+    return stored ? normalize(stored) : null;
+  } catch {
+    return null;
   }
 }
 

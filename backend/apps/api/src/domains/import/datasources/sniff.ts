@@ -21,6 +21,11 @@ import { open } from 'node:fs/promises';
  * every request on the process, not just the scan that asked.
  */
 
+/** `text` without a leading UTF-8 byte order mark, which a CSV header test must not see. */
+export function stripBom(text: string): string {
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+}
+
 /** First `bytes` of the file as utf8, or null when unreadable. */
 export async function readHead(fpath: string, bytes = 4096): Promise<string | null> {
   let handle: Awaited<ReturnType<typeof open>> | undefined;

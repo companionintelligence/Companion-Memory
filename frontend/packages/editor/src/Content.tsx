@@ -50,7 +50,7 @@ export function Content({ className, onReferenceClick }: Props) {
       onClick={handleClick}
       className={cn(
         'prose dark:prose-invert max-w-none min-h-full focus:outline-none',
-        '[&_.ProseMirror]:focus:outline-none [&_.ProseMirror]:min-h-full [&_.ProseMirror]:p-6 [&_.ProseMirror]:text-base',
+        '[&_.ProseMirror]:focus:outline-none [&_.ProseMirror]:min-h-full [&_.ProseMirror]:p-3 [&_.ProseMirror]:text-base device:[&_.ProseMirror]:p-4',
         'prose-p:leading-tight prose-headings:leading-tight [&_h1]:mt-4 [&_h2]:mt-3 [&_h3]:mt-2 [&_p]:mt-0 [&_p]:mb-4',
         // Reference chips: a tinted inline pill, distinct from ordinary links
         // and from surrounding prose, with no underline so it reads as an object.

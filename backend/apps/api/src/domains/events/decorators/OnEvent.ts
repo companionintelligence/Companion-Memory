@@ -84,6 +84,9 @@ export function OnEvent<E extends string>(event: E, opts?: Opts) {
         // exception and no log naming the cause.
         const trackedAck: Acknowledgement | undefined = ack && {
           jobId: ack.jobId,
+          // Same rule as jobId: this wrapper is the only way metadata reaches
+          // the listener, so a field left off here is a field that never arrives.
+          enqueuedAt: ack.enqueuedAt,
           done: () => {
             acknowledged = true;
             ack.done();

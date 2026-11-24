@@ -227,6 +227,21 @@ describe('ThingVisionListener — a vision guess is recorded as a sighting', () 
     );
   });
 
+  it('starts the minted thing "last seen" when the photo was taken', async () => {
+    const { listener, itemService } = makeListener({
+      externalCreatedAt: new Date('2018-03-09T08:00:00.000Z'),
+    });
+
+    await listener.handleFileUploaded(upload());
+
+    expect(itemService.create).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ lastSeenAt: new Date('2018-03-09T08:00:00.000Z') }),
+    );
+    // The sighting has no place, so neither does the thing.
+    expect(itemService.create.mock.calls[0][1]).not.toHaveProperty('lastSeenPlaceEntityId');
+  });
+
   it('NEVER invents a detection confidence', async () => {
     const { listener, observationService } = makeListener();
 
@@ -354,6 +369,57 @@ describe('ThingVisionListener — a vision guess is recorded as a sighting', () 
 
     expect(itemService.create).not.toHaveBeenCalled();
     expect(resolutionService.resolveAndApply).not.toHaveBeenCalled();
+    expect(observationService.resolve).not.toHaveBeenCalled();
+  });
+
+  it('mints nothing for a sighting a person answered "not a thing"', async () => {
+    const { listener, observationService, itemService, resolutionService } = makeListener();
+
+    // The same photo taken again returns the same rows. The mug was rejected
+    // (unconfirmed, unlinked, method `user`); the lamp nobody has answered.
+    observationService.create.mockImplementation(async (_ctx: unknown, dto: CreateObjectObservationDto) => ({
+      id: `obs-${dto.label}`,
+      resolvedObjectId: null,
+      resolutionMethod: dto.label === 'Coffee Mug' ? 'user' : 'none',
+    }));
+
+    await listener.handleFileUploaded(upload());
+
+    // The "no" holds for the mug and stops nothing else in the frame.
+    expect(resolutionService.resolveAndApply).toHaveBeenCalledTimes(1);
+    expect(resolutionService.resolveAndApply).toHaveBeenCalledWith(expect.anything(), 'obs-Desk Lamp');
+    expect(itemService.create).toHaveBeenCalledTimes(1);
+    expect(itemService.create).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ name: 'Desk Lamp' }),
+    );
+    expect(observationService.resolve).toHaveBeenCalledTimes(1);
+    expect(observationService.resolve).toHaveBeenCalledWith(
+      expect.anything(),
+      'obs-Desk Lamp',
+      expect.anything(),
+    );
+  });
+
+  it('mints nothing when a person answers the sighting while the pass is running', async () => {
+    const { listener, itemService, observationService, resolutionService } = makeListener();
+
+    // `create` read the row before the answer landed; the ladder re-reads it
+    // and reports the person's answer instead of a decline.
+    resolutionService.resolveAndApply.mockResolvedValue({
+      observationId: 'obs-coffee-mug',
+      method: 'user',
+      confidence: null,
+      objectId: null,
+      productId: null,
+      reason: 'user-rejected; left untouched',
+      applied: false,
+      observation: null,
+    });
+
+    await listener.handleFileUploaded(upload());
+
+    expect(itemService.create).not.toHaveBeenCalled();
     expect(observationService.resolve).not.toHaveBeenCalled();
   });
 

@@ -35,4 +35,14 @@ describe('MaintenanceController — appliance-wide sweeps are administrator-only
       expect(guardsOn(MaintenanceController, method)).toContain(ApplianceAdminGuard);
     }
   });
+
+  it('ingest/reset carries the admin guard too: it truncates whole tables', () => {
+    // A `full` key or a session was enough before, so a household member could run it, and
+    // the only thing between them and every other account's rows was the service's probe.
+    expect(guardsOn(MaintenanceController, 'resetIngest')).toContain(ApplianceAdminGuard);
+  });
+
+  it("the external-id-kind check carries it: its sample lists every account's content ids", () => {
+    expect(guardsOn(MaintenanceController, 'contentExternalIdKindIntegrity')).toContain(ApplianceAdminGuard);
+  });
 });

@@ -219,6 +219,9 @@ describe('RedditRecordWriter', () => {
       'comm-existing',
       expect.objectContaining({
         content: 'Body',
+        // A one-line body is its own clip: null clears whatever preview an
+        // earlier, longer version of the post left on the row.
+        preview: null,
         metadata: expect.objectContaining({
           Kind: 'post',
           IP: '1.2.3.4',

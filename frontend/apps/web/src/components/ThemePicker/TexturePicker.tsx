@@ -1,4 +1,4 @@
-import { type CSSProperties, useMemo } from 'react';
+import { type CSSProperties, useEffect, useMemo, useState } from 'react';
 
 import { Button, Tooltip } from '@ci/shadcn';
 import { useTranslation } from 'react-i18next';
@@ -17,15 +17,26 @@ const TEXTURE_OPACITY_MIN = 0;
 const TEXTURE_OPACITY_MAX = 0.8;
 const TEXTURE_OPACITY_STEP = 0.05;
 
+type Palette = typeof DEFAULT_TEXTURE_PALETTE;
+
+const samePalette = (a: Palette, b: Palette) =>
+  a.background === b.background && a.accent === b.accent && a.contrast === b.contrast && a.muted === b.muted;
+
 export function TexturePicker() {
   const { t } = useTranslation();
   const { themeState } = useTheme();
   const { backgroundState, setTexture, setTextureOpacity } = useBackground();
 
-  const texturePalette = useMemo(
-    () => readTexturePalette() ?? DEFAULT_TEXTURE_PALETTE,
-    [themeState.mode, themeState.colorTheme],
-  );
+  // Read in an effect, after ThemeProvider's layout effect has swapped the
+  // root variables. Reading during render (it used to be a useMemo) picked up
+  // the theme being left, so the tiles showed light swatches on a dark page.
+  // The mount run usually reads what the initial render already read; keeping
+  // the old object then saves rebuilding every preview (and reseeding Conway's).
+  const [texturePalette, setTexturePalette] = useState(() => readTexturePalette() ?? DEFAULT_TEXTURE_PALETTE);
+  useEffect(() => {
+    const next = readTexturePalette() ?? DEFAULT_TEXTURE_PALETTE;
+    setTexturePalette((prev) => (samePalette(prev, next) ? prev : next));
+  }, [themeState]);
   const textureOpacity = backgroundState.textureOpacity;
 
   const texturePreviews = useMemo<Record<string, CSSProperties>>(() => {
@@ -54,7 +65,7 @@ export function TexturePicker() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-sm font-medium">Surface Texture</h3>
+          <h3 className="text-sm font-medium">Surface texture</h3>
           <p className="text-xs text-muted-foreground">Hero-inspired SVG patterns</p>
         </div>
         <Button
@@ -82,7 +93,7 @@ export function TexturePicker() {
                 <button
                   onClick={() => setTexture(pattern.id)}
                   className={`
-                  group relative rounded-lg border p-2 text-left transition-all focus-visible:outline-none
+                  group relative rounded-lg border p-2 text-left transition-[color,background-color,border-color,box-shadow,opacity,transform] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring
                   ${
                     isSelected
                       ? 'border-primary ring-2 ring-primary/30'

@@ -5,7 +5,7 @@ const dotenv = require('dotenv');
 dotenv.config({ path: process.env.DOTENV_CONFIG_PATH || '.env' });
 
 const config = require('config');
-const { z } = require('zod');
+const { z } = require('zod/v3');
 
 const schema = z.object({
   type: z.literal('postgres'),

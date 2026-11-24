@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { gql } from '@/graphql';
@@ -112,7 +112,7 @@ const BASE_PROVIDERS: ProviderFixture[] = [
 
 /** Scope queries to one provider's card, since every card repeats the same field labels. */
 function providerCard(name: string): HTMLElement {
-  const card = screen.getByText(name).closest('[data-slot="card"]');
+  const card = screen.getByText(name).closest('[data-slot="settings-row"]');
 
   if (!card) {
     throw new Error(`no card found for ${name}`);
@@ -129,7 +129,7 @@ describe('OAuthSection', () => {
     const google = providerCard('Google');
 
     expect(within(google).getByLabelText('Client ID')).toHaveAttribute('type', 'password');
-    expect(within(google).getByLabelText('Client Secret')).toHaveAttribute('type', 'password');
+    expect(within(google).getByLabelText('Client secret')).toHaveAttribute('type', 'password');
   });
 
   it('toggles a field between masked and visible independently per field', async () => {
@@ -141,7 +141,7 @@ describe('OAuthSection', () => {
     fireEvent.click(within(google).getByRole('button', { name: /show client id/i }));
     expect(within(google).getByLabelText('Client ID')).toHaveAttribute('type', 'text');
     // The secret field is untouched by revealing the client ID.
-    expect(within(google).getByLabelText('Client Secret')).toHaveAttribute('type', 'password');
+    expect(within(google).getByLabelText('Client secret')).toHaveAttribute('type', 'password');
 
     fireEvent.click(within(google).getByRole('button', { name: /hide client id/i }));
     expect(within(google).getByLabelText('Client ID')).toHaveAttribute('type', 'password');
@@ -158,16 +158,26 @@ describe('OAuthSection', () => {
     fireEvent.change(within(google).getByLabelText('Client ID'), { target: { value: 'client-abc' } });
     expect(within(google).queryByRole('button', { name: /save credentials/i })).not.toBeInTheDocument();
 
-    fireEvent.change(within(google).getByLabelText('Client Secret'), { target: { value: 'secret-xyz' } });
+    fireEvent.change(within(google).getByLabelText('Client secret'), { target: { value: 'secret-xyz' } });
     expect(within(google).getByRole('button', { name: /save credentials/i })).toBeInTheDocument();
   });
 
   it('creates a provider key for a provider with none yet, using the id looked up from the providers query', async () => {
     let createVariables: unknown;
+    let providersLoaded = false;
+    const providersBase = providersMock(BASE_PROVIDERS);
+    const providers = {
+      ...providersBase,
+      result: () => {
+        providersLoaded = true;
+
+        return providersBase.result;
+      },
+    };
 
     renderWithProviders(<OAuthSection />, {
       mocks: [
-        providersMock(BASE_PROVIDERS),
+        providers,
         {
           request: {
             query: CREATE_PROVIDER_KEY,
@@ -201,10 +211,12 @@ describe('OAuthSection', () => {
     });
 
     await screen.findByText('Google');
+    await waitFor(() => expect(providersLoaded).toBe(true));
+    await act(async () => {});
     const google = providerCard('Google');
 
     fireEvent.change(within(google).getByLabelText('Client ID'), { target: { value: 'client-abc' } });
-    fireEvent.change(within(google).getByLabelText('Client Secret'), { target: { value: 'secret-xyz' } });
+    fireEvent.change(within(google).getByLabelText('Client secret'), { target: { value: 'secret-xyz' } });
     fireEvent.click(within(google).getByRole('button', { name: /save credentials/i }));
 
     await waitFor(() => expect(createVariables).toBeDefined());
@@ -261,6 +273,10 @@ describe('OAuthSection', () => {
     });
 
     await screen.findByText('Google');
+    // The fields are seeded from the query result in an effect, one render after the card appears.
+    await waitFor(() =>
+      expect(within(providerCard('Google')).getByLabelText('Client ID')).toHaveValue('old-id'),
+    );
     const google = providerCard('Google');
 
     fireEvent.change(within(google).getByLabelText('Client ID'), { target: { value: 'new-id' } });
@@ -292,20 +308,24 @@ describe('OAuthSection', () => {
     });
 
     await screen.findByText('Google');
+    // The fields are seeded from the query result in an effect, one render after the card appears.
+    await waitFor(() =>
+      expect(within(providerCard('Google')).getByLabelText('Client ID')).toHaveValue('the-id'),
+    );
     const google = providerCard('Google');
 
     expect(within(google).getByLabelText('Client ID')).toHaveValue('the-id');
 
     fireEvent.click(within(google).getByRole('button', { name: /delete stored credentials/i }));
 
-    expect(screen.getByText('Delete OAuth Keys')).toBeInTheDocument();
-    expect(screen.getByText(/delete the oauth keys for google/i)).toBeInTheDocument();
+    expect(screen.getByText('Delete OAuth credentials?')).toBeInTheDocument();
+    expect(screen.getByText(/delete the oauth credentials for google/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
 
-    await waitFor(() => expect(screen.queryByText('Delete OAuth Keys')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText('Delete OAuth credentials?')).not.toBeInTheDocument());
     expect(within(providerCard('Google')).getByLabelText('Client ID')).toHaveValue('');
-    expect(within(providerCard('Google')).getByLabelText('Client Secret')).toHaveValue('');
+    expect(within(providerCard('Google')).getByLabelText('Client secret')).toHaveValue('');
     expect(
       within(providerCard('Google')).queryByRole('button', { name: /delete stored credentials/i }),
     ).not.toBeInTheDocument();
@@ -332,13 +352,17 @@ describe('OAuthSection', () => {
     });
 
     await screen.findByText('Google');
+    // The fields are seeded from the query result in an effect, one render after the card appears.
+    await waitFor(() =>
+      expect(within(providerCard('Google')).getByLabelText('Client ID')).toHaveValue('the-id'),
+    );
     fireEvent.click(
       within(providerCard('Google')).getByRole('button', { name: /delete stored credentials/i }),
     );
 
     fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
 
-    expect(screen.queryByText('Delete OAuth Keys')).not.toBeInTheDocument();
+    expect(screen.queryByText('Delete OAuth credentials?')).not.toBeInTheDocument();
     expect(within(providerCard('Google')).getByLabelText('Client ID')).toHaveValue('the-id');
   });
 
@@ -361,8 +385,12 @@ describe('OAuthSection', () => {
     });
 
     await screen.findByText('Google');
+    // The fields are seeded from the query result in an effect, one render after the card appears.
+    await waitFor(() =>
+      expect(within(providerCard('Google')).getByLabelText('Client ID')).toHaveValue('the-id'),
+    );
     const google = providerCard('Google');
-    const secret = within(google).getByLabelText('Client Secret');
+    const secret = within(google).getByLabelText('Client secret');
 
     expect(secret).toHaveValue('');
     expect(secret).toHaveAttribute('placeholder', '••••••••cret');
@@ -419,9 +447,13 @@ describe('OAuthSection', () => {
     });
 
     await screen.findByText('Google');
+    // The fields are seeded from the query result in an effect, one render after the card appears.
+    await waitFor(() =>
+      expect(within(providerCard('Google')).getByLabelText('Client ID')).toHaveValue('the-id'),
+    );
     const google = providerCard('Google');
 
-    fireEvent.change(within(google).getByLabelText('Client Secret'), {
+    fireEvent.change(within(google).getByLabelText('Client secret'), {
       target: { value: 'brand-new-secret' },
     });
     fireEvent.click(within(google).getByRole('button', { name: /save credentials/i }));
@@ -429,7 +461,7 @@ describe('OAuthSection', () => {
     await waitFor(() => expect(updateCalled).toBeDefined());
     // The typed secret is cleared from the field after saving; the hint takes over again.
     await waitFor(() =>
-      expect(within(providerCard('Google')).getByLabelText('Client Secret')).toHaveValue(''),
+      expect(within(providerCard('Google')).getByLabelText('Client secret')).toHaveValue(''),
     );
   });
 
@@ -452,6 +484,10 @@ describe('OAuthSection', () => {
     });
 
     await screen.findByText('Google');
+    // The fields are seeded from the query result in an effect, one render after the card appears.
+    await waitFor(() =>
+      expect(within(providerCard('Google')).getByLabelText('Client ID')).toHaveValue('the-id'),
+    );
     const google = providerCard('Google');
 
     fireEvent.change(within(google).getByLabelText('Client ID'), { target: { value: '' } });

@@ -195,7 +195,12 @@ export function useGraphDots(authToken?: string | null, options: GraphDotsOption
 
         const [contextResponse, firstResponse] = await Promise.all([contextPromise, firstPromise]);
 
-        if (!contextResponse?.success || !contextResponse.context) {
+        // `context: null` beside `success: true` is not a failure: the server is
+        // saying this account has no self Person (it never onboarded, or its
+        // profile was removed), so there is nobody to centre the constellation
+        // on. The dots do not need one — show them uncentred rather than refusing
+        // the whole tab with a raw error (QA MEM-16).
+        if (!contextResponse?.success) {
           throw new Error('Unable to resolve user context');
         }
 
@@ -213,7 +218,7 @@ export function useGraphDots(authToken?: string | null, options: GraphDotsOption
           hydrating: true,
           error: null,
           nodes: firstNodes,
-          userEntityId: contextResponse.context.currentUser.entityId,
+          userEntityId: contextResponse.context?.currentUser.entityId ?? null,
           counts: firstResponse.counts ?? {},
           truncated: firstResponse.truncated ?? false,
           connectivity: firstResponse.connectivity ?? null,

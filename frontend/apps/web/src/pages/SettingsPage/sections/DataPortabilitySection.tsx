@@ -1,14 +1,18 @@
 import { useRef, useState } from 'react';
 
-import { Button, Card, Dialog, Input, Label } from '@ci/shadcn';
+import { isNativePlatform } from '@ci/common';
+import { Button, Dialog, Input, Label } from '@ci/shadcn';
 import { Download, Upload } from '@ci/shadcn/icons';
 
+import { WebSignInRequired } from '@/components/WebSignInRequired';
 import { useAuth, useCurrentUser } from '@/hooks';
 import {
   downloadAccountExport,
   uploadAccountImport,
   uploadLegacyAccountImport,
 } from '@/lib/accountDataPortability';
+
+import { SettingsGroup, SettingsRow, SettingsSection, SettingsStatus } from '../kit';
 
 import { WorkingSetSection } from './WorkingSetSection';
 
@@ -29,10 +33,27 @@ export function DataPortabilitySection() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Shown inside the dialog, which stays open when an import fails. On the page it sat behind the
+  // dialog's overlay and closing the dialog to read it cleared it.
+  const [importError, setImportError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+
+  // Every way out of the dialog clears what was chosen and typed, Cancel included (it used to only
+  // hide the dialog, so reopening showed the same file and email with Replace my data already live).
+  const closeImportDialog = () => {
+    setImportOpen(false);
+    setConfirmEmail('');
+    setSelectedFile(null);
+    setImportError(null);
+  };
 
   const email = user?.email ?? '';
   const matches = email.length > 0 && confirmEmail.trim().toLowerCase() === email.trim().toLowerCase();
+  // Export and import stream one very large file each way, and the native shell can do neither: it
+  // carries no file-save or share plugin, and the helpers fetch a relative `/api/...` — the app's own
+  // `capacitor://localhost` origin, not the Memory server — with no `x-api-key`. On the phone the export
+  // still reported "Export downloaded." with no file to show for it. So say so, rather than offer it.
+  const native = isNativePlatform();
 
   const handleExport = async () => {
     setExporting(true);
@@ -56,6 +77,7 @@ export function DataPortabilitySection() {
 
     setImporting(true);
     setError(null);
+    setImportError(null);
     setSuccess(null);
 
     try {
@@ -66,63 +88,60 @@ export function DataPortabilitySection() {
       setSuccess(
         `Import complete — ${result.rowsImported.toLocaleString()} rows across ${result.tablesImported} tables, ${result.filesRestored.toLocaleString()} files restored.`,
       );
-      setImportOpen(false);
-      setConfirmEmail('');
-      setSelectedFile(null);
+      closeImportDialog();
     } catch {
-      setError('Could not import that archive. Check the file and confirmation email, then try again.');
+      setImportError('Could not import that archive. Check the file and confirmation email, then try again.');
     } finally {
       setImporting(false);
     }
   };
 
   return (
-    <>
-      <div className="mb-6">
-        <h2 className="text-xl font-semibold">Your data</h2>
-        <p className="text-sm text-muted-foreground mt-1">
-          Download a portable copy of everything in Memory, or restore from a previous export.
-        </p>
-      </div>
+    <SettingsSection
+      title="Your data"
+      description="Download a portable copy of everything in Memory, or restore from a previous export."
+    >
+      {native ? (
+        <WebSignInRequired>
+          Export and import move your whole Memory as one very large file, which this app cannot save or open
+          yet. Open Companion Memory in a web browser, sign in, and use Your data there to export or restore
+          it.
+        </WebSignInRequired>
+      ) : (
+        <SettingsGroup title="Export and import">
+          <SettingsRow
+            label="Export all data"
+            hint="An NDJSON archive of your memories, files, graph, schedule and settings."
+            help="Streams the archive as it is written, so large accounts are supported without a single-file size cap."
+            control={
+              <Button onClick={() => void handleExport()} disabled={exporting}>
+                <Download aria-hidden="true" />
+                {exporting ? 'Preparing export…' : 'Export all my data'}
+              </Button>
+            }
+          />
 
-      <div className="space-y-4">
-        <Card>
-          <Card.Content className="space-y-4 pt-6">
-            <div className="space-y-1">
-              <h3 className="text-sm font-medium">Export all data</h3>
-              <p className="text-sm text-muted-foreground">
-                Streams an NDJSON archive of your memories, files, graph, schedule, and settings. Large
-                accounts are supported without a single-file size cap.
-              </p>
-            </div>
-            <Button onClick={() => void handleExport()} disabled={exporting}>
-              <Download className="mr-1.5 h-4 w-4" strokeWidth={1.5} />
-              {exporting ? 'Preparing export…' : 'Export all my data'}
-            </Button>
-          </Card.Content>
-        </Card>
+          <SettingsRow
+            label="Import data"
+            hint="Replaces your current Memory data with a CI Memory export file (.ndjson, or legacy .json). This cannot be undone."
+            control={
+              <Button variant="outline" onClick={() => setImportOpen(true)}>
+                <Upload aria-hidden="true" />
+                Import from file
+              </Button>
+            }
+          />
 
-        <Card>
-          <Card.Content className="space-y-4 pt-6">
-            <div className="space-y-1">
-              <h3 className="text-sm font-medium">Import data</h3>
-              <p className="text-sm text-muted-foreground">
-                Replaces your current Memory data with a CI Memory export file (.ndjson, or legacy .json).
-                This cannot be undone.
-              </p>
-            </div>
-            <Button variant="outline" onClick={() => setImportOpen(true)}>
-              <Upload className="mr-1.5 h-4 w-4" strokeWidth={1.5} />
-              Import from file
-            </Button>
-          </Card.Content>
-        </Card>
+          {error || success ? (
+            <SettingsRow>
+              {error ? <SettingsStatus tone="error">{error}</SettingsStatus> : null}
+              {success ? <SettingsStatus tone="success">{success}</SettingsStatus> : null}
+            </SettingsRow>
+          ) : null}
+        </SettingsGroup>
+      )}
 
-        {error ? <p className="text-sm text-destructive">{error}</p> : null}
-        {success ? <p className="text-sm text-muted-foreground">{success}</p> : null}
-
-        <WorkingSetSection />
-      </div>
+      <WorkingSetSection />
 
       <input
         ref={fileInputRef}
@@ -131,18 +150,19 @@ export function DataPortabilitySection() {
         className="hidden"
         onChange={(event) => {
           setSelectedFile(event.target.files?.[0] ?? null);
+          // Emptied once read, or choosing the same file again would not fire onChange.
+          event.target.value = '';
         }}
       />
 
       <Dialog
         open={importOpen}
         onOpenChange={(next) => {
-          setImportOpen(next);
-
-          if (!next) {
-            setConfirmEmail('');
-            setSelectedFile(null);
-            setError(null);
+          if (next) {
+            setImportOpen(true);
+          } else if (!importing) {
+            // Escape, the close button and a click outside are refused mid-import, like Cancel.
+            closeImportDialog();
           }
         }}
       >
@@ -169,15 +189,21 @@ export function DataPortabilitySection() {
               <Input
                 id="importConfirmEmail"
                 autoComplete="off"
+                inputMode="email"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
                 placeholder={email}
                 value={confirmEmail}
                 onChange={(event) => setConfirmEmail(event.target.value)}
               />
             </div>
+
+            {importError ? <p className="text-sm text-destructive">{importError}</p> : null}
           </div>
 
           <Dialog.Footer>
-            <Button variant="outline" onClick={() => setImportOpen(false)} disabled={importing}>
+            <Button variant="outline" onClick={closeImportDialog} disabled={importing}>
               Cancel
             </Button>
             <Button
@@ -190,6 +216,6 @@ export function DataPortabilitySection() {
           </Dialog.Footer>
         </Dialog.Content>
       </Dialog>
-    </>
+    </SettingsSection>
   );
 }

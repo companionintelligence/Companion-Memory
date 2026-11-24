@@ -4,6 +4,7 @@ import { DataSource } from 'typeorm';
 
 import { FeatureService } from '@ci/common/feature';
 import { LoggerService } from '@ci/common/logging';
+import { fanOutPerUser } from '@ci/common/schedule';
 import { EventService } from '@ci/domains/events';
 import { QuestionService } from '@ci/domains/intelligence';
 
@@ -61,15 +62,11 @@ export class SmartRotationService {
     }
 
     const batch = this.nextUserBatch(workType, userIds, usersPerTick);
-    let enqueued = 0;
-
-    for (const userId of batch) {
-      const didEnqueue = await this.enqueueWork(userId, workType);
-
-      if (didEnqueue) {
-        enqueued += 1;
-      }
-    }
+    // One user's failure no longer costs the rest of the batch their turn.
+    const { enqueued } = await fanOutPerUser(batch, (userId) => this.enqueueWork(userId, workType), {
+      logger: this.logger,
+      label: `smart rotation ${workType}`,
+    });
 
     if (enqueued > 0) {
       this.logger.log('Smart rotation scheduled work enqueued', { workType, enqueued, users: batch.length });

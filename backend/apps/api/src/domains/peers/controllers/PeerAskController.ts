@@ -1,6 +1,5 @@
 import {
   BadRequestException,
-  Body,
   Controller,
   Get,
   Headers,
@@ -15,12 +14,25 @@ import {
 import { FeatureService } from '@ci/common/feature';
 import { PORTAL_TOKEN_VERIFIER, type PortalTokenVerifier } from '@ci/common/guards/PortalTokenVerifier';
 import { LoggerService } from '@ci/common/logging';
-import type { RawBodyRequest } from '@ci/common/middleware/BodyParserMiddleware';
+import { type RawBodyRequest, transportHasBody } from '@ci/common/middleware/BodyParserMiddleware';
 import config from '@ci/configuration';
 import type { AskChannelProvenance } from '@ci/domains/asks';
 
 import { SignatureFormatError, parseSignatureHeaders } from '../httpSignature';
+import {
+  claimedKeyId,
+  extractBearer,
+  header,
+  parseRawJson,
+  publishedBase,
+  signedTargetUri,
+} from '../peerRequest';
 import { PEER_ASK_ID_PATTERN, peerAskBodySchema, type PeerAskResponse } from '../protocol';
+import {
+  isSelfCertifyingIssuer,
+  selfCertifyingIssuerOf,
+  selfCertifyingPublicJwk,
+} from '../selfCertifyingKeyId';
 import { PeerAskService } from '../services/PeerAskService';
 import { PeerLinkService } from '../services/PeerLinkService';
 import { PeerRateLimitService } from '../services/PeerRateLimitService';
@@ -39,8 +51,12 @@ import { PeerSignatureService } from '../services/PeerSignatureService';
  * ADR-0005 designates a dedicated `ci-mcp` adapter as the long-term external
  * boundary; until that lands this controller is the narrow, single-purpose
  * stand-in, gated by the `ask` feature flag (on by default since 2026-08-17).
- * The flag alone does not open this route: it also requires `peers.audience`,
- * and refuses every request until an operator binds one.
+ * The flag alone does not open the Portal-token path: it also requires
+ * `peers.audience`, and refuses every request until an operator binds one. A
+ * request signed under a self-certifying key (`did:keri:D<x>` or `did:key`) has
+ * no token and needs no audience; it needs `peers.memoryEndpoint` (what the
+ * signed `@target-uri` is rebuilt from) and a link the owner made for exactly
+ * that identifier, and is refused with a 401 without one.
  */
 @Controller('agent/v1')
 export class PeerAskController {
@@ -61,16 +77,18 @@ export class PeerAskController {
   async ask(
     @Headers('authorization') authorization: string | undefined,
     @Req() request: RawBodyRequest,
-    @Body() body: unknown,
   ): Promise<PeerAskResponse> {
-    const identity = await this.authenticate(authorization);
-    const channel = await this.assertSignature(request, identity, request.rawBody);
+    const identity = await this.authenticate(authorization, request);
+    const channel = await this.assertSignature(request, identity);
 
     // Rate-limit on the verified peer identity, BEFORE the peer-link lookup, so
     // an unlinked caller cannot hammer the endpoint for free.
     await this.rateLimitService.consume(identity);
 
-    const parsed = peerAskBodySchema.safeParse(body);
+    // As TrustTasksController does, the ask is read from the exact bytes a
+    // signature's digest is checked against (BodyParserMiddleware keeps them for
+    // /agent/v1), never from a separately parsed body.
+    const parsed = peerAskBodySchema.safeParse(parseRawJson(request.rawBody));
     if (!parsed.success) {
       // The body is attacker-controlled; reject anything off-contract outright.
       throw new BadRequestException('Malformed ask');
@@ -116,11 +134,12 @@ export class PeerAskController {
     @Req() request: RawBodyRequest,
     @Param('correlation') askId: string,
   ): Promise<PeerAskResponse> {
-    const identity = await this.authenticate(authorization);
+    const identity = await this.authenticate(authorization, request);
     // The collect route creates nothing, so its channel facts have nowhere to
     // be recorded — but it is still verified, because a route with a weaker
-    // gate is how the poll endpoint would have become the way in.
-    await this.assertSignature(request, identity, undefined);
+    // gate is how the poll endpoint would have become the way in. A body sent
+    // on it anyway is held to the same binding as one sent to `ask`.
+    await this.assertSignature(request, identity);
 
     await this.rateLimitService.consumePoll(identity);
 
@@ -142,6 +161,7 @@ export class PeerAskController {
    */
   private async authenticate(
     authorization: string | undefined,
+    request?: RawBodyRequest,
   ): Promise<{ issuer: string; subject: string }> {
     if (!(await this.featureService.isFeatureEnabled('ask'))) {
       // Dark by default: indistinguishable from a box that has no peer surface.
@@ -149,7 +169,19 @@ export class PeerAskController {
     }
 
     const token = extractBearer(authorization);
-    if (!token) {
+    if (!token || token.toLowerCase() === 'keri') {
+      // A SOVEREIGN peer: no Portal token, only a signature whose keyid is a
+      // self-certifying `did:keri:D<x>` (see `sovereignKeyId.ts`) or `did:key:z6Mk…`
+      // (see `didKeyId.ts`). This returns the CLAIMED identity and proves nothing
+      // yet: `assertSignature` must then find a link the owner made for exactly
+      // that identifier, under its own issuer, and verify the signature, and every
+      // caller runs it before using the identity.
+      const keyid = request ? claimedKeyId(request) : null;
+      const selfCertifying = keyid != null ? selfCertifyingIssuerOf(keyid) : null;
+      if (keyid != null && selfCertifying != null) {
+        return { issuer: selfCertifying, subject: keyid };
+      }
+
       throw new UnauthorizedException('Missing bearer token');
     }
 
@@ -179,9 +211,20 @@ export class PeerAskController {
    *
    * Downstream routing still resolves a peer link by `(issuer, subject)` — the
    * OIDC identity — so this step does not REPLACE that, it constrains it. What
-   * it adds is the property the bearer token cannot have: a leaked token is no
-   * longer sufficient, because the request must also be signed by the key the
-   * owner recorded on that same link, over a digest of this exact body.
+   * it adds, for a request that is signed, is the property the bearer token
+   * cannot have: the request is bound to the key the owner recorded on that
+   * same link, over a digest of this exact body, with a nonce that makes a
+   * replay detectable.
+   *
+   * `peers.requireHttpSignature` ships on, so by default every request has to
+   * carry a valid signature. With it turned off, that is optional only for a
+   * peer whose link records NO key: an unsigned request from such a peer
+   * returns early below and the Portal token alone
+   * authenticates it: a leaked token is enough to ask as that peer, and a
+   * replay is not detected. An unsigned request from a peer whose link DOES
+   * record a key is refused whatever the flag says. With the flag on, every
+   * request has to carry a valid signature, keyless links included.
+   * The boot-time warning in `configuration.ts` reports the default state.
    *
    * Making the KEY the primary identity (and the Portal token an optional
    * attestation, per UMA's FLOW.md) is the follow-up; it needs the thumbprint
@@ -194,9 +237,10 @@ export class PeerAskController {
    * would let a caller choose the authority half of the string and thereby make
    * a signature minted for `evil.example` verify here — the request would carry
    * its own idea of what it was addressed to. `peers.memoryEndpoint` is the
-   * endpoint this box PUBLISHES to the directory, which is the authority a
-   * peer would have signed over. Same rule as UMA's: authorization inputs never
-   * come from transport headers.
+   * `/agent/v1` base the owner gave peers, which they store on their link to
+   * this box and sign `<base>/ask` against. Nothing publishes it to a
+   * directory. Same rule as UMA's: authorization inputs never come from
+   * transport headers.
    *
    * ═══ ONE REFUSAL FOR EVERY FAILURE ═══
    *
@@ -210,14 +254,25 @@ export class PeerAskController {
   private async assertSignature(
     request: RawBodyRequest,
     identity: { issuer: string; subject: string },
-    rawBody: string | undefined,
   ): Promise<AskChannelProvenance | null> {
     const hasSignatureHeaders = request.headers['signature-input'] != null;
 
-    // Not required and not offered: nothing to check. A box that has not yet
-    // turned the requirement on must keep talking to peers that do not sign.
+    // Not required and not offered: nothing to check, UNLESS the owner has
+    // recorded a key for this peer. A box that has not yet turned the
+    // requirement on must keep talking to peers that cannot sign, but a peer
+    // whose key is on its link can, and `PeerAskClient` signs every call once
+    // a key is configured. An unsigned request naming that peer is therefore
+    // a bearer token without the key behind it: refusing it here is what stops
+    // a leaked or replayed token from asking as a peer that signs, while the
+    // box-wide switch is still off for the peers that do not.
     if (!this.signatureService.required && !hasSignatureHeaders) {
-      return null;
+      const links = await this.peerLinkService.findActiveByPeerIdentity(identity.issuer, identity.subject);
+      if (!links.some((candidate) => candidate.peerKeyJwk != null)) {
+        return null;
+      }
+
+      this.logger.warn(`peer ask refused: unsigned, but the peer's link records a key (${identity.issuer})`);
+      throw new UnauthorizedException(SIGNATURE_REFUSED);
     }
 
     if (!hasSignatureHeaders) {
@@ -225,14 +280,22 @@ export class PeerAskController {
       throw new UnauthorizedException(SIGNATURE_REFUSED);
     }
 
-    const authority = originOf(config.peers?.memoryEndpoint);
-    if (!authority) {
+    const base = publishedBase(config.peers?.memoryEndpoint);
+    if (!base) {
       // Refusing is the only safe answer: with nothing to reconstruct
       // `@target-uri` from, the alternative is trusting a header for a signed
       // component. An operator who turns on signing must publish the endpoint
       // peers sign against.
       this.logger.warn('peer ask refused: peers.memoryEndpoint is not configured');
       throw new ServiceUnavailableException('Peer asks are not enabled');
+    }
+
+    // A path outside `/agent/v1` has no signed target to rebuild, so it gets the
+    // same refusal as every other signature failure.
+    const targetUri = signedTargetUri(base, request.originalUrl ?? request.url);
+    if (targetUri == null) {
+      this.logger.warn('peer ask refused: request path is outside /agent/v1');
+      throw new UnauthorizedException(SIGNATURE_REFUSED);
     }
 
     let keyid: string;
@@ -258,24 +321,41 @@ export class PeerAskController {
     // THE KEY AND THE TOKEN MUST AGREE ABOUT WHO THIS IS. Accepting any link
     // that merely holds the key would let peer A's signature authorize a
     // request carrying peer B's token — two halves of two different identities
-    // combining into one that neither party holds.
+    // combining into one that neither party holds. A sovereign peer has no
+    // token, so its identity is `did:keri` or `did:key` + the identifier it signed
+    // with, and the same exact match applies: only a link under that issuer naming
+    // that very identifier (the full `did:…:` form `PeerAskService` resolves it
+    // by) answers. A link the owner made for a Portal identity never answers a
+    // bare signature, and a `did:key` link never answers a `did:keri` one.
+    const sovereign = isSelfCertifyingIssuer(identity.issuer);
     const link = links.find(
       (candidate) => candidate.peerIssuer === identity.issuer && candidate.peerSubject === identity.subject,
     );
 
-    if (link?.peerKeyJwk == null) {
+    // The key the link records always wins: an AID whose link holds a different
+    // key is refused, never verified against the key the AID spells out. Only a
+    // sovereign link with no key recorded falls back to that spelled-out key,
+    // which is the whole point of a self-certifying identifier — and only for
+    // the documented `did:keri:D<x>` and `did:key:z6Mk…` forms, never a CESR
+    // prefix, an `E` AID, or a DID whose key can rotate.
+    const peerKeyJwk = link?.peerKeyJwk ?? (sovereign && link ? selfCertifyingPublicJwk(keyid) : null);
+
+    if (link == null || peerKeyJwk == null) {
       this.logger.warn(`peer ask refused: no link binds key ${keyid} to ${identity.issuer}`);
       throw new UnauthorizedException(SIGNATURE_REFUSED);
     }
 
     const verification = await this.signatureService.verifyInbound({
       method: request.method,
-      targetUri: `${authority}${request.originalUrl ?? request.url}`,
+      targetUri,
       signatureInput: header(request, 'signature-input'),
       signature: header(request, 'signature'),
       contentDigestHeader: header(request, 'content-digest'),
-      rawBody,
-      peerPublicJwk: link.peerKeyJwk,
+      // Whether there IS a body comes from the transport, never from whether a
+      // parser happened to keep its bytes; see `transportHasBody`.
+      transportHasBody: transportHasBody(request.headers),
+      rawBody: request.rawBody,
+      peerPublicJwk: peerKeyJwk,
     });
 
     if (!verification.ok) {
@@ -300,48 +380,4 @@ export class PeerAskController {
 }
 
 /** The ONE refusal a signature failure ever produces. See {@link PeerAskController.assertSignature}. */
-const SIGNATURE_REFUSED = 'Invalid token';
-
-/**
- * The ORIGIN of this box's published endpoint — scheme, host, port, and nothing
- * else.
- *
- * `peers.memoryEndpoint` is the full `/agent/v1` base URL, while
- * `request.originalUrl` already carries `/agent/v1/...`; concatenating the two
- * whole strings doubles the prefix and every honest signature fails. The
- * authority half comes from config (never from `Host`) and the path half comes
- * from the route, which is exactly the split that keeps a caller from choosing
- * either one.
- *
- * Returns null for anything unparseable, which the caller turns into a refusal
- * rather than a guess.
- */
-function originOf(endpoint: string | undefined): string | null {
-  const trimmed = endpoint?.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  try {
-    return new URL(trimmed).origin;
-  } catch {
-    return null;
-  }
-}
-
-/** Read a single-valued header, dropping the array form express allows. */
-function header(request: RawBodyRequest, name: string): string | undefined {
-  const value = request.headers[name];
-
-  return typeof value === 'string' ? value : undefined;
-}
-
-function extractBearer(header: string | undefined): string | null {
-  if (!header) {
-    return null;
-  }
-
-  const [scheme, value] = header.split(' ');
-
-  return scheme?.toLowerCase() === 'bearer' && value ? value.trim() : null;
-}
+export const SIGNATURE_REFUSED = 'Invalid token';

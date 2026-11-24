@@ -51,7 +51,7 @@ android {
             if (hasKeystore) {
                 signingConfig signingConfigs.release
             }
-            minifyEnabled false
+            minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }
@@ -79,6 +79,7 @@ def crossBoundaryTestInputs = files(
     "${projectDir}/../../../../packages/common/src/utils/oidcNative.ts",
     "${projectDir}/../../../../apps/ios/ios/App/App/Info.plist",
     "${projectDir}/../../../../apps/web/src/lib/registerNativePushToken.ts",
+    "${projectDir}/../../capacitor.config.ts",
     "${projectDir}/../../../../../backend/apps/api/config/default.json"
 )
 tasks.withType(Test).configureEach {
@@ -118,12 +119,12 @@ dependencies {
     // org.json on the classpath would otherwise be AGP's mockable android.jar stub, whose
     // methods all throw "not mocked". @capacitor/android declares this same coordinate for
     // exactly the same reason in its own build.gradle.
-    testImplementation "org.json:json:20240303"
+    testImplementation "org.json:json:20260814"
     // Needed only by the two tests that require a real Activity / merged manifest
     // (MainActivityPluginRegistrationTest, MergedManifestPermissionsTest). 4.14.x is the
     // generation that supports compileSdk 35+; it pulls the shadows framework and
     // Robolectric.buildActivity transitively.
-    testImplementation "org.robolectric:robolectric:4.14.1"
+    testImplementation "org.robolectric:robolectric:4.18.1"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')

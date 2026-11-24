@@ -1,9 +1,10 @@
 import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { ValidationPipe } from '@ci/common/pipes';
+import config from '@ci/configuration';
 import { BrowserActivityInsightPreferenceService } from '@ci/domains/llm/browser-activity-insight-preference.module';
 import { ChatModelPreferenceService } from '@ci/domains/llm/chat-model-preference.module';
 import { ImageDescriptionPreferenceService } from '@ci/domains/llm/image-description-preference.module';
@@ -31,6 +32,20 @@ export const nullableEnabledSchema = z.object({ enabled: z.boolean().nullable() 
 
 /** `chatModel: null` clears the override and returns to the appliance default. */
 export const chatModelSchema = z.object({ chatModel: z.string().trim().min(1).nullable() }).strip();
+
+export const memoryGovernanceSchema = z
+  .object({
+    memoryGovernanceEnabled: z.boolean().optional(),
+    memoryRecencyDecayEnabled: z.boolean().optional(),
+  })
+  .strip();
+
+export const decisionEngineSchema = z
+  .object({
+    contrastiveDecisionEnabled: z.boolean().optional(),
+    generativeDecisionEnabled: z.boolean().optional(),
+  })
+  .strip();
 
 @UseGuards(JwtOrApiKeyAuthGuard)
 @Controller('personalization')
@@ -96,12 +111,17 @@ export class PersonalizationController {
    * chat model specifically — are visible to background vision work
    * (`OllamaService.resolveVisionModel`), not just to the browser tab that
    * set them.
+   *
+   * `defaultChatModel` is the appliance default (`LLM_DEFAULT_CHAT_MODEL`, which
+   * the Hub sets), the model a turn runs on when the user has no override. The
+   * web app needs it to show and send that model instead of whichever entry
+   * `/llm/models` happens to list first.
    */
   @Get('chat-model')
   async getChatModel(@Context() context: RequestContext) {
     const chatModel = await this.chatModelPreference.getChatModel(context.userId!);
 
-    return { chatModel };
+    return { chatModel, defaultChatModel: config.llm.chatModel };
   }
 
   @Post('chat-model')
@@ -173,5 +193,71 @@ export class PersonalizationController {
     );
 
     return { enabled };
+  }
+
+  /**
+   * Settings → Model "Memory governance & recency decay" (`knowl` pattern):
+   * controls automatic fact supersession/conflict detection and exponential
+   * recency decay during hybrid recall.
+   */
+  @Get('memory-governance')
+  async getMemoryGovernance(@Context() context: RequestContext) {
+    return this.chatModelPreference.getMemoryGovernancePreferences(context.userId!);
+  }
+
+  @Post('memory-governance')
+  async updateMemoryGovernance(
+    @Context() context: RequestContext,
+    @Body(new ValidationPipe(memoryGovernanceSchema))
+    body: { memoryGovernanceEnabled?: boolean; memoryRecencyDecayEnabled?: boolean },
+  ) {
+    const serviceContext = toServiceContext(context);
+    if (body.memoryGovernanceEnabled !== undefined) {
+      await this.chatModelPreference.setMemoryGovernanceEnabled(serviceContext, body.memoryGovernanceEnabled);
+    }
+
+    if (body.memoryRecencyDecayEnabled !== undefined) {
+      await this.chatModelPreference.setMemoryRecencyDecayEnabled(
+        serviceContext,
+        body.memoryRecencyDecayEnabled,
+      );
+    }
+
+    return this.chatModelPreference.getMemoryGovernancePreferences(context.userId!);
+  }
+
+  /**
+   * Settings → Model "Decision engines" (`CLM` Contrastive System 1 +
+   * Generative System 2): lets the user toggle the fast embedding-geometry
+   * contrastive decision layer and the generative LLM decision layer
+   * independently.
+   */
+  @Get('decision-engine')
+  async getDecisionEngine(@Context() context: RequestContext) {
+    return this.chatModelPreference.getDecisionEnginePreferences(context.userId!);
+  }
+
+  @Post('decision-engine')
+  async updateDecisionEngine(
+    @Context() context: RequestContext,
+    @Body(new ValidationPipe(decisionEngineSchema))
+    body: { contrastiveDecisionEnabled?: boolean; generativeDecisionEnabled?: boolean },
+  ) {
+    const serviceContext = toServiceContext(context);
+    if (body.contrastiveDecisionEnabled !== undefined) {
+      await this.chatModelPreference.setContrastiveDecisionEnabled(
+        serviceContext,
+        body.contrastiveDecisionEnabled,
+      );
+    }
+
+    if (body.generativeDecisionEnabled !== undefined) {
+      await this.chatModelPreference.setGenerativeDecisionEnabled(
+        serviceContext,
+        body.generativeDecisionEnabled,
+      );
+    }
+
+    return this.chatModelPreference.getDecisionEnginePreferences(context.userId!);
   }
 }

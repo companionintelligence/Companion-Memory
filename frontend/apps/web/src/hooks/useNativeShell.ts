@@ -5,8 +5,10 @@ import {
   addBackButtonListener,
   exitApp,
   hideSplashScreen,
+  isIosPlatform,
   isNativePlatform,
   setStatusBarStyle,
+  setSystemBarsBackground,
   syncNativeIntentConfig,
 } from '@ci/common';
 import { useNavigate } from 'react-router-dom';
@@ -56,7 +58,11 @@ function applyStatusBarForTheme(): void {
     // getComputedStyle can throw if body isn't ready — fall back below.
   }
 
-  void setStatusBarStyle(isDark ? 'DARK' : 'LIGHT', background ?? (isDark ? '#0b1f28' : '#ffffff'));
+  const resolved = background ?? (isDark ? '#0b1f28' : '#ffffff');
+  void setStatusBarStyle(isDark ? 'DARK' : 'LIGHT', resolved);
+  // Android: the WebView is inset by the system bars, so the strips above and below it
+  // are window background, not web content. Paint them to match (no-op elsewhere).
+  void setSystemBarsBackground(resolved);
 }
 
 /**
@@ -81,7 +87,9 @@ export function useNativeShell(): void {
     }
 
     void hideSplashScreen();
-    document.documentElement.classList.add('ci-native');
+    // `ci-ios` / `ci-android` let CSS tell the two shells apart: iOS is edge-to-edge
+    // and pads by its own safe-area floors, Android is inset natively and must not.
+    document.documentElement.classList.add('ci-native', isIosPlatform() ? 'ci-ios' : 'ci-android');
 
     // Mirror the API base URL into the keystore so native App Intents can reach the
     // server — now (covers the configured server from a previous session) and whenever
@@ -128,7 +136,7 @@ export function useNativeShell(): void {
       themeObserver.disconnect();
       disposeAppState();
       unsubscribe();
-      document.documentElement.classList.remove('ci-native');
+      document.documentElement.classList.remove('ci-native', 'ci-ios', 'ci-android');
     };
   }, [navigate]);
 }

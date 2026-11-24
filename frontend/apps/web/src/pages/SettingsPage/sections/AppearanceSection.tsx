@@ -1,7 +1,9 @@
 import { useDeviceLayout } from '@ci/common';
-import { Card, cn, Label, Switch } from '@ci/shadcn';
+import { Switch } from '@ci/shadcn';
 
 import { ColorPicker, TexturePicker, useBackground, useTheme } from '@/components/ThemePicker';
+
+import { SegmentedControl, SettingsGroup, SettingsRow, SettingsSection } from '../kit';
 
 const THEME_MODES = [
   { value: 'light', label: 'Light' },
@@ -15,56 +17,41 @@ export function AppearanceSection() {
   const { isMobile } = useDeviceLayout();
 
   return (
-    <>
-      <div className="mb-6">
-        <h2 className="text-xl font-semibold">Appearance</h2>
-        <p className="text-sm text-muted-foreground mt-1">Customize the look and feel of your interface.</p>
-      </div>
+    <SettingsSection title="Appearance" description="Customize the look and feel of your interface.">
+      <SettingsGroup>
+        <SettingsRow
+          label="Theme"
+          hint="Auto follows your system setting."
+          control={
+            <SegmentedControl
+              label="Theme"
+              value={themeState.mode}
+              options={THEME_MODES}
+              onChange={setTheme}
+              className="w-56"
+            />
+          }
+        />
 
-      <Card>
-        <Card.Content className="flex flex-col gap-6">
-          <div>
-            <p className="mb-2 text-sm font-medium">Theme</p>
-            <div role="radiogroup" aria-label="Theme" className="flex gap-1 rounded-md bg-muted p-1 text-xs">
-              {THEME_MODES.map((entry) => (
-                <button
-                  key={entry.value}
-                  type="button"
-                  role="radio"
-                  aria-checked={themeState.mode === entry.value}
-                  onClick={() => setTheme(entry.value)}
-                  className={cn(
-                    'flex-1 cursor-pointer rounded-sm px-2 py-1.5 transition-colors',
-                    themeState.mode === entry.value
-                      ? 'bg-background text-foreground shadow-sm'
-                      : 'text-muted-foreground hover:text-foreground',
-                  )}
-                >
-                  {entry.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {isMobile === false ? (
-            <div className="flex items-center justify-between gap-4">
-              <div className="min-w-0">
-                <Label htmlFor="pointer-glow" className="text-sm font-medium">
-                  Pointer glow
-                </Label>
-                <p className="text-xs text-muted-foreground mt-1">
-                  A soft light that follows the cursor. Desktop only.
-                </p>
-              </div>
+        {isMobile === false ? (
+          <SettingsRow
+            label="Pointer glow"
+            htmlFor="pointer-glow"
+            hint="A soft light that follows the cursor. Desktop only."
+            control={
               <Switch
                 id="pointer-glow"
                 checked={glowEnabled}
                 onCheckedChange={setGlowEnabled}
                 aria-label="Pointer glow"
               />
-            </div>
-          ) : null}
+            }
+          />
+        ) : null}
+      </SettingsGroup>
 
+      <SettingsGroup title="Colors and texture">
+        <SettingsRow>
           <div className="grid gap-6 lg:grid-cols-2">
             <div>
               <ColorPicker />
@@ -73,8 +60,8 @@ export function AppearanceSection() {
               <TexturePicker />
             </div>
           </div>
-        </Card.Content>
-      </Card>
-    </>
+        </SettingsRow>
+      </SettingsGroup>
+    </SettingsSection>
   );
 }

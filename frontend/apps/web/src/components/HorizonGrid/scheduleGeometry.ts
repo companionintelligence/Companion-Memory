@@ -428,9 +428,26 @@ interface OccupancyCell extends RhythmClaim {
   minutes: number;
 }
 
+/**
+ * The class to paint for one bin.
+ *
+ * Prefers HBPE's `predictedL0` over the most probable `l0Probs` entry. The two
+ * differ on purpose: the probabilities are a calibrated posterior, and most of
+ * a day carries no recorded activity, so their argmax answers UNKNOWN nearly
+ * everywhere even when the distribution is exactly right. HBPE picks the label
+ * with a floored prior correction, which is a decision the server is better
+ * placed to make — it is the side that knows the class priors.
+ *
+ * Falls back to the argmax when the field is absent, so an HBPE that predates
+ * it paints exactly as it used to.
+ */
 function dominantOccupancyClass(bucket: ForecastBucket | null | undefined): ActivityClass {
   if (!bucket?.l0Probs.length) {
     return 'UNKNOWN';
+  }
+
+  if (bucket.predictedL0) {
+    return normalizeClass(bucket.predictedL0);
   }
 
   const top = bucket.l0Probs.reduce((best, cur) => (cur.probability > best.probability ? cur : best));
@@ -471,9 +488,16 @@ function occupancyClaims(
 
     const slot = Math.min(BUCKETS_PER_DAY - 1, Math.floor(zonedMinutesOfDay(at, zone) / BUCKET_MINUTES));
 
+    const l0Class = dominantOccupancyClass(bucket);
+
     bySlot.set(slot, {
-      weight: bucket.q50,
-      l0Class: dominantOccupancyClass(bucket),
+      // UNKNOWN is "no claim", and this file already spells that weight 0 (the
+      // empty slots below, and the climate path). It has to here too: the head
+      // reports high confidence that nothing is recorded for most of a day, and
+      // carrying that through as weight would wash `--activity-none` — a
+      // visible slate grey — over two thirds of the calendar.
+      weight: l0Class === 'UNKNOWN' ? 0 : bucket.q50,
+      l0Class,
       bucket,
       localMin: slot * BUCKET_MINUTES,
       minutes: BUCKET_MINUTES,
@@ -590,6 +614,58 @@ function slotForecastLine(
   return `${weekday} ${daypart}s you usually have ${best.cluster.name}.`;
 }
 
+/**
+ * Phone add-to-calendar sheet, as a fraction of the viewport.
+ * The sheet's class is `max-h-[40vh]` — keep these two the same.
+ */
+const PHONE_SHEET_VH = 0.4;
+
+/** A little air between the tapped hour and the top of that sheet. */
+const SHEET_HOUR_GAP_PX = 12;
+
+/**
+ * Where the day scroller should sit so a tapped hour stays visible.
+ *
+ * With no sheet, an hour already on screen stays put, and one below the pane
+ * is brought up to the top third. With the sheet open, the hour is placed just
+ * above the sheet. The result never goes past the end of the grid, so midnight
+ * stays the bottom of the day instead of opening empty space under it.
+ */
+function scrollTopForSelectedHour({
+  hourY,
+  scrollTop,
+  clientHeight,
+  scrollHeight,
+  occlusionPx,
+}: {
+  hourY: number;
+  scrollTop: number;
+  clientHeight: number;
+  scrollHeight: number;
+  occlusionPx: number;
+}): number {
+  const maxScroll = scrollHeight > clientHeight ? scrollHeight - clientHeight : Number.POSITIVE_INFINITY;
+
+  if (occlusionPx <= 0) {
+    const viewBottom = scrollTop + clientHeight;
+
+    if (hourY >= scrollTop && hourY <= viewBottom) {
+      return scrollTop;
+    }
+
+    return Math.min(maxScroll, Math.max(0, hourY - clientHeight / 3));
+  }
+
+  const safeBottom = clientHeight - occlusionPx - SHEET_HOUR_GAP_PX;
+  const offset = hourY - scrollTop;
+
+  if (offset >= 0 && offset <= Math.max(0, safeBottom)) {
+    return scrollTop;
+  }
+
+  return Math.min(maxScroll, Math.max(0, hourY - Math.max(0, safeBottom)));
+}
+
 // ── Lanes ─────────────────────────────────────────────────────────────────────
 
 /**
@@ -626,6 +702,8 @@ export {
   dropInstant,
   movedStart,
   slotForecastLine,
+  scrollTopForSelectedHour,
+  PHONE_SHEET_VH,
   RHYTHM_NOISE_FLOOR,
   BUCKET_MINUTES,
   BUCKETS_PER_DAY,

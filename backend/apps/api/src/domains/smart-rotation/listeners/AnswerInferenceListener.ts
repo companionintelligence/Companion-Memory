@@ -4,7 +4,7 @@ import { type ServiceContext, type UserServiceContext } from '@ci/common/context
 import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
 import { type RecallLine, RecallService } from '@ci/domains/agent';
-import { Events, type EventPayloads, OnEvent } from '@ci/domains/events';
+import { type Acknowledgement, Events, type EventPayloads, OnEvent } from '@ci/domains/events';
 import {
   Answer,
   type AnswerEvidence,
@@ -36,25 +36,10 @@ import {
 import { PersonalizationService } from '@ci/domains/personalization';
 import { SearchService } from '@ci/domains/search-next';
 
+import { INFERENCE_QUEUE_RETENTION_MINUTES } from './SmartRotationListener';
+
 const RELATED_ANSWER_LIMIT = 10;
 const RECENT_ANSWER_FALLBACK = 5;
-
-/**
- * This call was previously unbounded — no signal, no timeout — so a hung or
- * slow-loading model held its job (and the single-slot LLM_BACKGROUND_QUEUE behind it)
- * indefinitely, up to pg-boss's own 900s `expireInSeconds`. Observed on a real
- * appliance as `infer.question.answer` jobs dead-lettering with a raw "fetch
- * failed" and no useful diagnosis, under the SAME contention pattern documented
- * on `TodoScanService.SCAN_TIMEOUT_MS`: a request that cannot be cancelled
- * holds its model slot regardless of what killed the caller, so retries queue
- * behind their own predecessors' orphaned generations instead of behind
- * nothing.
- *
- * 60s matches the other planning-domain budgets. Unlike those, this call
- * stays on {@link PROMPT_MODEL} rather than moving to the utility tier — see
- * that constant's use below. This is a bounds-only fix.
- */
-const INFERENCE_TIMEOUT_MS = 60_000;
 
 /**
  * Output cap (Ollama `options.num_predict`). The schema's `answer` is
@@ -195,6 +180,15 @@ export type InferenceOutcome =
       confidence?: number;
     };
 
+/**
+ * Why a queued job was dropped before any retrieval or model call.
+ *
+ * `gone` is the row vanishing between the listener's two reads of it; the other
+ * three are the filters both inference selectors apply when they queue a job
+ * (see {@link QuestionService.findInferenceStanding}).
+ */
+type InferenceSkipReason = 'gone' | 'inactive' | 'hand-entry' | 'forked';
+
 @Injectable()
 export class AnswerInferenceListener {
   constructor(
@@ -209,10 +203,65 @@ export class AnswerInferenceListener {
     this.logger.setContext(AnswerInferenceListener.name);
   }
 
+  /**
+   * The queue's entry point: drop a job that waited too long, run the rest.
+   *
+   * ═══ WHY A JOB CAN BE TOO OLD TO RUN ═══
+   *
+   * An inference is a guess at one unanswered question, and the selectors make
+   * a fresh guess every interval, so a job is only worth its GPU time while it
+   * is current. Measured on core-1, 2026-10-17: four owners at one job a minute
+   * each against one `ollama-background` slot. The queue fell ~4 h behind — a
+   * job created at 23:01 UTC started at 02:56 — with 941 waiting, and every one
+   * of them would have been run, oldest first, long after anyone wanted it.
+   *
+   * The dispatch gate (`inferenceDispatchGate.ts`) stops a backlog forming, and
+   * new sends carry {@link INFERENCE_QUEUE_RETENTION_MINUTES} so pg-boss drops
+   * them unstarted. This is the third leg, for whatever reaches a worker anyway:
+   * a backlog queued before either existed (90-day retention, so it would
+   * otherwise replay in full on the next start), or a job fetched just before
+   * its retention ran out. Same number, same meaning: past it the job is
+   * completed without work — one log line, no retrieval, no model call — and
+   * the selector, which reads the completed row as an attempt, moves on.
+   *
+   * Measured from `enqueuedAt` (the row's `created_on`), so a retry keeps its
+   * place in the clock and a dead-letter replay, which is a NEW job, is not
+   * stale on arrival. No `enqueuedAt` (LocalEventService) means nothing waited.
+   *
+   * {@link inferQuestionAnswer} stays the unacknowledged work itself, which is
+   * what tests and probes call directly.
+   */
   @OnEvent(Events.INFER_QUESTION_ANSWER, {
     queue: LLM_BACKGROUND_QUEUE,
     queueOptions: LLM_BACKGROUND_QUEUE_OPTIONS,
+    autoAcknowledge: false,
   })
+  async handleInferQuestionAnswer(
+    payload: EventPayloads[Events.INFER_QUESTION_ANSWER],
+    ack: Acknowledgement,
+  ): Promise<void> {
+    const waitedMs = ack.enqueuedAt ? Date.now() - ack.enqueuedAt.getTime() : 0;
+
+    if (waitedMs > INFERENCE_QUEUE_RETENTION_MINUTES * 60_000) {
+      this.logger.log('Answer inference dropped — the job waited longer than it is worth', {
+        userId: payload.ownerId,
+        questionId: payload.questionId,
+        waitedMinutes: Math.round(waitedMs / 60_000),
+        limitMinutes: INFERENCE_QUEUE_RETENTION_MINUTES,
+      });
+      ack.done();
+
+      return;
+    }
+
+    try {
+      await this.inferQuestionAnswer(payload);
+      ack.done();
+    } catch (error) {
+      ack.fail(error);
+    }
+  }
+
   async inferQuestionAnswer(payload: EventPayloads[Events.INFER_QUESTION_ANSWER]) {
     const ownerId = payload.ownerId;
     if (!ownerId) {
@@ -236,6 +285,33 @@ export class AnswerInferenceListener {
       return;
     }
 
+    // ═══ THE EXECUTION-TIME GATE ═══
+    //
+    // `findById` settles who may READ the row and nothing else. The selectors
+    // that queue this job also require the question to be active, not
+    // `hand_entry`, and not replaced by one of the owner's own forks — but they
+    // check that when they QUEUE it, and a job waits in pg-boss, behind the
+    // single-slot LLM queue, before anything runs it. In that gap a migration can
+    // retire the row, a reclassification can mark it `hand_entry`, and the owner
+    // can fork it, and nothing in the payload knows. Unchecked, the job ran the
+    // model anyway and wrote an inferred answer onto a question the owner is no
+    // longer asked.
+    //
+    // Here, and not in `inferAnswerForQuestion`: that is what a probe or a test
+    // calls to inspect the model's decision without writing anything, and gating
+    // it would stop a probe from asking about a hand-entry question at all.
+    const skipReason = await this.findSkipReason(serviceContext, question.id);
+
+    if (skipReason) {
+      this.logger.debug('Answer inference skipped — the question no longer qualifies', {
+        userId: ownerId,
+        questionId: payload.questionId,
+        reason: skipReason,
+      });
+
+      return;
+    }
+
     const outcome = await this.inferAnswerForQuestion(serviceContext, question);
 
     if (outcome.status !== 'ok') {
@@ -245,6 +321,43 @@ export class AnswerInferenceListener {
     const { inferred, confidence, evidence } = outcome;
 
     await this.persistInferredAnswer(serviceContext, payload.questionId, inferred, confidence, evidence);
+  }
+
+  /**
+   * Why a queued job must not run any more, or null when the question still
+   * qualifies.
+   *
+   * Reads the three facts fresh from `ci.questions` and decides here, so the
+   * decision is this listener's and the SQL stays the service's. The order is
+   * only the order the reason is reported in: a retired question the owner has
+   * also forked is `inactive`, and either way the job does not run.
+   */
+  private async findSkipReason(
+    serviceContext: UserServiceContext,
+    questionId: string,
+  ): Promise<InferenceSkipReason | null> {
+    const standing = await this.questionService.findInferenceStanding(serviceContext, questionId);
+
+    // Readable a moment ago and not now: deleted between the two reads.
+    if (!standing) {
+      return 'gone';
+    }
+
+    if (!standing.isActive) {
+      return 'inactive';
+    }
+
+    // A deny-list, as in both selectors (`evidence_class <> 'hand_entry'`): a
+    // class added later stays inferable until somebody says it is not.
+    if (standing.evidenceClass === 'hand_entry') {
+      return 'hand-entry';
+    }
+
+    if (standing.forkedByCaller) {
+      return 'forked';
+    }
+
+    return null;
   }
 
   /**
@@ -343,7 +456,18 @@ ${evidence.block}`
     ];
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), INFERENCE_TIMEOUT_MS);
+    // The call must be bounded and cancellable: unbounded, a hung or slow-loading model held its
+    // job and the single-slot LLM_BACKGROUND_QUEUE behind it, and a request that cannot be
+    // cancelled keeps its model slot (see `TodoScanService.SCAN_TIMEOUT_MS`), so retries queued
+    // behind their own predecessors' orphaned generations.
+    //
+    // The bound is `llm.answerInferenceTimeoutMs` (270s), not the 60s the other planning-domain
+    // calls use: the call is non-streaming, so the first byte is the finished answer, and a pool
+    // placement on a slow CPU node was aborted at 60s and retried. It is also handed to the
+    // backend as this call's first-response deadline, which would otherwise cut it at
+    // `llm.firstResponseTimeoutMs`. Unlike the planning calls this one stays on PROMPT_MODEL.
+    const timeoutMs = config.llm.answerInferenceTimeoutMs;
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     let llmResponse;
 
@@ -355,6 +479,7 @@ ${evidence.block}`
         // INFERRED_ANSWER_JSON_SCHEMA.
         format: INFERRED_ANSWER_JSON_SCHEMA,
         signal: controller.signal,
+        firstResponseTimeoutMs: timeoutMs,
         maxOutputTokens: INFERENCE_MAX_OUTPUT_TOKENS,
         keepAlive: INFERENCE_KEEP_ALIVE,
       });

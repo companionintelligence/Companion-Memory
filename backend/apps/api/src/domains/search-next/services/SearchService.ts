@@ -4,6 +4,10 @@ import { DataSource } from 'typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { EmbeddingGenerationService } from '@ci/common/embeddings';
+import { defaultDecisionClient } from '@ci/common/hbpe/decisionClient';
+import { DECISION_FLAGS, isDecisionFlagOn } from '@ci/common/hbpe/decisionFlags';
+import { fuseRerankOrder, RERANK_TOP_N } from '@ci/common/hbpe/rerankFusion';
+import { IMAGE_FILE_EXTENSIONS, VIDEO_FILE_EXTENSIONS } from '@ci/common/media/mediaFileNames';
 import { EventService } from '@ci/domains/events';
 import {
   RETRIEVAL_POLICY_DEFAULTS,
@@ -12,6 +16,7 @@ import {
   tsRankWeightsLiteral,
 } from '@ci/domains/retrieval-policy';
 
+import { entityTimeSql } from '../entityTime';
 import { queryTokenCount, RetrievalQueryEvent, type RetrievalQueryPayload } from '../events';
 import { buildPromptQuery, type BuildPromptQueryOptions } from '../promptQuery';
 import type { EntityIdentifier, IndexableEntity, PromptSearchResult } from '../types';
@@ -162,6 +167,29 @@ export type SemanticSearchScope = {
   includeTypes?: IndexableEntity[];
   excludeTypes?: IndexableEntity[];
   /**
+   * Keep only the content rows that are a photo or a video (`ci.content.type = 'media'`); rows of
+   * every other type are untouched. A photo's search has to stop at its content row, the one that
+   * carries its media event (and so its date), and a Drive document or a YouTube like is content
+   * too. Bound into the statement text, not a parameter, so no caller's numbering moves.
+   */
+  mediaContentOnly?: boolean;
+  /**
+   * Leave out the conversation turns agents stored (`POST /memory/turn`, category
+   * `agent-turn`), except those from the agents listed by `source_system` (`openclaw`,
+   * `hermes`). `[]` leaves every one out. Absent: no filter, which is what recall and the
+   * agents' own memory lookups need, since remembering past conversations is why turns are
+   * stored. Everything a person reads passes it: the explorer, the agent search intents,
+   * asks, the activity timeline. See {@link agentTurnClause}.
+   */
+  showAgentTurnsFrom?: readonly string[];
+  /**
+   * Keep only the communications of these kinds (`email`, `sms`, `chat`, ...); other entity types
+   * pass untouched. Emails, texts and chats are all one entity type, so without it "my latest
+   * email" can only ask for every communication. Written into the text, never a parameter, so no
+   * caller's numbering moves; anything not a {@link COMMUNICATION_TYPES} value is dropped.
+   */
+  communicationTypes?: readonly CommunicationKind[];
+  /**
    * Cosine-distance floor, overriding {@link SEMANTIC_DISTANCE_THRESHOLD}.
    * Smaller = stricter. Callers that need a tighter relevance bar than plain
    * search (evidence retrieval, where a merely-word-adjacent row is worse than
@@ -217,7 +245,106 @@ type BaseSearchOptions = {
   maxResults?: number;
   /** Semantic modes only. See {@link SemanticSearchScope.distanceThreshold}. */
   distanceThreshold?: number;
+  /**
+   * Keep only rows whose own time ({@link entityTimeSql}) is on or after `since` / on or before
+   * `until`. Lexical modes only (`keyword`, `boosted`): a nearest-neighbour list has no "every
+   * match since Tuesday", so the semantic modes ignore both.
+   */
+  since?: Date;
+  until?: Date;
+  /**
+   * `recent` orders the page by each row's own time, newest first, nulls last, rank as the
+   * tie-break; the default is rank. Lexical modes only, like `since` / `until`.
+   */
+  sort?: 'relevance' | 'recent';
+  /** See {@link SemanticSearchScope.mediaContentOnly}. */
+  mediaContentOnly?: boolean;
+  /** See {@link SemanticSearchScope.showAgentTurnsFrom}. */
+  showAgentTurnsFrom?: readonly string[];
+  /** See {@link SemanticSearchScope.communicationTypes}. */
+  communicationTypes?: readonly CommunicationKind[];
+  /**
+   * `keyword` mode only: also match the query's last word as the START of a
+   * word, so "Jor" finds Jordan. For menus that search as you type, such as a
+   * note's `[[` link menu; `websearch_to_tsquery` alone matches whole
+   * (stemmed) words, so a half-typed name found nothing. `auto` resolves to
+   * keyword when it is set; the other modes ignore it.
+   */
+  prefix?: boolean;
+  /**
+   * Hybrid fusion strategy:
+   * - `'weighted'` (default): 50/50 normalized score average.
+   * - `'rrf'`: Reciprocal Rank Fusion ($\sum_i \frac{1}{k + \text{rank}_i}$, $k=60$),
+   *   which is invariant to outlier `ts_rank` spikes.
+   */
+  fusionMode?: 'weighted' | 'rrf';
 };
+
+export const RRF_DEFAULT_K = 60;
+
+/**
+ * Reciprocal Rank Fusion (`knowl` / Cormack et al. pattern): combines ranked
+ * lists from heterogeneous retrieval channels (e.g. pgvector cosine similarity
+ * and Postgres `ts_rank`) using rank positions rather than raw score magnitudes:
+ *
+ * $$\text{RRF}(d) = \sum_{L \in \text{lists}} \frac{1}{k + \text{rank}_L(d)}$$
+ *
+ * where $\text{rank}_L(d) \ge 1$ is the 1-based rank of document $d$ in list $L$.
+ */
+export function reciprocalRankFusion<T extends { id: string; type: IndexableEntity }>(
+  rankedLists: ReadonlyArray<ReadonlyArray<T>>,
+  k: number = RRF_DEFAULT_K,
+): Array<T & { score: number }> {
+  const fusedScores = new Map<string, number>();
+  const itemsByKey = new Map<string, T>();
+
+  for (const list of rankedLists) {
+    list.forEach((item, index) => {
+      const key = `${item.type}:${item.id}`;
+      const rank = index + 1;
+      fusedScores.set(key, (fusedScores.get(key) ?? 0) + 1 / (k + rank));
+      if (!itemsByKey.has(key)) {
+        itemsByKey.set(key, item);
+      }
+    });
+  }
+
+  const results: Array<T & { score: number }> = [];
+  fusedScores.forEach((score, key) => {
+    const item = itemsByKey.get(key)!;
+    results.push({ ...item, score });
+  });
+
+  return results.sort((a, b) => b.score - a.score);
+}
+
+/** The `since` / `until` predicate over {@link entityTimeSql}, bound after `paramOffset - 1` params. */
+function buildTimeFilter(
+  options: { since?: Date; until?: Date },
+  paramOffset: number,
+  alias: string,
+): { clause: string; params: string[] } {
+  const clauses: string[] = [];
+  const params: string[] = [];
+  const time = entityTimeSql(alias);
+
+  if (options.since) {
+    clauses.push(`AND ${time} >= $${paramOffset + params.length}::timestamptz`);
+    params.push(options.since.toISOString());
+  }
+
+  if (options.until) {
+    clauses.push(`AND ${time} <= $${paramOffset + params.length}::timestamptz`);
+    params.push(options.until.toISOString());
+  }
+
+  return { clause: clauses.join('\n        '), params };
+}
+
+/** The ORDER BY a lexical page runs: rank, or each row's own time newest first with rank as the tie-break. */
+function lexicalOrderSql(sort: 'relevance' | 'recent' | undefined, alias: string): string {
+  return sort === 'recent' ? `${entityTimeSql(alias)} DESC NULLS LAST, score DESC` : 'score DESC';
+}
 
 type SearchOptions =
   | (BaseSearchOptions & { includeTypes: IndexableEntity[]; excludeTypes?: never })
@@ -234,10 +361,92 @@ type PromptSearchOptions = BuildPromptQueryOptions & {
   maxResults?: number;
   includeTypes?: IndexableEntity[];
   excludeTypes?: IndexableEntity[];
+  /**
+   * Also admit the owner's photo events ('photos'), or photo and video events
+   * ('media'), beside `includeTypes`. A photo's place and capture date are on
+   * its event, not its file, so "photos from Lisbon" filtered to files alone
+   * could only ever answer "none". Never other events: a calendar entry in
+   * Lisbon is not a photo of it.
+   */
+  mediaEvents?: 'photos' | 'media';
+  /**
+   * Let one of those events match on its place (`location_name`, which its
+   * display title also quotes). Off unless the caller has checked that the
+   * asker may learn places: with it on, "Any photos from 14 Elm Street?"
+   * answers a location question at the photos ceiling. Off, the event side
+   * matches on the rest of the event (its date words, title and caption) with
+   * the place's words taken out.
+   */
+  mediaEventPlaces?: boolean;
 };
 
+/**
+ * Image file names, from the list `MEDIA_FILENAME_RE` in search-ingress/searchTexts.ts is built from.
+ * Trailing whitespace is allowed because the indexer tests the title after `trim()`, which takes
+ * tabs and newlines off as well as spaces (`btrim` takes only spaces). Leading whitespace can't
+ * change a test anchored at the end.
+ */
+const IMAGE_FILENAME_SQL = String.raw`\.(${IMAGE_FILE_EXTENSIONS})\s*$`;
+/** The video ones, from the same place. */
+const VIDEO_FILENAME_SQL = String.raw`\.(${VIDEO_FILE_EXTENSIONS})\s*$`;
+
+/**
+ * Is the vector row `v` a photo event (or a photo or video event, for 'media')?
+ * The test `eventDisplayTitle` makes in search-ingress: an image (or video)
+ * `Media Type`, or a title that is such a file name once trimmed (see
+ * {@link IMAGE_FILENAME_SQL}). Constant SQL, no asker text.
+ *
+ * Without `places`, the event must also match `q` once the words of its place
+ * are taken out of its vector (`ts_delete`), so a match on the place alone
+ * doesn't count. The display title's "Topanga, CA" is cut from the same
+ * `location_name`, so the same lexemes cover it.
+ */
+function mediaEventSql(kind: 'photos' | 'media', places: boolean): string {
+  const mediaTypes =
+    kind === 'media'
+      ? `(e.metadata ->> 'Media Type' LIKE 'image/%' OR e.metadata ->> 'Media Type' LIKE 'video/%')`
+      : `e.metadata ->> 'Media Type' LIKE 'image/%'`;
+  const fileNames =
+    kind === 'media'
+      ? `(n.name ~* '${IMAGE_FILENAME_SQL}' OR n.name ~* '${VIDEO_FILENAME_SQL}')`
+      : `n.name ~* '${IMAGE_FILENAME_SQL}'`;
+
+  return `EXISTS (
+          SELECT 1
+            FROM ci.events e
+            LEFT JOIN ci.entities n ON n.entity_id = e.event_id
+           WHERE e.event_id = v.entity_id
+             AND (${mediaTypes} OR ${fileNames})${
+               places
+                 ? ''
+                 : `
+             AND ts_delete(v.vector, tsvector_to_array(to_tsvector('english', coalesce(e.location_name, '')))) @@ q.tq`
+             }
+        )`;
+}
+
+/**
+ * One photo, one match, for a prompt search that admits media events.
+ *
+ * A capture event names the file it came with (`metadata.FileId`, which
+ * MediaStage stamps before the push), so a photo whose file and event both
+ * match would count twice. The event is dropped when its own file matched too.
+ * An event whose file didn't match, or that names none, stays.
+ */
+const ONE_MATCH_PER_PHOTO_SQL = `WHERE NOT (
+        m.entity_type = 'event'
+        AND EXISTS (
+          SELECT 1
+            FROM ci.events e
+            JOIN matched f
+              ON f.entity_type = 'file'
+             AND f.entity_id::text = e.metadata ->> 'FileId'
+           WHERE e.event_id = m.entity_id
+        )
+      )`;
+
 /** The strategy {@link SearchService.search} actually ran, after `'auto'` resolved. */
-export type SearchModeTaken = 'semantic' | 'keyword' | 'boosted' | 'hybrid';
+export type SearchModeTaken = 'semantic' | 'keyword' | 'boosted' | 'hybrid' | 'recent';
 
 /**
  * What {@link SearchService.searchPage} returns: the page AND how big the
@@ -271,6 +480,38 @@ export interface SearchPage {
   modeTaken: SearchModeTaken;
 }
 
+/** How {@link SearchService.countBy} buckets each entry's own time, in the owner's time zone. */
+export const TIME_BUCKETS = ['hour', 'weekday', 'month', 'year', 'date'] as const;
+
+export type TimeBucket = (typeof TIME_BUCKETS)[number];
+
+/** What {@link SearchService.countBy} returns. */
+export interface TimeBucketCounts {
+  /** Every bucket that holds at least one entry, in calendar order (hours 0-23, Monday first). */
+  groups: { key: string; count: number }[];
+  /** Matching entries with no time of their own (an undated photo): in `total`, in no bucket. */
+  undated: number;
+  /** The whole match set, dated or not: the same number {@link SearchService.count} returns. */
+  total: number;
+  /** The IANA zone the buckets were cut in: the owner's, or UTC when theirs is unset or unknown. */
+  timeZone: string;
+}
+
+/** Each bucket's key and its calendar order, over `local` (a timestamp without zone). */
+const TIME_BUCKET_SQL: Record<TimeBucket, { key: string; order: string }> = {
+  hour: { key: `lpad(extract(hour FROM local)::int::text, 2, '0')`, order: 'extract(hour FROM local)' },
+  weekday: { key: `trim(to_char(local, 'Dy'))`, order: 'extract(isodow FROM local)' },
+  month: { key: `to_char(local, 'YYYY-MM')`, order: `to_char(local, 'YYYY-MM')` },
+  year: { key: `to_char(local, 'YYYY')`, order: `to_char(local, 'YYYY')` },
+  date: { key: `to_char(local, 'YYYY-MM-DD')`, order: `to_char(local, 'YYYY-MM-DD')` },
+};
+
+/**
+ * Options for {@link SearchService.recentPage}: the scope and window of a keyword page. `query`
+ * is ignored; there is no text to match.
+ */
+export type RecentPageOptions = CountOptions & { maxResults?: number };
+
 /**
  * Options for {@link SearchService.count}: the lexical `WHERE` of a keyword
  * search and nothing else. No mode, because only the lexical predicate has a
@@ -282,7 +523,14 @@ export interface SearchPage {
  * term, which a tool that demanded one turned into a validation error
  * (measured live 2026-09-16: the model sent `query: ""` and the turn died).
  */
-type CountOptions = { query?: string } & (
+type CountOptions = {
+  query?: string;
+  since?: Date;
+  until?: Date;
+  mediaContentOnly?: boolean;
+  showAgentTurnsFrom?: readonly string[];
+  communicationTypes?: readonly CommunicationKind[];
+} & (
   | { includeTypes: IndexableEntity[]; excludeTypes?: never }
   | { excludeTypes: IndexableEntity[]; includeTypes?: never }
   | { includeTypes?: never; excludeTypes?: never }
@@ -314,6 +562,69 @@ const DEFAULT_MAX_RESULTS = 25;
  * bound as `$2`.
  */
 const KEYWORD_TSQUERY_SQL = `replace(websearch_to_tsquery('english', $2)::text, ' & ', ' | ')::tsquery`;
+
+/**
+ * Shortest half-typed word matched as a prefix. One letter matches a lexeme in
+ * nearly every indexed row, and the keyword query ranks every match before its
+ * LIMIT, so a menu searching on each keystroke would rank the whole corpus on
+ * the first one.
+ */
+const MIN_PREFIX_LENGTH = 2;
+
+/**
+ * The last run of letters, combining marks and digits in a query, for a
+ * `to_tsquery('simple', ... || ':*')` prefix match; `null` when it is shorter
+ * than {@link MIN_PREFIX_LENGTH}. The last RUN, not the last word with its
+ * punctuation squeezed out: Postgres indexes "O'Brien" as `o` and `brien` and
+ * "Jean-Pierre" with a `pierr` part, so "O'Br" has to look for `br` and
+ * "Jean-Pi" for `pi`. Only letters, marks and digits survive, so the bound
+ * value can never carry tsquery syntax of its own.
+ *
+ * Marks belong to the run because Postgres keeps them inside a word: "राहुल"
+ * is one lexeme, and its vowel signs are marks, so without them "राहु" left
+ * a single letter. The case is left alone: the 'simple' dictionary lowers the
+ * term with the database's own rules, the ones the index was built with.
+ * JavaScript's rules differ ("İ" becomes "i" plus a combining dot), so "İst"
+ * lowered here never found İstanbul.
+ */
+export function prefixTermOf(query: string): string | null {
+  const runs = query.match(/[\p{L}\p{M}\p{N}]+/gu) ?? [];
+  const last = runs[runs.length - 1] ?? '';
+
+  return last.length >= MIN_PREFIX_LENGTH ? last : null;
+}
+
+/**
+ * How long the passage-text read of the `SEARCH_TRAINED_RERANK` path may take.
+ * The sidecar call has its own 800 ms budget after it, so a rerank that falls
+ * back costs at most this plus that budget. A read that outlasts it is
+ * abandoned, and its statement timeout ends the query on the database side.
+ */
+const RERANK_TEXT_READ_TIMEOUT_MS = 200;
+
+/** One candidate's passage text, as {@link RERANK_PASSAGE_TEXT_SQL} returns it. */
+type PassageTextRow = { entity_type: string; id: string; title: string; body: string };
+
+/** The passage text of the given `(entity_type, entity_id)` pairs, for one user. */
+const RERANK_PASSAGE_TEXT_SQL = `SELECT k.entity_type, d.entity_id::text AS id, d.title, d.body
+  FROM unnest($2::text[], $3::uuid[]) AS k(entity_type, entity_id)
+  JOIN ci_search.mobile_search_documents d
+    ON d.entity_type = k.entity_type AND d.entity_id = k.entity_id
+ WHERE d.user_id = $1::uuid`;
+
+/**
+ * `work`, or `undefined` once `ms` has passed. `work` is not cancelled: the
+ * caller stops waiting for it. Its rejection, if it has one, is not reported
+ * as unhandled, because `Promise.race` has already subscribed to it.
+ */
+function withinBudget<T>(work: Promise<T>, ms: number): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<undefined>((resolve) => {
+    timer = setTimeout(resolve, ms, undefined);
+  });
+
+  return Promise.race([work, expired]).finally(() => clearTimeout(timer));
+}
 
 @Injectable()
 export class SearchService {
@@ -380,7 +691,16 @@ export class SearchService {
     // and can record. Logged as 'auto' it would be unreadable: auto is the
     // default, so it is most calls, and the three strategies it picks between
     // have completely different recall behaviour.
-    const modeTaken: SearchModeTaken = mode === 'auto' ? resolveAutoMode(resolvedOptions.query) : mode;
+    //
+    // `prefix` is a keyword feature, so it steers 'auto' to keyword: left to
+    // the word count, a four-word query went to boosted and dropped the prefix
+    // without a word.
+    const modeTaken: SearchModeTaken =
+      mode !== 'auto'
+        ? mode
+        : resolvedOptions.prefix === true
+          ? 'keyword'
+          : resolveAutoMode(resolvedOptions.query);
     const startedAt = Date.now();
 
     let outcome: StrategyResult;
@@ -460,8 +780,8 @@ export class SearchService {
     // so it binds as $2 rather than after the query text.
     const { sql, params } =
       query.length > 0
-        ? this.buildKeywordCountPlan(context.userId, query, resolvedOptions)
-        : this.buildScopeCountPlan(context.userId, resolvedOptions);
+        ? this.buildKeywordCountPlan(context.userId, query, resolvedOptions, options)
+        : this.buildScopeCountPlan(context.userId, resolvedOptions, options);
 
     const rows: { total_matches: string | number }[] = await this.dataSource.query(sql, params);
     const totalMatches = Number(rows[0]?.total_matches ?? 0);
@@ -485,26 +805,201 @@ export class SearchService {
     return totalMatches;
   }
 
+  /**
+   * The newest entries in scope by each one's own time, with no text to match: "my most recent
+   * email", "what did I do yesterday". Entries with no time at all (an undated photo, an index
+   * row whose record is gone) are left out, since they cannot be newer or older than anything.
+   * Scope it: unscoped, a calendar entry next year is "newest".
+   *
+   * `searchPage` needs a term, so an agent asked for the newest email had to guess a word every
+   * email contains. Seen 2026-11-16: Hermes searched "email" and answered with the newest email
+   * that happened to contain the word (2026-09-22) while 2026-11-13 mail sat in the index, then
+   * tried "the", "your" and "I", which the index drops, and read their empty pages as "nothing
+   * newer". `totalMatches` is the whole scope's dated size.
+   */
+  async recentPage(context: UserServiceContext, options: RecentPageOptions): Promise<SearchPage> {
+    const { maxResults = DEFAULT_MAX_RESULTS } = options;
+    const resolvedOptions = this.applyDefaultTypeExclusions({ ...options, query: '' });
+    const startedAt = Date.now();
+
+    const typeFilter = this.buildTypeFilter(resolvedOptions, 2, 'v');
+    const params: (string | string[])[] = [context.userId];
+
+    if (typeFilter.param) {
+      params.push(typeFilter.param);
+    }
+
+    const window: string[] = [];
+
+    if (options.since) {
+      params.push(options.since.toISOString());
+      window.push(`AND dated.t >= $${params.length}::timestamptz`);
+    }
+
+    if (options.until) {
+      params.push(options.until.toISOString());
+      window.push(`AND dated.t <= $${params.length}::timestamptz`);
+    }
+
+    // Each row's time is computed once, in the inner query, and both filtered and ordered on.
+    const sql = `
+      SELECT dated.entity_id, dated.entity_type, count(*) OVER () AS total_matches
+      FROM (
+        SELECT v.entity_id, v.entity_type, ${entityTimeSql('v')} AS t
+        FROM ci_search.vectors v
+        WHERE v.user_id = $1
+          ${typeFilter.clause}
+      ) dated
+      WHERE dated.t IS NOT NULL
+        ${window.join('\n        ')}
+      ORDER BY dated.t DESC, dated.entity_id
+      LIMIT ${maxResults}
+    `;
+
+    const rows: CountedRowResult[] = await this.dataSource.query(sql, params);
+    const totalMatches = totalMatchesOf(rows);
+
+    this.recordQuery({
+      userId: context.userId,
+      caller: 'search',
+      modeTaken: 'recent',
+      queryTokenCount: 0,
+      includeTypes: resolvedOptions.includeTypes ?? null,
+      excludeTypes: resolvedOptions.excludeTypes ?? null,
+      resultCount: rows.length,
+      topScore: null,
+      latencyMs: Date.now() - startedAt,
+    });
+
+    return {
+      items: rows.map((row) => ({ id: row.entity_id, type: row.entity_type as IndexableEntity })),
+      totalMatches,
+      truncated: totalMatches > rows.length,
+      limit: maxResults,
+      modeTaken: 'recent',
+    };
+  }
+
+  /**
+   * How many entries in scope fall in each hour of the day, weekday, month, year or date, by each
+   * entry's own time in the owner's time zone: "what time of day do I take photos of birds".
+   *
+   * The same match set as {@link count} (same query, scope and window), so the buckets plus
+   * `undated` add up to its number. Without it the only way to answer was to page every match
+   * through the context: seen 2026-11-16, OpenClaw paged 105 bird photos eight at a time and
+   * overflowed its window, while the answer is a dozen numbers.
+   */
+  async countBy(
+    context: UserServiceContext,
+    options: CountOptions & { groupBy: TimeBucket },
+  ): Promise<TimeBucketCounts> {
+    const query = options.query?.trim() ?? '';
+    const resolvedOptions = this.applyDefaultTypeExclusions({ ...options, query });
+    const bucket = TIME_BUCKET_SQL[options.groupBy];
+    const startedAt = Date.now();
+
+    const select = `${entityTimeSql('v')} AS t`;
+    const { sql: matched, params } =
+      query.length > 0
+        ? this.buildKeywordCountPlan(context.userId, query, resolvedOptions, options, select)
+        : this.buildScopeCountPlan(context.userId, resolvedOptions, options, select);
+
+    // An unknown zone would fail the statement, so it is checked against the server's own list.
+    const sql = `
+      WITH zone AS (
+        SELECT COALESCE(
+          (SELECT tz.name FROM pg_timezone_names tz
+            WHERE tz.name = (SELECT btrim(u.timezone) FROM ci.users u WHERE u.id = $1)),
+          'UTC') AS name
+      ),
+      matched AS (${matched}),
+      local AS (
+        SELECT (matched.t AT TIME ZONE zone.name) AS local FROM matched CROSS JOIN zone
+      )
+      SELECT NULL AS key, NULL AS ord, count(*) FILTER (WHERE local IS NULL) AS n, count(*) AS total,
+             (SELECT name FROM zone) AS zone
+        FROM local
+      UNION ALL
+      SELECT ${bucket.key}, ${bucket.order}, count(*), NULL, NULL
+        FROM local
+       WHERE local IS NOT NULL
+       GROUP BY 1, 2
+      ORDER BY 2 NULLS FIRST
+    `;
+
+    const rows: {
+      key: string | null;
+      n: string | number;
+      total: string | number | null;
+      zone: string | null;
+    }[] = await this.dataSource.query(sql, params);
+    const [head, ...buckets] = rows;
+
+    this.recordQuery({
+      userId: context.userId,
+      caller: 'search_count',
+      modeTaken: query.length > 0 ? 'keyword' : 'scope',
+      queryTokenCount: queryTokenCount(query),
+      includeTypes: resolvedOptions.includeTypes ?? null,
+      excludeTypes: resolvedOptions.excludeTypes ?? null,
+      resultCount: Number(head?.total ?? 0),
+      topScore: null,
+      latencyMs: Date.now() - startedAt,
+    });
+
+    return {
+      groups: buckets.map((row) => ({ key: String(row.key), count: Number(row.n) })),
+      undated: Number(head?.n ?? 0),
+      total: Number(head?.total ?? 0),
+      timeZone: head?.zone ?? 'UTC',
+    };
+  }
+
+  /**
+   * Whether `query` leaves anything for the keyword index to match. The index drops common words
+   * ("the", "your", "I"), so a query of only those matches nothing, and an empty page from it
+   * says nothing about what is in Memory.
+   */
+  async hasSearchTerms(query: string): Promise<boolean> {
+    if (query.trim().length === 0) {
+      return false;
+    }
+
+    const rows: { has_terms: boolean }[] = await this.dataSource.query(
+      `SELECT (${KEYWORD_TSQUERY_SQL.replace('$2', '$1')}) <> ''::tsquery AS has_terms`,
+      [query],
+    );
+
+    return rows[0]?.has_terms === true;
+  }
+
   /** `count(*)` of the rows in scope that match `query` lexically — the page's own predicate, uncapped. */
   private buildKeywordCountPlan(
     userId: string,
     query: string,
-    scope: Pick<SemanticSearchScope, 'includeTypes' | 'excludeTypes'>,
+    scope: Pick<
+      SemanticSearchScope,
+      'includeTypes' | 'excludeTypes' | 'mediaContentOnly' | 'showAgentTurnsFrom' | 'communicationTypes'
+    >,
+    window: { since?: Date; until?: Date } = {},
+    select = 'count(*) AS total_matches',
   ): { sql: string; params: (string | string[])[] } {
-    const typeFilter = this.buildTypeFilter(scope, 3);
+    const typeFilter = this.buildTypeFilter(scope, 3, 'v');
+    const timeFilter = buildTimeFilter(window, 3 + (typeFilter.param ? 1 : 0), 'v');
 
     const sql = `
       WITH q AS (
         SELECT ${KEYWORD_TSQUERY_SQL} AS tq
       )
-      SELECT count(*) AS total_matches
+      SELECT ${select}
       FROM
-        ci_search.vectors
+        ci_search.vectors v
         CROSS JOIN q
-      WHERE user_id = $1
+      WHERE v.user_id = $1
         AND q.tq <> ''::tsquery
-        AND vector @@ q.tq
+        AND v.vector @@ q.tq
         ${typeFilter.clause}
+        ${timeFilter.clause}
     `;
 
     const params: (string | string[])[] = [userId, query];
@@ -513,21 +1008,30 @@ export class SearchService {
       params.push(typeFilter.param);
     }
 
+    params.push(...timeFilter.params);
+
     return { sql, params };
   }
 
   /** `count(*)` of every indexed row in scope, no text match — "how many photos do I have". */
   private buildScopeCountPlan(
     userId: string,
-    scope: Pick<SemanticSearchScope, 'includeTypes' | 'excludeTypes'>,
+    scope: Pick<
+      SemanticSearchScope,
+      'includeTypes' | 'excludeTypes' | 'mediaContentOnly' | 'showAgentTurnsFrom' | 'communicationTypes'
+    >,
+    window: { since?: Date; until?: Date } = {},
+    select = 'count(*) AS total_matches',
   ): { sql: string; params: (string | string[])[] } {
-    const typeFilter = this.buildTypeFilter(scope, 2);
+    const typeFilter = this.buildTypeFilter(scope, 2, 'v');
+    const timeFilter = buildTimeFilter(window, 2 + (typeFilter.param ? 1 : 0), 'v');
 
     const sql = `
-      SELECT count(*) AS total_matches
-      FROM ci_search.vectors
-      WHERE user_id = $1
+      SELECT ${select}
+      FROM ci_search.vectors v
+      WHERE v.user_id = $1
         ${typeFilter.clause}
+        ${timeFilter.clause}
     `;
 
     const params: (string | string[])[] = [userId];
@@ -535,6 +1039,8 @@ export class SearchService {
     if (typeFilter.param) {
       params.push(typeFilter.param);
     }
+
+    params.push(...timeFilter.params);
 
     return { sql, params };
   }
@@ -612,9 +1118,17 @@ export class SearchService {
       query: prompt,
       ...(options.includeTypes ? { includeTypes: options.includeTypes } : {}),
       ...(options.excludeTypes ? { excludeTypes: options.excludeTypes } : {}),
+      // A prompt search answers someone else's ask: the owner's chats with their own agents are
+      // never part of an answer to another person.
+      showAgentTurnsFrom: [],
     } as SearchOptions);
 
     const typeFilter = this.buildTypeFilter(resolvedOptions, 4, 'v');
+    // The same `$4` list, widened by the media events of `mediaEvents`.
+    const typeClause =
+      options.mediaEvents && resolvedOptions.includeTypes?.length
+        ? `AND (v.entity_type = ANY($4) OR (v.entity_type = 'event' AND ${mediaEventSql(options.mediaEvents, options.mediaEventPlaces === true)}))`
+        : typeFilter.clause;
     const { weights } = await this.rankingLiterals();
 
     // Each group's text crosses as a PARAMETER and is turned into a tsquery by
@@ -653,20 +1167,28 @@ export class SearchService {
           END
         )::tsquery AS tq
         FROM grouped
+      ),
+      matched AS (
+        SELECT
+          v.entity_id,
+          v.entity_type,
+          ts_rank('${weights}', v.vector, q.tq) AS score
+        FROM
+          ci_search.vectors v
+          CROSS JOIN q
+        WHERE v.user_id = $1
+          AND q.tq IS NOT NULL
+          AND v.vector @@ q.tq
+          ${typeClause}
       )
       SELECT
-        v.entity_id,
-        v.entity_type,
-        ts_rank('${weights}', v.vector, q.tq) AS score,
+        m.entity_id,
+        m.entity_type,
+        m.score,
         count(*) OVER () AS total_matches
-      FROM
-        ci_search.vectors v
-        CROSS JOIN q
-      WHERE v.user_id = $1
-        AND q.tq IS NOT NULL
-        AND v.vector @@ q.tq
-        ${typeFilter.clause}
-      ORDER BY score DESC
+      FROM matched m
+      ${options.mediaEvents ? ONE_MATCH_PER_PHOTO_SQL : ''}
+      ORDER BY m.score DESC
       LIMIT ${limit}
     `;
 
@@ -1020,6 +1542,21 @@ export class SearchService {
     const semanticResults = semanticLeg.results;
     const keywordResults = keywordLeg.results;
 
+    if (options.fusionMode === 'rrf') {
+      const rrfFused = reciprocalRankFusion([semanticResults, keywordResults]);
+      // `SEARCH_TRAINED_RERANK` (default off): the head of the fused list is
+      // re-scored by HBPE. See {@link rerankFusedHead}.
+      const fused = isDecisionFlagOn(DECISION_FLAGS.searchRerank)
+        ? await this.rerankFusedHead(context.userId, options.query, rrfFused)
+        : rrfFused;
+
+      return {
+        results: fused.slice(0, maxResults),
+        totalMatches: null,
+        limit: maxResults,
+      };
+    }
+
     // Normalize keyword scores (ts_rank scores vary widely, normalize to 0-1)
     const maxKeywordScore = Math.max(...keywordResults.map((r) => r.score), 0.001);
 
@@ -1082,6 +1619,78 @@ export class SearchService {
   }
 
   /**
+   * Re-scores the head of an RRF list with HBPE `/decision/rerank`, the
+   * `SEARCH_TRAINED_RERANK` path. The head is the first {@link RERANK_TOP_N}
+   * candidates, and the combination formula is documented in
+   * {@link fuseRerankOrder}.
+   *
+   * Passage text comes from `ci_search.mobile_search_documents`, the plain-text
+   * projection of the index, which holds the device-indexed types only. A
+   * candidate with no projected text keeps its RRF position. Any failure
+   * (database, sidecar, timeout, malformed reply) returns the list unchanged.
+   */
+  private async rerankFusedHead(
+    userId: string,
+    query: string,
+    fused: ScoredSearchResult[],
+  ): Promise<ScoredSearchResult[]> {
+    const head = fused.slice(0, RERANK_TOP_N);
+    const keyOf = (item: ScoredSearchResult) => `${item.type}:${item.id}`;
+
+    try {
+      // A read that outlasts its budget is abandoned, and the RRF list stands.
+      const texts = await withinBudget(this.rerankPassageTexts(userId, head), RERANK_TEXT_READ_TIMEOUT_MS);
+
+      if (!texts) {
+        return fused;
+      }
+
+      const passages = head.flatMap((item) => {
+        const text = texts.get(keyOf(item));
+
+        return text ? [{ id: keyOf(item), text }] : [];
+      });
+      const ranked = await defaultDecisionClient().rerank(userId, query, passages);
+
+      if (!ranked) {
+        return fused;
+      }
+
+      const scores = new Map(ranked.map((item) => [item.id, item.score] as const));
+
+      return [...fuseRerankOrder(head, keyOf, scores), ...fused.slice(RERANK_TOP_N)];
+    } catch {
+      return fused;
+    }
+  }
+
+  /** `type:id` to passage text, for the given candidates, read from the user's own projection. */
+  private async rerankPassageTexts(
+    userId: string,
+    candidates: readonly ScoredSearchResult[],
+  ): Promise<Map<string, string>> {
+    if (candidates.length === 0) {
+      return new Map();
+    }
+
+    const rows: PassageTextRow[] = await this.dataSource.transaction(async (manager) => {
+      // Scoped to this transaction. The read stops on the database side at the
+      // same bound the caller waits for, so an abandoned read does not run on.
+      await manager.query(`SELECT set_config('statement_timeout', $1, true)`, [
+        `${RERANK_TEXT_READ_TIMEOUT_MS}ms`,
+      ]);
+
+      return manager.query(RERANK_PASSAGE_TEXT_SQL, [
+        userId,
+        candidates.map((item) => item.type),
+        candidates.map((item) => item.id),
+      ]);
+    });
+
+    return new Map(rows.map((row) => [`${row.entity_type}:${row.id}`, `${row.title}\n${row.body}`.trim()]));
+  }
+
+  /**
    * The semantic statement, as data, so something other than a search can run
    * exactly what a search runs.
    *
@@ -1111,7 +1720,7 @@ export class SearchService {
   ): SemanticSearchPlan {
     const { maxResults = SEMANTIC_MAX_RESULTS, distanceThreshold = SEMANTIC_DISTANCE_THRESHOLD } = scope;
 
-    const typeFilter = this.buildTypeFilter(scope, 4);
+    const typeFilter = this.buildTypeFilter(scope, 4, 'se');
 
     // Cosine distance (<=>), NOT L2 (<->): embeddings are unnormalised, so the
     // L2 distance is ~22 and never < 0.5 — the threshold made semantic search
@@ -1128,16 +1737,16 @@ export class SearchService {
     // come back short of its LIMIT, and why the recall probe exists.
     const sql = `
       SELECT
-        entity_id,
-        entity_type,
-        1 - (embedding <=> $2) as score
+        se.entity_id,
+        se.entity_type,
+        1 - (se.embedding <=> $2) as score
       FROM
-        ci_search.embeddings
-      WHERE user_id = $1
-        AND embedding IS NOT NULL
-        AND (embedding <=> $2) < $3::double precision
+        ci_search.embeddings se
+      WHERE se.user_id = $1
+        AND se.embedding IS NOT NULL
+        AND (se.embedding <=> $2) < $3::double precision
         ${typeFilter.clause}
-      ORDER BY embedding <=> $2
+      ORDER BY se.embedding <=> $2
       LIMIT ${maxResults}
     `;
 
@@ -1236,8 +1845,21 @@ export class SearchService {
   private async keywordSearch(context: UserServiceContext, options: SearchOptions): Promise<StrategyResult> {
     const { query, maxResults = DEFAULT_MAX_RESULTS } = options;
 
-    const typeFilter = this.buildTypeFilter(options, 3);
+    const typeFilter = this.buildTypeFilter(options, 3, 'v');
+    const timeParamOffset = 3 + (typeFilter.param ? 1 : 0);
+    const timeFilter = buildTimeFilter(options, timeParamOffset, 'v');
     const { weights } = await this.rankingLiterals();
+
+    // The whole-word query OR'd with the last word as a prefix. 'simple', not
+    // 'english': stemming a half-typed word would guess at a word the person
+    // has not finished. The whole words still go through 'english', so a
+    // finished "Jordans" matches as it did before.
+    const prefixTerm = options.prefix === true ? prefixTermOf(query) : null;
+    const prefixParam = timeParamOffset + timeFilter.params.length;
+    const tsquery =
+      prefixTerm == null
+        ? KEYWORD_TSQUERY_SQL
+        : `(${KEYWORD_TSQUERY_SQL}) || to_tsquery('simple', $${prefixParam} || ':*')`;
 
     // `count(*) OVER ()` is evaluated after WHERE and before LIMIT, so it is
     // the size of the whole match set on every returned row — and it is free
@@ -1245,21 +1867,22 @@ export class SearchService {
     // LIMIT takes the top of it.
     const sql = `
       WITH q AS (
-        SELECT ${KEYWORD_TSQUERY_SQL} AS tq
+        SELECT ${tsquery} AS tq
       )
       SELECT
-        entity_id,
-        entity_type,
-        ts_rank('${weights}', vector, q.tq) as score,
+        v.entity_id,
+        v.entity_type,
+        ts_rank('${weights}', v.vector, q.tq) as score,
         count(*) OVER () AS total_matches
       FROM
-        ci_search.vectors
+        ci_search.vectors v
         CROSS JOIN q
-      WHERE user_id = $1
+      WHERE v.user_id = $1
         AND q.tq <> ''::tsquery
-        AND vector @@ q.tq
+        AND v.vector @@ q.tq
         ${typeFilter.clause}
-      ORDER BY score DESC
+        ${timeFilter.clause}
+      ORDER BY ${lexicalOrderSql(options.sort, 'v')}
       LIMIT ${maxResults}
     `;
 
@@ -1267,6 +1890,12 @@ export class SearchService {
 
     if (typeFilter.param) {
       params.push(typeFilter.param);
+    }
+
+    params.push(...timeFilter.params);
+
+    if (prefixTerm != null) {
+      params.push(prefixTerm);
     }
 
     const rows: CountedRowResult[] = await this.dataSource.query(sql, params);
@@ -1301,6 +1930,7 @@ export class SearchService {
 
     // Use 'v' table alias since we're joining vectors and embeddings
     const typeFilter = this.buildTypeFilter(options, 4, 'v');
+    const timeFilter = buildTimeFilter(options, 4 + (typeFilter.param ? 1 : 0), 'v');
     const { weights, boost } = await this.rankingLiterals();
 
     // The natural-language questions we get from clients ("Where does Jordan
@@ -1333,7 +1963,8 @@ export class SearchService {
         AND q.tq <> ''::tsquery
         AND v.vector @@ q.tq
         ${typeFilter.clause}
-      ORDER BY score DESC
+        ${timeFilter.clause}
+      ORDER BY ${lexicalOrderSql(options.sort, 'v')}
       LIMIT ${maxResults}
     `;
 
@@ -1342,6 +1973,8 @@ export class SearchService {
     if (typeFilter.param) {
       params.push(typeFilter.param);
     }
+
+    params.push(...timeFilter.params);
 
     const rows: CountedRowResult[] = await this.dataSource.query(sql, params);
 
@@ -1357,28 +1990,39 @@ export class SearchService {
   }
 
   private buildTypeFilter(
-    options: Pick<SemanticSearchScope, 'includeTypes' | 'excludeTypes'>,
+    options: Pick<
+      SemanticSearchScope,
+      'includeTypes' | 'excludeTypes' | 'mediaContentOnly' | 'showAgentTurnsFrom' | 'communicationTypes'
+    >,
     paramOffset: number,
     tableAlias?: string,
   ): { clause: string; param: string[] | null } {
     const column = tableAlias ? `${tableAlias}.entity_type` : 'entity_type';
+    const media =
+      (options.mediaContentOnly ? `\n        ${mediaContentClause(tableAlias)}` : '') +
+      (options.showAgentTurnsFrom && tableAlias
+        ? `\n        ${agentTurnClause(tableAlias, options.showAgentTurnsFrom)}`
+        : '') +
+      (options.communicationTypes && tableAlias
+        ? `\n        ${communicationTypeClause(tableAlias, options.communicationTypes)}`
+        : '');
 
     if (options.includeTypes && options.includeTypes.length > 0) {
       return {
-        clause: `AND ${column} = ANY($${paramOffset})`,
+        clause: `AND ${column} = ANY($${paramOffset})${media}`,
         param: options.includeTypes,
       };
     }
 
     if (options.excludeTypes && options.excludeTypes.length > 0) {
       return {
-        clause: `AND ${column} != ALL($${paramOffset})`,
+        clause: `AND ${column} != ALL($${paramOffset})${media}`,
         param: options.excludeTypes,
       };
     }
 
     return {
-      clause: '',
+      clause: media.trim(),
       param: null,
     };
   }
@@ -1386,6 +2030,89 @@ export class SearchService {
 
 function makeCompositeKey(type: IndexableEntity, id: string): string {
   return `${type}:${id}`;
+}
+
+/**
+ * {@link SemanticSearchScope.mediaContentOnly} as SQL: a content row must be a photo or a video,
+ * any other row passes.
+ *
+ * The index row's columns are named only OUTSIDE the subquery. Several statements call this with
+ * no table alias, and inside a correlated subquery an unqualified name binds to the subquery's own
+ * table first: `ci.content` has an `entity_type` column of its own, so `EXISTS (... WHERE
+ * entity_type ...)` would quietly compare the wrong one.
+ */
+export function mediaContentClause(tableAlias?: string): string {
+  const type = tableAlias ? `${tableAlias}.entity_type` : 'entity_type';
+  const id = tableAlias ? `${tableAlias}.entity_id` : 'entity_id';
+
+  return `AND (${type} <> 'content' OR ${id} IN (SELECT mc.id FROM ci.content mc WHERE mc.type = 'media'))`;
+}
+
+/**
+ * `AGENT_TURN_MESSAGE_CATEGORY` from `@ci/domains/memory`, repeated because memory imports this
+ * domain. SearchService.agentTurns.test pins the two together.
+ */
+export const AGENT_TURN_CATEGORY = 'agent-turn';
+
+/** An agent's `source_system` as `agentTurnSourceSystem` writes it; anything else is never bound. */
+const AGENT_SOURCE = /^[a-z0-9_]+$/;
+
+/**
+ * {@link SemanticSearchScope.showAgentTurnsFrom} as SQL: a communication hit that is an agent turn
+ * stays only when its agent is listed. A correlated primary-key probe per communication hit, like
+ * {@link entityTimeSql}'s. `alias` names the index row's table and is required: unqualified, a
+ * bare `entity_id` inside a subquery binds to that subquery's own table first. The sources are
+ * written into the text (no caller's parameter numbering moves), so only slugs pass.
+ */
+export function agentTurnClause(alias: string, showFrom: readonly string[]): string {
+  const sources = showFrom.filter((source) => AGENT_SOURCE.test(source));
+  const kept =
+    sources.length > 0
+      ? ` AND (agent_turn.source_system IS NULL OR agent_turn.source_system <> ALL (ARRAY[${sources
+          .map((source) => `'${source}'`)
+          .join(', ')}]::text[]))`
+      : '';
+
+  return (
+    `AND (${alias}.entity_type <> 'communication' OR NOT EXISTS (` +
+    `SELECT 1 FROM ci.communications agent_turn WHERE agent_turn.id = ${alias}.entity_id ` +
+    `AND agent_turn.category = '${AGENT_TURN_CATEGORY}'${kept}))`
+  );
+}
+
+/**
+ * The kinds a communication row can be (`ci.communication_type`). `CommunicationType` from
+ * `@ci/domains/memory`, repeated because memory imports this domain; a test pins the two together.
+ */
+export const COMMUNICATION_TYPES = [
+  'email',
+  'sms',
+  'call',
+  'chat',
+  'video_call',
+  'voice_note',
+  'post',
+] as const;
+
+export type CommunicationKind = (typeof COMMUNICATION_TYPES)[number];
+
+/**
+ * {@link SemanticSearchScope.communicationTypes} as SQL: a communication hit stays only when it is
+ * one of the kinds listed; any other entity type passes. A primary-key probe per communication
+ * hit, like {@link agentTurnClause}. Only {@link COMMUNICATION_TYPES} values are written into the
+ * text; a list with none of them keeps no communication at all.
+ */
+export function communicationTypeClause(alias: string, kinds: readonly string[]): string {
+  const known = kinds.filter((kind): kind is CommunicationKind =>
+    (COMMUNICATION_TYPES as readonly string[]).includes(kind),
+  );
+  const list = known.length > 0 ? known.map((kind) => `'${kind}'`).join(', ') : 'NULL';
+
+  return (
+    `AND (${alias}.entity_type <> 'communication' OR EXISTS (` +
+    `SELECT 1 FROM ci.communications comm_kind WHERE comm_kind.id = ${alias}.entity_id ` +
+    `AND comm_kind.communication_type::text IN (${list})))`
+  );
 }
 
 /**

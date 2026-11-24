@@ -34,12 +34,12 @@ android {
     namespace "com.companionintelligence.speech"
     compileSdk project.hasProperty('compileSdkVersion') ? rootProject.ext.compileSdkVersion : 36
     defaultConfig {
-        // Must not exceed the app's own minSdk (23) — the manifest merger rejects a library
+        // Must not exceed the app's own minSdk (24) — the manifest merger rejects a library
         // requiring a higher floor than its consumer. The API-31/33/34 speech APIs this
         // plugin uses are each guarded by an explicit Build.VERSION.SDK_INT check at the
         // call site (see SpeechRecognitionController's tier selection), with a documented
         // best-effort path for API 23–30.
-        minSdkVersion project.hasProperty('minSdkVersion') ? rootProject.ext.minSdkVersion : 23
+        minSdkVersion project.hasProperty('minSdkVersion') ? rootProject.ext.minSdkVersion : 24
         targetSdkVersion project.hasProperty('targetSdkVersion') ? rootProject.ext.targetSdkVersion : 36
         versionCode 1
         versionName "1.0"

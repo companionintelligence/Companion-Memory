@@ -34,7 +34,8 @@ export {
 export type { ToolRequestContext } from './context';
 export type { ToolCoreLogger } from './logging';
 
-export type { ToolHandle } from './core/ToolHandle';
+export { coerceArgumentsToSchema } from './core/coerceArguments';
+export type { ToolCallRefusal, ToolHandle } from './core/ToolHandle';
 export {
   DISPATCH_TIERS,
   TOOL_PRINCIPALS,
@@ -69,9 +70,11 @@ export {
   capabilityAllows,
   capabilityRequiredFor,
   needsConfirmation,
+  reachesThirdParty,
   removesData,
   resolveDispatch,
   resolveToolGate,
+  stricterPrivacy,
   type DispatchDecision,
   type DispatchOptions,
   type DispatchReason,

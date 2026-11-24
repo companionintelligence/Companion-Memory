@@ -12,13 +12,7 @@
  * which is the point.
  */
 
-export const PENDING_ACTION_STATUSES = [
-  'proposed',
-  'approved',
-  'executed',
-  'declined',
-  'expired',
-] as const;
+export const PENDING_ACTION_STATUSES = ['proposed', 'approved', 'executed', 'declined', 'expired'] as const;
 
 export type PendingActionStatus = (typeof PENDING_ACTION_STATUSES)[number];
 

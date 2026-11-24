@@ -13,8 +13,17 @@ export interface DispatchJob {
   packet?: { source?: { title?: string } };
 }
 
+/**
+ * `authToken` is the web JWT — null in the native app, whose credential is a keystore API key that
+ * `fetchJson` attaches as `x-api-key` on its own. Send the bearer only when there is one; an empty
+ * one is a malformed header on a request that would otherwise authenticate with the key.
+ */
+function bearer(authToken: string | null): Record<string, string> {
+  return authToken ? { Authorization: `Bearer ${authToken}` } : {};
+}
+
 export async function createDispatchJob(
-  authToken: string,
+  authToken: string | null,
   input: {
     sourceKind: string;
     sourceId: string;
@@ -27,7 +36,7 @@ export async function createDispatchJob(
   const job = await fetchJson<DispatchJob>('/api/v1/agent/jobs', {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${authToken}`,
+      ...bearer(authToken),
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(input),
@@ -41,14 +50,14 @@ export async function createDispatchJob(
 }
 
 export async function steerDispatchJob(
-  authToken: string,
+  authToken: string | null,
   jobId: string,
   input: { action: 'continue' | 'redirect' | 'halt'; message?: string },
 ): Promise<DispatchJob> {
   const job = await fetchJson<DispatchJob>(`/api/v1/agent/jobs/${jobId}/steer`, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${authToken}`,
+      ...bearer(authToken),
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(input),
@@ -62,11 +71,12 @@ export async function steerDispatchJob(
 }
 
 export function useDispatchJob(threadId: string | null, enabled: boolean) {
-  const [{ authToken }] = useAuth();
+  // `authenticated`, not `authToken`: the token is the web JWT, which the native shell never has.
+  const [{ authToken, authenticated }] = useAuth();
   const [job, setJob] = useState<DispatchJob | null>(null);
 
   const reload = useCallback(async () => {
-    if (!authToken || !threadId || !enabled) {
+    if (!authenticated || !threadId || !enabled) {
       setJob(null);
 
       return null;
@@ -74,12 +84,12 @@ export function useDispatchJob(threadId: string | null, enabled: boolean) {
 
     const result = await fetchJson<{ job: DispatchJob | null }>(
       `/api/v1/agent/jobs?threadId=${encodeURIComponent(threadId)}`,
-      { headers: { Authorization: `Bearer ${authToken}` } },
+      { headers: bearer(authToken ?? null) },
     );
     setJob(result?.job ?? null);
 
     return result?.job ?? null;
-  }, [authToken, enabled, threadId]);
+  }, [authToken, authenticated, enabled, threadId]);
 
   useEffect(() => {
     void reload();

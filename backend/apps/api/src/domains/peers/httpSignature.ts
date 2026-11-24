@@ -6,6 +6,8 @@ import {
   type KeyObject,
 } from 'node:crypto';
 
+import { selfCertifyingIssuerOf } from './selfCertifyingKeyId';
+
 /**
  * RFC 9421 HTTP Message Signatures, profiled for the peer-ask surface — plus
  * the RFC 9530 `Content-Digest` that binds a signature to a body.
@@ -31,6 +33,13 @@ import {
  * this, and its answer is the one here: the request is SIGNED by the key that
  * is the peer's identity, over a base that covers the method, the target and a
  * digest of the body, with a nonce and a validity window.
+ *
+ * That answer applies only to a request that carries a signature, or to every
+ * request once `peers.requireHttpSignature` is on. The flag ships on (since
+ * 2026-11-19); a box that turns it off accepts an unsigned Portal-token ask
+ * from a peer whose link records no key, and all three problems above hold for
+ * it (see `PeerAskController.assertSignature`, which refuses one from a keyed
+ * link whatever the flag says).
  *
  * ═══ WHAT IS DELIBERATELY NOT HERE ═══
  *
@@ -75,7 +84,10 @@ export interface SignatureParams {
   created: number;
   /** Unix seconds. */
   expires: number;
-  /** RFC 7638 JWK thumbprint of the signing key. */
+  /**
+   * RFC 7638 JWK thumbprint of the signing key, or a self-certifying DID that spells the key out
+   * (`did:keri:D<x>`, `did:key:z6Mk…`; see `selfCertifyingKeyId.ts`).
+   */
   keyid: string;
   alg: string;
   nonce: string;
@@ -294,7 +306,10 @@ function parseParams(raw: string): SignatureParams {
   const alg = params.get('alg') ?? '';
   const nonce = params.get('nonce') ?? '';
 
-  if (!KEYID_PATTERN.test(keyid)) {
+  // A JWK thumbprint, or one of the two self-certifying forms this box understands: the KERI-shaped
+  // `did:keri:D<x>` (see `sovereignKeyId.ts`) or the W3C `did:key:z6Mk…` (see `didKeyId.ts`). Any
+  // other `did:` keyid is refused here rather than half-understood later.
+  if (!KEYID_PATTERN.test(keyid) && selfCertifyingIssuerOf(keyid) == null) {
     throw new SignatureFormatError('bad keyid');
   }
 

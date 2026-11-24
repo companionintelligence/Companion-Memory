@@ -6,7 +6,12 @@ import { ExternalLink, Play } from '@ci/shadcn/icons';
 import { resolveMediaUrl } from '@/components/entities/resolveMediaUrl';
 import { type FragmentType, gql, useFragment } from '@/graphql';
 
-import { EmbedPlayer, providerLabel } from '../../GalleryView/EmbedPlayer';
+import {
+  EmbedPlayer,
+  embedsOpenExternally,
+  openEmbedExternally,
+  providerLabel,
+} from '../../GalleryView/EmbedPlayer';
 
 /**
  * The rich-media fields of a content row: the tier-0 player (a pure function
@@ -93,6 +98,18 @@ export function RichMediaCard({ content, title, url }: Props) {
   const episode = typeof payload.episode === 'number' ? payload.episode : null;
   const episodeTitle = typeof payload.episode_title === 'string' ? payload.episode_title : null;
   const pageUrl = url ?? unfurl?.canonicalUrl ?? null;
+  // The phone apps never mount a provider frame (see embedsOpenExternally), so
+  // play goes straight to the provider instead of to an inline player.
+  const play = () => {
+    if (player && embedsOpenExternally()) {
+      openEmbedExternally(player, pageUrl);
+
+      return;
+    }
+
+    setPlaying(true);
+  };
+
   const source = player ? providerLabel(player.provider) : (unfurl?.siteName ?? null);
   const facts = [
     unfurl?.authorName,
@@ -107,7 +124,7 @@ export function RichMediaCard({ content, title, url }: Props) {
     // (poster and text alike) instead of scrolling, the same bug EntityMedia had.
     <div className="shrink-0 overflow-hidden rounded-lg border border-border bg-card">
       {player && playing ? (
-        <EmbedPlayer player={player} title={heading ?? 'Player'} />
+        <EmbedPlayer player={player} title={heading ?? 'Player'} pageUrl={pageUrl} />
       ) : poster ? (
         <div
           className="relative bg-black/5"
@@ -123,7 +140,7 @@ export function RichMediaCard({ content, title, url }: Props) {
           {player && (
             <button
               type="button"
-              onClick={() => setPlaying(true)}
+              onClick={play}
               aria-label={`Play on ${source ?? 'provider'}`}
               className="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors hover:bg-black/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
@@ -134,7 +151,7 @@ export function RichMediaCard({ content, title, url }: Props) {
           )}
         </div>
       ) : player ? (
-        <Button variant="secondary" className="m-3" onClick={() => setPlaying(true)}>
+        <Button variant="secondary" className="m-3" onClick={play}>
           <Play className="mr-2 h-4 w-4 fill-current" /> Play on {source}
         </Button>
       ) : null}

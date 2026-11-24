@@ -1,7 +1,12 @@
 import { Fragment, useState, type ReactNode } from 'react';
 
+import { useScrollOverflow } from '@ci/common';
 import { Badge, Button, Card, Collapsible, Input, Skeleton, cn } from '@ci/shadcn';
 import { AlertTriangle, ChevronDown, ChevronRight, type LucideIcon } from '@ci/shadcn/icons';
+
+import { ScrollMoreArrows } from '@/components/ScrollMoreArrows';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+import type { DateTimeFormatter } from '@/lib/dateTimeFormat';
 
 import { FoldCard, cardPad, usePhone } from './Fold';
 import {
@@ -110,15 +115,7 @@ export function JobsTable({ data, loading, error, filters, jobTypes, onChange, o
    * fail in a way that points at the wrong component.
    */
   const categoryChips = (
-    <div
-      className={
-        phone
-          ? 'scrollbar-none flex gap-1 overflow-x-auto overscroll-x-contain pb-0.5'
-          : 'flex flex-wrap items-center gap-1'
-      }
-      role="tablist"
-      aria-label="Job category"
-    >
+    <ChipRow phone={phone} label="Job category" wideClassName="flex flex-wrap items-center gap-1">
       <CategoryChip
         label="All"
         count={allCategoriesTotal}
@@ -162,19 +159,11 @@ export function JobsTable({ data, loading, error, filters, jobTypes, onChange, o
           />
         </>
       ) : null}
-    </div>
+    </ChipRow>
   );
 
   const stateTabs = (
-    <div
-      className={
-        phone
-          ? 'scrollbar-none flex gap-1 overflow-x-auto overscroll-x-contain pb-0.5'
-          : 'flex flex-wrap gap-1'
-      }
-      role="tablist"
-      aria-label="Job state"
-    >
+    <ChipRow phone={phone} label="Job state" wideClassName="flex flex-wrap gap-1">
       {STATE_TABS.map((tab) => {
         // `stateCounts` deliberately ignores the state filter, so every tab
         // shows what picking it would yield. `total` does NOT — it reflects
@@ -214,7 +203,7 @@ export function JobsTable({ data, loading, error, filters, jobTypes, onChange, o
           </Button>
         );
       })}
-    </div>
+    </ChipRow>
   );
 
   const filterSelects = (
@@ -265,7 +254,11 @@ export function JobsTable({ data, loading, error, filters, jobTypes, onChange, o
             them under one surface makes the card read as "narrow the table by
             state, then by category, then by these three" instead of as three
             unrelated control strips. */}
-        <div className="flex flex-col gap-2 rounded-lg border border-border/60 bg-muted/30 p-2">
+        {/* `min-w-0`: this panel is an item of the card header's grid, and a grid
+            item's minimum width defaults to its content's. On a phone that content
+            is a chip row laid out on one line (~1,750px), so without it the whole
+            header — Find box included — was laid out that wide. */}
+        <div className="flex min-w-0 flex-col gap-2 rounded-lg border border-border/60 bg-muted/30 p-2">
           <FilterRow label="State" phone={phone}>
             {stateTabs}
           </FilterRow>
@@ -354,7 +347,7 @@ export function JobsTable({ data, loading, error, filters, jobTypes, onChange, o
                 and the whole page scrolls sideways. */}
             <table className="w-full table-fixed border-collapse text-sm">
               <thead>
-                <tr className="border-b border-border/60 text-left text-xs uppercase text-muted-foreground">
+                <tr className="border-b border-border/60 text-left text-xs text-muted-foreground">
                   <th scope="col" className="w-8 py-1.5" />
                   <th scope="col" className="min-w-0 py-1.5 pr-3 font-medium">
                     Job
@@ -437,6 +430,7 @@ function JobFailureLine({ message }: { message: string }) {
 
 function JobRow({ job, expanded, onToggle }: { job: JobListItem; expanded: boolean; onToggle: () => void }) {
   const Chevron = expanded ? ChevronDown : ChevronRight;
+  const fmt = useDateTimeFormat();
 
   return (
     <>
@@ -484,7 +478,9 @@ function JobRow({ job, expanded, onToggle }: { job: JobListItem; expanded: boole
         <td className="py-1.5 pr-3 text-right tabular-nums text-xs text-muted-foreground">
           {job.retryCount}/{job.retryLimit}
         </td>
-        <td className="py-1.5 text-right text-xs text-muted-foreground">{formatTimestamp(job.createdOn)}</td>
+        <td className="py-1.5 text-right text-xs text-muted-foreground">
+          {formatTimestamp(job.createdOn, fmt)}
+        </td>
       </tr>
       {expanded ? (
         <tr className="border-b border-border/40 bg-muted/20">
@@ -499,6 +495,8 @@ function JobRow({ job, expanded, onToggle }: { job: JobListItem; expanded: boole
 }
 
 function JobCard({ job, expanded, onToggle }: { job: JobListItem; expanded: boolean; onToggle: () => void }) {
+  const fmt = useDateTimeFormat();
+
   return (
     <div className="border-b border-border/40 last:border-0">
       <button
@@ -515,35 +513,45 @@ function JobCard({ job, expanded, onToggle }: { job: JobListItem; expanded: bool
           </span>
           <StateBadge job={job} />
         </div>
-        <p className="min-w-0 truncate text-xs text-muted-foreground">
-          {job.event ?? 'no event name'}
-          {job.interactive ? ' · interactive' : ''}
-          {' · '}
-          {job.queue}
-        </p>
+        {/* The name above already says what the job is; its event and queue names
+            say it again in internal form ("Retrieval telemetry", then
+            "retrieval.query · telemetry"), so on a phone they wait in the details.
+            Retries are counted only once there have been some. */}
         <p className="text-xs text-muted-foreground">
           {formatDuration(job.durationMs)}
           {' · '}
-          {job.retryCount}/{job.retryLimit}
-          {' · '}
-          {formatTimestamp(job.createdOn)}
+          {formatTimestamp(job.createdOn, fmt)}
+          {job.retryCount > 0 ? ` · Retried ${job.retryCount} of ${job.retryLimit}` : ''}
+          {job.interactive ? ' · interactive' : ''}
         </p>
         {job.failure ? <JobFailureLine message={job.failure.message} /> : null}
       </button>
       {expanded ? (
         <div className="pb-3">
-          <JobDetails job={job} />
+          <JobDetails job={job} names />
         </div>
       ) : null}
     </div>
   );
 }
 
-function JobDetails({ job }: { job: JobListItem }) {
+/**
+ * `names` adds the event and queue names, which the table shows in its own columns
+ * but a phone card leaves out of its summary.
+ */
+function JobDetails({ job, names = false }: { job: JobListItem; names?: boolean }) {
+  const fmt = useDateTimeFormat();
+
   return (
     <>
       <p className="mb-2 max-w-3xl text-xs text-muted-foreground">{job.description}</p>
       <dl className="grid gap-x-6 gap-y-1 text-xs sm:grid-cols-2 lg:grid-cols-3">
+        {names ? (
+          <>
+            <Detail label="Event" value={job.event ?? 'no event name'} mono />
+            <Detail label="Queue" value={job.queue} mono />
+          </>
+        ) : null}
         <Detail label="Job id" value={job.id} mono />
         <Detail
           label="Category"
@@ -556,8 +564,8 @@ function JobDetails({ job }: { job: JobListItem }) {
           }
         />
         <Detail label="Payload" value={`${job.payloadBytes.toLocaleString()} bytes`} />
-        <Detail label="Started" value={formatTimestamp(job.startedOn)} />
-        <Detail label="Completed" value={formatTimestamp(job.completedOn)} />
+        <Detail label="Started" value={formatTimestamp(job.startedOn, fmt)} />
+        <Detail label="Completed" value={formatTimestamp(job.completedOn, fmt)} />
         {job.workType ? <Detail label="Work type" value={job.workType} /> : null}
       </dl>
       {job.failure ? (
@@ -565,7 +573,7 @@ function JobDetails({ job }: { job: JobListItem }) {
           <p className="break-words text-xs font-medium text-destructive">{job.failure.message}</p>
           {job.failure.failedAt ? (
             <p className="mt-0.5 text-xs text-muted-foreground">
-              Failed {formatTimestamp(job.failure.failedAt)}
+              Failed {formatTimestamp(job.failure.failedAt, fmt)}
             </p>
           ) : null}
           {job.failure.stack ? (
@@ -582,7 +590,7 @@ function JobDetails({ job }: { job: JobListItem }) {
 function StateBadge({ job }: { job: JobListItem }) {
   if (job.deadLettered) {
     return (
-      <Badge variant="destructive" className="text-xs uppercase">
+      <Badge variant="destructive" className="text-xs ">
         dead-lettered
       </Badge>
     );
@@ -592,7 +600,7 @@ function StateBadge({ job }: { job: JobListItem }) {
     job.state === 'failed' ? 'destructive' : job.state === 'completed' ? 'secondary' : 'outline';
 
   return (
-    <Badge variant={variant} className="text-xs uppercase">
+    <Badge variant={variant} className="text-xs ">
       {job.state}
     </Badge>
   );
@@ -624,6 +632,46 @@ function Detail({ label, value, mono }: { label: string; value: ReactNode; mono?
  * is a visible echo of what assistive tech was already being told, not the only
  * copy of it.
  */
+/**
+ * A row of filter chips. On a wide screen the chips wrap. On a phone they stay on
+ * one line that scrolls sideways, and the right edge fades while chips are still
+ * hidden past it — otherwise the row just looks cut off.
+ */
+function ChipRow({
+  phone,
+  label,
+  wideClassName,
+  children,
+}: {
+  phone: boolean;
+  label: string;
+  wideClassName: string;
+  children: ReactNode;
+}) {
+  const [ref, more] = useScrollOverflow<HTMLDivElement>();
+
+  if (!phone) {
+    return (
+      <div className={wideClassName} role="tablist" aria-label={label}>
+        {children}
+      </div>
+    );
+  }
+
+  return (
+    <ScrollMoreArrows more={more}>
+      <div
+        ref={ref}
+        className="scrollbar-none flex gap-1 overflow-x-auto overscroll-x-contain pb-0.5"
+        role="tablist"
+        aria-label={label}
+      >
+        {children}
+      </div>
+    </ScrollMoreArrows>
+  );
+}
+
 function FilterRow({ label, phone, children }: { label: string; phone: boolean; children: ReactNode }) {
   return (
     <div
@@ -631,12 +679,7 @@ function FilterRow({ label, phone, children }: { label: string; phone: boolean; 
         phone ? 'flex flex-col gap-1' : 'grid grid-cols-[4.5rem_minmax(0,1fr)] items-start gap-x-3',
       )}
     >
-      <span
-        className={cn(
-          'font-medium uppercase tracking-wider text-muted-foreground',
-          phone ? 'text-[10px]' : 'pt-2 text-[11px]',
-        )}
-      >
+      <span className={cn('font-medium text-muted-foreground', phone ? 'text-[10px]' : 'pt-2 text-[11px]')}>
         {label}
       </span>
       <div className="min-w-0">{children}</div>
@@ -733,7 +776,7 @@ function FilterSelect({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         aria-label={label}
-        className={`h-9 rounded-md border px-2 text-sm text-foreground ${stacked ? 'w-full' : ''} ${
+        className={`h-9 rounded-md border px-2 text-base text-foreground md:text-sm ${stacked ? 'w-full' : ''} ${
           value ? 'border-primary/60 bg-primary/10' : 'border-input bg-background'
         }`}
       >
@@ -765,22 +808,14 @@ function formatDuration(ms: number | null): string {
   return `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`;
 }
 
-function formatTimestamp(value?: string | null): string {
-  if (!value) {
-    return '—';
-  }
-
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) {
-    return '—';
-  }
-
-  return new Intl.DateTimeFormat(undefined, {
-    month: 'short',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  }).format(date);
+function formatTimestamp(value: string | null | undefined, fmt: DateTimeFormatter): string {
+  return (
+    fmt.tryDateTime(value, {
+      month: 'short',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    }) ?? '—'
+  );
 }

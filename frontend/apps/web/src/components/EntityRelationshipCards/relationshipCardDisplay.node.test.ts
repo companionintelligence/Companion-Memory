@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { createDateTimeFormatter, DEVICE_DATE_TIME_FORMATTER } from '@/lib/dateTimeFormat';
+
 import {
   filterDisplayTags,
   formatCardWhen,
@@ -36,6 +38,45 @@ describe('formatRelationshipPhrase', () => {
         relationshipProperties: { normalized_from: 'RECEIVED_EMAIL_FROM' },
       }),
     ).toBe('You emailed');
+  });
+
+  it('names the neighbor as the parent or child of the page it is on, not "your parent"', () => {
+    // You PARENT_OF your child: on the child's page your card is their parent.
+    expect(formatRelationshipPhrase('PARENT_OF', { focusIsSource: false })).toBe('Parent');
+    // Your parent PARENT_OF you: on your parent's page your card is their child.
+    expect(formatRelationshipPhrase('PARENT_OF', { focusIsSource: true })).toBe('Child');
+    expect(formatRelationshipPhrase('CHILD_OF', { focusIsSource: true })).toBe('Parent');
+    expect(formatRelationshipPhrase('CHILD_OF', { focusIsSource: false })).toBe('Child');
+  });
+
+  it('names a client or an emergency contact the right way round', () => {
+    // You CLIENT_OF your accountant: on your page their card must not say "Your client".
+    expect(formatRelationshipPhrase('CLIENT_OF', { focusIsSource: true })).toBe('Has them as a client');
+    // On the accountant's page your card is their client.
+    expect(formatRelationshipPhrase('CLIENT_OF', { focusIsSource: false })).toBe('Client');
+    // Your sister EMERGENCY_CONTACT_FOR you: on your page she is your emergency contact.
+    expect(formatRelationshipPhrase('EMERGENCY_CONTACT_FOR', { focusIsSource: false })).toBe(
+      'Emergency contact',
+    );
+    // On her page your card has her as emergency contact; it used to say you were hers.
+    expect(formatRelationshipPhrase('EMERGENCY_CONTACT_FOR', { focusIsSource: true })).toBe(
+      'Has them as emergency contact',
+    );
+  });
+
+  it('says "you" for the page\'s person on the owner\'s own page', () => {
+    // You CLIENT_OF your accountant: on your own Self page their card has you as a client.
+    expect(formatRelationshipPhrase('CLIENT_OF', { focusIsSource: true, focusIsOwner: true })).toBe(
+      'Has you as a client',
+    );
+    expect(
+      formatRelationshipPhrase('EMERGENCY_CONTACT_FOR', { focusIsSource: true, focusIsOwner: true }),
+    ).toBe('Has you as emergency contact');
+    // Phrases that never name the page's person read the same on any page.
+    expect(formatRelationshipPhrase('CLIENT_OF', { focusIsSource: false, focusIsOwner: true })).toBe(
+      'Client',
+    );
+    expect(formatRelationshipPhrase('PARENT_OF', { focusIsSource: true, focusIsOwner: true })).toBe('Child');
   });
 
   it('hides leftover associated-with edges that have no original type', () => {
@@ -95,10 +136,18 @@ describe('formatCardWhen', () => {
   const now = new Date('2026-08-27T18:00:00');
 
   it('returns a short date for another day this year', () => {
-    expect(formatCardWhen(Date.parse('2026-03-04T12:00:00'), now)).toBe('Mar 4');
+    expect(formatCardWhen(Date.parse('2026-03-04T12:00:00'), DEVICE_DATE_TIME_FORMATTER, now)).toBe('Mar 4');
   });
 
   it('returns null when there is no recency', () => {
-    expect(formatCardWhen(0, now)).toBeNull();
+    expect(formatCardWhen(0, DEVICE_DATE_TIME_FORMATTER, now)).toBeNull();
+  });
+
+  it("returns today's time of day in the chosen hour cycle", () => {
+    // Local instants on the runner's clock, read back on the same clock (no zone given).
+    const at = Date.parse('2026-08-27T15:43:00');
+
+    expect(formatCardWhen(at, DEVICE_DATE_TIME_FORMATTER, now)).toMatch(/^3:43\sPM$/);
+    expect(formatCardWhen(at, createDateTimeFormatter({ timeFormat: 'h23' }), now)).toBe('15:43');
   });
 });

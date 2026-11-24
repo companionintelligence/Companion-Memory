@@ -13,13 +13,13 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { ValidationPipe } from '@ci/common/pipes';
 import config from '@ci/configuration';
 import { UserService } from '@ci/domains/user';
 
-import { CsrfGuard } from '../guards/CsrfGuard';
+import { CookieCsrfGuard, CsrfGuard } from '../guards/CsrfGuard';
 import { AuthService } from '../services/AuthService';
 import { CsrfService } from '../services/CsrfService';
 import { HubForwardAuthBridgeService } from '../services/HubForwardAuthBridgeService';
@@ -77,23 +77,30 @@ export class SessionController {
   }
 
   /**
-   * Verified Hub identity for this request, or `{ username: null }` when
-   * forward-auth is off / headers are missing. The SPA uses this to refuse a
-   * stale Memory home when Traefik already named a different person.
+   * Verified Hub identity for this request, or `{ username: null, accountId: null, refused: null }`
+   * when forward-auth is off / headers are missing. The SPA uses this to refuse a
+   * stale Memory home when Traefik already named a different person: by
+   * `accountId` — the account the Hub person signs in as — when the Hub sends a
+   * stable id, and by `username` against the account's email when it does not.
+   * `refused` is set when the bridge would not sign the Hub person in at all; no
+   * session in this browser is theirs then.
    */
   @Get('hub-identity')
   @HttpCode(200)
-  hubIdentity(@Req() req: Request) {
-    return { username: this.hubBridge.verifyUsername(req) };
+  async hubIdentity(@Req() req: Request) {
+    return this.hubBridge.describeIdentity(req);
   }
 
   /**
    * If Traefik named a Hub person who does not match the Memory cookie, replace
    * the session (and CSRF) so the next refresh/query is already the right user.
+   *
+   * Browser only, so the cookie-and-header CSRF pair is required: the native
+   * app's cookie-less shape is not accepted here.
    */
   @Post('hub-bridge')
   @HttpCode(200)
-  @UseGuards(CsrfGuard)
+  @UseGuards(CookieCsrfGuard)
   async hubBridgeAlign(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     return this.hubBridge.alignSession(req, res);
   }
@@ -128,10 +135,16 @@ export class SessionController {
       );
     }
 
-    const user = await this.userService.validatePassword(input.username, input.password);
+    // An unknown address costs a bcrypt comparison too (`authenticatePassword`), so the 401
+    // takes as long either way. `accountExists` only decides whether the failure also counts
+    // against that account's own budget; the response never says.
+    const { user, accountExists } = await this.userService.authenticatePassword(
+      input.username,
+      input.password,
+    );
 
     if (user == null) {
-      this.loginThrottle.recordFailure(metadata.ip, input.username);
+      this.loginThrottle.recordFailure(metadata.ip, input.username, undefined, { accountExists });
 
       throw new UnauthorizedException('Invalid credentials');
     }
@@ -143,7 +156,7 @@ export class SessionController {
 
     const { sessionToken, sessionId } = await this.authService.issueSessionToken(user.id, metadata);
 
-    const accessToken = await this.authService.issueAccessToken(user.id);
+    const accessToken = await this.authService.issueAccessToken(user.id, sessionId);
 
     setSessionCookie(req, res, sessionToken);
 
@@ -177,15 +190,13 @@ export class SessionController {
       this.authService.getSessionMetadata(req),
     );
 
-    const accessToken = await this.authService.issueAccessToken(userId);
+    const accessToken = await this.authService.issueAccessToken(userId, sessionId);
 
-    // If we obtain a new session token from calling `rotateSessionToken` then
-    // we conclude that we have not matched a grace-period rotation and must set
-    // a new cookie value.
-    //
-    // Otherwise we have a grace-period match and we avoid setting a new cookie.
-    // The browser keeps the cookie from the first concurrent request that
-    // performed the real rotation.
+    // A rotation answers with the new token. A grace match (the token the last
+    // rotation replaced: a refresh sent alongside it, or one whose answer never
+    // reached this browser) answers with the session's current token, so the
+    // browser ends up holding it either way. Null only when that token cannot be
+    // signed again; the browser then keeps the cookie it has.
     if (sessionToken) {
       setSessionCookie(req, res, sessionToken);
     }
@@ -241,7 +252,10 @@ export class SessionController {
       throw new UnauthorizedException('Invalid or expired token');
     }
 
-    await this.authService.invalidateSession(userId, token, this.authService.getSessionMetadata(req));
+    // Ends the session whatever address or browser this request comes from; only refresh compares
+    // those. A session that is already gone leaves nothing to end. The answer is the same 204:
+    // signing out twice, or after a password change signed this browser out, is not an error.
+    await this.authService.invalidateSession(userId, token);
   }
 
   private getSessionToken(req: Request) {

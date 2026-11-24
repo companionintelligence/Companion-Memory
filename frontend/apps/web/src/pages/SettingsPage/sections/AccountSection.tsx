@@ -1,19 +1,69 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react';
 
 import { fetchJson, FetchJsonError } from '@ci/common';
-import { Button, Card, Dialog, Input, Label, PasswordInput } from '@ci/shadcn';
+import { Button, Dialog, EmailInput, Input, Label, PasswordInput } from '@ci/shadcn';
 import { TriangleAlert } from '@ci/shadcn/icons';
 
+import { useNeedsWebSignIn, WebSignInRequired } from '@/components/WebSignInRequired';
 import { useAuth, useCurrentUser } from '@/hooks';
 
-function messageFrom(error: unknown, fallback: string): string {
+import {
+  SettingsFooter,
+  SettingsForm,
+  SettingsGroup,
+  SettingsRow,
+  SettingsSection,
+  SettingsStatus,
+} from '../kit';
+
+/**
+ * What "sign in again" means for someone the Hub signs in: the bridge only mints a
+ * fresh session when there is no Memory session to keep, so reloading alone would
+ * keep the old one.
+ */
+const HUB_SIGN_IN_AGAIN = 'Sign out, then open Memory from your Hub again to make this change.';
+
+/**
+ * What a 403 from `DELETE /account` means. Only the device key a phone holds can meet
+ * one: the route requires a key at `full` (`AccountController.remove`), and a phone
+ * that signed in before keys were minted at `full` (#2661) still holds a `write` one.
+ * Signing in again mints a new key at `full`. A web session is never refused this way;
+ * the capability rule reads only API keys.
+ */
+const DEVICE_SIGN_IN_AGAIN_TO_DELETE =
+  'This device needs a fresh sign-in to delete the account. Sign out, sign back in, then try again.';
+
+/**
+ * The `message` of a 409 from `DELETE /account` (`AccountController`): the caller is the last
+ * administrator and other people still have accounts, so somebody has to take over first.
+ */
+const SUCCESSOR_REQUIRED = 'SUCCESSOR_REQUIRED';
+const SUCCESSOR_NOT_FOUND = 'SUCCESSOR_NOT_FOUND';
+
+/** The shortest new password the server accepts (`passwordPolicy.ts`). */
+const MIN_PASSWORD_LENGTH = 8;
+
+function messageFrom(error: unknown, fallback: string, signInAgain: string): string {
   if (error instanceof FetchJsonError && error.status === 401 && error.message === 'REAUTH_REQUIRED') {
-    // A Companion-signed-in account with no password of its own proves itself by a recent
-    // sign-in instead; the window has passed.
-    return 'Sign in again to make this change.';
+    // An account with no password of its own proves itself by a recent sign-in
+    // instead; the window has passed.
+    return signInAgain;
   }
 
   return error instanceof FetchJsonError ? error.message : fallback;
+}
+
+/**
+ * An `onChange` that stores the field's value and drops its form's error, which was about the
+ * values it was shown for. The browser's own checks (an address it won't accept, a too-short
+ * password) stop the next submit before the form's handler runs. Without this, "New passwords do
+ * not match." stayed beside a message about something else.
+ */
+function editAndClearError(set: (value: string) => void, setError: (error: null) => void) {
+  return (e: ChangeEvent<HTMLInputElement>) => {
+    set(e.target.value);
+    setError(null);
+  };
 }
 
 /**
@@ -33,36 +83,67 @@ const PURGE_GRACE_DESCRIPTION = '30 days';
 export function AccountSection() {
   const [{ authToken }, { logout }] = useAuth();
   const { user, refetch: refetchUser } = useCurrentUser();
+  // The native shell holds only a device key. Reading the account and changing its email or password
+  // take a session JWT (`JwtAuthGuard`) — never a key — so there they can only answer "Unauthorized",
+  // after the person has typed their current password. `DELETE /account` is the one route that takes
+  // a key (at `full`), and it stays below.
+  const needsWebSignIn = useNeedsWebSignIn();
 
   const [open, setOpen] = useState(false);
   const [confirmEmail, setConfirmEmail] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Set once the server says this is the last administrator: the dialog then asks who takes over.
+  const [needsSuccessor, setNeedsSuccessor] = useState(false);
+  const [successorEmail, setSuccessorEmail] = useState('');
+
+  // Every way out of the dialog (Cancel, Escape, the close button, a click outside) clears what was
+  // typed. Cancel used to only hide it, so reopening showed the email still filled in and the
+  // destructive button already live.
+  const closeDeleteDialog = () => {
+    setOpen(false);
+    setConfirmEmail('');
+    setError(null);
+    setNeedsSuccessor(false);
+    setSuccessorEmail('');
+  };
 
   const email = user?.email ?? '';
   // Mirrors the server's comparison so the button is only live when the request would
   // actually be accepted — the user should never meet the 400.
-  const matches = email.length > 0 && confirmEmail.trim().toLowerCase() === email.trim().toLowerCase();
+  const matches =
+    email.length > 0 &&
+    confirmEmail.trim().toLowerCase() === email.trim().toLowerCase() &&
+    (!needsSuccessor || successorEmail.trim().length > 0);
 
-  // OIDC-linked accounts (`ci.federated_identities`) were given a random 32-byte
-  // password at signup that the user has never seen — asking for a "current
-  // password" to change email/password would lock them out permanently, the same
-  // reason account deletion above doesn't require one either.
-  const [hasFederatedIdentity, setHasFederatedIdentity] = useState(false);
-  // A federated account that has set a password of its own is asked for it like any other.
-  const [hasOwnPassword, setHasOwnPassword] = useState(false);
-  const asksCurrentPassword = !hasFederatedIdentity || hasOwnPassword;
+  // Accounts provisioned by Portal/OIDC sign-in or by the Hub forward-auth bridge
+  // were given a random 32-byte password the user has never seen — asking for a
+  // "current password" to change email/password would lock them out permanently,
+  // the same reason account deletion above doesn't require one either. The server
+  // decides on exactly this flag (`AccountController.requireReauth`), whatever the
+  // sign-in method; until it answers, assume the common case and ask.
+  const [hasOwnPassword, setHasOwnPassword] = useState(true);
+  const asksCurrentPassword = hasOwnPassword;
+  // The Hub signs this session in by this address, so changing it here would strand
+  // the account (`AccountController.changeEmail`). It also means "sign in again"
+  // goes through the Hub.
+  const [emailManagedByHub, setEmailManagedByHub] = useState(false);
+  const signInAgain = emailManagedByHub ? HUB_SIGN_IN_AGAIN : 'Sign in again to make this change.';
 
   useEffect(() => {
-    fetchJson<{ email: string; hasFederatedIdentity: boolean; hasOwnPassword: boolean }>('/api/account', {
+    if (needsWebSignIn) {
+      return;
+    }
+
+    fetchJson<{ email: string; hasOwnPassword: boolean; emailManagedByHub: boolean }>('/api/account', {
       headers: { ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) },
     })
       .then((result) => {
-        setHasFederatedIdentity(result?.hasFederatedIdentity ?? false);
-        setHasOwnPassword(result?.hasOwnPassword ?? false);
+        setHasOwnPassword(result?.hasOwnPassword ?? true);
+        setEmailManagedByHub(result?.emailManagedByHub ?? false);
       })
       .catch(() => {});
-  }, [authToken]);
+  }, [authToken, needsWebSignIn]);
 
   const [newEmail, setNewEmail] = useState('');
   const [emailCurrentPassword, setEmailCurrentPassword] = useState('');
@@ -94,7 +175,7 @@ export function AccountSection() {
       setEmailCurrentPassword('');
       await refetchUser();
     } catch (err) {
-      setEmailError(messageFrom(err, 'Could not update email.'));
+      setEmailError(messageFrom(err, 'Could not update email.', signInAgain));
     } finally {
       setEmailSaving(false);
     }
@@ -109,6 +190,8 @@ export function AccountSection() {
 
   const handleChangePassword = async (e: FormEvent) => {
     e.preventDefault();
+    // Before the mismatch check, so "Password updated." from the last change does not sit beside it.
+    setPasswordSavedNote(null);
 
     if (newPassword !== confirmNewPassword) {
       setPasswordError('New passwords do not match.');
@@ -118,7 +201,6 @@ export function AccountSection() {
 
     setPasswordSaving(true);
     setPasswordError(null);
-    setPasswordSavedNote(null);
 
     try {
       await fetchJson('/api/account/password', {
@@ -133,13 +215,15 @@ export function AccountSection() {
         }),
       });
 
-      setPasswordSavedNote('Password updated. Other signed-in devices have been signed out.');
+      setPasswordSavedNote(
+        'Password updated. Your other browsers and the phone and desktop apps you signed in on are signed out. Keys you made under API keys still work.',
+      );
       setNewPassword('');
       setConfirmNewPassword('');
       setPasswordCurrentPassword('');
       setHasOwnPassword(true);
     } catch (err) {
-      setPasswordError(messageFrom(err, 'Could not update password.'));
+      setPasswordError(messageFrom(err, 'Could not update password.', signInAgain));
     } finally {
       setPasswordSaving(false);
     }
@@ -159,168 +243,260 @@ export function AccountSection() {
           // would break the very client this feature exists for.
           ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
         },
-        body: JSON.stringify({ confirmEmail: confirmEmail.trim() }),
+        body: JSON.stringify({
+          confirmEmail: confirmEmail.trim(),
+          ...(needsSuccessor ? { successorEmail: successorEmail.trim() } : {}),
+        }),
       });
 
       // The account stops authenticating immediately, so there is nothing left to
       // stay signed in to: drop the local credential and return to a logged-out app.
-      await logout();
-    } catch {
-      setError('Could not delete the account. Please try again.');
+      // Without asking about captures still queued on a phone: they can no longer
+      // upload, and the deletion just confirmed covers them.
+      await logout({ discardUnsentCaptures: true });
+    } catch (err) {
+      if (err instanceof FetchJsonError && err.status === 409 && err.message === SUCCESSOR_REQUIRED) {
+        // The server deleted nothing. Ask who takes over, then the same button tries again.
+        setNeedsSuccessor(true);
+        setError(
+          'You are the only administrator, and other people have accounts on this Memory. Enter the email address of the person who should take over.',
+        );
+      } else if (err instanceof FetchJsonError && err.status === 409 && err.message === SUCCESSOR_NOT_FOUND) {
+        setError('No other account on this Memory uses that email address.');
+      } else {
+        setError(
+          err instanceof FetchJsonError && err.status === 403
+            ? DEVICE_SIGN_IN_AGAIN_TO_DELETE
+            : 'Could not delete the account. Please try again.',
+        );
+      }
+
       setLoading(false);
     }
   };
 
+  const [confirmingSignOut, setConfirmingSignOut] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
+  const [signOutError, setSignOutError] = useState<string | null>(null);
+  const [signOutNote, setSignOutNote] = useState<string | null>(null);
+
+  const handleSignOutEverywhere = async () => {
+    setSigningOut(true);
+    setSignOutError(null);
+    setSignOutNote(null);
+
+    try {
+      const result = await fetchJson<{ revokedKeys: number }>('/api/account/sign-out-everywhere', {
+        method: 'POST',
+        headers: { ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) },
+      });
+      const revoked = result?.revokedKeys ?? 0;
+
+      setSignOutNote(
+        `Signed out everywhere else. ${revoked === 1 ? '1 API key was' : `${revoked} API keys were`} deleted.`,
+      );
+      setConfirmingSignOut(false);
+    } catch (err) {
+      setSignOutError(messageFrom(err, 'Could not sign out everywhere. Please try again.', signInAgain));
+    } finally {
+      setSigningOut(false);
+    }
+  };
+
+  const emailStatus = emailError ? (
+    <SettingsStatus tone="error">{emailError}</SettingsStatus>
+  ) : emailSavedNote ? (
+    <SettingsStatus tone="success">{emailSavedNote}</SettingsStatus>
+  ) : null;
+
+  const passwordStatus = passwordError ? (
+    <SettingsStatus tone="error">{passwordError}</SettingsStatus>
+  ) : passwordSavedNote ? (
+    <SettingsStatus tone="success">{passwordSavedNote}</SettingsStatus>
+  ) : null;
+
   return (
-    <>
-      <div className="mb-6">
-        <h2 className="text-xl font-semibold">Account</h2>
-        <p className="text-sm text-muted-foreground mt-1">
-          {email ? <>Signed in as {email}.</> : 'Manage your account.'}
-        </p>
-      </div>
-
-      <Card className="py-0">
-        <Card.Content>
-          <form className="space-y-4" onSubmit={handleChangeEmail}>
-            <div className="space-y-1">
-              <h3 className="text-sm font-medium">Change email</h3>
-              <p className="text-sm text-muted-foreground">You'll use this address to sign in.</p>
-            </div>
-
-            {asksCurrentPassword && (
-              <div className="grid gap-2">
-                <Label htmlFor="emailCurrentPassword">Current password</Label>
-                <PasswordInput
-                  id="emailCurrentPassword"
-                  autoComplete="current-password"
-                  value={emailCurrentPassword}
-                  onChange={(e) => setEmailCurrentPassword(e.target.value)}
-                  disabled={emailSaving}
-                  required
-                />
-              </div>
-            )}
-
-            <div className="grid gap-2">
-              <Label htmlFor="newEmail">New email</Label>
-              <Input
-                id="newEmail"
-                type="email"
-                autoComplete="email"
-                value={newEmail}
-                onChange={(e) => setNewEmail(e.target.value)}
-                disabled={emailSaving}
-                required
+    <SettingsSection
+      title="Account"
+      description={email ? <>Signed in as {email}.</> : 'Manage your account.'}
+    >
+      {needsWebSignIn ? (
+        <WebSignInRequired>
+          Your email and password can only be changed from a web sign-in; this app signs in with its own
+          device key, which cannot change them. Open Companion Memory in a web browser and sign in to change
+          them. Deleting your account works from here.
+        </WebSignInRequired>
+      ) : (
+        <>
+          {emailManagedByHub ? (
+            <SettingsGroup title="Email">
+              <SettingsRow
+                label={email}
+                hint="Your Hub signs you in to Memory with this address, so it can't be changed here."
               />
-            </div>
+            </SettingsGroup>
+          ) : (
+            <SettingsGroup title="Change email" description="You'll use this address to sign in.">
+              <SettingsForm onSubmit={handleChangeEmail}>
+                {asksCurrentPassword && (
+                  <SettingsRow label="Current password" htmlFor="emailCurrentPassword">
+                    <PasswordInput
+                      id="emailCurrentPassword"
+                      autoComplete="current-password"
+                      value={emailCurrentPassword}
+                      onChange={editAndClearError(setEmailCurrentPassword, setEmailError)}
+                      disabled={emailSaving}
+                      required
+                    />
+                  </SettingsRow>
+                )}
 
-            {emailError && <p className="text-sm text-destructive">{emailError}</p>}
-            {emailSavedNote && <p className="text-sm text-muted-foreground">{emailSavedNote}</p>}
+                <SettingsRow label="New email" htmlFor="newEmail">
+                  <EmailInput
+                    id="newEmail"
+                    autoComplete="email"
+                    value={newEmail}
+                    onChange={editAndClearError(setNewEmail, setEmailError)}
+                    disabled={emailSaving}
+                    required
+                  />
+                </SettingsRow>
 
-            <Button type="submit" size="sm" disabled={emailSaving || newEmail.trim().length === 0}>
-              {emailSaving ? 'Saving…' : 'Update email'}
-            </Button>
-          </form>
-        </Card.Content>
-      </Card>
+                <SettingsFooter status={emailStatus}>
+                  <Button type="submit" disabled={emailSaving || newEmail.trim().length === 0}>
+                    {emailSaving ? 'Saving…' : 'Update email'}
+                  </Button>
+                </SettingsFooter>
+              </SettingsForm>
+            </SettingsGroup>
+          )}
 
-      <Card className="py-0">
-        <Card.Content>
-          <form className="space-y-4" onSubmit={handleChangePassword}>
-            <div className="space-y-1">
-              <h3 className="text-sm font-medium">
-                {asksCurrentPassword ? 'Change password' : 'Set a password'}
-              </h3>
-              <p className="text-sm text-muted-foreground">
-                {asksCurrentPassword
-                  ? 'Changing your password signs out every other device.'
-                  : 'You signed in with a Companion account and have no password yet — set one to also sign in with email.'}
-              </p>
-            </div>
+          <SettingsGroup
+            title={asksCurrentPassword ? 'Change password' : 'Set a password'}
+            description={
+              asksCurrentPassword
+                ? 'Changing your password signs out every other device.'
+                : 'This account has no password yet. Set one to also sign in with your email and password.'
+            }
+          >
+            <SettingsForm onSubmit={handleChangePassword}>
+              {asksCurrentPassword && (
+                <SettingsRow label="Current password" htmlFor="passwordCurrentPassword">
+                  <PasswordInput
+                    id="passwordCurrentPassword"
+                    autoComplete="current-password"
+                    value={passwordCurrentPassword}
+                    onChange={editAndClearError(setPasswordCurrentPassword, setPasswordError)}
+                    disabled={passwordSaving}
+                    required
+                  />
+                </SettingsRow>
+              )}
 
-            {asksCurrentPassword && (
-              <div className="grid gap-2">
-                <Label htmlFor="passwordCurrentPassword">Current password</Label>
+              <SettingsRow label="New password" htmlFor="newPassword">
                 <PasswordInput
-                  id="passwordCurrentPassword"
-                  autoComplete="current-password"
-                  value={passwordCurrentPassword}
-                  onChange={(e) => setPasswordCurrentPassword(e.target.value)}
+                  id="newPassword"
+                  autoComplete="new-password"
+                  minLength={MIN_PASSWORD_LENGTH}
+                  value={newPassword}
+                  onChange={editAndClearError(setNewPassword, setPasswordError)}
                   disabled={passwordSaving}
                   required
                 />
-              </div>
-            )}
+              </SettingsRow>
 
-            <div className="grid gap-2">
-              <Label htmlFor="newPassword">New password</Label>
-              <PasswordInput
-                id="newPassword"
-                autoComplete="new-password"
-                minLength={6}
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                disabled={passwordSaving}
-                required
-              />
-            </div>
+              <SettingsRow label="Confirm new password" htmlFor="confirmNewPassword">
+                <PasswordInput
+                  id="confirmNewPassword"
+                  autoComplete="new-password"
+                  value={confirmNewPassword}
+                  onChange={editAndClearError(setConfirmNewPassword, setPasswordError)}
+                  disabled={passwordSaving}
+                  required
+                />
+              </SettingsRow>
 
-            <div className="grid gap-2">
-              <Label htmlFor="confirmNewPassword">Confirm new password</Label>
-              <PasswordInput
-                id="confirmNewPassword"
-                autoComplete="new-password"
-                value={confirmNewPassword}
-                onChange={(e) => setConfirmNewPassword(e.target.value)}
-                disabled={passwordSaving}
-                required
-              />
-            </div>
+              <SettingsFooter status={passwordStatus}>
+                <Button
+                  type="submit"
+                  disabled={passwordSaving || newPassword.length === 0 || confirmNewPassword.length === 0}
+                >
+                  {passwordSaving ? 'Saving…' : asksCurrentPassword ? 'Update password' : 'Set password'}
+                </Button>
+              </SettingsFooter>
+            </SettingsForm>
+          </SettingsGroup>
 
-            {passwordError && <p className="text-sm text-destructive">{passwordError}</p>}
-            {passwordSavedNote && <p className="text-sm text-muted-foreground">{passwordSavedNote}</p>}
-
-            <Button
-              type="submit"
-              size="sm"
-              disabled={passwordSaving || newPassword.length === 0 || confirmNewPassword.length === 0}
+          <SettingsGroup>
+            <SettingsRow
+              label="Sign out everywhere"
+              align="start"
+              hint="Signs out every other browser and every phone or desktop app, and deletes the API keys you made under API keys. Apps connected through your Hub keep working. This browser stays signed in."
+              control={
+                confirmingSignOut ? (
+                  <>
+                    <Button
+                      variant="outline"
+                      onClick={() => setConfirmingSignOut(false)}
+                      disabled={signingOut}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      onClick={() => void handleSignOutEverywhere()}
+                      disabled={signingOut}
+                    >
+                      {signingOut ? 'Signing out…' : 'Sign out and delete keys'}
+                    </Button>
+                  </>
+                ) : (
+                  <Button variant="outline" onClick={() => setConfirmingSignOut(true)}>
+                    Sign out everywhere
+                  </Button>
+                )
+              }
             >
-              {passwordSaving ? 'Saving…' : hasFederatedIdentity ? 'Set password' : 'Update password'}
-            </Button>
-          </form>
-        </Card.Content>
-      </Card>
+              {signOutError ? <SettingsStatus tone="error">{signOutError}</SettingsStatus> : null}
+              {signOutNote ? <SettingsStatus tone="success">{signOutNote}</SettingsStatus> : null}
+            </SettingsRow>
+          </SettingsGroup>
+        </>
+      )}
 
-      <Card className="border-destructive/40 mb-[max(1rem,var(--safe-area-bottom))]">
-        <Card.Header>
-          <div className="flex items-start gap-3">
-            <TriangleAlert className="mt-0.5 h-5 w-5 shrink-0 text-destructive" strokeWidth={1.5} />
-            <div className="space-y-1">
-              <Card.Title>Delete account</Card.Title>
-              <Card.Description>
-                Signs you out everywhere immediately. This account, its memories and any files you uploaded
-                are then permanently deleted from this server after {PURGE_GRACE_DESCRIPTION}. This cannot be
-                undone.
-              </Card.Description>
-            </div>
-          </div>
-        </Card.Header>
-        <Card.Content>
-          <Button variant="destructive" disabled={!email} onClick={() => setOpen(true)}>
-            Delete account
-          </Button>
-        </Card.Content>
-      </Card>
+      <SettingsGroup className="mb-[max(1rem,var(--safe-area-bottom))]" cardClassName="border-destructive/40">
+        <SettingsRow
+          label={
+            <span className="inline-flex items-center gap-1.5">
+              <TriangleAlert className="size-4 shrink-0 text-destructive" aria-hidden="true" />
+              Delete account
+            </span>
+          }
+          align="start"
+          hint={
+            <>
+              Signs you out everywhere immediately. This account, its memories and any files you uploaded are
+              then permanently deleted from this server after {PURGE_GRACE_DESCRIPTION}. This cannot be
+              undone.
+            </>
+          }
+          control={
+            <Button variant="destructive" disabled={!email} onClick={() => setOpen(true)}>
+              Delete account
+            </Button>
+          }
+        />
+      </SettingsGroup>
 
       <Dialog
         open={open}
         onOpenChange={(next: boolean) => {
-          setOpen(next);
-
-          if (!next) {
-            setConfirmEmail('');
-            setError(null);
+          if (next) {
+            setOpen(true);
+          } else if (!loading) {
+            // Refused mid-request, like Cancel: the answer (a 409 asking who takes over) would land
+            // in a closed dialog and show up stale on the next open.
+            closeDeleteDialog();
           }
         }}
       >
@@ -341,6 +517,10 @@ export function AccountSection() {
               <Input
                 id="confirmEmail"
                 autoComplete="off"
+                inputMode="email"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
                 placeholder={email}
                 value={confirmEmail}
                 onChange={(e) => setConfirmEmail(e.target.value)}
@@ -348,11 +528,24 @@ export function AccountSection() {
               />
             </div>
 
+            {needsSuccessor && (
+              <div className="grid gap-2">
+                <Label htmlFor="successorEmail">Email of the person who takes over</Label>
+                <EmailInput
+                  id="successorEmail"
+                  autoComplete="off"
+                  value={successorEmail}
+                  onChange={(e) => setSuccessorEmail(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && matches && !loading && handleDelete()}
+                />
+              </div>
+            )}
+
             {error ? <p className="text-sm text-destructive">{error}</p> : null}
           </div>
 
           <Dialog.Footer>
-            <Button variant="outline" onClick={() => setOpen(false)} disabled={loading}>
+            <Button variant="outline" onClick={closeDeleteDialog} disabled={loading}>
               Cancel
             </Button>
             <Button variant="destructive" onClick={handleDelete} disabled={!matches || loading}>
@@ -361,6 +554,6 @@ export function AccountSection() {
           </Dialog.Footer>
         </Dialog.Content>
       </Dialog>
-    </>
+    </SettingsSection>
   );
 }

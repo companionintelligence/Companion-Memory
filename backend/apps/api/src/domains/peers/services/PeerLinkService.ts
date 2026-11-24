@@ -5,7 +5,9 @@ import { v7 as uuidv7 } from 'uuid';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import { GrantService } from '@ci/domains/asks';
 
+import { didKeyIdFor, isDidKeyId } from '../didKeyId';
 import {
   isPeerTrustTier,
   type PeerLink,
@@ -13,6 +15,14 @@ import {
   type PeerLinkStatus,
   type PeerTrustTier,
 } from '../entities/PeerLinkEntity';
+import { jwkThumbprint } from '../httpSignature';
+import {
+  DID_KEY_ISSUER,
+  SOVEREIGN_ISSUER,
+  selfCertifyingIssuerOf,
+  selfCertifyingPublicJwk,
+} from '../selfCertifyingKeyId';
+import { sovereignKeyIdFor } from '../sovereignKeyId';
 
 export interface CreatePeerLinkDto {
   peerHandle: string;
@@ -23,6 +33,14 @@ export interface CreatePeerLinkDto {
   personEntityId?: string | null;
   trustTier?: PeerTrustTier;
   status?: PeerLinkStatus;
+  /**
+   * For an edit: the link the caller read. Refused with a 409 unless it is
+   * still the handle's current link, and written by id only while it is still
+   * as live as it was when read. Without it, an end plus a re-add between the
+   * caller's read and this write put the ended link's tier and identity on the
+   * new link.
+   */
+  expectedLinkId?: string;
 }
 
 /**
@@ -36,6 +54,28 @@ export interface CreatePeerLinkDto {
  */
 const IDENTITY_CONSTRAINT = 'peer_links_owner_identity_live_uniq';
 
+/** One live link per (owner, handle): `20261029131708_link_ended_peer_again_as_new_row.sql`. */
+const HANDLE_CONSTRAINT = 'peer_links_owner_handle_uniq';
+
+/**
+ * The constraint a `23505` names, or `null` when the error is not a unique
+ * violation at all. A violation whose name a pooler dropped comes back as
+ * `{ constraint: undefined }`, which callers must tell apart from `null`.
+ */
+function uniqueViolation(err: unknown): { constraint: unknown } | null {
+  const candidate = err as {
+    code?: unknown;
+    constraint?: unknown;
+    driverError?: { code?: unknown; constraint?: unknown };
+  } | null;
+
+  if ((candidate?.driverError?.code ?? candidate?.code) !== '23505') {
+    return null;
+  }
+
+  return { constraint: candidate?.driverError?.constraint ?? candidate?.constraint };
+}
+
 /**
  * Was this write refused because another LIVE link of this owner's already
  * claims the same `(peer_issuer, peer_subject)`?
@@ -48,19 +88,25 @@ const IDENTITY_CONSTRAINT = 'peer_links_owner_identity_live_uniq';
  * keeps surfacing as itself.
  */
 function isIdentityConflict(err: unknown): boolean {
-  const candidate = err as {
-    code?: unknown;
-    constraint?: unknown;
-    driverError?: { code?: unknown; constraint?: unknown };
-  } | null;
+  const violation = uniqueViolation(err);
 
-  if ((candidate?.driverError?.code ?? candidate?.code) !== '23505') {
-    return false;
+  return violation != null && (violation.constraint == null || violation.constraint === IDENTITY_CONSTRAINT);
+}
+
+/**
+ * The row a write by handle addresses: the live link, or, when none is live, the
+ * one ended last. Ending a link and adding the peer again leaves two rows under
+ * one handle (`peer_links_owner_handle_uniq` covers live rows only), and only
+ * the newer can be live.
+ */
+function currentOf(rows: readonly PeerLinkEntity[]): PeerLinkEntity | null {
+  const live = rows.find((row) => row.revokedAt == null);
+
+  if (live) {
+    return live;
   }
 
-  const constraint = candidate?.driverError?.constraint ?? candidate?.constraint;
-
-  return constraint == null || constraint === IDENTITY_CONSTRAINT;
+  return [...rows].sort((a, b) => (b.revokedAt?.getTime() ?? 0) - (a.revokedAt?.getTime() ?? 0))[0] ?? null;
 }
 
 /**
@@ -102,28 +148,40 @@ export class PeerLinkService {
     @InjectRepository(PeerLinkEntity)
     private readonly repository: Repository<PeerLinkEntity>,
     private readonly logger: LoggerService,
+    // Adding back a peer whose link was ended revokes the grants still
+    // addressed to the ended link; see `upsert`.
+    private readonly grantService: GrantService,
   ) {
     this.logger.setContext(PeerLinkService.name);
   }
 
   /**
-   * Link a peer (idempotent on (owner, handle) — re-linking refreshes it).
+   * Link a peer. Idempotent on the handle's live link, which a re-add
+   * refreshes; adding back a handle whose link was ended makes a new link.
    *
    * ═══ `peerIssuer` / `peerSubject`: WHAT THEY ARE, AND WHAT GUARDS THEM ═══
    *
    * The pair `PeerAskService.resolveLink` matches an inbound ask on. Setting it
    * is the gesture that decides WHICH REMOTE IDENTITY MAY ACT AS THIS PEER, and
    * therefore which `trustTier` ceiling a stranger's token inherits — so it is
-   * the most consequential thing this method writes. Three guards, in the order
-   * they run:
+   * the most consequential thing this method writes. Five guards; the first
+   * is inherited, the next three are checks in front of the write (the second
+   * and third only when the write CHANGES the binding, see `changesBinding`),
+   * and the last is the database's:
    *
    *   1. **Owner scoping**, inherited rather than added: the read below and the
    *      row it creates are both keyed on `context.userId`, so a caller can
    *      only ever bind THEIR OWN link. `PeerLinkResolver.updatePeerLink` adds
    *      the matching refusal for an id it cannot read.
-   *   2. **Both or neither, never blank** — a half-set pair is inert while
+   *   2. **A self-certifying subject is bound under its own issuer, and a
+   *      `did:key` link names a VALID `did:key`** (canonical, not a weak key,
+   *      a point on the curve): otherwise the link is inert while looking bound.
+   *   3. **Both or neither, never blank** — a half-set pair is inert while
    *      looking bound.
-   *   3. **One LIVE link per (owner, identity)**, enforced by a partial unique
+   *   4. **One live link per KEY across its two spellings** (`did:keri:D<x>`
+   *      and `did:key`): a read followed by a write, so two racing writes can
+   *      both pass it. Said so where it is made.
+   *   5. **One LIVE link per (owner, identity)**, enforced by a partial unique
    *      index because a read-then-write check races.
    *
    * `undefined` means "the caller said nothing", and is the only value that
@@ -149,20 +207,41 @@ export class PeerLinkService {
     const peerIssuer = normalizeIdentityPart(data.peerIssuer, 'peerIssuer');
     const peerSubject = normalizeIdentityPart(data.peerSubject, 'peerSubject');
 
-    const existing = await this.repository.findOne({
-      where: { ownerUserId: context.userId, peerHandle: data.peerHandle },
-    });
+    const current = await this.findCurrentByHandle(context.userId, data.peerHandle);
+
+    // An edit of a link the peer was added back after: the handle's current
+    // row is the new link, and the values the caller read belong to the old.
+    if (data.expectedLinkId != null && current?.id !== data.expectedLinkId) {
+      throw new ConflictException(
+        `This link to ${data.peerHandle} was ended and they were added again since. Change the current link instead.`,
+      );
+    }
+
+    // ═══ ADDING AN ENDED LINK BACK MAKES A NEW ONE ═══
+    //
+    // Reviving the ended row brought back everything it had collected: its
+    // signing key, the identity bound to it and the asks exchanged over it,
+    // all addressed by its id. The owner ended that link; adding the peer again
+    // is a new one, so it gets a new row and the old one stays as it was, ended
+    // and readable. Only the owner's own labels carry over: the name they gave
+    // the peer and the person in their memory it is.
+    const relinks = current?.revokedAt != null && data.status === 'active';
+    const existing = relinks ? null : current;
 
     const record = this.repository.create({
       ...(existing ?? { id: uuidv7(), ownerUserId: context.userId, peerHandle: data.peerHandle }),
       memoryEndpoint: data.memoryEndpoint,
-      displayName: data.displayName ?? existing?.displayName ?? null,
+      displayName: data.displayName ?? current?.displayName ?? null,
       peerIssuer: peerIssuer ?? existing?.peerIssuer ?? null,
       peerSubject: peerSubject ?? existing?.peerSubject ?? null,
-      personEntityId: data.personEntityId ?? existing?.personEntityId ?? null,
+      personEntityId: data.personEntityId ?? current?.personEntityId ?? null,
       trustTier: data.trustTier ?? existing?.trustTier ?? 'peer',
       status: data.status ?? existing?.status ?? 'active',
-      revokedAt: null,
+      // Closes G5(b): editing a link via `updatePeerLink` (where `data.status` is
+      // omitted) must preserve an existing `revokedAt` timestamp rather than
+      // unconditionally wiping it to null. `status: 'active'` on an ended link
+      // never gets here with it: that is a new row (`relinks` above).
+      revokedAt: data.status === 'active' ? null : (existing?.revokedAt ?? null),
     });
 
     // ═══ BOTH OR NEITHER — CHECKED ON THE MERGED ROW, NOT THE INPUT ═══
@@ -183,15 +262,128 @@ export class PeerLinkService {
     // legacy inconsistency into an outage.
     const touchesIdentity = peerIssuer !== undefined || peerSubject !== undefined;
 
+    // Whether this write CHANGES the binding the row has now (none, for a new link). `updatePeerLink`
+    // always sends the stored pair back, so "was an identity supplied" is true of every edit of a bound
+    // link, and a guard keyed on it would refuse a tier change on a row it has no quarrel with. The
+    // guards below that judge the binding itself (is this a key, does another link name it) are keyed
+    // on this instead: they run for a link being bound or re-bound, not for one being renamed.
+    const changesBinding =
+      record.peerIssuer !== (existing?.peerIssuer ?? null) ||
+      record.peerSubject !== (existing?.peerSubject ?? null);
+
+    // A `did:key` link is answered by exactly the identifier it names, so a subject that is not one
+    // canonical Ed25519 `did:key` (one that is the weak or off-curve, a mistyped character) could never
+    // match an inbound ask: inert while looking bound, the same failure as half a pair. Refused by name
+    // rather than stored.
+    if (changesBinding && record.peerIssuer === DID_KEY_ISSUER && !isDidKeyId(record.peerSubject ?? '')) {
+      throw new BadRequestException(
+        'peerSubject must be a canonical Ed25519 did:key (did:key:z6Mk…) when peerIssuer is did:key',
+      );
+    }
+
+    // The same failure from the other side: a subject that IS a self-certifying identifier, bound under
+    // some other DID-looking issuer (`DID:KEY`, `did:key:`, `did:keri` for a did:key subject), is answered
+    // by nothing, because an inbound ask is matched on exactly the issuer that identifier belongs to. An
+    // http(s) issuer is a Portal identity, whose subject is whatever Portal says, and is left alone.
+    const declaredIssuer = record.peerSubject == null ? null : selfCertifyingIssuerOf(record.peerSubject);
+    if (
+      changesBinding &&
+      declaredIssuer != null &&
+      record.peerIssuer !== declaredIssuer &&
+      !/^https?:\/\//i.test(record.peerIssuer ?? '')
+    ) {
+      throw new BadRequestException(
+        `peerSubject is a self-certifying identifier and must be bound under peerIssuer ${declaredIssuer}`,
+      );
+    }
+
     if (touchesIdentity && (record.peerIssuer == null) !== (record.peerSubject == null)) {
       throw new BadRequestException(
         'peerIssuer and peerSubject must be set together — one alone can never match an inbound ask',
       );
     }
 
+    // ═══ ONE KEY, ONE LIVE LINK — ACROSS ITS SPELLINGS ═══
+    //
+    // `did:keri:D<x>` and `did:key:z6Mk…` are two spellings of ONE Ed25519 key, under two issuers, so
+    // the unique (owner, issuer, subject) index does not see them as the same identity. Left alone, an
+    // owner could hold both live at different tiers, the SIGNER would choose which one answers by the
+    // keyid it signs under, and revoking one would not cut the key off. The check is on the row about
+    // to be written (the merged one) and only when the write changes the binding.
+    //
+    // WHAT THIS DOES NOT DO: it is a read followed by a write, with nothing in the database behind it
+    // (the unique indexes see two spellings as two identities), so two writes racing from two tabs or
+    // devices can both pass it. The owner can still edit or revoke each link, because an edit that
+    // leaves the binding alone is not checked. The race is a known residual, not a guarantee.
+    if (
+      changesBinding &&
+      record.revokedAt == null &&
+      record.peerIssuer != null &&
+      record.peerSubject != null &&
+      selfCertifyingIssuerOf(record.peerSubject) === record.peerIssuer
+    ) {
+      // ONE lookup of the one pair that could clash: the same key under the other issuer's spelling. An
+      // ended link cannot clash (it answers nothing), and the link being written is not its own twin.
+      const twin = twinSpelling(record.peerIssuer, record.peerSubject);
+      const clash =
+        twin == null
+          ? null
+          : await this.repository.findOne({
+              where: {
+                ownerUserId: context.userId,
+                peerIssuer: twin.issuer,
+                peerSubject: twin.subject,
+                revokedAt: IsNull(),
+              },
+            });
+
+      if (clash != null && clash.id !== record.id) {
+        throw new ConflictException(
+          'Another live peer link already names that key under a different spelling (did:keri and did:key spell the ' +
+            'same Ed25519 key) — revoke it first, or re-bind that link instead',
+        );
+      }
+    }
+
+    let revokedGrants = 0;
+
+    if (relinks) {
+      // ═══ THE ENDED LINK'S GRANTS END WITH IT ═══
+      //
+      // Grants address a peer by link id, so none of them reaches the new
+      // link. They are still revoked, because the Grants tab lists a grant
+      // until it is, and one shown as live for a peer the owner just added back
+      // at Stranger reads as consent that carried over. `revoke()` leaves them
+      // alone, so this is where they go.
+      //
+      // BEFORE the insert, not after: once the new row exists a retry reads it
+      // as the current link, so a failure here after the insert would leave
+      // these grants listed as live for good. They belong to an ended link and
+      // can answer nothing, so revoking them when the insert then fails costs
+      // nothing.
+      revokedGrants = await this.grantService.revokeForPeerLink(context, current.id);
+    }
+
+    let saved: PeerLinkEntity;
+
     try {
-      return PeerLinkEntity.toEgressType(await this.repository.save(record));
+      // An edit, and a re-add of a link that is still live (`existing` is never
+      // an ended row when `status` is `active`: that is `relinks`), both write
+      // onto the row they read. Through `save()`, a re-add that raced an end
+      // wrote `revoked_at = NULL` back and revived the ended link.
+      saved =
+        existing != null && (data.expectedLinkId != null || data.status === 'active')
+          ? await this.updateAsRead(context, existing, record, { activate: data.status === 'active' })
+          : await this.repository.save(record);
     } catch (err) {
+      // Two adds of one handle (a double click, two devices) both read the same
+      // current row, or none, and both insert; the index lets one through.
+      if (existing == null && uniqueViolation(err)?.constraint === HANDLE_CONSTRAINT) {
+        throw new ConflictException(
+          `${data.peerHandle} was added${relinks ? ' again' : ''} a moment ago. Reload to see the link.`,
+        );
+      }
+
       // ═══ ONE LIVE LINK PER (OWNER, IDENTITY) — WHY THE DB DECIDES ═══
       //
       // A read-then-write check here would race: two concurrent binds both read
@@ -208,10 +400,79 @@ export class PeerLinkService {
 
       throw err;
     }
+
+    if (relinks) {
+      // The counterpart of the line `revoke()` logs: a link coming back is as
+      // much a change to who can ask as one going away.
+      this.logger.log(
+        `peer link re-added as a new link: ${data.peerHandle}; ${revokedGrants} grant(s) of the ended link revoked`,
+      );
+    }
+
+    return PeerLinkEntity.toEgressType(saved);
   }
 
+  /**
+   * Write an edit, or a re-add of a live link, onto the row it was read from,
+   * and only while that row is as live as it was then.
+   *
+   * Through `save()`, a link ended between the read and this write came back
+   * live, because the merged row carries `revoked_at = NULL`, and then
+   * collided with the link that replaced it. This writes the link's editable
+   * columns (every one of them, as merged in `upsert`) and never `revoked_at`,
+   * and the WHERE carries the check: a link that was live must still be live.
+   * One that was already ended can only stay ended (a re-add makes a new row),
+   * so its id alone is enough. No row matched means it changed under the
+   * caller.
+   *
+   * `activate` is a re-add: it writes `status = 'active'`, which the WHERE only
+   * lets land on a row that is still live.
+   */
+  private async updateAsRead(
+    context: UserServiceContext,
+    read: PeerLinkEntity,
+    record: PeerLinkEntity,
+    options: { activate: boolean },
+  ): Promise<PeerLinkEntity> {
+    const result = await this.repository.update(
+      {
+        id: read.id,
+        ownerUserId: context.userId,
+        ...(read.revokedAt == null ? { revokedAt: IsNull() } : {}),
+      },
+      {
+        memoryEndpoint: record.memoryEndpoint,
+        displayName: record.displayName,
+        peerIssuer: record.peerIssuer,
+        peerSubject: record.peerSubject,
+        personEntityId: record.personEntityId,
+        trustTier: record.trustTier,
+        // Never `revoked_at`, and `status` only for a re-add of a live link: an
+        // edit never changes whether the link is live, and writing back the
+        // `revoked_at` read in JS would round it to the millisecond.
+        ...(options.activate && read.revokedAt == null ? { status: 'active' as const } : {}),
+      },
+    );
+
+    if (!result.affected) {
+      throw new ConflictException(
+        `This link to ${read.peerHandle} changed while it was being saved. Reload to see the link.`,
+      );
+    }
+
+    return this.repository.findOneOrFail({ where: { id: read.id, ownerUserId: context.userId } });
+  }
+
+  /**
+   * Every link the owner has, ended ones included, oldest first. A peer added
+   * again after its link ended has two rows under one handle, and the order puts
+   * the live one after the ended one, so a client indexing by handle keeps it.
+   */
   async findAll(context: UserServiceContext): Promise<PeerLink[]> {
-    const rows = await this.repository.find({ where: { ownerUserId: context.userId } });
+    const rows = await this.repository.find({
+      where: { ownerUserId: context.userId },
+      order: { createdAt: 'ASC', id: 'ASC' },
+    });
 
     return rows.map(PeerLinkEntity.toEgressType);
   }
@@ -225,12 +486,15 @@ export class PeerLinkService {
     return row ? PeerLinkEntity.toEgressType(row) : null;
   }
 
+  /** The live link with this handle, or the one ended last when none is live. */
   async findByHandle(context: UserServiceContext, handle: string): Promise<PeerLink | null> {
-    const row = await this.repository.findOne({
-      where: { ownerUserId: context.userId, peerHandle: handle },
-    });
+    const row = await this.findCurrentByHandle(context.userId, handle);
 
     return row ? PeerLinkEntity.toEgressType(row) : null;
+  }
+
+  private async findCurrentByHandle(ownerUserId: string, handle: string): Promise<PeerLinkEntity | null> {
+    return currentOf(await this.repository.find({ where: { ownerUserId, peerHandle: handle } }));
   }
 
   /**
@@ -279,6 +543,14 @@ export class PeerLinkService {
    * each have linked the same peer, and the caller must disambiguate rather than
    * answering as an arbitrary one.
    *
+   * A link matches on any of three clauses:
+   *
+   *   1. it records the key whose thumbprint is the keyid;
+   *   2. for a self-certifying keyid (`did:keri:D<x>` or `did:key`), it names
+   *      that keyid as its identity, under the issuer that goes with it;
+   *   3. for a self-certifying keyid, it records the key the keyid spells out,
+   *      found by that key's thumbprint.
+   *
    * Note what this deliberately does NOT consult: the OIDC issuer or subject.
    * A signature proves possession of the key; whether the peer also presented a
    * Portal token that says who operates it is a separate, additive fact. Mixing
@@ -290,8 +562,38 @@ export class PeerLinkService {
       return [];
     }
 
+    const whereConditions: Array<Record<string, unknown>> = [
+      { peerKeyThumbprint: thumbprint, status: 'active', revokedAt: IsNull() },
+    ];
+
+    // A self-certifying keyid IS the peer's identifier, so the link that names it is found by its
+    // identity, whether or not it records the key (see `sovereignKeyId.ts`, `didKeyId.ts`).
+    const selfCertifying = selfCertifyingIssuerOf(thumbprint);
+    if (selfCertifying != null) {
+      whereConditions.push({
+        peerIssuer: selfCertifying,
+        peerSubject: thumbprint,
+        status: 'active',
+        revokedAt: IsNull(),
+      });
+
+      // A link that RECORDS the key this keyid spells is found too, by that key's thumbprint, so a box
+      // signing under its own `did:key` or `did:keri:D<x>` can be checked against the Portal link its
+      // peer recorded the key on. `PeerAskController`'s issuer/subject match still decides which link
+      // answers, so a token-less request, whose identity is `did:key` or `did:keri`, never matches a
+      // Portal link.
+      const spelled = selfCertifyingPublicJwk(thumbprint);
+      if (spelled != null) {
+        whereConditions.push({
+          peerKeyThumbprint: jwkThumbprint(spelled),
+          status: 'active',
+          revokedAt: IsNull(),
+        });
+      }
+    }
+
     const rows = await this.repository.find({
-      where: { peerKeyThumbprint: thumbprint, status: 'active', revokedAt: IsNull() },
+      where: whereConditions,
     });
 
     return rows.map(PeerLinkEntity.toEgressType);
@@ -299,9 +601,7 @@ export class PeerLinkService {
 
   /** Revoke a peer link — takes effect on the next inbound ask. */
   async revoke(context: UserServiceContext, handle: string): Promise<PeerLink> {
-    const row = await this.repository.findOne({
-      where: { ownerUserId: context.userId, peerHandle: handle },
-    });
+    const row = await this.findCurrentByHandle(context.userId, handle);
 
     if (row == null) {
       throw new NotFoundException(`Peer ${handle} not found`);
@@ -313,4 +613,22 @@ export class PeerLinkService {
 
     return PeerLinkEntity.toEgressType(await this.repository.save(row));
   }
+}
+
+/**
+ * The other spelling of the key a self-certifying link names: the same key as `did:keri:D<x>` for a
+ * `did:key` link and as `did:key:z6Mk…` for a `did:keri` one, with the issuer that goes with it. Null
+ * when the subject is not a key this codec can spell both ways (a weak or off-curve key has no `did:key`).
+ */
+function twinSpelling(issuer: string, subject: string): { issuer: string; subject: string } | null {
+  const jwk = selfCertifyingPublicJwk(subject);
+  if (jwk == null) {
+    return null;
+  }
+
+  const twinSubject = issuer === DID_KEY_ISSUER ? sovereignKeyIdFor(jwk) : didKeyIdFor(jwk);
+
+  return twinSubject == null
+    ? null
+    : { issuer: issuer === DID_KEY_ISSUER ? SOVEREIGN_ISSUER : DID_KEY_ISSUER, subject: twinSubject };
 }

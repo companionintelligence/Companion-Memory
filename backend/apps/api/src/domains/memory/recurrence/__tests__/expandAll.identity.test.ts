@@ -47,6 +47,32 @@ describe('expandAll — identity and suppression', () => {
     expect(first.endTime?.toISOString()).toBe('2026-09-14T16:30:00.000Z');
   });
 
+  it('keys an ALL-DAY occurrence by date, the DATE-valued RECURRENCE-ID both pipelines store', () => {
+    // TransformGoogleCalendar keys an all-day override from
+    // `originalStartTime.date`; the .ics importer keeps `RECURRENCE-ID;VALUE=DATE`
+    // as written. Spelled as an instant, the key matched neither, and a
+    // cancelled or moved all-day occurrence was synthesized right back.
+    const [first] = expandAll(
+      [
+        master({
+          startTime: new Date('2026-09-07T00:00:00Z'),
+          endTime: new Date('2026-09-08T00:00:00Z'),
+          isAllDay: true,
+          sourceId: 'office-day@google.com',
+        }),
+      ],
+      WINDOW,
+      OPTS,
+    );
+
+    expect(first.startTime.toISOString()).toBe('2026-09-14T00:00:00.000Z');
+    expect(first.overrideSourceId).toBe('office-day@google.com#20260914');
+    // The synthetic id and the RECURRENCE-ID the client sees keep their
+    // instant spelling: only the suppression key changes.
+    expect(first.recurrenceInstant).toBe('20260914T000000Z');
+    expect(first.occurrenceId).toBe(occurrenceEventId(MASTER_ID, '20260914T000000Z'));
+  });
+
   it('mints a stable uuid so every uuid-typed consumer keeps working', () => {
     const [first] = expandAll([master()], WINDOW, OPTS);
 

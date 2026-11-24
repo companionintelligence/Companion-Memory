@@ -135,7 +135,3 @@ Companion Memory is the memory layer of the Companion Intelligence appliance. It
 receives data from CI-Browser-Extension, CI-Connect, and Companion Capture, has
 its own built-in bulk archive importer, and is consumed by every client over
 REST/GraphQL.
-
----
-
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**

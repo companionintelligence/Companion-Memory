@@ -57,13 +57,12 @@ describe('PGBossEventService.sendMany', () => {
     ]);
 
     expect(insert).toHaveBeenCalledTimes(1);
-    expect(insert.mock.calls[0][0]).toEqual([
+    expect(insert.mock.calls[0][1]).toEqual([
       {
-        name: 'default',
         data: { communicationId: 'c1', name: 'communication.created' },
         priority: DEFAULT_JOB_PRIORITY,
       },
-      { name: 'default', data: { eventId: 'e1', name: 'event.created' }, priority: DEFAULT_JOB_PRIORITY },
+      { data: { eventId: 'e1', name: 'event.created' }, priority: DEFAULT_JOB_PRIORITY },
     ]);
   });
 
@@ -75,8 +74,8 @@ describe('PGBossEventService.sendMany', () => {
       priority: -5,
     });
 
-    expect(insert.mock.calls[0][0]).toEqual([
-      { name: 'default', data: { communicationId: 'c1', name: 'communication.created' }, priority: -5 },
+    expect(insert.mock.calls[0][1]).toEqual([
+      { data: { communicationId: 'c1', name: 'communication.created' }, priority: -5 },
     ]);
   });
 
@@ -94,16 +93,14 @@ describe('PGBossEventService.sendMany', () => {
       { singletonKey: 'batch-key', startAfter },
     );
 
-    expect(insert.mock.calls[0][0]).toEqual([
+    expect(insert.mock.calls[0][1]).toEqual([
       {
-        name: 'default',
         data: { communicationId: 'c1', name: 'communication.created' },
         priority: DEFAULT_JOB_PRIORITY,
         singletonKey: 'batch-key',
         startAfter,
       },
       {
-        name: 'default',
         data: { eventId: 'e1', name: 'event.created' },
         priority: DEFAULT_JOB_PRIORITY,
         singletonKey: 'batch-key',
@@ -118,8 +115,8 @@ describe('PGBossEventService.sendMany', () => {
 
     await service.sendMany('default', [{ name: 'communication.created', data: { communicationId: 'c1' } }]);
 
-    expect(insert.mock.calls[0][0][0]).not.toHaveProperty('singletonKey');
-    expect(insert.mock.calls[0][0][0]).not.toHaveProperty('startAfter');
+    expect(insert.mock.calls[0][1][0]).not.toHaveProperty('singletonKey');
+    expect(insert.mock.calls[0][1][0]).not.toHaveProperty('startAfter');
   });
 
   it('splits large batches into bounded insert() chunks', async () => {
@@ -134,7 +131,7 @@ describe('PGBossEventService.sendMany', () => {
 
     // 4500 rows at a 2000-row chunk bound → 2000 + 2000 + 500.
     expect(insert).toHaveBeenCalledTimes(3);
-    expect(insert.mock.calls.map((c: unknown[][]) => c[0].length)).toEqual([2000, 2000, 500]);
+    expect(insert.mock.calls.map((c: unknown[][]) => c[1].length)).toEqual([2000, 2000, 500]);
   });
 
   it('warns loudly and drops nothing silently when the queue is suppressed via CI_QUEUE_SUPPRESS', async () => {

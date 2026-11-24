@@ -43,11 +43,13 @@ function fill(label: RegExp, value: string) {
 /** A create mock that records the input it was called with. */
 function createMock(capture: (input: Record<string, unknown>) => void): MockedResponse {
   return {
-    request: { query: CREATE_EVENT },
-    variableMatcher: (variables: { input: Record<string, unknown> }) => {
-      capture(variables.input);
+    request: {
+      query: CREATE_EVENT,
+      variables: (variables: { input: Record<string, unknown> }) => {
+        capture(variables.input);
 
-      return true;
+        return true;
+      },
     },
     result: {
       data: {
@@ -73,9 +75,27 @@ describe('AddEventModal — validation', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /^add$/i }));
 
-    expect(await screen.findByText(/give the event a title/i)).toBeInTheDocument();
+    // Beside the field, which says which one, and above the buttons.
+    expect(await screen.findAllByText(/give the event a title/i)).toHaveLength(2);
     expect(sent).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  // ═══ THE REASON USED TO BE ONLY WHERE THE FINGER WASN'T ═══
+  //
+  // The form scrolls inside the modal while Add sits in a fixed footer under it,
+  // so a refusal drawn beside the offending field — which can be scrolled out of
+  // view — left Add looking dead. The sentence now also sits directly above the
+  // buttons, in the slot a rejected write already uses.
+  it('says what is wrong directly above the Add button, not only beside the field', () => {
+    renderModal();
+
+    fireEvent.click(screen.getByRole('button', { name: /^add$/i }));
+
+    const alert = screen.getByRole('alert');
+
+    expect(alert).toHaveTextContent(/give the event a title/i);
+    expect(alert.nextElementSibling).toContainElement(screen.getByRole('button', { name: /^add$/i }));
   });
 
   it('refuses an end that precedes the start', async () => {
@@ -83,12 +103,12 @@ describe('AddEventModal — validation', () => {
     renderModal([createMock(sent)]);
 
     fill(/^title$/i, 'Dinner with Sam');
-    fill(/^starts$/i, '2026-08-19');
-    fill(/^ends$/i, '2026-08-18');
+    fill(/^starts at$/i, '2026-08-19');
+    fill(/^ends at$/i, '2026-08-18');
 
     fireEvent.click(screen.getByRole('button', { name: /^add$/i }));
 
-    expect(await screen.findByText(/ends before it starts/i)).toBeInTheDocument();
+    expect(await screen.findAllByText(/ends before it starts/i)).toHaveLength(2);
     expect(sent).not.toHaveBeenCalled();
   });
 
@@ -101,7 +121,7 @@ describe('AddEventModal — validation', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /^add$/i }));
 
-    expect(await screen.findByText(/both a latitude/i)).toBeInTheDocument();
+    expect(await screen.findAllByText(/both a latitude/i)).toHaveLength(2);
     expect(sent).not.toHaveBeenCalled();
   });
 });
@@ -131,10 +151,12 @@ describe('AddEventModal — creating the event', () => {
     renderModal([createMock((input) => inputs.push(input))]);
 
     fill(/^title$/i, 'Move house');
-    expect(screen.getAllByLabelText(/^at$/i)).toHaveLength(2);
+    expect(screen.getByLabelText(/^start time$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^end time$/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByLabelText(/all day/i));
-    expect(screen.queryAllByLabelText(/^at$/i)).toHaveLength(0);
+    expect(screen.queryByLabelText(/^start time$/i)).toBeNull();
+    expect(screen.queryByLabelText(/^end time$/i)).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: /^add$/i }));
 
@@ -145,8 +167,7 @@ describe('AddEventModal — creating the event', () => {
   it('keeps the draft and shows the error when the write is rejected', async () => {
     const { onClose, onCreated } = renderModal([
       {
-        request: { query: CREATE_EVENT },
-        variableMatcher: () => true,
+        request: { query: CREATE_EVENT, variables: () => true },
         error: new Error('network down'),
       } as unknown as MockedResponse,
     ]);

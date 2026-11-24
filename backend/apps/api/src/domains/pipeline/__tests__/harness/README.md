@@ -124,31 +124,46 @@ synchronous answer, which is obtained by spawning a short-lived
 test file and depends on nothing but a node builtin (notably not `pg`, which the
 child would have to resolve through Yarn PnP).
 
-Skipped output looks like this, and the reason is always printed:
+The spec prints its reason with `console.warn`. Run on its own, jest shows that
+line; in a multi-file run jest's default reporter **drops the console output of
+any file whose tests were all skipped**, so `skippedSuitesReporter.js` (wired in
+`jest.config.mjs`) prints every such file and its reason just above the totals:
 
 ```
-console.warn
-  [pipeline.integration] SKIPPED — no database configured — set PIPELINE_TEST_DATABASE_URL or …
+1 test file was skipped outright — none of its tests ran:
+  1 × no database configured — set <SUITE>_TEST_DATABASE_URL or DATABASE_URL, or DATABASE_PASSWORD …
+      src/domains/pipeline/__tests__/pipeline.integration.spec.ts
 
 Test Suites: 1 skipped, 0 of 1 total
 Tests:       38 skipped, 38 total
 ```
 
-### Three outcomes, deliberately different
+### A skip needs proof, and only an unasked-for database may skip
 
 | Situation | Result | Why |
 | --- | --- | --- |
-| No connection resolvable from the environment | **skip** | This is CI. `.github/workflows/ci.yml` runs `yarn workspace @ci/be-api test` with no database service and no `.env`, so `DATABASE_PASSWORD` is unset and the suite skips cleanly. |
-| Connection resolvable, nothing listening on the port | **skip** | The stack is down. Not the developer's problem right now. |
+| No connection resolvable from the environment | **skip** | A checkout with no `.env` and no URL: a laptop without the stack. |
+| Only `.env`'s discrete `DATABASE_*` values, and the connection is **refused** | **skip** | The dev stack is down. Not the developer's problem right now. |
+| `PIPELINE_TEST_DATABASE_URL` or `DATABASE_URL` set for the run, and the connection is **refused** | **fail**, naming the variable | You asked for this database. A skip would read as a pass — and a stale dev-stack port looks exactly like this (take the URL from `make dburl`). |
+| Nothing answers at all, or the **probe itself could not finish** | **fail**, however the database was configured | Not evidence of absence. Until 2026-09-30 a probe killed by its time limit on a loaded machine read as "nothing listening", and a suite pointed at a healthy Postgres skipped silently. |
+| A URL that does not parse | **fail**, naming the variable | A configuration mistake, not an absent database. |
 | Something listening, but the control plane is missing | **fail**, with `Run yarn workspace @ci/be-api migrate` | This is a broken setup, not an absent one. Skipping here would turn a migration mistake into a green run. |
 
+"Set for the run" means in the environment jest was started with; a URL `.env`
+itself fills in counts as the dev stack's, like the discrete variables. The
+decision is `decideAvailability()` in `databaseConnection.ts`, with the same
+table in its header; a **fail** throws at collection time, so jest reports the
+file as "Test suite failed to run" with the reason.
+
 A TCP handshake proves something is listening, not that it is Postgres with the
-migrations applied — that split is what the third row buys.
+migrations applied — that split is what the last row buys.
 
 Tuning knobs:
 
-- `PIPELINE_TEST_PROBE_TIMEOUT_MS` (default `2000`) — raise it on a slow or
-  heavily loaded machine.
+- `PIPELINE_TEST_PROBE_TIMEOUT_MS` (default `2000`) — the socket timeout for the
+  connection attempt. Starting the probe process has its own allowance
+  (10 s, up to three attempts), so a loaded machine no longer needs this raised:
+  a probe that cannot start in time now fails the suite instead of skipping it.
 
 ---
 

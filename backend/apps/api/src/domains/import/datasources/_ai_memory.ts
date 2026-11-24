@@ -9,6 +9,40 @@
    this module only answers "what memories does this JSON contain?" plus a few
    shape hints the datasources use to disambiguate a shared filename. */
 
+import crypto from 'node:crypto';
+
+import { parseFlexibleDate } from './dates';
+import { readJsonFile } from './readers';
+import type { ImportParams } from './timeline';
+import { textContent, timeframeContains } from './timeline';
+
+/** The file names a vendor's memory export is shipped under. */
+export const MEMORY_FILENAMES = ['memories.json', 'memory.json'];
+
+/**
+ * Files only OpenAI's export ships next to conversations.json — their presence
+ * marks a memory-only directory as ChatGPT's even when the entries themselves
+ * carry no vendor signal. Claude's data export ships users.json (plural) +
+ * projects.json instead. Each datasource reads BOTH lists, to claim its own
+ * export and to decline the other's.
+ */
+export const CHATGPT_SIBLINGS = [
+  'user.json',
+  'message_feedback.json',
+  'model_comparisons.json',
+  'shared_conversations.json',
+  'chat.html',
+];
+export const CLAUDE_SIBLINGS = ['users.json', 'projects.json'];
+
+export function isMemoryFilename(name: string): boolean {
+  return MEMORY_FILENAMES.includes(name.toLowerCase());
+}
+
+export function findName(names: string[], wanted: (n: string) => boolean): string | undefined {
+  return names.find((n) => wanted(n.toLowerCase()));
+}
+
 export interface MemoryEntry {
   text: string;
   created?: Date;
@@ -82,31 +116,11 @@ export function unwrapMemoryList(parsed: unknown): unknown[] | undefined {
 
 /** Epoch seconds, epoch millis, numeric strings, and ISO strings → Date. */
 function toDate(v: unknown): Date | undefined {
-  if (v == null) {
-    return undefined;
-  }
+  // A decimal string ("1716393600.5") is a fractional epoch here, which the
+  // shared rule (integers only) does not read; the number path does.
+  const numeric = typeof v === 'string' && /^\d+(\.\d+)?$/.test(v.trim()) ? Number(v) : v;
 
-  if (typeof v === 'string' && /^\d+(\.\d+)?$/.test(v.trim())) {
-    v = Number(v);
-  }
-
-  if (typeof v === 'number') {
-    if (!isFinite(v) || v <= 0) {
-      return undefined;
-    }
-
-    const d = new Date(v > 1e12 ? v : v * 1000);
-
-    return isNaN(d.getTime()) ? undefined : d;
-  }
-
-  if (typeof v === 'string' && v) {
-    const d = new Date(v);
-
-    return isNaN(d.getTime()) ? undefined : d;
-  }
-
-  return undefined;
+  return parseFlexibleDate(numeric, { epoch: 'auto' });
 }
 
 function firstString(obj: Record<string, unknown>, keys: string[]): string | undefined {
@@ -272,4 +286,63 @@ export function memoryTitle(text: string, max = 80): string {
   const line = text.split('\n', 1)[0].trim();
 
   return line.length > max ? line.slice(0, max - 1) + '…' : line;
+}
+
+/** What tells one vendor's memory note from another's: the id prefix and the `Source` label. */
+export interface MemoryVendor {
+  /** `<idPrefix>:memory:<key>` is the note's stable id. */
+  idPrefix: 'chatgpt' | 'claude' | 'gemini';
+  source: 'ChatGPT' | 'Claude' | 'Gemini';
+  /**
+   * Prefer the entry's own title over the first line of its text. Claude's
+   * profile sections carry a section heading; the other vendors' entries do
+   * not, and their importers never read `title`.
+   */
+  preferEntryTitle?: boolean;
+}
+
+/**
+ * One memory entry as a note item. Was a verbatim private `pushMemory` in each
+ * of the three AI-assistant importers.
+ */
+export function pushMemoryEntry(m: MemoryEntry, params: ImportParams, vendor: MemoryVendor): void {
+  const ts = m.created ?? m.updated;
+  if (!timeframeContains(params.timeframe, ts)) {
+    return;
+  }
+
+  const key = m.idHint || crypto.createHash('sha1').update(m.text).digest('hex').slice(0, 24);
+  params.pipeline.push({
+    item: {
+      id: `${vendor.idPrefix}:memory:${key}`,
+      classification: 'note',
+      timestamp: ts,
+      content: textContent('memory.txt', m.text),
+      metadata: {
+        Kind: 'memory',
+        Title: (vendor.preferEntryTitle ? m.title : undefined) || memoryTitle(m.text),
+        Category: m.category || undefined,
+        Updated: m.updated || undefined,
+        Source: vendor.source,
+        Text: m.text,
+      },
+    },
+  });
+}
+
+/** Every memory entry of one export file, as note items. */
+export async function importMemoriesFile(
+  fpath: string,
+  params: ImportParams,
+  vendor: MemoryVendor & { label: string },
+): Promise<void> {
+  const parsed = await readJsonFile(fpath, { log: params.log, label: vendor.label });
+
+  if (parsed === undefined) {
+    return;
+  }
+
+  for (const m of parseMemoryEntries(parsed)) {
+    pushMemoryEntry(m, params, vendor);
+  }
 }

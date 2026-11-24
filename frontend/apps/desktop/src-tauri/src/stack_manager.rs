@@ -12,6 +12,7 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -104,7 +105,7 @@ fn describe_compose_line(line: &str) -> Option<String> {
 /// overlay's `ports:` handling for little real benefit.
 pub const GATEWAY_PORT: u16 = 8642;
 
-const PROJECT_NAME: &str = "ci-server-desktop";
+pub(crate) const PROJECT_NAME: &str = "ci-server-desktop";
 
 /// CI-Portal's production origin — the sensible default for "Sign in with
 /// CI-Portal" (see write_env_file). Override with the CI_PORTAL_URL env var
@@ -146,8 +147,12 @@ pub fn initialize_stack(resource_dir: &Path, data_dir: &Path) -> Result<StackPat
     let compose_dir = data_dir.join("compose");
     let logs_dir = data_dir.join("logs");
     let import_work_dir = data_dir.join("import-work");
+    // Made here, before any `compose up`: Docker creates a missing bind-mount
+    // source itself, owned by root, and this app could then never write the
+    // presence file into it (see presence.rs).
+    let desktop_app_dir = crate::presence::dir(&compose_dir);
 
-    for dir in [&compose_dir, &logs_dir, &import_work_dir] {
+    for dir in [&compose_dir, &logs_dir, &import_work_dir, &desktop_app_dir] {
         fs::create_dir_all(dir).map_err(|e| format!("Failed to create {}: {e}", dir.display()))?;
     }
 
@@ -312,8 +317,9 @@ fn write_env_file(env_path: &Path, image_tag: &str, import_work_dir: &Path) -> R
 
 /// Appends the LLM_API_BASE/LLM_API_KEY override
 /// local_model::LocalModelHandles::resolve_once resolved (Apple-on-device-
-/// for-chat only — every other outcome relies on the existing OLLAMA_HOST
-/// default and calls this with an empty override, a harmless no-op).
+/// for-chat only). The HostOllama branch may instead carry a chat model (see
+/// below). Every other outcome relies on the existing OLLAMA_HOST default
+/// and calls this with an empty override, a harmless no-op.
 /// Additive rather than rewriting write_env_file's own content: it never
 /// writes these two keys itself, so there's no duplicate-key risk, and this
 /// keeps "the no-secrets baseline env" and "the local-model resolution
@@ -322,11 +328,26 @@ fn write_env_file(env_path: &Path, image_tag: &str, import_work_dir: &Path) -> R
 /// (re)created, not on every request. resolve_once itself only calls this
 /// once (see its doc comment), so calling it twice is not a concern in
 /// practice, but it would still duplicate lines if it ever were.
+///
+/// The one exception to "additive" is a chat model (a user's own Ollama
+/// without DEFAULT_CHAT_MODEL): write_env_file already wrote
+/// LLM_DEFAULT_CHAT_MODEL, so that line is replaced rather than repeated.
+/// LLM_UTILITY_MODEL is deliberately left unset. The api's utility calls
+/// already move to the chat model when the utility model is not served (its
+/// residency planner, or utilityModelTheEndpointServes when that is off).
+/// Setting the key would also mark the utility model as an operator's choice,
+/// which sends image turns to it even when a user has picked another chat
+/// model.
 pub fn apply_llm_env_override(paths: &StackPaths, llm_env: &crate::local_model::LlmEnvOverride) -> Result<(), String> {
+    let env_path = paths.compose_dir.join(".env");
+
+    if let Some(model) = &llm_env.chat_model {
+        set_env_chat_model(paths, model)?;
+    }
+
     let (Some(api_base), Some(api_key)) = (&llm_env.llm_api_base, &llm_env.llm_api_key) else {
         return Ok(());
     };
-    let env_path = paths.compose_dir.join(".env");
     let addition = format!("LLM_API_BASE={api_base}\nLLM_API_KEY={api_key}\n");
     use std::io::Write;
     fs::OpenOptions::new()
@@ -334,6 +355,53 @@ pub fn apply_llm_env_override(paths: &StackPaths, llm_env: &crate::local_model::
         .open(&env_path)
         .and_then(|mut file| file.write_all(addition.as_bytes()))
         .map_err(|e| format!("Failed to append LLM override to {}: {e}", env_path.display()))
+}
+
+const CHAT_MODEL_KEY: &str = "LLM_DEFAULT_CHAT_MODEL";
+
+/// Points `.env` at `model` for chat and background work. Takes effect for a
+/// container only when it is recreated (see apply_env_change).
+///
+/// Written beside `.env` and renamed over it. "Download recommended model"
+/// calls this from its own thread, outside START_IN_FLIGHT, so a `compose up`
+/// from the tray or the splash can be reading `.env` at that moment. A rename
+/// gives it the old file or the new one. A truncate-and-write could give it an
+/// empty one. An `up` without CI_SERVER_IMAGE_TAG or CI_LOCAL_ONLY recreates
+/// the containers wrongly.
+pub fn set_env_chat_model(paths: &StackPaths, model: &str) -> Result<(), String> {
+    let env_path = paths.compose_dir.join(".env");
+    let staged = paths.compose_dir.join(".env.next");
+    let current = fs::read_to_string(&env_path).map_err(|e| format!("Failed to read {}: {e}", env_path.display()))?;
+    fs::write(&staged, with_chat_model(&current, model))
+        .and_then(|()| fs::rename(&staged, &env_path))
+        .map_err(|e| format!("Failed to write {}: {e}", env_path.display()))
+}
+
+/// The chat model `.env` names, if it can be read.
+pub fn env_chat_model(paths: &StackPaths) -> Option<String> {
+    let contents = fs::read_to_string(paths.compose_dir.join(".env")).ok()?;
+
+    chat_model_in(&contents)
+}
+
+fn chat_model_in(env_contents: &str) -> Option<String> {
+    env_contents
+        .lines()
+        .rev()
+        .find_map(|line| line.split_once('=').filter(|(name, _)| *name == CHAT_MODEL_KEY))
+        .map(|(_, value)| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+/// `.env` contents with LLM_DEFAULT_CHAT_MODEL naming `model`, exactly once.
+fn with_chat_model(env_contents: &str, model: &str) -> String {
+    let mut contents: String = env_contents
+        .lines()
+        .filter(|line| !line.split_once('=').is_some_and(|(name, _)| name == CHAT_MODEL_KEY))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    contents.push_str(&format!("{CHAT_MODEL_KEY}={model}\n"));
+    contents
 }
 
 /// Extra host-tool search dirs Docker Desktop/Docker Engine installers don't
@@ -520,6 +588,19 @@ pub fn is_docker_available() -> bool {
 /// already learns readiness by polling health, never from this return value.
 static START_IN_FLIGHT: Mutex<()> = Mutex::new(());
 
+/// Set by Quit. From then on no new `up` starts; one already running finishes.
+///
+/// Quit kills the Ollama this app runs, and when that happens during the first
+/// start's model pull, the pull fails and ensure_local_model_then_start_stack
+/// goes on to `compose up` anyway, in the moment before the app exits. The
+/// person quit before Memory had started, so it stays that way until they open
+/// the app again.
+static NO_NEW_STARTS: AtomicBool = AtomicBool::new(false);
+
+pub fn refuse_new_starts() {
+    NO_NEW_STARTS.store(true, Ordering::SeqCst);
+}
+
 /// `Some(guard)` if this caller now owns the start; `None` if another start is
 /// already running and this one should stand down.
 fn claim_start() -> Option<std::sync::MutexGuard<'static, ()>> {
@@ -582,7 +663,33 @@ pub fn start_stack(paths: &StackPaths) -> Result<(), String> {
     start_stack_inner(paths, None)
 }
 
+/// Recreates the containers whose settings changed in `.env`: the same `up`
+/// as `start_stack`, which leaves unchanged containers running. Unlike
+/// `start_stack` it waits for a start already under way instead of standing
+/// down, because that start may have read `.env` before the change.
+///
+/// A stack the person stopped from the tray stays stopped (its next start reads
+/// the new `.env`), as does one the app is quitting on. Returns whether it ran
+/// the `up`.
+pub fn apply_env_change(paths: &StackPaths) -> Result<bool, String> {
+    let _in_flight = START_IN_FLIGHT.lock().unwrap_or_else(|p| p.into_inner());
+
+    if is_user_stopped(paths) || NO_NEW_STARTS.load(Ordering::SeqCst) {
+        log::info!("apply_env_change: the stack is stopped or the app is quitting; its next start reads the new .env");
+        return Ok(false);
+    }
+
+    start_stack_inner(paths, None)?;
+
+    Ok(true)
+}
+
 fn start_stack_inner(paths: &StackPaths, progress: Option<&ProgressHandle>) -> Result<(), String> {
+    if NO_NEW_STARTS.load(Ordering::SeqCst) {
+        log::info!("start_stack: the app is quitting; not starting the stack");
+        return Ok(());
+    }
+
     if let Some(progress) = progress {
         set_progress(progress, "preflight", "Checking your machine…");
     }
@@ -590,10 +697,17 @@ fn start_stack_inner(paths: &StackPaths, progress: Option<&ProgressHandle>) -> R
     // The app's OWN gateway holds this port whenever the stack is already up,
     // and treating that as a foreign conflict made the error unrecoverable:
     // every Retry hit the same check and refused before compose could run. A
-    // port held by our own healthy stack is the normal case, not a problem.
-    if !is_stack_healthy_blocking() {
-        crate::port_check::preflight_port(GATEWAY_PORT)?;
-    }
+    // port held by our own running gateway is the normal case, not a problem.
+    //
+    // "Something answers on the port" is not that, though. This used to skip
+    // the check on any TCP connect, so a port another program had taken was
+    // never reported: compose then failed to start the gateway, left it
+    // created, and readiness navigated the window into the other program's
+    // page. Now the skip needs this project's gateway container running with
+    // the port published.
+    gateway_port_preflight(gateway_port_answers(), gateway_serves_port, || {
+        crate::port_check::preflight_port(GATEWAY_PORT)
+    })?;
 
     if !is_docker_installed() {
         return Err("Docker is not installed.".to_string());
@@ -836,9 +950,10 @@ fn describe_compose_failure(transcript: &[String]) -> String {
     }
 }
 
-/// Whether the gateway is already answering — used to tell "our own stack holds
-/// the port" apart from "something else does".
-fn is_stack_healthy_blocking() -> bool {
+/// Whether anything at all accepts a connection on the gateway port. It says
+/// nothing about what: pair it with [`gateway_serves_port`] before treating
+/// the answer as this app's own stack.
+fn gateway_port_answers() -> bool {
     std::net::TcpStream::connect_timeout(
         &format!("127.0.0.1:{GATEWAY_PORT}").parse().expect("valid loopback address"),
         Duration::from_millis(400),
@@ -846,16 +961,51 @@ fn is_stack_healthy_blocking() -> bool {
     .is_ok()
 }
 
-/// The bundled overlay uses the Compose Specification's `!reset` tag, which
-/// needs Compose >= 2.24. Older CLIs fail on it with a YAML parse error that
-/// says nothing about versions, so check up front and say so plainly.
+/// The start preflight's ruling on the gateway port, split from the probes
+/// that feed it so it is testable without Docker or a real listener. A port
+/// that answers is fine only when this project's gateway container is the one
+/// holding it; a port that does not answer must still be free to bind.
+fn gateway_port_preflight(
+    port_answers: bool,
+    gateway_serves_port: impl FnOnce() -> bool,
+    port_is_free: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    if !port_answers {
+        return port_is_free();
+    }
+
+    if gateway_serves_port() {
+        Ok(())
+    } else {
+        Err(foreign_port_holder_message())
+    }
+}
+
+/// What the splash says when the gateway port is taken and this project's
+/// gateway container is not the one holding it.
+fn foreign_port_holder_message() -> String {
+    format!(
+        "Port {GATEWAY_PORT} is already in use, and not by this app's own stack. \
+         Quit whatever is using it and try again."
+    )
+}
+
+/// The bundled overlay uses the Compose Specification's `!override` tag (on the
+/// gateway's `ports:`), which first shipped in Compose 2.24.4 (compose-go
+/// v2.0.0-rc.3). Older CLIs do not reject it: they ignore the tag and append the
+/// overlay's loopback mapping to production's all-interfaces one, so the gateway
+/// either fails to bind or answers on every interface again. Nothing in that
+/// failure mentions versions, so check up front and say so plainly.
 fn compose_version_error() -> Option<String> {
     let output = docker_command().args(["compose", "version", "--short"]).output().ok()?;
     compose_version_error_in(&String::from_utf8_lossy(&output.stdout))
 }
 
+/// The oldest Compose that honours `!override`; see [`compose_version_error`].
+const MIN_COMPOSE_VERSION: (u32, u32, u32) = (2, 24, 4);
+
 /// The version comparison itself, split from the `docker compose version` call
-/// so the boundary (2.23 refused, 2.24 accepted) and the unreadable-output
+/// so the boundary (2.24.3 refused, 2.24.4 accepted) and the unreadable-output
 /// escape hatch can be covered without a Docker daemon.
 fn compose_version_error_in(raw: &str) -> Option<String> {
     let version = raw.trim().trim_start_matches('v');
@@ -869,31 +1019,58 @@ fn compose_version_error_in(raw: &str) -> Option<String> {
     // message quoting its own version back at it.
     let major = parts.next().and_then(|p| p.parse::<u32>().ok());
     let minor = parts.next().and_then(|p| p.parse::<u32>().ok()).unwrap_or(0);
+    // Only the leading digits: Docker Desktop reports versions such as
+    // `2.24.6-desktop.1`, and a pre-release such as `2.24.4-rc1` counts as 2.24.4.
+    let patch = parts
+        .next()
+        .map(|p| {
+            p.chars()
+                .take_while(char::is_ascii_digit)
+                .collect::<String>()
+        })
+        .and_then(|digits| digits.parse::<u32>().ok())
+        .unwrap_or(0);
 
     // Unreadable version — let compose speak for itself. `Some(0)` is kept in this
     // branch because no Compose that can run the bundled overlay reports major 0.
     let major = major.filter(|&major| major > 0 || minor > 0)?;
 
-    if (major, minor) < (2, 24) {
+    if (major, minor, patch) < MIN_COMPOSE_VERSION {
+        let (need_major, need_minor, need_patch) = MIN_COMPOSE_VERSION;
         return Some(format!(
-            "Docker Compose {version} is too old — Companion Memory needs 2.24 or newer. Update Docker Desktop and try again."
+            "Docker Compose {version} is too old. Companion Memory needs {need_major}.{need_minor}.{need_patch} or newer. Update Docker Desktop and try again."
         ));
     }
 
     None
 }
 
+/// What the tray's Stop Stack runs: `stop`, not `down`.
+///
+/// `down` also removes the project's networks. The next `up` creates them
+/// again on whatever subnet Docker hands out, which is often a different one.
+/// Every request reaches the api from the `ci` network's gateway address and a
+/// session only renews from the address it signed in from, so a moved subnet
+/// signed the window and every browser out at their next renewal ("Invalid
+/// session"). `stop` keeps the containers and their networks, so Start Stack
+/// brings the same addresses back. Volumes are kept either way.
+///
+/// The start path's self-heal still runs `down`, see with_stale_container_retry.
+/// It only runs after an `up` has already failed on a stale container or on a
+/// network that is gone, and in that second case the subnet is new anyway.
+const STOP_ARGS: [&str; 1] = ["stop"];
+
 pub fn stop_stack(paths: &StackPaths) -> Result<(), String> {
     let output = compose_command(paths)
-        .arg("down")
+        .args(STOP_ARGS)
         .output()
-        .map_err(|e| format!("Failed to run docker compose down: {e}"))?;
+        .map_err(|e| format!("Failed to run docker compose stop: {e}"))?;
 
     append_desktop_log(paths, "stop", &describe_output(&output));
 
     if !output.status.success() {
         return Err(format!(
-            "docker compose down failed: {}",
+            "docker compose stop failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }
@@ -936,6 +1113,93 @@ pub fn image_tag_of(image_ref: &str) -> Option<&str> {
     last_segment.split_once(':').map(|(_, tag)| tag).filter(|tag| !tag.is_empty())
 }
 
+/// What `docker inspect` says about this project's gateway container: the
+/// facts readiness and the start preflight rest on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GatewayContainer {
+    /// `Config.Image`, the reference the container was created from.
+    image: String,
+    /// `State.Running`.
+    running: bool,
+    /// The container's own port bindings hold GATEWAY_PORT on the host. A
+    /// container compose created but could not start, because something else
+    /// had the port, has none.
+    publishes_gateway_port: bool,
+}
+
+impl GatewayContainer {
+    /// Running and holding the port itself, so what answers on
+    /// 127.0.0.1:GATEWAY_PORT is this container and not another program.
+    fn serves_gateway_port(&self) -> bool {
+        self.running && self.publishes_gateway_port
+    }
+
+    /// Serving the port, and created from this build's image tag.
+    fn serves_image_tag(&self, image_tag: &str) -> bool {
+        self.serves_gateway_port() && image_tag_of(&self.image) == Some(image_tag)
+    }
+}
+
+/// Reads a [`GatewayContainer`] out of `docker inspect`'s JSON, an array with
+/// one object per name asked about. Split from the command so the decision is
+/// testable without a Docker daemon.
+fn parse_gateway_inspect(inspect_json: &str) -> Option<GatewayContainer> {
+    let parsed: serde_json::Value = serde_json::from_str(inspect_json).ok()?;
+    let container = parsed.get(0)?;
+
+    let image = container.pointer("/Config/Image")?.as_str()?.to_string();
+    let running = container
+        .pointer("/State/Running")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let gateway_port = GATEWAY_PORT.to_string();
+    let publishes_gateway_port = container
+        .pointer("/NetworkSettings/Ports")
+        .and_then(|ports| ports.get(format!("{GATEWAY_PORT}/tcp")))
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|bindings| {
+            bindings.iter().any(|binding| {
+                binding.get("HostPort").and_then(serde_json::Value::as_str)
+                    == Some(gateway_port.as_str())
+            })
+        });
+
+    Some(GatewayContainer {
+        image,
+        running,
+        publishes_gateway_port,
+    })
+}
+
+/// This project's gateway container, or None when it does not exist or Docker
+/// cannot be asked.
+fn inspect_gateway() -> Option<GatewayContainer> {
+    let output = docker_command()
+        .args([
+            "inspect",
+            "--type",
+            "container",
+            &format!("{PROJECT_NAME}-gateway-1"),
+        ])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    parse_gateway_inspect(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Is this project's gateway container running and holding the gateway port?
+///
+/// The health probe cannot tell: any program listening on 127.0.0.1:8642 can
+/// answer `/api/health`. Only the container's own state and port bindings tie
+/// the socket to it.
+pub fn gateway_serves_port() -> bool {
+    inspect_gateway().is_some_and(|gateway| gateway.serves_gateway_port())
+}
+
 /// Is the gateway container that answers on the port running THIS build's
 /// images?
 ///
@@ -948,22 +1212,23 @@ pub fn image_tag_of(image_ref: &str) -> Option<&str> {
 /// was pinned to a frontend the API no longer matched. Gating on the gateway
 /// (the last service compose recreates, since it depends on `api`) means the
 /// page the shell navigates to is the one it shipped with.
+///
+/// The image alone is not enough either: `docker inspect` reports it for a
+/// container that was created and never started, which is the state compose
+/// leaves the gateway in when another program already holds the port. So the
+/// container must also be running with the port published, see
+/// [`gateway_serves_port`].
 pub fn gateway_runs_image_tag(image_tag: &str) -> bool {
-    let output = docker_command()
-        .args(["inspect", "--format", "{{.Config.Image}}", &format!("{PROJECT_NAME}-gateway-1")])
-        .output();
+    inspect_gateway().is_some_and(|gateway| gateway.serves_image_tag(image_tag))
+}
 
-    match output {
-        Ok(out) if out.status.success() => {
-            let image_ref = String::from_utf8_lossy(&out.stdout);
-            image_tag_of(image_ref.trim()) == Some(image_tag)
-        }
-        _ => false,
-    }
+/// Memory's health check, through the gateway.
+fn health_url() -> String {
+    format!("http://127.0.0.1:{GATEWAY_PORT}/api/health")
 }
 
 pub async fn is_healthy() -> bool {
-    let url = format!("http://127.0.0.1:{GATEWAY_PORT}/api/health");
+    let url = health_url();
     let client = match reqwest::Client::builder().timeout(Duration::from_millis(2500)).build() {
         Ok(client) => client,
         Err(_) => return false,
@@ -974,11 +1239,36 @@ pub async fn is_healthy() -> bool {
     }
 }
 
+/// Blocks until Memory answers its health check through the gateway, `timeout`
+/// passes or `give_up` says to stop waiting (asked between tries). For a caller
+/// already off the async runtime.
+pub fn wait_until_healthy(timeout: Duration, give_up: impl Fn() -> bool) -> bool {
+    let url = health_url();
+    let Ok(client) = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_millis(2500))
+        .no_proxy()
+        .build()
+    else {
+        return false;
+    };
+    let deadline = std::time::Instant::now() + timeout;
+
+    loop {
+        if client.get(&url).send().is_ok_and(|response| response.status().is_success()) {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline || give_up() {
+            return false;
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    }
+}
+
 fn user_stopped_marker(paths: &StackPaths) -> PathBuf {
     paths.data_dir.join(".user-stopped")
 }
 
-fn mark_user_stopped(paths: &StackPaths) {
+pub fn mark_user_stopped(paths: &StackPaths) {
     let _ = fs::write(user_stopped_marker(paths), b"");
 }
 
@@ -986,7 +1276,8 @@ fn clear_user_stopped(paths: &StackPaths) {
     let _ = fs::remove_file(user_stopped_marker(paths));
 }
 
-fn is_user_stopped(paths: &StackPaths) -> bool {
+/// The person stopped Memory from the tray and has not started it since.
+pub fn is_user_stopped(paths: &StackPaths) -> bool {
     user_stopped_marker(paths).exists()
 }
 
@@ -1113,6 +1404,100 @@ mod tests {
         assert!(contents.contains("OIDC_ISSUER_URL="));
         assert!(!contents.to_lowercase().contains("secret"));
         assert!(!contents.to_lowercase().contains("password"));
+    }
+
+    /// With a user's own Ollama that lacks the default model, the app names one
+    /// it has. The chat model line write_env_file wrote must be replaced, not
+    /// repeated. LLM_UTILITY_MODEL stays unset (see apply_llm_env_override).
+    /// Everything else in the file stays as written. Running it twice changes
+    /// nothing.
+    #[test]
+    fn a_chat_model_override_replaces_the_default_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = scratch_paths(&dir);
+        fs::create_dir_all(&paths.compose_dir).unwrap();
+        let env_path = paths.compose_dir.join(".env");
+        write_env_file(&env_path, "2026.8.25", &paths.import_work_dir).unwrap();
+        let before = fs::read_to_string(&env_path).unwrap();
+
+        let llm_env = crate::local_model::LlmEnvOverride {
+            chat_model: Some("qwen3.5:122b".to_string()),
+            ..Default::default()
+        };
+        apply_llm_env_override(&paths, &llm_env).unwrap();
+        apply_llm_env_override(&paths, &llm_env).unwrap();
+        let after = fs::read_to_string(&env_path).unwrap();
+
+        let values = |key: &str| {
+            after
+                .lines()
+                .filter_map(|line| line.split_once('='))
+                .filter(|(name, _)| *name == key)
+                .map(|(_, value)| value.to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(values("LLM_DEFAULT_CHAT_MODEL"), vec!["qwen3.5:122b"]);
+        assert!(values("LLM_UTILITY_MODEL").is_empty(), "the utility model is left to the api");
+        assert!(values("LLM_API_BASE").is_empty(), "no endpoint was asked for");
+
+        let untouched = |contents: &str| {
+            contents
+                .lines()
+                .filter(|line| !line.starts_with("LLM_DEFAULT_CHAT_MODEL="))
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(untouched(&after), untouched(&before));
+    }
+
+    /// "Download recommended model" reads which chat model Memory runs on and,
+    /// once the download is in, points `.env` back at the default. That is a
+    /// second rewrite of the same line. The file ends up as the app would
+    /// have written it had the model been there at launch.
+    #[test]
+    fn the_chat_model_is_read_back_and_can_be_switched_to_the_default() {
+        use crate::local_model::ollama_sidecar::DEFAULT_CHAT_MODEL;
+
+        let dir = tempfile::tempdir().unwrap();
+        let paths = scratch_paths(&dir);
+        assert_eq!(env_chat_model(&paths), None, "no .env yet");
+
+        fs::create_dir_all(&paths.compose_dir).unwrap();
+        let env_path = paths.compose_dir.join(".env");
+        write_env_file(&env_path, "2026.8.25", &paths.import_work_dir).unwrap();
+        let as_written = fs::read_to_string(&env_path).unwrap();
+        assert_eq!(env_chat_model(&paths).as_deref(), Some(DEFAULT_CHAT_MODEL));
+
+        set_env_chat_model(&paths, "qwen3.5:122b").unwrap();
+        assert_eq!(env_chat_model(&paths).as_deref(), Some("qwen3.5:122b"));
+
+        set_env_chat_model(&paths, DEFAULT_CHAT_MODEL).unwrap();
+        assert_eq!(env_chat_model(&paths).as_deref(), Some(DEFAULT_CHAT_MODEL));
+        assert!(
+            !paths.compose_dir.join(".env.next").exists(),
+            "the staged copy is renamed over .env, not left beside it"
+        );
+        let mut lines_now: Vec<_> = fs::read_to_string(&env_path).unwrap().lines().map(str::to_string).collect();
+        let mut lines_then: Vec<_> = as_written.lines().map(str::to_string).collect();
+        lines_now.sort();
+        lines_then.sort();
+        assert_eq!(lines_now, lines_then);
+
+        assert_eq!(chat_model_in("LLM_DEFAULT_CHAT_MODEL=\n"), None);
+        assert_eq!(chat_model_in("LLM_DEFAULT_CHAT_MODEL_X=a\nLLM_DEFAULT_CHAT_MODEL=b\n").as_deref(), Some("b"));
+    }
+
+    /// A download that ends after the person stopped Memory from the tray
+    /// leaves it stopped. Its `up` would have started the stack again and
+    /// cleared the marker that tells the tray it was stopped on purpose.
+    #[test]
+    fn an_env_change_leaves_a_stopped_stack_stopped() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = scratch_paths(&dir);
+        mark_user_stopped(&paths);
+
+        assert_eq!(apply_env_change(&paths), Ok(false));
+        assert!(is_user_stopped(&paths));
     }
 
     /// Every key write_env_file generates, in one list.
@@ -1254,6 +1639,10 @@ mod tests {
         // out rather than expressed as a profile override, are documented at
         // compose_up_blocking.
         assert_eq!(UP_ARGS, ["up", "-d", "--remove-orphans", "--scale", "powersync=0"]);
+
+        // Stop Stack must not be `down`. That removes the networks, so the next
+        // `up` can create `ci` on another subnet and sign every session out.
+        assert_eq!(STOP_ARGS, ["stop"]);
     }
 
     #[test]
@@ -1424,6 +1813,77 @@ mod tests {
         drop(in_flight);
     }
 
+    /// Readiness needs the gateway container running AND holding 8642 itself.
+    /// `docker inspect` reports `Config.Image` for a container compose created
+    /// but could not start, which is the state another program holding the
+    /// port leaves it in, so the image alone proved nothing.
+    #[test]
+    fn a_gateway_counts_only_when_it_runs_and_holds_the_port_itself() {
+        let inspect = |running: bool, ports: &str| {
+            format!(
+                r#"[{{"Config":{{"Image":"ghcr.io/companionintelligence/companion/gateway:2026.9.10"}},"State":{{"Running":{running}}},"NetworkSettings":{{"Ports":{ports}}}}}]"#
+            )
+        };
+        let serves = |running: bool, ports: &str| {
+            parse_gateway_inspect(&inspect(running, ports))
+                .expect("parses")
+                .serves_gateway_port()
+        };
+        let published = r#"{"8642/tcp":[{"HostIp":"127.0.0.1","HostPort":"8642"}]}"#;
+        let elsewhere = r#"{"8642/tcp":[{"HostIp":"127.0.0.1","HostPort":"18642"}]}"#;
+
+        let up = parse_gateway_inspect(&inspect(true, published)).expect("parses");
+        assert!(up.image.ends_with("/gateway:2026.9.10"));
+        assert!(up.serves_gateway_port());
+        assert!(up.serves_image_tag("2026.9.10"));
+        assert!(
+            !up.serves_image_tag("2026.9.6"),
+            "another release's gateway is not ready"
+        );
+
+        // The right image is not enough on its own.
+        let created = parse_gateway_inspect(&inspect(false, published)).expect("parses");
+        assert!(!created.serves_image_tag("2026.9.10"));
+
+        // Created and never started: what compose leaves behind when the
+        // port was already taken.
+        assert!(!serves(false, r#"{"8642/tcp":null}"#));
+        assert!(!serves(false, published));
+
+        // Running, but the port is not its own.
+        assert!(!serves(true, "{}"));
+        assert!(!serves(true, elsewhere));
+
+        // No such container, or output that is not inspect's.
+        assert_eq!(parse_gateway_inspect("[]"), None);
+        assert_eq!(parse_gateway_inspect("Error: No such object"), None);
+    }
+
+    /// The preflight used to skip its port check whenever anything accepted a
+    /// connection on 8642, so a port another program held was never reported.
+    #[test]
+    fn a_port_held_by_anything_but_our_gateway_fails_the_preflight() {
+        let free = || Ok(());
+
+        // Our own running gateway holds it: the normal case on a relaunch.
+        assert_eq!(gateway_port_preflight(true, || true, free), Ok(()));
+
+        // Something answers, and it is not our gateway.
+        let err = gateway_port_preflight(true, || false, free).unwrap_err();
+        assert!(
+            err.contains("8642") && err.contains("not by this app"),
+            "{err}"
+        );
+
+        // Nothing answers: binding the port decides, and Docker is not asked.
+        assert_eq!(
+            gateway_port_preflight(false, || unreachable!(), free),
+            Ok(())
+        );
+        let taken = || Err("Port 8642 is already in use".to_string());
+        assert!(gateway_port_preflight(false, || true, taken).is_err());
+    }
+
     /// Readiness compares the gateway's running image tag with the bundled
     /// one, and an image reference's tag is not simply "after the colon".
     #[test]
@@ -1588,17 +2048,26 @@ mod tests {
         );
     }
 
-    /// The bundled overlay uses the Compose Specification's `!reset` tag, which
-    /// needs 2.24. Below that, compose fails with a YAML parse error that never
-    /// mentions versions, so this check is the only place the real reason gets
-    /// said — and the boundary has to be exactly right, or it either rejects
-    /// working installs or lets the unreadable error through.
+    /// The bundled overlay uses the Compose Specification's `!override` tag,
+    /// which first shipped in 2.24.4. Below that, compose ignores the tag and
+    /// appends the loopback mapping to production's all-interfaces one, and
+    /// nothing in the result mentions versions, so this check is the only place
+    /// the real reason gets said. The boundary has to be exactly right, or it
+    /// either rejects working installs or lets the broken mapping through.
     #[test]
-    fn compose_older_than_2_24_is_refused_and_2_24_itself_is_not() {
+    fn compose_older_than_2_24_4_is_refused_and_2_24_4_itself_is_not() {
         assert!(compose_version_error_in("2.23.9").is_some());
-        assert!(compose_version_error_in("2.24.0").is_none());
-        assert!(compose_version_error_in("2.24").is_none());
+        assert!(compose_version_error_in("2.24.0").is_some());
+        assert!(compose_version_error_in("2.24.3").is_some());
+        assert!(compose_version_error_in("2.24").is_some());
+        assert!(compose_version_error_in("2.24.4").is_none());
+        assert!(compose_version_error_in("2.25.0").is_none());
         assert!(compose_version_error_in("1.29.2").is_some());
+
+        // Docker Desktop's own spelling: the patch is read up to its first
+        // non-digit, so a suffix neither hides an old patch nor refuses a new one.
+        assert!(compose_version_error_in("v2.24.6-desktop.1\n").is_none());
+        assert!(compose_version_error_in("v2.24.3-desktop.1\n").is_some());
 
         // The `v` prefix and the trailing newline are what `docker compose
         // version --short` actually emits, in that order.
@@ -1610,9 +2079,9 @@ mod tests {
         assert!(compose_version_error_in("2.9.0").is_some());
         assert!(compose_version_error_in("3.0.0").is_none());
 
-        let message = compose_version_error_in("2.23.9").expect("2.23.9 is too old");
-        assert!(message.contains("2.23.9"), "the user should see their own version: {message}");
-        assert!(message.contains("2.24"), "and what they need: {message}");
+        let message = compose_version_error_in("2.24.3").expect("2.24.3 is too old");
+        assert!(message.contains("2.24.3"), "the user should see their own version: {message}");
+        assert!(message.contains("2.24.4"), "and what they need: {message}");
     }
 
     /// An unparseable version must not become a hard stop. A Compose CLI that
@@ -1643,7 +2112,8 @@ mod tests {
         // A trailing component that does not parse is not the same thing: the
         // major and minor are readable, so the comparison still applies.
         assert!(compose_version_error_in("2.23.0-rc1").is_some());
-        assert!(compose_version_error_in("2.24.0-rc1").is_none());
+        assert!(compose_version_error_in("2.24.4-rc1").is_none());
+        assert!(compose_version_error_in("2.25.x").is_none());
     }
 
     /// desktop.log is append-only for the life of the install, so without the
@@ -1717,5 +2187,16 @@ mod tests {
         assert!(is_user_stopped(&paths));
         clear_user_stopped(&paths);
         assert!(!is_user_stopped(&paths));
+    }
+
+    /// Giving up at once means one try. A Memory that does not answer is not
+    /// asked again, and one running on this machine answers that first try.
+    #[test]
+    fn giving_up_ends_the_wait_for_memory_at_once() {
+        let started = std::time::Instant::now();
+
+        wait_until_healthy(std::time::Duration::from_secs(60), || true);
+
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "waited {:?}", started.elapsed());
     }
 }

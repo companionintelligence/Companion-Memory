@@ -3,6 +3,7 @@ import { Injectable } from '@nestjs/common';
 import config from '@ci/configuration';
 
 import { BaseClient as Client } from './BaseClient';
+import { DropboxClient } from './DropboxClient';
 import { FacebookClient } from './FacebookClient';
 import { GitHubClient } from './GitHubClient';
 import { GoogleClient } from './GoogleClient';
@@ -27,6 +28,7 @@ export class ClientFactory {
     private readonly signalClient: SignalClient,
     private readonly slackClient: SlackClient,
     private readonly steamClient: SteamClient,
+    private readonly dropboxClient: DropboxClient,
   ) {
     this.providers.set(config.auth.providers.google.id, this.googleClient);
     this.providers.set(config.auth.providers.microsoft.id, this.microsoftClient);
@@ -37,6 +39,7 @@ export class ClientFactory {
     this.providers.set(config.auth.providers.signal.id, this.signalClient);
     this.providers.set(config.auth.providers.slack.id, this.slackClient);
     this.providers.set(config.auth.providers.steam.id, this.steamClient);
+    this.providers.set(config.auth.providers.dropbox.id, this.dropboxClient);
   }
 
   getClientByProviderId(providerId: string | null | undefined): Client {

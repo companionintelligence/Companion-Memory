@@ -18,15 +18,26 @@ export class PredictionsModule {}
 
 export { HbpeService, CalibrationService, ForecastHistoryService, PlaceForecastService };
 export { CALIBRATION_BASIS } from './services/CalibrationService';
+export {
+  assertForecastHorizon,
+  FORECAST_HORIZONS,
+  isForecastHorizon,
+  type ForecastHorizon,
+} from './services/HbpeService';
 export type { CalibrationReport, CalibrationScore } from './services/CalibrationService';
 export type { PlaceForecastItem } from './services/PlaceForecastService';
 export type { ForecastHistoryBucket, ForecastHistoryDay } from './services/ForecastHistoryService';
 export type {
+  DecisionPassageInput,
+  DecisionRerankItem,
+  DecisionRerankResponse,
   DueItem,
   DueResponse,
   ForecastBucket,
   ForecastResponse,
   ForageTrialResponse,
+  L0ClassificationResponse,
+  MemoryIngressDecisionResponse,
   WeekForecastCluster,
   WeekForecastDay,
   WeekForecastResponse,

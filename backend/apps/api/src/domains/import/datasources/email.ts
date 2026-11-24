@@ -8,8 +8,9 @@ import readline from 'node:readline';
 import { messageIdFromHeaders, normalizeMessageId } from '@ci/domains/memory';
 
 import { extractAttachmentToFile, attachmentMediaKind } from './attachment_extract';
+import { ADDRESS_HEADERS, decodeAddressList, parseEmailAddress, splitAddressList } from './email_address';
 import { mboxFromLineDate, receivedDate } from './email_date';
-import { emailDirection, isDraft } from './email_direction';
+import { emailDirection, emailDirectionBasis, isDraft, keepTrustedGmailLabels } from './email_direction';
 import { decodeHeaderField, parseMime, readableBody, type ParsedMimeResult } from './email_mime';
 import { emailThreadId } from './email_thread';
 import {
@@ -20,8 +21,9 @@ import {
 } from './receipt_detect';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
+import { readHead } from './sniff';
 import type { ImportParams, Graph, EntityAttribute, Relationship } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 // Marker type: this importer takes no options yet (future: skip labels,
 // preferHTML, …). Record<string, never> rather than {} so it means "no
@@ -223,6 +225,9 @@ export class EmailFileImporter implements FileImporter {
     const headersRaw = parts[0].replace(/\n[ \t]+/g, ' '); // unfold
     const bodyRaw = parts.slice(1).join('\n\n');
     const headers = parseHeaders(headersRaw);
+    // Only Google's own X-Gmail-Labels counts: a sender can write one too, and
+    // the map above joins duplicates (email_direction.ts#trustedGmailLabels).
+    const gmailLabels = keepTrustedGmailLabels(headers, headersRaw, decodeHeaderField);
     if (!headers.Date && !headers.Subject) {
       params.pipeline.drop?.('non_message');
 
@@ -284,7 +289,7 @@ export class EmailFileImporter implements FileImporter {
         return;
       }
 
-      for (const addr of line.split(/,/)) {
+      for (const addr of splitAddressList(line)) {
         const parsed = parseEmailAddress(addr.trim());
         if (!parsed.email) {
           continue;
@@ -327,6 +332,7 @@ export class EmailFileImporter implements FileImporter {
     // submission has none → outbound. The canonical mapping reads `Direction`
     // (mapping.ts#directionFor).
     const direction = emailDirection(headers);
+    const directionBasis = emailDirectionBasis(headers);
     // Attachments ride the communication itself as metadata.MediaAttachments —
     // the descriptor lane the push's comms media leg reads (upload + content
     // row + the message's attachments column; see graphql.ts
@@ -370,11 +376,7 @@ export class EmailFileImporter implements FileImporter {
       classification: isReceipt ? 'receipt' : 'email',
       timestamp: ts,
       intermediateLocation: location,
-      content: {
-        filename: path.basename(location),
-        mediaType: 'text/plain',
-        data: async () => Buffer.from(bodyText || ''),
-      },
+      content: textContent(path.basename(location), bodyText || ''),
       // Body snippet so the canonical mapping carries text to CI-Server; capped
       // to keep metadata/embeddings sane (full body still lives in content.data).
       // From/To ride along so the comms mapping can fill participants_metadata.
@@ -384,6 +386,10 @@ export class EmailFileImporter implements FileImporter {
         To: headers.To,
         Cc: headers.Cc,
         Direction: direction,
+        DirectionBasis: directionBasis,
+        // A Sent label a sender could have written was refused: the push never
+        // takes this mail's From for one of the owner's addresses (push/self.ts).
+        SentLabelRefused: gmailLabels.sentLabelRefused || undefined,
         MessageID: cleanMsgID,
         InReplyTo: headers['In-Reply-To']?.replace(/[<>]/g, ''),
         References: headers.References?.replace(/[<>]/g, ' '),
@@ -411,16 +417,7 @@ export class EmailFileImporter implements FileImporter {
 
 /** First 5 bytes 'From ' implies mbox (the column-0 record separator). */
 async function sniffIsMbox(fpath: string): Promise<boolean> {
-  try {
-    const fd = await fs.promises.open(fpath, 'r');
-    const buf = Buffer.alloc(5);
-    await fd.read(buf, 0, 5, 0);
-    await fd.close();
-
-    return buf.toString() === 'From ';
-  } catch {
-    return false;
-  }
+  return (await readHead(fpath, 5)) === 'From ';
 }
 
 function parseHeaders(raw: string): Record<string, string> {
@@ -435,7 +432,8 @@ function parseHeaders(raw: string): Record<string, string> {
     // decodeHeaderField is a cheap no-op (one .includes('=?') check) unless a
     // value actually carries a `=?charset?…?=` encoded-word — see gmail.ts's
     // parseHeaders for why decoding unconditionally here is safe.
-    const val = decodeHeaderField(line.slice(idx + 1).trim());
+    const value = line.slice(idx + 1).trim();
+    const val = ADDRESS_HEADERS.has(key.toLowerCase()) ? decodeAddressList(value) : decodeHeaderField(value);
     if (!map[key]) {
       map[key] = val;
     } else {
@@ -444,28 +442,6 @@ function parseHeaders(raw: string): Record<string, string> {
   }
 
   return map;
-}
-
-function parseEmailAddress(raw: string): { name?: string; email?: string } {
-  // Linear indexOf/slice, NOT a regex — the prior
-  // /^(?:"?([^"<]+)"?\s*)?<([^>]+)>$/ backtracks quadratically and hung the whole
-  // mbox import on one pathological address header (see gmail.ts for the detail).
-  const lt = raw.indexOf('<');
-  if (lt !== -1) {
-    const gt = raw.indexOf('>', lt + 1);
-    if (gt !== -1) {
-      const email = raw.slice(lt + 1, gt).trim();
-      const name = raw.slice(0, lt).trim().replace(/^"|"$/g, '').trim() || undefined;
-
-      return { name, email };
-    }
-  }
-
-  if (/^[^@\s]+@[^@\s]+$/.test(raw)) {
-    return { email: raw.trim() };
-  }
-
-  return { name: raw };
 }
 
 registerDataSource({

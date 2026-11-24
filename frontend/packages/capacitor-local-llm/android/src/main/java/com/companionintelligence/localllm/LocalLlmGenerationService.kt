@@ -8,9 +8,11 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 
+private const val TAG = "LocalLlmGenService"
 private const val NOTIFICATION_CHANNEL_ID = "local_llm_generation"
 private const val NOTIFICATION_ID = 91_002
 
@@ -38,15 +40,33 @@ class LocalLlmGenerationService : Service() {
             NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
                 .setContentTitle("Companion is thinking")
                 .setContentText("Generating an on-device reply")
-                .setSmallIcon(android.R.drawable.ic_menu_info_details)
+                .setSmallIcon(NotificationIcons.small(this, android.R.drawable.ic_menu_info_details))
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
                 .build()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        // Best effort, like the request that started this service: Android can refuse the promotion
+        // (ForegroundServiceStartNotAllowedException on API 31+ when the app is backgrounded, a
+        // SecurityException if the permission or service type is missing). Thrown from here it would take
+        // the whole process down, for a notification that only ever *protected* a generation that runs
+        // fine without it. Stop the service instead; the generation carries on unprotected.
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not enter the foreground; stopping the generation service", e)
+            state.ended()
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        // The promise to Android is kept; a stop that arrived while it was pending is carried out now,
+        // by this side -- see GenerationServiceState for the crash that stopService() caused here.
+        if (state.enteredForeground()) {
+            stopSelf()
         }
 
         // Not START_STICKY: if the OS kills the process, there is no in-flight generation left
@@ -65,15 +85,30 @@ class LocalLlmGenerationService : Service() {
         }
     }
 
+    override fun onDestroy() {
+        state.ended()
+        super.onDestroy()
+    }
+
     companion object {
+        /** Start/stop ordering, shared by the service and its callers; see [GenerationServiceState]. */
+        internal val state = GenerationServiceState()
+
         /** Starts protecting an in-flight generation. Safe to call even if already running. */
         fun start(context: Context) {
+            state.starting()
             ContextCompat.startForegroundService(context, Intent(context, LocalLlmGenerationService::class.java))
         }
 
-        /** Ends the protection once generation completes, errors, or is cancelled. */
+        /**
+         * Ends the protection once generation completes, errors, or is cancelled. Only acts when the service
+         * is in the foreground; before that the service stops itself, so Android's start-foreground promise
+         * is never broken by a stop that came first.
+         */
         fun stop(context: Context) {
-            context.stopService(Intent(context, LocalLlmGenerationService::class.java))
+            if (state.stopRequested()) {
+                context.stopService(Intent(context, LocalLlmGenerationService::class.java))
+            }
         }
     }
 }

@@ -40,8 +40,19 @@ function makeDataSource(rows: FakeRow[]) {
   return { dataSource: { query }, query };
 }
 
-function makeIdentifierService(existing: Record<string, string>) {
+function makeIdentifierService(existing: Record<string, string>, forgotten: string[] = []) {
+  const listed = new Set(forgotten);
+
   return {
+    // `ci.forgotten_identifiers`: the identifiers of people the owner asked memory.forget to erase.
+    findForgottenIdentifiers: jest.fn(
+      async (_userId: string, keys: Array<{ kind: string; valueNormalized: string }>) =>
+        new Set(
+          keys
+            .map((key) => `${key.kind}:${key.valueNormalized}`)
+            .filter((composite) => listed.has(composite)),
+        ),
+    ),
     findEntityIdsByIdentifiers: jest.fn(
       async (_userId: string, keys: Array<{ kind: string; valueNormalized: string }>) => {
         const out = new Map<string, string>();
@@ -83,9 +94,9 @@ function makeIngestService() {
   };
 }
 
-function makeService(rows: FakeRow[], existing: Record<string, string>) {
+function makeService(rows: FakeRow[], existing: Record<string, string>, forgotten: string[] = []) {
   const ds = makeDataSource(rows);
-  const ids = makeIdentifierService(existing);
+  const ids = makeIdentifierService(existing, forgotten);
   const ingest = makeIngestService();
   const personalization = {
     getTrustMode: jest.fn(async () => 'balanced' as const),
@@ -353,6 +364,7 @@ describe('PersonStubBackfillService.backfill', () => {
 
     expect(result.range).toBeNull();
     expect(result.windows).toBe(0);
+    expect(result.identifiersForgotten).toBe(0);
     expect(ingest.ingest).not.toHaveBeenCalled();
   });
 
@@ -457,5 +469,228 @@ describe('PersonStubBackfillService.backfill', () => {
     const [, payload] = ingest.ingest.mock.calls[0];
     expect(payload.entities).toHaveLength(1);
     expect(payload.entities[0].properties).toMatchObject({ emails: ['friend@example.com'] });
+  });
+
+  describe('binding a participant to the owner', () => {
+    // Invented throughout: the owner's name, account email and phone.
+    const SELF = '00000000-0000-0000-0000-0000000000f1';
+
+    function makeOwnerService(rows: FakeRow[], trustMode: 'cautious' | 'balanced' | 'hands_off') {
+      let selectServed = false;
+      const query = jest.fn(async (sql: string) => {
+        if (sql.includes('SELECT entity_id FROM ci.users')) {
+          return [{ entity_id: SELF }];
+        }
+
+        if (sql.includes('FROM ci.users u') || sql.includes('is_self')) {
+          return [
+            { name: 'Avery Quinn', email: 'avery@owner.example', phones_json: null },
+            { name: 'Avery Quinn', email: null, phones_json: ['+1 415-555-0100'] },
+          ];
+        }
+
+        if (sql.includes('FROM ci.communications')) {
+          if (!selectServed) {
+            selectServed = true;
+
+            return rows;
+          }
+
+          return [];
+        }
+
+        return [];
+      });
+
+      const ids = makeIdentifierService({});
+      const ingest = makeIngestService();
+      const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
+      const service = new PersonStubBackfillService(
+        { query } as never,
+        ingest as never,
+        ids as never,
+        { getTrustMode: jest.fn(async () => trustMode) } as never,
+        logger as never,
+      );
+
+      return { service, ids, ingest };
+    }
+
+    const row = (participants: Record<string, unknown>): FakeRow => ({
+      id: 'row-1',
+      time: new Date('2026-01-07T00:00:00.000Z'),
+      participants_metadata: participants,
+    });
+
+    it.each(['cautious', 'balanced', 'hands_off'] as const)(
+      "mints a contact for a stranger writing under the owner's name instead of filing the address as the owner's (%s)",
+      async (trustMode) => {
+        const { service, ids, ingest } = makeOwnerService(
+          [row({ from: '"Avery Quinn" <someone@other.example>' })],
+          trustMode,
+        );
+
+        await service.backfill(USER, { startTime: START, endTime: END });
+
+        expect(ids.repointToEntity).not.toHaveBeenCalled();
+        expect(ids.claimForSelf).not.toHaveBeenCalled();
+        const [, payload] = ingest.ingest.mock.calls[0];
+        expect(payload.entities.map((entity) => entity.properties)).toEqual([
+          expect.objectContaining({ emails: ['someone@other.example'] }),
+        ]);
+      },
+    );
+
+    it("does not read the owner's phone digits out of a display name", async () => {
+      const { service, ids, ingest } = makeOwnerService(
+        [row({ from: '"Call 415 555 0100 today" <promo@other.example>', to: ['Support 415 555 0100'] })],
+        'cautious',
+      );
+
+      await service.backfill(USER, { startTime: START, endTime: END });
+
+      expect(ids.repointToEntity).not.toHaveBeenCalled();
+      expect(ids.claimForSelf).not.toHaveBeenCalled();
+      const [, payload] = ingest.ingest.mock.calls[0];
+      expect(payload.entities.map((entity) => entity.properties)).toEqual([
+        expect.objectContaining({ emails: ['promo@other.example'] }),
+        expect.objectContaining({ names: ['support 415 555 0100'] }),
+      ]);
+    });
+
+    it("still files the owner's own number as the owner's", async () => {
+      const { service, ids, ingest } = makeOwnerService([row({ from: '+1 (415) 555-0100' })], 'cautious');
+
+      await service.backfill(USER, { startTime: START, endTime: END });
+
+      expect(ids.repointToEntity).toHaveBeenCalledWith(
+        USER,
+        SELF,
+        'phone',
+        '+1 (415) 555-0100',
+        'self_collation',
+      );
+      expect(ingest.ingest).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('a person the owner asked memory.forget to erase', () => {
+    const FORGOTTEN = 'email:dana@example.com';
+
+    it('is not created again from the mail that still names them, and everyone else on it still is', async () => {
+      const rows: FakeRow[] = [
+        {
+          id: 'row-1',
+          time: new Date('2026-01-07T00:00:00.000Z'),
+          participants_metadata: { from: 'Dana Quill <dana@example.com>', to: ['new@example.com'] },
+        },
+      ];
+
+      const { service, ingest } = makeService(rows, {}, [FORGOTTEN]);
+
+      const result = await service.backfill(USER, { startTime: START, endTime: END });
+
+      expect(result.identifiersSeen).toBe(2);
+      expect(result.identifiersForgotten).toBe(1);
+      expect(result.peopleCreated).toBe(1);
+
+      const [, payload] = ingest.ingest.mock.calls[0];
+
+      expect(payload.entities).toHaveLength(1);
+      expect(payload.entities[0].properties?.emails).toEqual(['new@example.com']);
+    });
+
+    it('is created again when the owner did not ask for them to be forgotten', async () => {
+      const rows: FakeRow[] = [
+        {
+          id: 'row-1',
+          time: new Date('2026-01-07T00:00:00.000Z'),
+          participants_metadata: { from: 'Dana Quill <dana@example.com>', to: ['new@example.com'] },
+        },
+      ];
+
+      const { service, ingest } = makeService(rows, {}, []);
+
+      const result = await service.backfill(USER, { startTime: START, endTime: END });
+
+      expect(result.identifiersForgotten).toBe(0);
+      expect(result.peopleCreated).toBe(2);
+      expect(ingest.ingest.mock.calls[0][1].entities).toHaveLength(2);
+    });
+
+    it('leaves nothing to ingest when every participant on the page is forgotten', async () => {
+      const rows: FakeRow[] = [
+        {
+          id: 'row-1',
+          time: new Date('2026-01-07T00:00:00.000Z'),
+          participants_metadata: { from: 'dana@example.com', to: ['dana@example.com'] },
+        },
+      ];
+
+      const { service, ingest } = makeService(rows, {}, [FORGOTTEN]);
+
+      const result = await service.backfill(USER, { startTime: START, endTime: END });
+
+      expect(result).toMatchObject({
+        identifiersSeen: 1,
+        identifiersForgotten: 1,
+        peopleCreated: 0,
+        errors: [],
+      });
+      expect(ingest.ingest).not.toHaveBeenCalled();
+    });
+
+    it('asks about every identifier on a page in one query, for the owner whose mail it is', async () => {
+      const rows: FakeRow[] = [
+        {
+          id: 'row-1',
+          time: new Date('2026-01-07T00:00:00.000Z'),
+          participants_metadata: {
+            from: 'a@example.com',
+            to: ['b@example.com', '+1 (415) 555-0100'],
+            cc: 'c@example.com',
+          },
+        },
+      ];
+
+      const { service, ids } = makeService(rows, {}, []);
+
+      await service.backfill(USER, { startTime: START, endTime: END });
+
+      expect(ids.findForgottenIdentifiers).toHaveBeenCalledTimes(1);
+
+      const [userArg, keysArg] = ids.findForgottenIdentifiers.mock.calls[0];
+
+      expect(userArg).toBe(USER);
+      expect(keysArg.map((key) => `${key.kind}:${key.valueNormalized}`).sort()).toEqual(
+        ['email:a@example.com', 'email:b@example.com', 'email:c@example.com', 'phone:4155550100'].sort(),
+      );
+    });
+
+    it('counts an identifier the index already covers as existing, and does not ask what to do with it twice', async () => {
+      const rows: FakeRow[] = [
+        {
+          id: 'row-1',
+          time: new Date('2026-01-07T00:00:00.000Z'),
+          participants_metadata: { from: 'dana@example.com' },
+        },
+      ];
+
+      // Somebody holds the address again (a contact typed in after the forget): the index wins.
+      const { service, ingest } = makeService(rows, { [FORGOTTEN]: EXISTING_ENTITY }, [FORGOTTEN]);
+
+      const result = await service.backfill(USER, { startTime: START, endTime: END });
+
+      expect(result).toMatchObject({ identifiersExisting: 1, identifiersForgotten: 0, peopleCreated: 0 });
+      expect(ingest.ingest).not.toHaveBeenCalled();
+    });
+
+    it('asks nothing when there is nobody to ask about', async () => {
+      const { service, ids } = makeService([], {}, [FORGOTTEN]);
+
+      await service.backfill(USER, { startTime: START, endTime: END });
+
+      expect(ids.findForgottenIdentifiers).not.toHaveBeenCalled();
+    });
   });
 });

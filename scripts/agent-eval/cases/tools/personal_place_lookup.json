@@ -1,0 +1,15 @@
+{
+  "id": "tools_personal_place_lookup",
+  "capability": "tools",
+  "title": "A question about the user's own places uses the places tool",
+  "conversation": [
+    {
+      "role": "user",
+      "content": "Which of my saved places are in Manhattan? Use what you have about me. If you have none, say so."
+    }
+  ],
+  "expected": {
+    "should_use": ["places"],
+    "must_not_use": ["messaging", "planning", "import"]
+  }
+}

@@ -1,5 +1,3 @@
-import { z } from 'zod';
-
 import type { BaseClient, Connection } from '@ci/domains/connections';
 
 import type { User } from '../user';
@@ -35,6 +33,8 @@ export interface ConnectionSyncJob {
   readonly user?: User;
   readonly connection?: Connection;
   readonly lastTransformed?: Date | null;
+  /** Whether the sync executor stored a fetch result in `data`. See the entity column. */
+  readonly fetchedByExecutor?: boolean;
 }
 
 export interface CreateConnectionSyncJobDto {
@@ -65,6 +65,11 @@ export interface UpdateConnectionSyncJobDto {
   error?: Record<string, unknown> | undefined;
   completedAt?: Date | undefined;
   lastTransformed?: Date | null | undefined;
+  /**
+   * Set by the sync executor, and only by it, when it stores a fetch result. No client input maps
+   * onto this; it is what the transform sweep trusts `data` on.
+   */
+  fetchedByExecutor?: boolean;
 }
 
 export interface SearchConnectionSyncJobDto {
@@ -85,39 +90,14 @@ export interface SearchConnectionSyncJobDto {
    * tick for the life of the transform.
    */
   transformClaimable?: boolean;
+  /** Only rows the sync executor stored a fetch result in (`fetched_by_executor`). */
+  fetchedByExecutor?: boolean;
+  /** Only rows whose connection is active: signed in, and not paused or removed. */
+  connectionActive?: boolean;
   orderBy?: OrderByFormat;
   /** Row cap, pushed down as a SQL LIMIT. */
   limit?: number;
 }
-
-export const createConnectionSyncJobSchema = z.object({
-  id: z.string().uuid().optional(),
-  userId: z.string().uuid(),
-  connectionId: z.string().uuid(),
-  jobId: z.string().uuid().nullable().optional(),
-  endpointName: z.string(),
-  status: z.enum(['in_progress', 'failed', 'success']).optional(),
-  data: z.record(z.unknown()).optional(),
-  type: z.string(),
-  cursor: z.record(z.unknown()).nullable().optional(),
-  nextCursor: z.record(z.unknown()).nullable().optional(),
-  properties: z.record(z.unknown()).nullable().optional(),
-  error: z.record(z.unknown()).nullable().optional(),
-});
-
-export const updateConnectionSyncJobSchema = z.object({
-  jobId: z.string().uuid().nullable().optional(),
-  endpointName: z.string().optional(),
-  status: z.enum(['in_progress', 'failed', 'success']).optional(),
-  data: z.record(z.unknown()).optional(),
-  type: z.string().optional(),
-  cursor: z.record(z.unknown()).nullable().optional(),
-  nextCursor: z.record(z.unknown()).nullable().optional(),
-  properties: z.record(z.unknown()).nullable().optional(),
-  error: z.record(z.unknown()).nullable().optional(),
-  completedAt: z.string().datetime().nullable().optional(),
-  lastTransformed: z.string().datetime().nullable().optional(),
-});
 
 export interface EndpointServiceMapInterface {
   sync: {

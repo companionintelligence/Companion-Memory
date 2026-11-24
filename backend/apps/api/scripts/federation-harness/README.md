@@ -1,7 +1,5 @@
 # The two-box federation harness
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 Two full CI-Server boxes on one Mac, a local OIDC issuer standing in for
 CI-Portal, and five real federated asks between them — narrated in plain
 language so a human can watch consent actually work, and asserted so a

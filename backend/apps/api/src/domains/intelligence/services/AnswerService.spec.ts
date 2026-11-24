@@ -498,6 +498,91 @@ describe('AnswerService.create — inferred provenance', () => {
   });
 });
 
+/**
+ * `answer_method` of a typed answer. `update` stamped 'user' on a correction and
+ * `create` left NULL, so one answer read two ways depending on whether it had
+ * been edited yet — and the two inference selectors count only 'user' and
+ * 'inferred' as answered, so a question answered by hand was still offered to
+ * the model.
+ */
+describe('AnswerService.create — the method of a typed answer', () => {
+  const savedBy = (save: jest.Mock) => (save.mock.calls[0] as [AnswerEntity])[0];
+
+  it('records a typed answer as the user’s when no method is given', async () => {
+    const { service, save } = makeService();
+
+    await service.create(CONTEXT, { id: 'a1', text: 'Thai', question: { id: 'q1' } });
+
+    expect(savedBy(save).answerMethod).toBe('user');
+  });
+
+  it('does the same when the caller names the user as the source', async () => {
+    const { service, save } = makeService();
+
+    await service.create(CONTEXT, {
+      id: 'a1',
+      text: 'Thai',
+      question: { id: 'q1' },
+      answerSource: 'user_input',
+    });
+
+    expect(savedBy(save).answerMethod).toBe('user');
+  });
+
+  it.each(['inferred', 'survey', 'about_you_correction', 'chat'])(
+    'never overrides a method the caller names (%s)',
+    async (answerMethod) => {
+      const { service, save } = makeService();
+
+      await service.create(CONTEXT, {
+        id: 'a1',
+        text: 'Thai',
+        question: { id: 'q1' },
+        answerSource: 'user_input',
+        answerMethod,
+      });
+
+      expect(savedBy(save).answerMethod).toBe(answerMethod);
+    },
+  );
+
+  it.each(['inferred', 'imported', 'observed'])(
+    'does not call words someone else wrote the user’s (source: %s)',
+    async (answerSource) => {
+      const { service, save } = makeService();
+
+      await service.create(CONTEXT, { id: 'a1', text: 'Thai', question: { id: 'q1' }, answerSource });
+
+      expect(savedBy(save).answerMethod).toBeUndefined();
+    },
+  );
+
+  it('agrees with an edit: the same typed words read the same before and after being corrected', async () => {
+    const { service, save } = makeService();
+
+    await service.create(CONTEXT, { id: 'a1', text: 'Thai', question: { id: 'q1' } });
+    const created = savedBy(save);
+    // Read now: the edit below rewrites this very object.
+    const methodWhenCreated = created.answerMethod;
+
+    const edited = await makeServiceWithStore([created]).service.update(CONTEXT, 'a1', { text: 'Mexican' });
+
+    expect(methodWhenCreated).toBe('user');
+    expect(edited?.answerMethod).toBe(methodWhenCreated);
+  });
+
+  it('gives every row of the batch form the same method, unless the item names one', async () => {
+    const { service, insert } = makeService();
+
+    await service.createMany(CONTEXT, [
+      { id: 'a1', text: 'yes', question: { id: 'q1' } },
+      { id: 'a2', text: 'no', question: { id: 'q2' }, answerMethod: 'survey' },
+    ]);
+
+    expect((insert.values as AnswerEntity[]).map((row) => row.answerMethod)).toEqual(['user', 'survey']);
+  });
+});
+
 describe('AnswerService tenancy scoping (SYSTEM_USER-conditional idiom)', () => {
   describe('findById', () => {
     it('returns the answer for its owner', async () => {

@@ -272,6 +272,15 @@ export const JOB_TYPES: Readonly<Record<string, JobTypeDescriptor>> = {
     category: JOB_CATEGORIES.graph,
     description: 'Remove an edge from the life graph.',
   },
+  // Filed here rather than beside the two `maintenance.*-backfill-request`
+  // sweep kicks under Pipeline: those only enqueue `pipeline.sweep`, while this
+  // one writes the stub Person nodes itself.
+  'maintenance.person-stub-backfill-request': {
+    label: 'Backfill person stubs',
+    category: JOB_CATEGORIES.graph,
+    description:
+      "Walk one user's communications and create a stub Person, with its identifier, for every participant the identifier index does not know yet, so the person-link stage has someone to resolve against. Requested after a bulk import push; a repeat request costs a scan and creates nothing.",
+  },
 
   // ── Pipeline ────────────────────────────────────────────────────────────
   'pipeline.slice': {
@@ -411,6 +420,12 @@ export const JOB_TYPES: Readonly<Record<string, JobTypeDescriptor>> = {
     category: JOB_CATEGORIES.planning,
     description:
       'After a scheduled block ends, look for completion evidence and auto-complete or ask the user on Plan.',
+  },
+  'planning.fire_reminders': {
+    label: 'Fire due reminders',
+    category: JOB_CATEGORIES.planning,
+    description:
+      'Once a minute, claim the reminders that have come due for one user and deliver each as a Web Push notification. A reminder on a task or planned block that is already done, skipped or cancelled is held back, not sent.',
   },
   'task.created': {
     label: 'Task created',

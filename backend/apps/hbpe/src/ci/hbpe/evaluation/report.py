@@ -15,7 +15,33 @@ def _fmt(value: float | None, places: int = 4) -> str:
     return "—" if value is None else f"{value:.{places}f}"
 
 
-def render(result: WalkForwardResult, candidate: str | None = None) -> str:
+def macro_recall(score, exclude: str | None = None) -> float | None:
+    """
+    Mean per-class recall over classes that have support.
+
+    Neither top-1 nor Brier survives a corpus with one dominant class, and both
+    corpora here have one: sparse is 41% WORK, densified is 97% background. A
+    forecaster that answers the dominant class everywhere posts 0.99 top-1 and
+    a Brier near zero on the densified run while recognising nothing. Averaging
+    recall over classes weights the rare ones equally with the common one, so
+    that forecaster scores near zero here, which is the honest number.
+
+    *exclude* drops the densification filler, whose recall says only how often
+    the model correctly predicted that nothing was recorded.
+    """
+    values = [
+        stats["recall"]
+        for cls, stats in score.per_class.items()
+        if cls != exclude and stats.get("support") and stats.get("recall") is not None
+    ]
+    return sum(values) / len(values) if values else None
+
+
+def render(
+    result: WalkForwardResult,
+    candidate: str | None = None,
+    background: str | None = None,
+) -> str:
     cov = result.coverage
     lines = [
         "Walk-forward L0 occupancy forecast",
@@ -30,24 +56,37 @@ def render(result: WalkForwardResult, candidate: str | None = None) -> str:
         f"  ({cov.buckets_per_eval_day:.1f}/day of {cov.buckets_per_day},"
         f" {cov.occupancy_rate:.1%} occupancy)",
         "",
-        f"  {'model':<14}{'n':>7}{'top-1':>9}{'Brier':>9}{'ECE':>9}",
-        f"  {'-' * 14}{'-' * 7:>7}{'-' * 9:>9}{'-' * 9:>9}{'-' * 9:>9}",
+        f"  {'model':<14}{'n':>7}{'macro-R':>9}{'top-1':>9}{'Brier':>9}{'ECE':>9}",
+        f"  {'-' * 14}{'-' * 7:>7}{'-' * 9:>9}{'-' * 9:>9}{'-' * 9:>9}{'-' * 9:>9}",
     ]
 
-    # Best top-1 first: the D3 gate is decided on top-1, so lead with it.
+    # Ordered by macro recall, and Brier where that is unavailable. The gate no
+    # longer reads top-1 and neither should the reader: on a corpus with one
+    # dominant class it ranks a degenerate forecaster first.
+    macro = {
+        name: macro_recall(s, exclude=background) for name, s in result.scores.items()
+    }
     ordered = sorted(
         result.scores.items(),
-        key=lambda kv: (kv[1].l0_top1_acc is None, -(kv[1].l0_top1_acc or 0.0)),
+        key=lambda kv: (
+            macro[kv[0]] is None,
+            -(macro[kv[0]] or 0.0),
+            kv[1].brier or 0.0,
+        ),
     )
     for name, score in ordered:
         lines.append(
             f"  {name:<14}{score.n_l0:>7}"
+            f"{_fmt(macro[name], 3):>9}"
             f"{_fmt(score.l0_top1_acc):>9}"
             f"{_fmt(score.brier):>9}"
             f"{_fmt(score.ece):>9}"
         )
 
-    lines += ["", f"  (uniform Brier = {UNIFORM_BRIER:.4f})", "", "  per-class recall"]
+    lines += ["", f"  (uniform Brier = {UNIFORM_BRIER:.4f})"]
+    if background:
+        lines.append(f"  (macro-R excludes {background}, the densification filler)")
+    lines += ["", "  per-class recall"]
     header = f"  {'class':<14}" + "".join(f"{n:>12}" for n, _ in ordered)
     lines.append(header)
     for cls in L0_CLASSES:
@@ -65,6 +104,8 @@ def render(result: WalkForwardResult, candidate: str | None = None) -> str:
         if verdict is None:
             lines += ["", f"  D3 serve gate: {candidate} not comparable (no B1 row)"]
         else:
-            outcome = "CLEARS" if verdict == "serve" else "BENCHED (falls back to B2)"
+            outcome = (
+                "CLEARS" if verdict == "serve" else "BENCHED (falls back to a baseline)"
+            )
             lines += ["", f"  D3 serve gate: {candidate} {outcome}"]
     return "\n".join(lines)

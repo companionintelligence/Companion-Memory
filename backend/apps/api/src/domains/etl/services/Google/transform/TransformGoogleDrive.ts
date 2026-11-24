@@ -12,12 +12,18 @@ import {
 
 import { ConnectionSyncJob } from '../../../types';
 import { CloudFileIngestService } from '../../CloudFileIngestService';
+import { isPhotoOrVideoType, isZipArchive } from '../../cloudFileTypes';
+import { CloudFolderIngestService } from '../../CloudFolderIngestService';
+
+const DRIVE_FOLDER_MIME = 'application/vnd.google-apps.folder';
 
 interface DriveFile {
   id?: string;
   name?: string;
   mimeType?: string;
   modifiedTime?: string;
+  /** The folder the file is in. Absent for a file that is in none of this drive's folders. */
+  parents?: string[];
   owners?: Array<{
     displayName?: string;
     emailAddress?: string;
@@ -34,6 +40,7 @@ export class GoogleDriveTransformService {
     private readonly fileService: FileService,
     private readonly connectionService: ConnectionService,
     private readonly cloudFileIngestService: CloudFileIngestService,
+    private readonly cloudFolderIngestService: CloudFolderIngestService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(GoogleDriveTransformService.name);
@@ -54,10 +61,41 @@ export class GoogleDriveTransformService {
         syncJobId,
       });
 
-      const files = this.extractDriveFiles(data);
+      const listed = this.extractDriveFiles(data);
+
+      // A FOLDER an importer recognises as a data export (Meta transfers a
+      // Facebook export to Drive as loose files, in several part folders) is
+      // set aside whole: its files get no rows of their own, and once the
+      // folder stops changing it is downloaded and imported as one run — see
+      // CloudFolderIngestService. Claimed first, so a change seen in this
+      // very listing counts against the folder being settled.
+      const isFolder = (file: DriveFile): boolean => file.mimeType === DRIVE_FOLDER_MIME;
+      const describe = (file: DriveFile) => ({
+        file,
+        id: file.id!,
+        name: file.name ?? '',
+        parents: file.parents,
+      });
+      const inExportFolder = await this.cloudFolderIngestService.claimDriveFiles({
+        connection,
+        userId,
+        files: listed.filter((file) => file.id && !isFolder(file)).map(describe),
+        folders: listed.filter((file) => file.id && isFolder(file)).map(describe),
+      });
+      const claimed = new Set([...inExportFolder].map((entry) => entry.file));
+      const files = listed.filter((file) => !claimed.has(file));
+
+      // Every sync tick is also the clock that notices a folder has settled —
+      // including the ticks that list nothing, which is what "settled" looks
+      // like. Deliberately not awaited: see ingestSettledDropboxFolders.
+      void this.cloudFolderIngestService.ingestSettledDriveFolders({ connection, userId });
 
       if (files.length === 0) {
-        this.logger.log('No Drive files found to transform', { userId, syncJobId });
+        this.logger.log('No Drive files found to transform', {
+          userId,
+          syncJobId,
+          inExportFolders: claimed.size,
+        });
 
         return;
       }
@@ -66,17 +104,29 @@ export class GoogleDriveTransformService {
         userId,
         syncJobId,
         fileCount: files.length,
+        inExportFolders: claimed.size,
       });
 
+      // Photos and videos go together, as one download and one import run
+      // for the page; everything else is handled file by file.
+      const media = files.filter(
+        (file) =>
+          file.id && isPhotoOrVideoType(file.mimeType) && !isZipArchive(file.mimeType, file.name ?? ''),
+      );
+      const mediaSet = new Set(media);
+
+      await this.processDriveMedia({ media, connection, userId });
       await Promise.all(
-        files.map(
-          async (file) =>
-            await this.processDriveFile({
-              file,
-              connection,
-              userId,
-            }),
-        ),
+        files
+          .filter((file) => !mediaSet.has(file))
+          .map(
+            async (file) =>
+              await this.processDriveFile({
+                file,
+                connection,
+                userId,
+              }),
+          ),
       );
 
       this.logger.log('Google Drive transformation completed', {
@@ -93,6 +143,77 @@ export class GoogleDriveTransformService {
         stack: error instanceof Error ? error.stack : undefined,
       });
       throw error;
+    }
+  }
+
+  /**
+   * This page's photos and videos, downloaded and imported as real media
+   * rather than left as a name and a link. A file that could not be fetched
+   * keeps its pointer row so it is not simply missing; one that was fetched
+   * loses any pointer row an earlier sync wrote for it.
+   */
+  private async processDriveMedia({
+    media,
+    userId,
+    connection,
+  }: {
+    media: DriveFile[];
+    userId: string;
+    connection: Connection;
+  }): Promise<void> {
+    if (media.length === 0) {
+      return;
+    }
+
+    try {
+      const result = await this.cloudFileIngestService.ingestDriveMedia({
+        connection,
+        userId,
+        files: media.map((file) => ({
+          id: file.id!,
+          name: file.name || 'Untitled File',
+          mimeType: file.mimeType!,
+          revision: file.modifiedTime ?? null,
+          size: file.size != null ? Number(file.size) : null,
+          // Drive lists names, not paths, and names repeat; the file id keeps
+          // two IMG_0001.jpg apart.
+          // (A Drive name may itself contain a slash, which a path cannot.)
+          relativePath: `${file.id}/${(file.name || 'Untitled File').replace(/[\\/]/g, '_')}`,
+        })),
+      });
+      const byId = new Map(media.map((file) => [file.id!, file]));
+
+      for (const { id, reason } of result.failed) {
+        const file = byId.get(id)!;
+
+        this.logger.warn('Drive media download failed; recording a pointer instead', {
+          fileId: id,
+          fileName: file.name,
+          reason,
+        });
+        await this.createPointerFile({
+          userId,
+          connectionId: connection.id,
+          fileName: file.name || 'Untitled File',
+          mimeType: file.mimeType!,
+          webViewLink: file.webViewLink || null,
+          file,
+        });
+      }
+
+      const imported = [...result.downloaded, ...result.unchanged]
+        .map((id) => byId.get(id)!.webViewLink)
+        .filter((link): link is string => !!link);
+
+      await this.fileService.removePointersByExternalIds({ userId }, imported);
+    } catch (error) {
+      this.logger.error('Error processing Drive media', {
+        userId,
+        connectionId: connection.id,
+        files: media.length,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+      // Don't throw - the rest of the page still gets processed
     }
   }
 
@@ -141,7 +262,7 @@ export class GoogleDriveTransformService {
       const webViewLink = file.webViewLink || null;
 
       // Skip Google Drive folders
-      if (mimeType === 'application/vnd.google-apps.folder') {
+      if (mimeType === DRIVE_FOLDER_MIME) {
         this.logger.debug('Skipping Google Drive folder', {
           userId,
           connectionId,
@@ -158,7 +279,32 @@ export class GoogleDriveTransformService {
         mimeType,
       });
 
-      if (this.isDownloadableDocumentType(mimeType)) {
+      if (isZipArchive(mimeType, fileName)) {
+        // A zip MAY be an export an importer reads (a Facebook "Download your
+        // information" archive synced to Drive, a Takeout). The ingest service
+        // decides from the archive's file listing, and downloads + imports it
+        // only when a specific importer claims it. Everything else — and a
+        // failure, which the ledger retries next tick — is an ordinary Drive
+        // file: the same pointer row every other non-document gets.
+        const size = file.size != null ? Number(file.size) : null;
+        const result = await this.cloudFileIngestService.ingestDriveArchive({
+          connection,
+          userId,
+          file: { id: fileId, name: fileName, mimeType, modifiedTime: file.modifiedTime ?? null, size },
+        });
+
+        if (result.outcome === 'downloaded') {
+          this.logger.log('Drive archive recognised as an export; started an import run', {
+            fileId,
+            fileName,
+            importers: result.importers,
+            runId: result.importRunId,
+            byteSize: result.byteSize,
+          });
+        } else if (result.outcome !== 'skipped_unchanged') {
+          await this.createPointerFile({ userId, connectionId, fileName, mimeType, webViewLink, file });
+        }
+      } else if (this.isDownloadableDocumentType(mimeType)) {
         // A document whose bytes we can actually fetch (alt=media) rather
         // than a native Google type that would need /export?mimeType= — see
         // CloudFileIngestService's docstring for why that mapping isn't
@@ -184,7 +330,7 @@ export class GoogleDriveTransformService {
             reason: result.reason,
           });
 
-          await this.createPointerFile({ userId, fileName, mimeType, webViewLink, file });
+          await this.createPointerFile({ userId, connectionId, fileName, mimeType, webViewLink, file });
           await this.createPlaceholderContent({
             userId,
             connectionId,
@@ -213,7 +359,7 @@ export class GoogleDriveTransformService {
         // download for these needs /export?mimeType=<exportMime>, not
         // alt=media — deliberately out of scope for this pass (see the
         // audit's notDone). Keep today's pointer + placeholder behavior.
-        await this.createPointerFile({ userId, fileName, mimeType, webViewLink, file });
+        await this.createPointerFile({ userId, connectionId, fileName, mimeType, webViewLink, file });
         await this.createPlaceholderContent({
           userId,
           connectionId,
@@ -223,9 +369,9 @@ export class GoogleDriveTransformService {
           webViewLink,
         });
       } else {
-        // Not a document at all (image, video, etc.) — there is no "content"
-        // to import, so the webViewLink-as-pointer design is correct as-is.
-        await this.createPointerFile({ userId, fileName, mimeType, webViewLink, file });
+        // Neither a document nor media (photos and videos were taken out
+        // before this loop) — nothing here to read, so a pointer it is.
+        await this.createPointerFile({ userId, connectionId, fileName, mimeType, webViewLink, file });
       }
 
       this.logger.log('Drive file saved successfully', {
@@ -248,12 +394,14 @@ export class GoogleDriveTransformService {
   /** The pointer-only `ci.files` row: today's whole behavior for non-content files. */
   private async createPointerFile({
     userId,
+    connectionId,
     fileName,
     mimeType,
     webViewLink,
     file,
   }: {
     userId: string;
+    connectionId: string;
     fileName: string;
     mimeType: string;
     webViewLink: string | null;
@@ -262,6 +410,8 @@ export class GoogleDriveTransformService {
     await this.fileService.create(
       { userId },
       {
+        // So disconnecting Drive removes the pointer rows it wrote.
+        connectionId,
         filename: fileName,
         contentType: mimeType,
         externalId: webViewLink,

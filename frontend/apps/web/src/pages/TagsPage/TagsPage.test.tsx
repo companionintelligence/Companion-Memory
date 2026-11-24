@@ -80,6 +80,47 @@ describe('TagsPage — search state lives in the URL', () => {
   });
 });
 
+describe('TagsPage — compact mobile rows', () => {
+  it('hides secondary copy and combines edit and delete in one action menu', async () => {
+    renderTagsPage([
+      tagsMock([
+        tagNode({
+          id: 't1',
+          label: 'holiday',
+          description: 'Trips, photos, and plans with family',
+        }),
+      ]),
+    ]);
+
+    const description = await screen.findByText('Trips, photos, and plans with family');
+    expect(description).toHaveClass('hidden', 'truncate', 'device:block');
+    expect(screen.getByTestId('tag-row')).toHaveClass(
+      'gap-2',
+      'px-2',
+      'py-1.5',
+      'device:gap-3',
+      'device:px-3',
+      'device:py-2',
+    );
+
+    const actions = screen.getByRole('button', { name: 'Actions for holiday' });
+    expect(actions).toHaveClass('size-8', 'device:hidden');
+    expect(screen.getByRole('button', { name: 'Edit holiday' })).toHaveClass('hidden', 'device:inline-flex');
+    expect(screen.getByRole('button', { name: 'Delete holiday' })).toHaveClass(
+      'hidden',
+      'device:inline-flex',
+    );
+
+    fireEvent.pointerDown(actions, { button: 0 });
+
+    const edit = await screen.findByRole('menuitem', { name: 'Edit' });
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).toBeInTheDocument();
+
+    fireEvent.click(edit);
+    expect(await screen.findByRole('heading', { name: 'Edit tag' })).toBeInTheDocument();
+  });
+});
+
 describe('TagsPage — error state uses the shared ErrorState component', () => {
   it('renders ErrorState (with Retry) instead of the old no-retry empty state, and Retry calls refetch', async () => {
     renderTagsPage([

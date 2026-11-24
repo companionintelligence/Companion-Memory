@@ -8,6 +8,11 @@ import type { LoggerService } from '@ci/common/logging';
 import type { EventService } from '@ci/domains/events';
 import { UserEntity, UserService } from '@ci/domains/user';
 
+import {
+  databaseAvailability,
+  dataSourceConnection,
+  resolveConnection,
+} from '../../__tests__/support/databaseConnection';
 import { acquireSchemaWriteLock, type SchemaLock } from '../../__tests__/support/schemaLock';
 import { ApiKeyEntity } from '../entities/ApiKeyEntity';
 import { ApiKeyService } from '../services/ApiKeyService';
@@ -27,22 +32,35 @@ import { ApiKeyStrategy } from '../services/ApiKeyStrategy';
  * and then authenticates with ONLY what it printed, using the real
  * `ApiKeyService`/`ApiKeyStrategy`/`UserService` classes — not a mock of them.
  *
- * Opt-in: set `AUTH_TEST_DATABASE_URL` to a database with the migrations applied.
- * Unlike the notes/planning house-pattern suites this one MUST point at a database
- * literally named `companion` — the script resolves its own connection through
- * `@ci/configuration`, whose `db.database` has no environment override (see
- * `backend/apps/api/config/custom-environment-variables.json`), so it always dials
- * `companion` regardless of what this suite is told.
+ * Needs a database with the migrations applied: `AUTH_TEST_DATABASE_URL`, else
+ * `DATABASE_URL`, else `.env`'s `DATABASE_*` values. `databaseAvailability()`
+ * decides whether that means run, skip or fail.
  *
  *   AUTH_TEST_DATABASE_URL=postgres://companion:pw@localhost:5432/companion \
  *     yarn workspace @ci/be-api test src/domains/auth/__tests__/CreateTestUserScript.integration.test.ts
+ *
+ * The script resolves its own connection through `@ci/configuration`, so it is
+ * handed the one this suite resolved: host, port, user and password as the
+ * `DATABASE_*` variables `config/custom-environment-variables.json` maps, and the
+ * database NAME through `NODE_CONFIG`, because `db.database` has no environment
+ * variable. Without that the script would write to `companion` whatever database
+ * this suite reads back from — which used to mean this suite could only ever be
+ * pointed at a database literally named `companion`.
  *
  * No scratch database: this suite runs no migration DDL, only INSERTs/DELETEs
  * under a user it creates and removes itself, like the other house-pattern specs.
  */
 
-const DATABASE_URL = process.env.AUTH_TEST_DATABASE_URL;
-const describeWithDb = DATABASE_URL ? describe : describe.skip;
+const DATABASE_ENV = {
+  urlEnvVar: 'AUTH_TEST_DATABASE_URL',
+  probeTimeoutEnvVar: 'AUTH_TEST_PROBE_TIMEOUT_MS',
+};
+const availability = databaseAvailability(DATABASE_ENV);
+const describeWithDb = availability.available ? describe : describe.skip;
+
+if (!availability.available) {
+  console.warn(`[auth/CreateTestUserScript.integration] SKIPPED — ${availability.reason}`);
+}
 
 /** Minimal express-like request — mirrors ApiKeyStrategy.test.ts's helper. */
 function requestWith(headers: Record<string, string>) {
@@ -79,7 +97,7 @@ describeWithDb('create-test-user.ts — the printed credentials, against the rea
   beforeAll(async () => {
     dataSource = new DataSource({
       type: 'postgres',
-      url: DATABASE_URL,
+      ...dataSourceConnection(DATABASE_ENV),
       entities: [UserEntity, ApiKeyEntity],
       synchronize: false,
       extra: { options: '-c search_path=ci,public' },
@@ -96,7 +114,13 @@ describeWithDb('create-test-user.ts — the printed credentials, against the rea
     // this suite proves the actual write path, not a re-implementation of it.
     // Explicit DATABASE_* env vars win over any repo-root `.env` the "exec" yarn
     // script tries to load (dotenv never overrides an already-set variable).
-    const url = new URL(DATABASE_URL!);
+    // NODE_CONFIG carries the database name, which has no variable of its own —
+    // see the header.
+    const connection = resolveConnection(DATABASE_ENV);
+
+    if (connection == null) {
+      throw new Error('databaseAvailability passed but no connection resolved');
+    }
 
     const stdout = execFileSync('yarn', ['run', 'exec', '--', 'scripts/create-test-user.ts'], {
       cwd: apiRoot,
@@ -104,10 +128,11 @@ describeWithDb('create-test-user.ts — the printed credentials, against the rea
       env: {
         ...process.env,
         DOTENV_CONFIG_PATH: '/dev/null',
-        DATABASE_HOST: url.hostname,
-        DATABASE_PORT: url.port || '5432',
-        DATABASE_USERNAME: decodeURIComponent(url.username),
-        DATABASE_PASSWORD: decodeURIComponent(url.password),
+        DATABASE_HOST: connection.host,
+        DATABASE_PORT: String(connection.port),
+        DATABASE_USERNAME: connection.username,
+        DATABASE_PASSWORD: connection.password,
+        NODE_CONFIG: JSON.stringify({ db: { database: connection.database } }),
         TEST_USER_EMAIL: email,
         TEST_USER_PASSWORD: password,
         TEST_KEY_NAME: keyName,
@@ -145,6 +170,14 @@ describeWithDb('create-test-user.ts — the printed credentials, against the rea
 
     expect(user).not.toBeNull();
     expect(user?.email).toBe(email);
+  });
+
+  it('stamps password_set_at, so changing the email or password asks for the printed password', async () => {
+    // AccountController.requireReauth keys on this stamp alone: left null, the account
+    // would prove itself by a recent sign-in instead of the password it was given.
+    const user = await dataSource.getRepository(UserEntity).findOneBy({ id: createdUserId });
+
+    expect(user?.passwordSetAt).toBeInstanceOf(Date);
   });
 
   it('authenticates with the printed password, via the real UserService.validatePassword', async () => {

@@ -28,6 +28,8 @@ vi.mock('./ObservationReview', () => ({
 
 const THING_A = btoa('item:a');
 const THING_B = btoa('item:b');
+const THING_C = btoa('item:c');
+const THING_D = btoa('item:d');
 
 /** Renders `pathname + search` so a test can assert what the router URL holds. */
 /** See PeoplePage.test.tsx / PlacesPage.test.tsx — stubs IntersectionObserver with a no-op. */
@@ -168,6 +170,45 @@ const DUPLICATE_GROUP: GetItemDuplicatesQuery = {
             category: 'tools',
             quantity: 1,
             lifecycleState: 'ACTIVE' as const,
+          },
+        ],
+      },
+    ],
+  },
+};
+
+const MULTIPLE_DUPLICATE_GROUPS: GetItemDuplicatesQuery = {
+  itemDuplicates: {
+    __typename: 'ItemDuplicatesPayload',
+    totalCount: 2,
+    hasMore: false,
+    groups: [
+      DUPLICATE_GROUP.itemDuplicates.groups[0]!,
+      {
+        __typename: 'ItemDuplicateGroupType',
+        reason: 'BRAND_MODEL',
+        value: 'DeWalt · DCD791',
+        totalItems: 2,
+        items: [
+          {
+            __typename: 'ItemType',
+            id: THING_C,
+            name: 'Garage drill',
+            brand: 'DeWalt',
+            model: 'DCD791',
+            category: 'tools',
+            quantity: 1,
+            lifecycleState: 'ACTIVE',
+          },
+          {
+            __typename: 'ItemType',
+            id: THING_D,
+            name: 'Workshop drill',
+            brand: 'DeWalt',
+            model: 'DCD791',
+            category: 'tools',
+            quantity: 1,
+            lifecycleState: 'ACTIVE',
           },
         ],
       },
@@ -321,6 +362,45 @@ describe('ThingsPage', () => {
     expect(screen.getByText(/Same code/)).toBeInTheDocument();
     expect(screen.getAllByText('0012345678905').length).toBeGreaterThan(0);
     expect(screen.getByText('Makita drill')).toBeInTheDocument();
+  });
+
+  it('keeps mobile duplicates compact until the user asks for more', async () => {
+    const originalMatchMedia = window.matchMedia;
+
+    window.matchMedia = ((query: string) => ({
+      matches: query.includes('max-width'),
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })) as unknown as typeof window.matchMedia;
+
+    try {
+      renderWithProviders(<ThingsPage />, {
+        route: '/memory/things',
+        mocks: [
+          mockQuery(GET_THINGS, BASE_VARIABLES, makeThingsResult([makeThing(THING_A, 'Drill')]), {
+            maxUsageCount: 3,
+          }),
+          duplicatesMock(MULTIPLE_DUPLICATE_GROUPS),
+        ],
+      });
+
+      expect(await screen.findByText('Possible duplicates')).toBeInTheDocument();
+      expect(screen.getByText('Makita drill')).toBeInTheDocument();
+      expect(screen.queryByText('Garage drill')).not.toBeInTheDocument();
+      expect(screen.getAllByRole('button', { name: 'Keep this thing' })[0]).toHaveClass('border');
+      expect(screen.getByRole('button', { name: 'Different things' })).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Show 1 more suggestions' }));
+
+      expect(await screen.findByText('Garage drill')).toBeInTheDocument();
+    } finally {
+      window.matchMedia = originalMatchMedia;
+    }
   });
 
   it('merges a duplicate group only after the confirm dialog is accepted', async () => {

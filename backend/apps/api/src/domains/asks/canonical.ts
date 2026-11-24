@@ -22,18 +22,9 @@
  * a cycle between them.
  */
 
-/**
- * Characters that render as NOTHING and therefore let two visually identical
- * strings compare unequal. `pho<U+200B>tos` renders as `photos` in the owner's
- * Grant Manager and in the asker's client, and compares unequal to it — which
- * is a block-evasion primitive, not a typo. Stripped rather than treated as
- * whitespace: they have no width, so collapsing them to a space would split one
- * word into two.
- *
- * Zero-width space / non-joiner / joiner, word joiner, soft hyphen, the
- * bidi/isolate formatting marks, and the BOM.
- */
-const INVISIBLE = /[\u00ad\u200b-\u200f\u2060-\u2064\u206a-\u206f\ufeff]/gu;
+import { stripInvisible } from '@ci/common/stripInvisible';
+
+export { stripInvisible };
 
 /**
  * Every Unicode character that reads as a space, mapped onto the ASCII one.
@@ -94,9 +85,24 @@ export function normalizeText(value: unknown): string | null {
     return null;
   }
 
-  const normalized = value.normalize('NFKC').replace(INVISIBLE, '').replace(UNICODE_SPACE, ' ').trim();
+  const normalized = stripInvisible(value.normalize('NFKC')).replace(UNICODE_SPACE, ' ').trim();
 
   return normalized ? normalized : null;
+}
+
+/**
+ * Whether {@link normalizeText} would strip anything from this string as a
+ * character that renders as nothing.
+ *
+ * The ask input layer stores the prompt without them, so by the time the
+ * owner's review card renders it there is nothing left to detect. This is
+ * what lets the card still say the text was altered (see
+ * `AskQuery.promptHiddenCharactersRemoved`). Same strip as
+ * {@link normalizeText}, so the two cannot disagree about what counts: an
+ * emoji's own joiner or variation selector is not a hidden character.
+ */
+export function hasInvisibleCharacters(value: unknown): boolean {
+  return typeof value === 'string' && stripInvisible(value.normalize('NFKC')) !== value.normalize('NFKC');
 }
 
 /**

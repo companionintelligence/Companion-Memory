@@ -1,6 +1,15 @@
 import type { FkEdge, PurgePlan, PurgeScope, PurgeStep, TableRef, UserRefColumn } from './types';
 
 /**
+ * A column that records who made or changed a row: `updated_by`,
+ * `changed_by_user_id` and the like. Under `SET NULL` it is attribution, never
+ * ownership (see the rules on {@link buildPurgePlan}). The verbs are spelled out
+ * so a column such as `owned_by` is not caught by accident and its rows left
+ * behind.
+ */
+const PROVENANCE_COLUMN = /^(created|updated|changed|modified|issued)_by(_user_id)?$/;
+
+/**
  * Build the ordered list of statements that removes one account's data.
  *
  * ## Why this exists rather than `ON DELETE CASCADE`
@@ -51,6 +60,13 @@ import type { FkEdge, PurgePlan, PurgeScope, PurgeStep, TableRef, UserRefColumn 
  *   the user's memories and graph edges, owned solely via `owner_user_id`);
  *   `ci.receipts.owner_user_id` does not, because `ci.receipts.user_id` already
  *   owns the row.
+ * - A `SET NULL` column named for who made or changed a row (`updated_by`,
+ *   `changed_by_user_id`) is never ownership, even when it is the only user
+ *   reference on its table: it is nulled. `ci.job_settings` and
+ *   `ci.outbound_settings` are appliance-wide rows whose `updated_by` says which
+ *   administrator last changed them. Deleting them with that administrator put
+ *   every job control and outbound switch back to its default, so a crash-report
+ *   upload they had switched off came back on for everyone else.
  * - A user reference **on `ci.users` itself** is never a delete root. Treating
  *   `ci.users.created_by` as one would delete every account this user created.
  * - Tables that are not user-scoped but hold a blocking (`NO ACTION`/`RESTRICT`)
@@ -93,25 +109,34 @@ export function buildPurgePlan(input: {
   }
 
   const roots: UserRefColumn[] = [];
-  const detached: UserRefColumn[] = [];
+  const detached: Array<{ column: UserRefColumn; reason: string }> = [];
 
   for (const column of userColumns) {
     // A reference on ci.users is always nulled, never followed. `created_by`
     // points at the account that provisioned another account: deleting through
     // it would take out unrelated, live users.
     if (tableKey(column) === usersKey) {
-      detached.push(column);
+      detached.push({ column, reason: `${column.column} attributes a different account's row` });
 
       continue;
     }
 
     if (column.deleteAction === 'n' || column.deleteAction === 'd') {
+      if (PROVENANCE_COLUMN.test(column.column)) {
+        detached.push({ column, reason: `${column.column} records who changed the row, not whose it is` });
+
+        continue;
+      }
+
       const ownedByAnotherColumn = (columnsByTable.get(tableKey(column)) ?? []).some(
         (other) => other.column !== column.column && other.deleteAction !== 'n' && other.deleteAction !== 'd',
       );
 
       if (ownedByAnotherColumn) {
-        detached.push(column);
+        detached.push({
+          column,
+          reason: `ON DELETE SET NULL, and ${tableKey(column)} is owned through another column`,
+        });
 
         continue;
       }
@@ -151,6 +176,11 @@ export function buildPurgePlan(input: {
         edge.parentTable === current.target.table &&
         // Self-references are flattened by a null step instead (step 3).
         tableKey({ schema: edge.childSchema, table: edge.childTable }) !== tableKey(current.target) &&
+        // ci.users is never deleted through: its references into purged rows are
+        // nulled for this account (step 3), and another account pointing there
+        // (`ci.users.entity_id` at this account's entities) must fail loudly on
+        // the foreign key rather than have its account row deleted.
+        tableKey({ schema: edge.childSchema, table: edge.childTable }) !== usersKey &&
         // A user-scoped child is deleted by its own root scope; ordering (step 4)
         // guarantees it happens first. Scoping it through the parent instead
         // could delete a different account's row.
@@ -180,8 +210,6 @@ export function buildPurgePlan(input: {
       queue.push(dependent);
     }
   }
-
-  const deleteTableKeys = new Set(deleteTargets.map((target) => tableKey(target.target)));
 
   // ── 3. Break references we must not follow, before anything is deleted ──
 
@@ -220,9 +248,14 @@ export function buildPurgePlan(input: {
     }
   }
 
-  // References pointing *out* of the ci.users row into rows we are about to
-  // delete — `ci.users.entity_id` is one, and it makes users<->entities a cycle
-  // that nothing else can break.
+  // References pointing *out* of ci.users into rows we are about to delete —
+  // `ci.users.entity_id` is one, and it makes users<->entities a cycle that
+  // nothing else can break. Nulled on EVERY account row that points into the
+  // doomed rows, not only this account's: another account whose `entity_id`
+  // names one of this account's entities would otherwise fail the entities
+  // delete on the foreign key on every retry, and the purge would never finish.
+  // Nulling it is what `ON DELETE SET NULL` would do; the other account keeps
+  // its row and loses only a pointer to data that is no longer there.
   for (const edge of edges) {
     if (edge.deleteAction !== 'a' && edge.deleteAction !== 'r') {
       continue;
@@ -232,18 +265,23 @@ export function buildPurgePlan(input: {
       continue;
     }
 
-    if (!deleteTableKeys.has(tableKey({ schema: edge.parentSchema, table: edge.parentTable }))) {
-      continue;
-    }
+    const parentKey = tableKey({ schema: edge.parentSchema, table: edge.parentTable });
 
-    nullSteps.push({
-      kind: 'null',
-      id: `detach:${usersKey}:${edge.childColumn}`,
-      target: users,
-      column: edge.childColumn,
-      scope: { kind: 'owned', column: 'id' },
-      reason: `${edge.constraintName} points from ${usersKey} into purged rows`,
-    });
+    for (const target of deleteTargets.filter((candidate) => tableKey(candidate.target) === parentKey)) {
+      nullSteps.push({
+        kind: 'null',
+        id: `detach:${usersKey}:${edge.childColumn}->${parentKey}:${scopeId(target.scope)}`,
+        target: users,
+        column: edge.childColumn,
+        scope: {
+          kind: 'referencesPurged',
+          column: edge.childColumn,
+          parent: { ...target.target, column: edge.parentColumn },
+          parentScope: target.scope,
+        },
+        reason: `${edge.constraintName} points from ${usersKey} into purged rows`,
+      });
+    }
   }
 
   // ── 4. Order the deletes: children before parents ──
@@ -260,16 +298,13 @@ export function buildPurgePlan(input: {
 
   // ── 5. Detach what survives, then the account row itself ──
 
-  const detachSteps: PurgeStep[] = detached.map((column) => ({
+  const detachSteps: PurgeStep[] = detached.map(({ column, reason }) => ({
     kind: 'null',
     id: `detach:${tableKey(column)}:${column.column}`,
     target: { schema: column.schema, table: column.table },
     column: column.column,
     scope: { kind: 'owned', column: column.column },
-    reason:
-      tableKey(column) === usersKey
-        ? `${column.column} attributes a different account's row`
-        : `ON DELETE SET NULL, and ${tableKey(column)} is owned through another column`,
+    reason,
   }));
 
   const steps: PurgeStep[] = [
@@ -282,7 +317,7 @@ export function buildPurgePlan(input: {
   return {
     steps,
     purgedTables: [...new Set(ordered.map((target) => tableKey(target.target)))].sort(),
-    detachedColumns: detached.map((column) => `${tableKey(column)}.${column.column}`).sort(),
+    detachedColumns: detached.map(({ column }) => `${tableKey(column)}.${column.column}`).sort(),
     warnings,
   };
 }
@@ -296,7 +331,8 @@ export function buildPurgePlan(input: {
  * explicitly keeps it inside the batch loop, where letting the parent's delete
  * cascade would fire one unbounded delete instead. So both are used as
  * ordering constraints, and cascade edges are dropped first if they turn out to
- * create a cycle that the mandatory ones do not.
+ * create a cycle that the mandatory ones do not. `SET NULL`/`SET DEFAULT` edges
+ * are the cheapest hint of all, tried first and dropped first.
  */
 function orderDeletes(
   targets: Array<{ target: TableRef; scope: PurgeScope; reason: string }>,
@@ -316,8 +352,18 @@ function orderDeletes(
 
   const mandatory = new Set<FkDeleteActionSetMember>(['a', 'r']);
   const preferred = new Set<FkDeleteActionSetMember>(['a', 'r', 'c']);
+  const cheapest = new Set<FkDeleteActionSetMember>(['a', 'r', 'c', 'n', 'd']);
 
-  let sorted = kahn([...present].sort(), constraintEdges(preferred));
+  // `SET NULL` children first too, when that makes no cycle: a parent deleted
+  // first has Postgres rewrite every child row that points at it, only for the
+  // purge to delete those rows a step later. `ci.position` is the one that
+  // matters: each `ci.entities` delete used to null the account's own positions
+  // in compressed chunks (decompressing them) before they were deleted, which
+  // their `user_id` segment lets the purge do cheaply. Dropped silently on a
+  // cycle, as it changes only the cost, never what is deleted.
+  let sorted =
+    kahn([...present].sort(), constraintEdges(cheapest)) ??
+    kahn([...present].sort(), constraintEdges(preferred));
 
   if (!sorted) {
     // A cascade edge closed a loop. Drop the soft constraints and retry — the

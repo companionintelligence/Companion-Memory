@@ -1,5 +1,6 @@
-import { mergeAttributes } from '@tiptap/core';
+import { Extension, mergeAttributes } from '@tiptap/core';
 import { Mention } from '@tiptap/extension-mention';
+import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { ReactRenderer } from '@tiptap/react';
 
 import { ReferenceList } from './ReferenceList';
@@ -16,6 +17,34 @@ const MENU_OFFSET_PX = 6;
 const MENU_MIN_SPACE_PX = 260;
 
 /**
+ * Claims a click on a reference chip before StarterKit's Link sees it.
+ *
+ * The chip renders as `<a href>`. Link's click handler (priority 1000, with
+ * `openOnClick` on by default) opens the href of any anchor in the editor in a
+ * new tab, so a chip click opened the page twice: in a new tab, and in this one
+ * through `Content`'s `onReferenceClick`. A higher priority puts this plugin
+ * ahead of Link's. Ordinary links are left to Link.
+ */
+const EntityReferenceClick = Extension.create({
+  name: `${ENTITY_REFERENCE_NAME}Click`,
+  priority: 1001,
+
+  addProseMirrorPlugins() {
+    return [
+      new Plugin({
+        key: new PluginKey(`${ENTITY_REFERENCE_NAME}Click`),
+        props: {
+          handleClick: (_view, _pos, event) =>
+            event.button === 0 &&
+            event.target instanceof Element &&
+            event.target.closest('a[data-entity-uid]') !== null,
+        },
+      }),
+    ];
+  },
+});
+
+/**
  * `[[` reference node for notes.
  *
  * Deliberately a *node* rather than a link mark: the target's GlobalUID lives in
@@ -30,6 +59,10 @@ const MENU_MIN_SPACE_PX = 260;
 export function createEntityReference(config: EntityReferenceConfig) {
   return Mention.extend({
     name: ENTITY_REFERENCE_NAME,
+
+    addExtensions() {
+      return [EntityReferenceClick];
+    },
 
     addAttributes() {
       return {
@@ -56,7 +89,10 @@ export function createEntityReference(config: EntityReferenceConfig) {
     },
 
     parseHTML() {
-      return [{ tag: `a[data-entity-uid]` }];
+      // StarterKit's Link mark also matches the anchor (`a[href]`). At equal
+      // priority ProseMirror tries mark rules before node rules, so without this
+      // a saved reference reloads as a plain link. 51 beats Link's default 50.
+      return [{ tag: `a[data-entity-uid]`, priority: 51 }];
     },
 
     renderHTML({ node, HTMLAttributes }) {

@@ -390,6 +390,100 @@ describe('ToolRegistry', () => {
     });
   });
 
+  describe('ownership decided at runtime (a schema getter)', () => {
+    /**
+     * The `messaging.*` intents: native tools whose owner is whoever the BlueBubbles connector
+     * belongs to, which can change after boot. Their `schema` is a getter, so the registry has to
+     * read it when it decides rather than once at registration.
+     */
+    function runtimeOwnedTool(name: string, owner: { current: string }) {
+      const base = fakeTool(name);
+      const baseSchema = base.schema;
+
+      return {
+        get schema() {
+          return { ...baseSchema, ownerUserId: owner.current };
+        },
+        execute: base.execute,
+      } as any;
+    }
+
+    async function registryWithRuntimeOwner() {
+      const { registry } = makeRegistry();
+      const owner = { current: 'user-1' };
+      const tool = runtimeOwnedTool('messaging.listChats', owner);
+      await registry.registerProvider(
+        fakeProvider({ 'messaging.listChats': tool, 'memory.recall': fakeTool('memory.recall') }),
+      );
+
+      return { registry, owner, tool };
+    }
+
+    it('follows the owner as it changes, for listing and for execution', async () => {
+      const { registry, owner, tool } = await registryWithRuntimeOwner();
+
+      expect(registry.getAvailableTools({ userId: 'user-1' }).map((s) => s.name)).toContain(
+        'messaging.listChats',
+      );
+      expect(registry.getAvailableTools({ userId: 'user-2' }).map((s) => s.name)).toEqual(['memory.recall']);
+
+      owner.current = 'user-2';
+
+      expect(registry.getAvailableTools({ userId: 'user-1' }).map((s) => s.name)).toEqual(['memory.recall']);
+      expect(
+        (await registry.executeTool('messaging_listChats', { userId: 'user-1', capability: 'full' }, {}))
+          .error?.code,
+      ).toBe('TOOL_NOT_FOUND');
+      expect(tool.execute).not.toHaveBeenCalled();
+      await expect(
+        registry.executeTool('messaging_listChats', { userId: 'user-2', capability: 'full' }, {}),
+      ).resolves.toMatchObject({ success: true });
+    });
+
+    it('isToolVisibleTo answers the same rule for one tool, and false for an unknown name', async () => {
+      const { registry } = await registryWithRuntimeOwner();
+
+      expect(registry.isToolVisibleTo('messaging_listChats', 'user-1')).toBe(true);
+      expect(registry.isToolVisibleTo('messaging.listChats', 'user-1')).toBe(true);
+      expect(registry.isToolVisibleTo('messaging_listChats', 'user-2')).toBe(false);
+      expect(registry.isToolVisibleTo('messaging_listChats', undefined)).toBe(false);
+      expect(registry.isToolVisibleTo('memory_recall', 'user-2')).toBe(true);
+      expect(registry.isToolVisibleTo('no_such_tool', 'user-1')).toBe(false);
+    });
+
+    it('lists an owned catalog tool in the outbound catalog to its owner only', async () => {
+      const { registry } = await registryWithRuntimeOwner();
+
+      expect(
+        registry
+          .getOutboundCatalogTools({ userId: 'user-1' })
+          .map((s) => s.name)
+          .sort(),
+      ).toEqual(['memory.recall', 'messaging.listChats']);
+      expect(registry.getOutboundCatalogTools({ userId: 'user-2' }).map((s) => s.name)).toEqual([
+        'memory.recall',
+      ]);
+      expect(registry.getOutboundCatalogTools().map((s) => s.name)).toEqual(['memory.recall']);
+    });
+
+    it('getOutboundCatalogToolsForEveryOwner keeps owned tools, and still drops opted-out providers', async () => {
+      const { registry } = await registryWithRuntimeOwner();
+      const optedOut = fakeProvider({
+        'mcp.github.create_issue': ownedTool('mcp.github.create_issue', 'user-1'),
+      });
+      optedOut.name = 'mcp-client';
+      optedOut.includeInOutboundCatalog = false;
+      await registry.registerProvider(optedOut);
+
+      expect(
+        registry
+          .getOutboundCatalogToolsForEveryOwner()
+          .map((s) => s.name)
+          .sort(),
+      ).toEqual(['memory.recall', 'messaging.listChats']);
+    });
+  });
+
   it('logs an egress warning when an external intent runs, and none when it does not', async () => {
     const logger = makeLogger();
     const registry = new ToolRegistryCore(logger, recordingSink().double, openGate().double);

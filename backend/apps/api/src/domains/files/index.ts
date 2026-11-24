@@ -66,7 +66,8 @@ import { VipsService } from './services/VipsService';
 })
 export class FilesModule {}
 
-export { FileEntity, FileService, SavedSearchEntity, SavedSearchService };
+export { FileEntity, FilePreviewGenerationListener, FileService, SavedSearchEntity, SavedSearchService };
+export type { ObjectWriter } from './services/FileService';
 export { FilePreviewService } from './services/FilePreviewService';
 export type { PreviewOutcome, PreviewSkipReason } from './services/FilePreviewService';
 export { FilePreviewSweepRequestEvent, FILE_PREVIEW_SWEEP_QUEUE } from './events';
@@ -111,8 +112,10 @@ export type { MediaDimensions } from './services/MediaDimensionsService';
 export { MEDIA_DIMENSIONS_QUEUE } from './listeners/MediaDimensionsBackfillListener';
 export type { File, SignedFile, SavedSearch };
 export type { SavedSearchFilters } from './types';
+export { isValidAreas, isValidBbox, savedSearchAreas } from './types';
 export { resolveSavedSearchDateRange, isRollingDatePreset } from './seeds/resolveDatePreset';
 export { DEFAULT_SAVED_SEARCHES } from './seeds/defaultSavedSearches';
+export { FILE_KINDS, type FileKind, fileKindsPredicate, isFileKind, normalizeFileKinds } from './fileKinds';
 export {
   FileCreatedEvent,
   FileUpdatedEvent,

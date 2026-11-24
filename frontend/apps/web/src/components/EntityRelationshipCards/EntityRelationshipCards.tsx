@@ -1,13 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
-import { gql as apolloGql, useApolloClient } from '@apollo/client';
+import { useApolloClient } from '@apollo/client/react';
 import { GlobalUID } from '@ci/common';
 import { Button, Card, cn } from '@ci/shadcn';
+import { parse } from 'graphql';
 import { Link } from 'react-router-dom';
 
 import { useNodeGraphService } from '@/api/useNodeGraphService';
 import { ChatAbout } from '@/components/ChatWithAgent';
 import { Tag } from '@/components/Tag';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 import { namedChatContext } from '@/lib/agentChat';
 
 import {
@@ -22,6 +24,8 @@ const CARD_MIN_WIDTH = 180;
 const CARD_GAP_PX = 12;
 const MAX_VISIBLE_CARDS = 10;
 const DEFAULT_VISIBLE_CARDS = 5;
+/** Collapsed, never fewer than this: one card per row on a phone was one connection. */
+const MIN_VISIBLE_CARDS = 3;
 /** Grid items default to min-width:auto, so a nowrap tag or long subject
  *  expands the track and paints off the rounded card. min-w-0 + clip keeps
  *  every child inside the tile. */
@@ -118,7 +122,8 @@ function buildBatchNodeTagsQuery(count: number) {
     (_, i) => `n${i}: node(id: $id${i}) { __typename ... on Taggable { tags { label } } }`,
   ).join('\n    ');
 
-  return apolloGql(`
+  // parse(), not gql: the document is assembled at run time, which codegen cannot read.
+  return parse(`
   query GetNodeTagsForRelationshipCards(${variableDefs}) {
     ${selections}
   }
@@ -161,7 +166,11 @@ function getVisibleCardCount(width: number): number {
     return Math.min(MAX_VISIBLE_CARDS, Math.max(DEFAULT_VISIBLE_CARDS, cardsPerRow));
   }
 
-  return Math.min(MAX_VISIBLE_CARDS, cardsPerRow);
+  // At least MIN_VISIBLE_CARDS, in whole rows, so the grid wraps onto a second
+  // row without leaving it half empty: three on a phone, four two across.
+  const rows = Math.ceil(MIN_VISIBLE_CARDS / cardsPerRow);
+
+  return Math.min(MAX_VISIBLE_CARDS, rows * cardsPerRow);
 }
 
 export function getEntityDetailPath(entityType: string, entityId: string): string | null {
@@ -334,7 +343,11 @@ export function EntityRelationshipCards({
   heading = 'Connections',
 }: Props) {
   const apolloClient = useApolloClient();
-  const containerRef = useRef<HTMLDivElement | null>(null);
+  const fmt = useDateTimeFormat();
+  // A callback ref held in state, not a ref object: the card returns null until
+  // its graph arrives, so on the first render there is no element, and an effect
+  // keyed on nothing ran once against that null and never measured the row.
+  const [container, setContainer] = useState<HTMLDivElement | null>(null);
   const [visibleCardCount, setVisibleCardCount] = useState(DEFAULT_VISIBLE_CARDS);
   const [expanded, setExpanded] = useState(false);
   const [tagsByEntityKey, setTagsByEntityKey] = useState<Record<string, string[]>>({});
@@ -347,8 +360,7 @@ export function EntityRelationshipCards({
   });
 
   useEffect(() => {
-    const element = containerRef.current;
-    if (!element) {
+    if (!container) {
       return;
     }
 
@@ -358,11 +370,11 @@ export function EntityRelationshipCards({
       }
     });
 
-    observer.observe(element);
-    setVisibleCardCount(getVisibleCardCount(element.clientWidth));
+    observer.observe(container);
+    setVisibleCardCount(getVisibleCardCount(container.clientWidth));
 
     return () => observer.disconnect();
-  }, []);
+  }, [container]);
 
   const relationshipCards = useMemo<RelationshipCard[]>(() => {
     if (!data) {
@@ -374,6 +386,8 @@ export function EntityRelationshipCards({
     const entityAllowlist = entityTypes
       ? new Set(entityTypes.map((type) => normalizeGraphEntityType(type)))
       : null;
+    // The owner's own Person carries `is_self`; on that page a phrase's "them" is the reader.
+    const focusIsOwner = nodeById.get(entityId)?.properties?.is_self === true;
 
     return data.links
       .filter((link) => link.source === entityId || link.target === entityId)
@@ -398,6 +412,7 @@ export function EntityRelationshipCards({
           otherEntityProperties,
           relationshipPhrase: formatRelationshipPhrase(link.relationship_type, {
             focusIsSource: link.source === entityId,
+            focusIsOwner,
             relationshipProperties,
           }),
           summary: pickCardSummary({
@@ -405,7 +420,7 @@ export function EntityRelationshipCards({
             description: otherEntityDescription,
             entityProperties: otherEntityProperties,
           }),
-          when: formatCardWhen(recency),
+          when: formatCardWhen(recency, fmt),
           strength: typeof link.strength === 'number' ? link.strength : 0,
           recency,
           // Stash raw link props for communication id recovery in the click handler.
@@ -415,7 +430,7 @@ export function EntityRelationshipCards({
       .filter(
         (card) => !entityAllowlist || entityAllowlist.has(normalizeGraphEntityType(card.otherEntityType)),
       );
-  }, [data, entityId, relationshipTypes, entityTypes]);
+  }, [data, entityId, relationshipTypes, entityTypes, fmt]);
 
   // Deterministic ordering: strongest first, then most recent, then a stable
   // id tiebreak — so the same relationships always surface (no random subset).
@@ -523,7 +538,11 @@ export function EntityRelationshipCards({
         </p>
         <div className="flex min-w-0 items-baseline justify-between gap-2">
           {card.relationshipPhrase ? (
-            <p className="min-w-0 truncate text-xs text-muted-foreground">{card.relationshipPhrase}</p>
+            // Wraps like the name above instead of cutting to one line: at the
+            // narrowest card "Has you as emergency contact" read "Has you as em…".
+            <p className="line-clamp-3 min-w-0 text-xs leading-snug text-muted-foreground">
+              {card.relationshipPhrase}
+            </p>
           ) : (
             <span />
           )}
@@ -555,9 +574,9 @@ export function EntityRelationshipCards({
   );
 
   return (
-    <div ref={containerRef} className="space-y-3">
+    <div ref={setContainer} className="space-y-3">
       <div className="flex items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">{heading}</h2>
+        <h2 className="text-sm font-semibold text-muted-foreground">{heading}</h2>
         {!loading && sortedCards.length > 0 && (
           <div className="flex items-center gap-2">
             <span className="text-xs text-muted-foreground">

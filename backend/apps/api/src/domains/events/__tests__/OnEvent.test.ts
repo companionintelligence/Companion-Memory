@@ -75,9 +75,12 @@ describe('OnEvent decorator', () => {
     class JobIdReadingListener {
       seen: string | undefined;
 
+      seenEnqueuedAt: Date | undefined;
+
       @OnEvent('on-event.test.jobid' as never, { autoAcknowledge: false })
       async handle(_payload: unknown, ack: Acknowledgement): Promise<void> {
         this.seen = ack.jobId;
+        this.seenEnqueuedAt = ack.enqueuedAt;
         ack.defer();
       }
     }
@@ -85,11 +88,16 @@ describe('OnEvent decorator', () => {
     it('forwards every ack field to the handler, not only the three callbacks', async () => {
       const listener = new JobIdReadingListener();
       const ack = makeAck();
+      const enqueuedAt = new Date('2026-10-17T23:01:00Z');
       ack.jobId = 'pgboss-job-42';
+      ack.enqueuedAt = enqueuedAt;
 
       await listener.handle({}, ack);
 
       expect(listener.seen).toBe('pgboss-job-42');
+      // AnswerInferenceListener drops stale work by this. Lost here, every job
+      // reads as fresh and a backlog replays in full.
+      expect(listener.seenEnqueuedAt).toBe(enqueuedAt);
       expect(ack.defer).toHaveBeenCalledTimes(1);
     });
 

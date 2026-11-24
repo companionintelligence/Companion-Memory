@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { LoggerService } from '@ci/common/logging';
 import { BlueBubblesClientService } from '@ci/domains/bluebubbles';
@@ -35,24 +35,39 @@ const GROUP_CHAT_STYLE = 43;
  */
 @Injectable()
 export class MessagingListChatsTool extends BaseTool<MessagingListChatsInput, MessagingListChatsOutput> {
-  readonly schema: IntentDefinition = {
+  private static readonly BASE_SCHEMA: IntentDefinition = {
     name: 'messaging.listChats',
     domain: 'messaging',
     title: 'List message chats',
     description: 'List the iMessage/SMS conversations known to the connected BlueBubbles server.',
-    privacy: { access: 'read', sensitivity: 'personal', destructive: false, external: true },
     // Reads live off the configured Mac's BlueBubbles server, not off any
-    // on-device mirror.
+    // on-device mirror. That server is the owner's own, so `ownServer`: a lookup
+    // before this call cannot use it to send anything to a third party.
+    privacy: { access: 'read', sensitivity: 'personal', destructive: false, external: true, ownServer: true },
     localCapable: false,
     phrases: ['What conversations do I have', 'List my text chats'],
     parameters: {
       type: 'object',
       properties: {
-        maxResults: { type: 'integer', description: 'Max chats to return (default 25).', minimum: 1, maximum: 100 },
+        maxResults: {
+          type: 'integer',
+          description: 'Max chats to return (default 25).',
+          minimum: 1,
+          maximum: 100,
+        },
       },
       required: [],
     },
   };
+
+  /**
+   * Owned by the BlueBubbles connector's owner, read fresh on every access: the registry hides
+   * this tool from every other account and refuses to run it for them. See
+   * `BlueBubblesClientService.toolOwnerUserId`.
+   */
+  get schema(): IntentDefinition {
+    return { ...MessagingListChatsTool.BASE_SCHEMA, ownerUserId: this.client.toolOwnerUserId() };
+  }
 
   constructor(
     private readonly client: BlueBubblesClientService,
@@ -67,10 +82,10 @@ export class MessagingListChatsTool extends BaseTool<MessagingListChatsInput, Me
   }
 
   protected async executeInternal(
-    _context: ToolExecutionContext,
+    context: ToolExecutionContext,
     input: MessagingListChatsInput,
   ): Promise<MessagingListChatsOutput> {
-    const chats = await this.client.listChats(input.maxResults ?? 25);
+    const chats = await this.client.listChats(context.userId, input.maxResults ?? 25);
 
     return {
       chats: chats.map((chat) => ({

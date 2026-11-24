@@ -21,7 +21,8 @@ import fs from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import { extractMediaMetadata } from './_exif';
+import { extractMediaMetadata } from '@ci/common/media/exif';
+
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams, Metadata } from './timeline';
@@ -169,7 +170,7 @@ class ApplePhotosFileImporter implements FileImporter {
       return { confidence: 0 };
     }
 
-    let isDir = false;
+    let isDir: boolean;
     try {
       isDir = (await stat(baseDir)).isDirectory();
     } catch {

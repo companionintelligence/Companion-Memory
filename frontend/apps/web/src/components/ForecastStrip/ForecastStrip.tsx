@@ -1,9 +1,12 @@
+import { forecastBuilt } from '@ci/common';
 import { cn, Tooltip } from '@ci/shadcn';
 import { Link } from 'react-router-dom';
 
 import type { ForecastBucket, ProbabilityEntry } from '@/api/useForecastService';
 import { useFeatures } from '@/common/feature';
+import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 import { classColor, normalizeClass } from '@/lib/activityPalette';
+import { HOUR_MINUTE, type DateTimeFormatter } from '@/lib/dateTimeFormat';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -51,15 +54,14 @@ function localMinutesOfDay(iso: string): number | null {
   return d.getHours() * 60 + d.getMinutes();
 }
 
-/** Format minutes-since-local-midnight as a clock label (e.g. 510 → "8:30 AM"). */
-function formatClock(minutesOfDay: number): string {
+/**
+ * Format minutes-since-local-midnight as a clock label (e.g. 510 → "8:30 AM", or "08:30" in
+ * 24-hour). A position on the strip rather than an instant, so only the hour cycle applies.
+ */
+function formatClock(minutesOfDay: number, fmt: DateTimeFormatter): string {
   const m = ((minutesOfDay % MINUTES_PER_DAY) + MINUTES_PER_DAY) % MINUTES_PER_DAY;
 
-  // Date constructor normalises overflow: 1440 → Jan 2 midnight → "12:00 AM"
-  return new Date(2000, 0, 1, Math.floor(m / 60), m % 60).toLocaleTimeString([], {
-    hour: 'numeric',
-    minute: '2-digit',
-  });
+  return fmt.clock(Math.floor(m / 60), m % 60);
 }
 
 /** Always returns exactly `n` entries sorted 0…n-1, filling gaps with neutral defaults. */
@@ -126,6 +128,24 @@ function dominantL0(probs: ProbabilityEntry[]): string {
   ).label;
 }
 
+/**
+ * The class to paint a bucket.
+ *
+ * Prefers HBPE's own `predictedL0` over the local argmax. The two differ on
+ * purpose: `l0Probs` is a calibrated posterior, and most of a day carries no
+ * recorded activity, so its argmax answers UNKNOWN nearly everywhere even when
+ * the distribution is exactly right. HBPE picks the label with a prior
+ * correction — floored, so it can only promote a class the model still gives
+ * real probability to — which is a decision the server is better placed to
+ * make than this component, since it is the side that knows the class priors.
+ *
+ * Falls back to the argmax when the field is absent, so an older HBPE (or a
+ * fixture written before it existed) renders exactly as it used to.
+ */
+function displayL0(bucket: ForecastBucket): string {
+  return bucket.predictedL0 ?? dominantL0(bucket.l0Probs);
+}
+
 function topL1(probs: ProbabilityEntry[]): { name: string; prob: number } | null {
   if (!probs.length) {
     return null;
@@ -148,19 +168,35 @@ export function SlotTooltip({
   minutes: number;
 }) {
   const { isFeatureEnabled } = useFeatures();
+  const fmt = useDateTimeFormat();
   const sorted = [...bucket.l0Probs].sort((a, b) => b.probability - a.probability);
   const top1 = topL1(bucket.l1Probs);
+  // The painted class is prior-corrected, so it is not always the tallest bar.
+  // Without marking it, hovering a bin coloured EXERCISE and reading UNKNOWN
+  // 84% at the top of the list looks like a bug rather than a decision.
+  const shown = displayL0(bucket);
 
   return (
     <div className="w-52 space-y-2 text-left">
       <p className="text-xs font-semibold">
-        {formatClock(localMin)} – {formatClock(localMin + minutes)}
+        {formatClock(localMin, fmt)} – {formatClock(localMin + minutes, fmt)}
+      </p>
+
+      <p className="text-[10px] opacity-60">
+        Showing <span className="font-semibold opacity-100">{shown}</span>
       </p>
 
       <div className="space-y-1">
         {sorted.map(({ label, probability }) => (
           <div key={label} className="flex items-center gap-2">
-            <span className="w-14 shrink-0 text-right text-[10px] opacity-75">{label}</span>
+            <span
+              className={cn(
+                'w-14 shrink-0 text-right text-[10px]',
+                label === shown ? 'font-semibold opacity-100' : 'opacity-75',
+              )}
+            >
+              {label}
+            </span>
             <div className="flex-1 h-1.5 rounded-full bg-current/20 overflow-hidden">
               <div
                 className="h-full rounded-full"
@@ -170,7 +206,12 @@ export function SlotTooltip({
                 }}
               />
             </div>
-            <span className="w-7 shrink-0 text-[10px] opacity-75 tabular-nums">
+            <span
+              className={cn(
+                'w-7 shrink-0 text-[10px] tabular-nums',
+                label === shown ? 'font-semibold opacity-100' : 'opacity-75',
+              )}
+            >
               {Math.round(probability * 100)}%
             </span>
           </div>
@@ -205,18 +246,16 @@ function ForecastSlot({
   minutes,
   isFirst,
   isLast,
-  systemStatus,
+  showClasses,
 }: {
   bucket: ForecastBucket;
   localMin: number;
   minutes: number;
   isFirst: boolean;
   isLast: boolean;
-  systemStatus: string;
+  showClasses: boolean;
 }) {
-  const isReady = systemStatus === 'READY';
-  const showClasses = isReady || systemStatus.includes(':');
-  const dominant = dominantL0(bucket.l0Probs);
+  const dominant = displayL0(bucket);
 
   const isEmpty = bucket.l0Probs.length === 0;
   const targetOpacity = isEmpty ? 0.08 : Math.max(0.2, Math.min(1, bucket.q50));
@@ -226,11 +265,12 @@ function ForecastSlot({
       <Tooltip.Trigger asChild>
         <div
           className={cn(
-            'flex-1 h-8 cursor-default transition-all duration-100',
+            'flex-1 h-8 cursor-default transition-[color,background-color,border-color,box-shadow,opacity,transform] duration-100',
             showClasses && 'hover:scale-y-[1.3] hover:z-10 relative',
-            // Before the engine is READY there is no class to name, so the strip
-            // stays on the theme colour rather than picking a hue at random.
-            // A live Predict/nightly run still has buckets — keep the colours.
+            // Until the forecast has been built there is no class to name, so
+            // the strip stays on the theme colour rather than painting the
+            // starter prior's class into every slot. A run over a built
+            // forecast keeps its colours.
             !showClasses && 'bg-primary/60',
             isFirst && 'rounded-l-full',
             isLast && 'rounded-r-full',
@@ -307,6 +347,26 @@ const STATUS_LABELS: Record<string, string> = {
   'NIGHTLY:cache': 'Refreshing predictions...',
 };
 
+/**
+ * Words for a forecast `systemStatus`, or null when there is nothing worth
+ * saying: READY, or a value this list does not know. A pipeline step it does
+ * not name still reads as an update in progress rather than as the raw
+ * `STAGE:step` string.
+ */
+export function forecastStatusLabel(systemStatus: string): string | null {
+  if (systemStatus === 'READY') {
+    return null;
+  }
+
+  // Own keys only: a plain index would hand back Object.prototype's
+  // `constructor` or `toString` for a status spelled that way.
+  if (Object.hasOwn(STATUS_LABELS, systemStatus)) {
+    return STATUS_LABELS[systemStatus];
+  }
+
+  return systemStatus.includes(':') ? STATUS_LABELS['NIGHTLY:queued'] : null;
+}
+
 export function formatEta(seconds: number): string {
   if (seconds >= 3300) {
     const hours = Math.round(seconds / 3600);
@@ -334,15 +394,16 @@ export function ForecastStrip({
   pipelineDetail = null,
   className,
 }: ForecastStripProps) {
+  const fmt = useDateTimeFormat();
   const ordered = orderLocalDay(buckets);
 
   const isReady = systemStatus === 'READY';
   const pipelineRunning = systemStatus.includes(':');
-  const showClasses = isReady || pipelineRunning;
+  const showClasses = forecastBuilt({ systemStatus, modelVersion, stillLearning });
   const baselineName =
     modelVersion && modelVersion !== 'hmt' && !modelVersion.startsWith('hmt') ? modelVersion : null;
   let statusLabel = isReady
-    ? `Generated ${new Date(generatedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+    ? `Generated ${fmt.time(generatedAt, HOUR_MINUTE)}`
     : stalled
       ? 'Prediction model not built yet — open Add ▸ Predict to start'
       : (STATUS_LABELS[systemStatus] ?? 'Processing...');
@@ -381,14 +442,14 @@ export function ForecastStrip({
             minutes={minutes}
             isFirst={idx === 0}
             isLast={idx === ordered.length - 1}
-            systemStatus={systemStatus}
+            showClasses={showClasses}
           />
         ))}
       </div>
 
       {/* Time labels — local midnight to last slot */}
       <div className="flex justify-between text-[10px] text-muted-foreground px-0.5">
-        <span>{formatClock(ordered[0]?.localMin ?? 0)}</span>
+        <span>{formatClock(ordered[0]?.localMin ?? 0, fmt)}</span>
         <span
           className={
             pipelineRunning && !stalled
@@ -403,6 +464,7 @@ export function ForecastStrip({
         <span>
           {formatClock(
             ordered[ordered.length - 1]?.localMin ?? MINUTES_PER_DAY - (ordered[0]?.minutes ?? 15),
+            fmt,
           )}
         </span>
       </div>

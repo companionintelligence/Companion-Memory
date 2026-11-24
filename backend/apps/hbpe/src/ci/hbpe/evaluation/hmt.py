@@ -35,6 +35,12 @@ class HmtForecaster:
     ``force_model='hmt'`` bypasses the D3 gate so this row measures the model
     rather than the gate's fallback to B2 — the gate is then re-applied
     separately by ``WalkForwardResult.served_verdict``.
+
+    ``force_model`` is not absolute: with no checkpoint on disk the engine runs
+    no transformer windows and silently serves B1 instead (``predict``'s
+    ``served == MODEL_HMT and hmt_days == 0`` branch).  The returned buckets
+    carry no model tag, so without the check below the harness would label a
+    B1-plus-HMM curve ``hmt`` and score it against B1 as if it were a rival.
     """
 
     name = "hmt"
@@ -59,6 +65,14 @@ class HmtForecaster:
             as_of=target_date,
             force_model="hmt",
         )
+        served = self._engine.last_model_version
+        if served != "hmt":
+            raise RuntimeError(
+                f"engine served {served!r}, not 'hmt', for {target_date}: there is "
+                f"no usable checkpoint for user {self.user_id}, so this row would "
+                f"report {served!r} under the name 'hmt'. Train a checkpoint, or "
+                f"drop --with-hmt."
+            )
         out = np.full((BUCKETS_PER_DAY, N_CLASSES), 1.0 / N_CLASSES, dtype=np.float64)
         for entry in buckets:
             idx = int(entry["bucket_index"])

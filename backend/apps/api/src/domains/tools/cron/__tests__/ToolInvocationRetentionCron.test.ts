@@ -1,10 +1,16 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { SCHEDULE_CRON_OPTIONS } from '@nestjs/schedule/dist/schedule.constants';
+import { SCHEDULE_CRON_OPTIONS } from '@ci/common/schedule/metadataKeys';
 
 import { TOOL_INVOCATION_RETENTION_CRON, ToolInvocationRetentionCron } from '../ToolInvocationRetentionCron';
 
 function makeLogger() {
-  return { setContext: jest.fn(), debug: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() } as any;
+  return {
+    setContext: jest.fn(),
+    debug: jest.fn(),
+    log: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+  } as any;
 }
 
 describe('ToolInvocationRetentionCron', () => {

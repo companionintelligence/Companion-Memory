@@ -39,13 +39,7 @@ export function FileRow({ file, time, onClick }: Props) {
 
   return (
     <EntityRow
-      icon={
-        url ? (
-          <PendingImage src={url} />
-        ) : (
-          <FileIcon />
-        )
-      }
+      icon={url ? <PendingImage src={url} /> : <FileIcon />}
       title={data.title}
       subtitle={
         <>

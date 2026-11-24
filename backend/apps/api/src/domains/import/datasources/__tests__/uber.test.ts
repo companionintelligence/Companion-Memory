@@ -1,7 +1,7 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
+import { tempDirsRemovedAfterEach } from '../../__tests__/support/tempDirs';
 import type { Graph, ImportParams } from '../timeline';
 import { UberFileImporter } from '../uber';
 
@@ -11,9 +11,11 @@ const HEADER =
   'City,Product Type,Begin Trip Time,Begin Trip Address,Dropoff Address,' +
   'Begin Trip Lat,Begin Trip Lng,Distance (miles),Fare Amount,Fare Currency';
 
+const { makeSync: tempDir } = tempDirsRemovedAfterEach();
+
 // Write a throwaway trips_data.csv (the file the importer recognizes) and import it.
 async function importTrips(rows: string[]) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-uber-'));
+  const dir = tempDir('ci-uber-');
   const fpath = path.join(dir, 'trips_data.csv');
   fs.writeFileSync(fpath, [HEADER, ...rows].join('\n'));
   const fi = new UberFileImporter();
@@ -60,7 +62,7 @@ const REQ_ROW =
 
 // Build a nested temp export dir from {rel, content} files and import from its root.
 async function importFromDir(files: Array<{ rel: string; content: string }>) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-uber-dir-'));
+  const root = tempDir('ci-uber-dir-');
   for (const f of files) {
     const full = path.join(root, f.rel);
     fs.mkdirSync(path.dirname(full), { recursive: true });
@@ -80,7 +82,7 @@ async function importFromDir(files: Array<{ rel: string; content: string }>) {
 
 // Import an Eats CSV while capturing the drop ledger.
 async function importEatsWithDrops(rows: string[]) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-uber-eats-drop-'));
+  const dir = tempDir('ci-uber-eats-drop-');
   const fpath = path.join(dir, 'user_orders-0.csv');
   fs.writeFileSync(fpath, [EATS_HEADER, ...rows].join('\n'));
   const items: Graph[] = [];
@@ -90,14 +92,13 @@ async function importEatsWithDrops(rows: string[]) {
     timeframe: {},
     log: () => {},
   } as unknown as ImportParams);
-  fs.rmSync(dir, { recursive: true, force: true });
 
   return { items, drops };
 }
 
 // Import a trips CSV while capturing the drop ledger.
 async function importWithDrops(csv: string) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-uber-drop-'));
+  const dir = tempDir('ci-uber-drop-');
   const fpath = path.join(dir, 'trips_data.csv');
   fs.writeFileSync(fpath, csv);
   const items: Graph[] = [];
@@ -107,14 +108,13 @@ async function importWithDrops(csv: string) {
     timeframe: {},
     log: () => {},
   } as unknown as ImportParams);
-  fs.rmSync(dir, { recursive: true, force: true });
 
   return { items, drops };
 }
 
 describe('Uber datasource', () => {
   it('recognizes a trips_data.csv with trip-coordinate columns', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-uber-'));
+    const dir = tempDir('ci-uber-');
     const fpath = path.join(dir, 'trips_data.csv');
     fs.writeFileSync(fpath, `${HEADER}\n`);
     const rec = await new UberFileImporter().recognize({}, { filename: 'trips_data.csv', fullPath: fpath });
@@ -311,7 +311,7 @@ describe('Uber datasource', () => {
 
     it('still drops a row that has neither a pickup nor a request time', async () => {
       const row = REQ_ROW.replace('2023-04-11T18:15:00.000Z', '').replace('2023-04-11T18:22:05.000Z', '');
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-uber-nostart-'));
+      const dir = tempDir('ci-uber-nostart-');
       const fpath = path.join(dir, 'trips_data.csv');
       fs.writeFileSync(fpath, [REQ_HEADER, row].join('\n'));
       const items: Graph[] = [];
@@ -321,7 +321,6 @@ describe('Uber datasource', () => {
         timeframe: {},
         log: () => {},
       } as unknown as ImportParams);
-      fs.rmSync(dir, { recursive: true, force: true });
       expect(items.length).toBe(0);
       expect(drops).toEqual([['trip_without_start_time', '1 Market St']]);
     });

@@ -44,11 +44,7 @@ export type SpeechRecognitionTier =
   | 'none';
 
 export type SpeechLanguagePackState =
-  | 'installed'
-  | 'downloadable'
-  | 'downloading'
-  | 'unsupported'
-  | 'unknown';
+  'installed' | 'downloadable' | 'downloading' | 'unsupported' | 'unknown';
 
 export interface SpeechRecognitionCapability {
   available: boolean;

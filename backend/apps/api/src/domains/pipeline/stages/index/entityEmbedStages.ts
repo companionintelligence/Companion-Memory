@@ -168,14 +168,15 @@ export class ItemEmbedStage extends DenseEmbedStageBase {
 /**
  * Person rows live in the shared `ci.entities` table behind the discriminator;
  * merge tombstones (rows folded into a canonical person) must never re-index —
- * a merge deletes the tombstone's embedding deliberately.
+ * a merge deletes the tombstone's embedding deliberately. Nor must a person the
+ * user asked Memory to forget (archived, `is_active` false), for the same reason.
  */
 export const INDEX_EMBED_PERSON_SOURCE: StageSource = {
   schema: 'ci',
   table: 'entities',
   idColumn: 'entity_id',
   userColumn: 'owner_user_id',
-  predicate: "s.entity_type = 'Person' AND s.merged_into_entity_id IS NULL",
+  predicate: "s.entity_type = 'Person' AND s.merged_into_entity_id IS NULL AND s.is_active IS NOT FALSE",
 };
 
 @Injectable()

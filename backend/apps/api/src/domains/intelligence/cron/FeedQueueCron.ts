@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 
 import { FeatureService } from '@ci/common/feature';
 import { LoggerService } from '@ci/common/logging';
-import { Cron } from '@ci/common/schedule';
+import { Cron, fanOutPerUser } from '@ci/common/schedule';
 
 import { QuestionService } from '../services/QuestionService';
 
@@ -33,16 +33,16 @@ export class FeedQueueCron {
     }
 
     const userIds = await this.questionService.listFeedQueueUserIds();
-    let enqueueCount = 0;
+    // One user's failure no longer costs the rest of the list their top-up.
+    const { enqueued: enqueueCount } = await fanOutPerUser(
+      userIds,
+      async (userId) => {
+        await this.questionService.rotateStaleFeedQuestions(userId);
 
-    for (const userId of userIds) {
-      await this.questionService.rotateStaleFeedQuestions(userId);
-      const enqueued = await this.questionService.enqueueNextFeedQueueQuestion(userId, FEED_QUEUE_LIMIT);
-
-      if (enqueued) {
-        enqueueCount += 1;
-      }
-    }
+        return this.questionService.enqueueNextFeedQueueQuestion(userId, FEED_QUEUE_LIMIT);
+      },
+      { logger: this.logger, label: 'feed queue top-up' },
+    );
 
     this.logger.log('Processed feed queue top-up', {
       usersProcessed: userIds.length,

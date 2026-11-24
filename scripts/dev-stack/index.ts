@@ -33,10 +33,11 @@ import dotenv from 'dotenv';
 import { CaddyClient, routeId } from './caddy';
 import { keyFromArgv } from './key';
 import { fail, link, note, ok, step, table } from './log';
-import { buildOvermindEnv } from './overmind-env';
+import { buildOvermindEnv, powersyncEnabled } from './overmind-env';
 import { allocStackPorts, dockerPublishedPorts } from './ports';
 import { ensureSidecarAuthSecret } from './sidecar-secret';
 import { removeStaleContainers } from './stale-containers';
+import { acquireSupervisorLock, liveStackMessage, readLiveHolder, socketIsLive } from './supervisor-lock';
 
 const ROOT = process.cwd();
 dotenv.config({ path: path.join(ROOT, '.env'), quiet: true });
@@ -48,6 +49,13 @@ if (ensureSidecarAuthSecret(path.join(ROOT, '.env'))) {
 }
 
 const caddy = new CaddyClient();
+
+// overmind's control socket lives in this worktree's dir (overmind runs with
+// cwd = ROOT) as a RELATIVE path. Relative keeps the bound sun_path short — an
+// absolute path in a deep worktree dir overflows sun_path (104 bytes on macOS).
+// The per-worktree cwd already isolates concurrent stacks, so no key suffix is
+// needed (it was what pushed the path over the limit).
+const OVERMIND_SOCKET = '.overmind.sock';
 
 /**
  * Whether this host can pass an AMD GPU into a container.
@@ -103,6 +111,18 @@ const COMPOSE_FILES = [
 /** Set once at startup; merged into the env of every compose invocation. */
 const AMD_GROUP_ENV = amdGroupEnv();
 
+/**
+ * The compose profiles this stack runs. `powersync` is opt-in: the replicator
+ * holds a replication slot, and a slot with no reader keeps WAL forever, so it
+ * runs only when .env names a POWERSYNC_URL (the api's own switch for the
+ * feature). `stop` always names it too — stopping a service that was never
+ * started is a no-op, while leaving it out would strand a running replicator
+ * when the opt-in was removed between `up` and teardown.
+ */
+function composeProfiles(includePowersync: boolean): string[] {
+  return ['--profile', 'local', ...(includePowersync ? ['--profile', 'powersync'] : [])];
+}
+
 // --- caddy routing (the CaddyClient lives in ./caddy) -----------------------
 
 /** reverse_proxy handler; flush_interval -1 streams responses immediately
@@ -130,8 +150,17 @@ const PLAYER_FRAME_SRC = [
   'https://www.dailymotion.com',
 ].join(' ');
 
-function buildRoute(key: string, p: { apiPort: number; webPort: number; objPort: number }) {
+function buildRoute(
+  key: string,
+  p: { apiPort: number; webPort: number; objPort: number; powersyncPort?: number },
+) {
   const host = `${key}.localhost`;
+  // The PowerSync client in a desktop browser on this route talks to the dev
+  // service at its loopback URL (the api returns POWERSYNC_URL verbatim), which
+  // `connect-src 'self'` would refuse. The phone loads vite directly and never
+  // sees this policy. Only when the stack runs the service.
+  const powersyncConnectSrc =
+    p.powersyncPort == null ? '' : ` http://localhost:${p.powersyncPort} ws://localhost:${p.powersyncPort}`;
   // script-src 'wasm-unsafe-eval': PowerSync's SQLite engine (wa-sqlite) is
   // WebAssembly compiled inside the DB web worker, and CSP counts compiling wasm
   // as eval — without it the worker's init throws and anything awaiting the local
@@ -142,17 +171,18 @@ function buildRoute(key: string, p: { apiPort: number; webPort: number; objPort:
   // over XHR. Without them the script is refused, loadGoogleMaps()'s rejection is
   // swallowed, and the map quietly degrades to dashed straight-line polylines.
   // img-src is already `*`, so Maps' imagery needs no entry of its own.
-  // Copy 4 of 4 of this policy — the other three are the http{} block and the
-  // /static/ and /assets/ locations in infrastructure/gateway/nginx.conf. They
-  // already drift (this one carries 'unsafe-inline' and the ws:// dev origins);
-  // change all four together anyway or a fix that works in `make dev` silently
-  // does nothing in the gateway-served and desktop builds.
+  // Copy 3 of 3 of this policy. The other two are the http{} block and the
+  // /assets/ location in infrastructure/gateway/nginx.conf. They already drift
+  // (this one carries 'unsafe-inline' and the ws:// dev origins); change all
+  // three together anyway or a fix that works in `make dev` silently does
+  // nothing in the gateway-served and desktop builds. The gateway's /static/
+  // location sends a sandboxed policy of its own that this dev route does not.
   const csp =
     "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://maps.googleapis.com " +
     "https://maps.gstatic.com; style-src 'self' 'unsafe-inline' " +
     "https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src * data: blob:; " +
     "media-src 'self' blob:; connect-src 'self' https://maps.googleapis.com " +
-    `ws://${host} wss://${host}; worker-src 'self'; ` +
+    `ws://${host} wss://${host}${powersyncConnectSrc}; worker-src 'self'; ` +
     "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; " +
     `frame-src ${PLAYER_FRAME_SRC};`;
 
@@ -204,7 +234,7 @@ function buildRoute(key: string, p: { apiPort: number; webPort: number; objPort:
 
 async function caddyUp(
   key: string,
-  p: { apiPort: number; webPort: number; objPort: number },
+  p: { apiPort: number; webPort: number; objPort: number; powersyncPort?: number },
 ): Promise<string> {
   await caddy.addRoute(buildRoute(key, p));
 
@@ -263,7 +293,15 @@ function composeUp(key: string, env: NodeJS.ProcessEnv): void {
 
   run(
     'docker',
-    ['compose', ...COMPOSE_FILES, '--profile', 'local', 'up', '-d', '--wait', '--remove-orphans'],
+    [
+      'compose',
+      ...COMPOSE_FILES,
+      ...composeProfiles(powersyncEnabled(env)),
+      'up',
+      '-d',
+      '--wait',
+      '--remove-orphans',
+    ],
     { ...env, ...AMD_GROUP_ENV },
   );
 
@@ -273,7 +311,7 @@ function composeUp(key: string, env: NodeJS.ProcessEnv): void {
 function composeStop(key: string): void {
   step('Stopping Docker services (volumes preserved)...\n');
 
-  spawnSync('docker', ['compose', ...COMPOSE_FILES, '--profile', 'local', 'stop'], {
+  spawnSync('docker', ['compose', ...COMPOSE_FILES, ...composeProfiles(true), 'stop'], {
     cwd: ROOT,
     // The group vars matter even on `stop`: compose interpolates every file it
     // is handed before it does anything, so an unset AMD_RENDER_GID would warn
@@ -362,6 +400,23 @@ function migrate(dbPort: number, env: NodeJS.ProcessEnv): void {
 // --- lifecycle --------------------------------------------------------------
 
 async function up(key: string): Promise<void> {
+  // One supervisor per worktree, before anything is touched — see
+  // supervisor-lock.ts for what a second one did to the first.
+  const lock = acquireSupervisorLock(ROOT, key);
+  if (!lock.acquired) {
+    fail(liveStackMessage(lock.holder, OVERMIND_SOCKET));
+    process.exit(1);
+  }
+
+  process.on('exit', lock.release);
+
+  // A supervisor from before the lock existed holds no lock file; its overmind
+  // still answers on the socket.
+  if (await socketIsLive(path.join(ROOT, OVERMIND_SOCKET))) {
+    fail(liveStackMessage(null, OVERMIND_SOCKET));
+    process.exit(1);
+  }
+
   if (await caddy.hasRoute(routeId(key))) {
     fail(`Already routed at ${key}.localhost. Tear it down first with \`make dev-down\`.`);
     process.exit(1);
@@ -370,7 +425,8 @@ async function up(key: string): Promise<void> {
   // One record feeds compose, the Caddy route and the Procfile env alike, so a
   // path proxied by both Caddy and vite (/api, /static) reaches the same port.
   const ports = await allocStackPorts(dockerPublishedPorts(key));
-  const { apiPort, webPort, dbPort, objPort, hbpePort, summaryPort, parserPort } = ports;
+  const { apiPort, webPort, dbPort, objPort, hbpePort, summaryPort, parserPort, powersyncPort } = ports;
+  const withPowersync = powersyncEnabled(process.env);
 
   const composeEnv: NodeJS.ProcessEnv = {
     ...process.env,
@@ -381,6 +437,7 @@ async function up(key: string): Promise<void> {
     SUMMARY_HOST_PORT: String(summaryPort),
     PARSER_HOST_PORT: String(parserPort),
     API_HOST_PORT: String(apiPort), // hbpe container calls the host api at this port
+    POWERSYNC_HOST_PORT: String(powersyncPort),
   };
 
   let overmind: ReturnType<typeof spawn> | null = null;
@@ -407,6 +464,7 @@ async function up(key: string): Promise<void> {
       composeStop(key);
     }
 
+    lock.release();
     ok('Teardown complete');
   };
 
@@ -433,15 +491,9 @@ async function up(key: string): Promise<void> {
 
     migrate(dbPort, composeEnv);
 
-    const host = await caddyUp(key, ports);
+    const host = await caddyUp(key, { ...ports, powersyncPort: withPowersync ? powersyncPort : undefined });
 
-    // overmind's control socket lives in this worktree's dir (overmind runs
-    // with cwd = ROOT) as a RELATIVE path. Relative keeps the bound sun_path
-    // short — an absolute path in a deep worktree dir overflows sun_path (104
-    // bytes on macOS). The per-worktree cwd already isolates concurrent stacks,
-    // so no key suffix is needed (it was what pushed the path over the limit).
-    const overmindSocket = '.overmind.sock';
-    const overmindEnv = buildOvermindEnv(process.env, ports, { host, socket: overmindSocket });
+    const overmindEnv = buildOvermindEnv(process.env, ports, { host, socket: OVERMIND_SOCKET });
 
     console.log('');
 
@@ -457,6 +509,7 @@ async function up(key: string): Promise<void> {
         ['hbpe', String(hbpePort)],
         ['summary', String(summaryPort)],
         ['parser', String(parserPort)],
+        ...(withPowersync ? [['powersync', String(powersyncPort)]] : []),
       ],
       ['left', 'right'],
     );
@@ -465,7 +518,8 @@ async function up(key: string): Promise<void> {
 
     console.log('');
 
-    fs.rmSync(path.join(ROOT, overmindSocket), { force: true }); // clear a stale socket from a crashed run
+    // Stale for certain: we hold the lock and nothing answered on it above.
+    fs.rmSync(path.join(ROOT, OVERMIND_SOCKET), { force: true });
 
     await new Promise<void>((resolve) => {
       overmind = spawn('overmind', ['start', '-f', 'Procfile'], {
@@ -490,6 +544,14 @@ async function up(key: string): Promise<void> {
 }
 
 async function down(key: string): Promise<void> {
+  // `dev-down` clears a STALE route. Removing a live stack's route is what let
+  // a second supervisor start on top of it (supervisor-lock.ts).
+  const holder = readLiveHolder(ROOT);
+  if (holder || (await socketIsLive(path.join(ROOT, OVERMIND_SOCKET)))) {
+    fail(`${liveStackMessage(holder, OVERMIND_SOCKET)} \`make dev-down\` only clears a stale route.`);
+    process.exit(1);
+  }
+
   await caddyDown(key);
 }
 

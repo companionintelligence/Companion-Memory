@@ -12,7 +12,12 @@
  * The ORDER is the order the API returns them in, so it is part of the contract
  * with the Settings card.
  */
-export const OUTBOUND_PATH_KEYS = ['crash_reports', 'place_lookups', 'link_previews', 'portal_oauth'] as const;
+export const OUTBOUND_PATH_KEYS = [
+  'crash_reports',
+  'place_lookups',
+  'link_previews',
+  'portal_oauth',
+] as const;
 
 export type OutboundPathKey = (typeof OUTBOUND_PATH_KEYS)[number];
 

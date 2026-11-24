@@ -1,21 +1,30 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ApiKeysSection } from './ApiKeysSection';
 
 // ApiKeysSection reads useAuth from the @/hooks barrel and talks to /api/keys through fetchJson.
 const h = vi.hoisted(() => ({
   fetchJson: vi.fn(),
+  // The web session: a JWT. The native shell holds only a device API key, so there is no JWT
+  // there (`authToken` null) while the session is still `authenticated`.
+  authToken: 'token' as string | null,
+  authenticated: true,
 }));
 
 vi.mock('@/hooks', () => ({
-  useAuth: () => [{ authToken: 'token' }, {}],
+  useAuth: () => [{ authToken: h.authToken, authenticated: h.authenticated }, {}],
 }));
 
 vi.mock('@ci/common', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@ci/common')>()),
   fetchJson: h.fetchJson,
 }));
+
+afterEach(() => {
+  h.authToken = 'token';
+  h.authenticated = true;
+});
 
 /** The parsed body of the key-creation POST, or undefined if it was never sent. */
 function createBody(): Record<string, unknown> | undefined {
@@ -35,6 +44,11 @@ function submit() {
   fireEvent.click(screen.getByRole('button', { name: /^create$/i }));
 }
 
+/** "All areas" is an explicit pick now; tests about other parts of the dialog make it. */
+function pickAllAreas() {
+  fireEvent.click(screen.getByLabelText('All areas'));
+}
+
 describe('ApiKeysSection scope picker', () => {
   beforeEach(() => {
     h.fetchJson.mockReset();
@@ -45,15 +59,52 @@ describe('ApiKeysSection scope picker', () => {
     );
   });
 
-  it('omits scopes when nothing is selected, preserving the full-access default', async () => {
+  // An empty selection used to mint an every-endpoint key on its own: a name and a click on Create
+  // was enough. Reaching everything is still possible, but only as a choice someone makes.
+  it('does not create a key until the areas are chosen', async () => {
     render(<ApiKeysSection />);
     await openCreateDialogAndName();
 
+    expect(screen.getByRole('button', { name: /^create$/i })).toBeDisabled();
+    expect(screen.getByText('Pick the areas this key can reach, or All areas.')).toBeInTheDocument();
+
+    // Enter in the name field calls the same handler, so it must not get around the disabled button.
+    fireEvent.keyDown(screen.getByLabelText(/^name$/i), { key: 'Enter' });
+    expect(createBody()).toBeUndefined();
+  });
+
+  it('omits scopes when All areas is picked, which the API reads as an unscoped key', async () => {
+    render(<ApiKeysSection />);
+    await openCreateDialogAndName();
+
+    pickAllAreas();
+    expect(
+      screen.getByText('The key can reach every endpoint your account can, at the level you pick below.'),
+    ).toBeInTheDocument();
     submit();
 
     await waitFor(() => expect(createBody()).toBeDefined());
     // Absent rather than an empty array — an omitted field keeps the grandfathered meaning.
     expect(createBody()).not.toHaveProperty('scopes');
+  });
+
+  it('treats All areas and a list of areas as two different answers', async () => {
+    render(<ApiKeysSection />);
+    await openCreateDialogAndName();
+
+    fireEvent.click(screen.getByLabelText('Memory'));
+    pickAllAreas();
+
+    expect(screen.getByLabelText('Memory')).not.toBeChecked();
+    expect(screen.getByLabelText('All areas')).toBeChecked();
+
+    fireEvent.click(screen.getByLabelText('MCP'));
+
+    expect(screen.getByLabelText('All areas')).not.toBeChecked();
+    submit();
+
+    await waitFor(() => expect(createBody()).toBeDefined());
+    expect(createBody()?.scopes).toEqual(['mcp']);
   });
 
   it('sends only the selected scopes', async () => {
@@ -153,12 +204,23 @@ describe('ApiKeysSection scope picker', () => {
     fireEvent.click(screen.getByRole('button', { name: /cancel/i }));
 
     // Reopening must not carry the previous selection: a stale scope would mint a
-    // limited key while the user believed it had full access.
+    // limited key the user never picked this time.
     await openCreateDialogAndName();
-    submit();
 
-    await waitFor(() => expect(createBody()).toBeDefined());
-    expect(createBody()).not.toHaveProperty('scopes');
+    expect(screen.getByLabelText('MCP')).not.toBeChecked();
+    expect(screen.getByRole('button', { name: /^create$/i })).toBeDisabled();
+  });
+
+  it('clears All areas when the dialog is cancelled', async () => {
+    render(<ApiKeysSection />);
+    await openCreateDialogAndName();
+    pickAllAreas();
+
+    fireEvent.click(screen.getByRole('button', { name: /cancel/i }));
+    await openCreateDialogAndName();
+
+    expect(screen.getByLabelText('All areas')).not.toBeChecked();
+    expect(screen.getByRole('button', { name: /^create$/i })).toBeDisabled();
   });
 });
 
@@ -179,6 +241,7 @@ describe('ApiKeysSection capability picker', () => {
     render(<ApiKeysSection />);
     await openCreateDialogAndName();
 
+    pickAllAreas();
     submit();
 
     await waitFor(() => expect(createBody()).toBeDefined());
@@ -190,6 +253,7 @@ describe('ApiKeysSection capability picker', () => {
     await openCreateDialogAndName();
 
     fireEvent.click(screen.getByRole('radio', { name: 'Read-only' }));
+    pickAllAreas();
     submit();
 
     await waitFor(() => expect(createBody()).toBeDefined());
@@ -203,16 +267,22 @@ describe('ApiKeysSection capability picker', () => {
     // Same reason as the scope checkboxes: an aria-label naming the radio would suppress the
     // description, leaving "Full access" with no statement of what it permits.
     expect(screen.getByRole('radio', { name: 'Read, write & delete' })).toHaveAccessibleDescription(
-      'Also delete memories and other stored data. Deletions cannot be undone.',
+      'Also delete memories and other stored data, merge people and make edits that remove data. Deletions cannot be undone.',
+    );
+    // Editing a person's contacts or renaming a tag can drop data and needs delete; saying "update
+    // existing ones" here promised edits a write key is refused.
+    expect(screen.getByRole('radio', { name: 'Read & write' })).toHaveAccessibleDescription(
+      'Also record new memories and make most edits. An edit that can remove something, such as changing a person’s contact details or renaming a tag, needs “Read, write & delete”.',
     );
   });
 
   // Capability is enforced on every operation a key can reach (a route's declared level, else the level
   // its shape implies), so read-only holds for an unscoped key too. The note says so, and says what
   // picking areas adds on top — which is why it only shows for read-only with no areas selected.
-  it('explains what read-only covers when it is picked with no areas selected', async () => {
+  it('explains what read-only covers when it is picked with All areas', async () => {
     render(<ApiKeysSection />);
     await openCreateDialogAndName();
+    pickAllAreas();
 
     expect(screen.queryByText(/Read-only applies everywhere this key can reach/i)).not.toBeInTheDocument();
 
@@ -243,6 +313,7 @@ describe('ApiKeysSection capability picker', () => {
 
     // A 'full' chosen for one key must not silently carry into the next.
     await openCreateDialogAndName();
+    pickAllAreas();
     submit();
 
     await waitFor(() => expect(createBody()).toBeDefined());
@@ -289,10 +360,10 @@ describe('ApiKeysSection capability changes', () => {
     render(<ApiKeysSection />);
 
     expect(await screen.findByText('Read & write')).toBeInTheDocument();
-    // Distinct from the "Full access" scope badge the same row carries for an empty scope set:
+    // Distinct from the "All areas" scope badge the same row carries for an empty scope set:
     // that one says where the key reaches, this one says what it may do there.
     expect(screen.getByText('Read, write & delete')).toBeInTheDocument();
-    expect(screen.getByText('Full access')).toBeInTheDocument();
+    expect(screen.getByText('All areas')).toBeInTheDocument();
   });
 
   it('narrows a key without a confirmation — tightening only ever removes authority', async () => {
@@ -407,7 +478,7 @@ describe('ApiKeysSection delete confirmation', () => {
     render(<ApiKeysSection />);
     await openDeleteFor('laptop');
 
-    expect(screen.getByText('Delete API Key')).toBeInTheDocument();
+    expect(screen.getByText('Delete API key?')).toBeInTheDocument();
     // The key's name is bolded inline (`<strong>{name}</strong>`), so it lands in its
     // own text node — one occurrence in the row behind the dialog, one in the prompt.
     expect(screen.getAllByText('laptop').length).toBeGreaterThanOrEqual(2);
@@ -470,7 +541,7 @@ describe('ApiKeysSection delete confirmation', () => {
     // its name) both stay put, ready to retry, rather than closing as if the
     // delete had gone through.
     expect(screen.getAllByText('laptop').length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText('Delete API Key')).toBeInTheDocument();
+    expect(screen.getByText('Delete API key?')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^delete$/i })).toBeEnabled();
   });
 
@@ -489,5 +560,97 @@ describe('ApiKeysSection delete confirmation', () => {
     await openDeleteFor('laptop');
 
     expect(screen.queryByText(/managed by Companion Hub/i)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * ═══ "FAILED TO LOAD API KEYS" AND "NO API KEYS CREATED YET" AT ONCE ═══
+ *
+ * A failed load leaves `keys` empty, and the empty state keyed off `keys` alone — so the red
+ * banner said the list could not be read while the card under it said there was nothing to read.
+ */
+describe('ApiKeysSection load failure', () => {
+  beforeEach(() => {
+    h.authToken = 'token';
+    h.authenticated = true;
+    h.fetchJson.mockReset();
+  });
+
+  it('does not claim there are no keys when the list could not be loaded', async () => {
+    h.fetchJson.mockRejectedValue(new Error('network down'));
+
+    render(<ApiKeysSection />);
+
+    expect(await screen.findByText('Failed to load API keys')).toBeInTheDocument();
+    expect(screen.queryByText('No API keys created yet.')).not.toBeInTheDocument();
+  });
+
+  it('still shows the empty state when the load succeeded and there are none', async () => {
+    h.fetchJson.mockResolvedValue([]);
+
+    render(<ApiKeysSection />);
+
+    expect(await screen.findByText('No API keys created yet.')).toBeInTheDocument();
+    expect(screen.queryByText('Failed to load API keys')).not.toBeInTheDocument();
+  });
+
+  it('keeps the empty state when only a later action failed', async () => {
+    // A failed create sets the same banner, but the list itself loaded fine and is empty.
+    h.fetchJson.mockImplementation((_url: string, init?: { method?: string }) =>
+      init?.method === 'POST' ? Promise.reject(new Error('nope')) : Promise.resolve([]),
+    );
+
+    render(<ApiKeysSection />);
+    await openCreateDialogAndName();
+    pickAllAreas();
+    submit();
+
+    expect(await screen.findByText('Failed to create API key')).toBeInTheDocument();
+    expect(screen.getByText('No API keys created yet.')).toBeInTheDocument();
+  });
+});
+
+/**
+ * ═══ A SCREEN THE PHONE CAN NEVER USE ═══
+ *
+ * `/api/keys` is `JwtOrPortalAuthGuard`, deliberately never an API key — a leaked key that could
+ * mint replacement keys would outlive its own revocation. The native shell holds only a device
+ * key (no web JWT), so the request could only 401, and the page then said "Failed to load API
+ * keys" above "No API keys created yet." Say what is true instead, and do not send the request.
+ */
+describe('ApiKeysSection on the native shell (device key, no web JWT)', () => {
+  beforeEach(() => {
+    h.authToken = null;
+    h.authenticated = true;
+    h.fetchJson.mockReset();
+    h.fetchJson.mockResolvedValue([]);
+  });
+
+  it('says plainly that a web sign-in is needed', () => {
+    render(<ApiKeysSection />);
+
+    expect(screen.getByText('Needs a web sign-in')).toBeInTheDocument();
+    expect(screen.getByText(/never allowed to mint or revoke keys/i)).toBeInTheDocument();
+  });
+
+  it('does not send a request that can only 401, and shows no load failure or empty state', async () => {
+    render(<ApiKeysSection />);
+
+    // Let any effect settle before asserting nothing happened.
+    await waitFor(() => expect(screen.getByText('Needs a web sign-in')).toBeInTheDocument());
+
+    expect(h.fetchJson).not.toHaveBeenCalled();
+    expect(screen.queryByText('Failed to load API keys')).not.toBeInTheDocument();
+    expect(screen.queryByText('No API keys created yet.')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /create api key/i })).not.toBeInTheDocument();
+  });
+
+  it('keeps the normal page for a web session', async () => {
+    h.authToken = 'token';
+
+    render(<ApiKeysSection />);
+
+    expect(await screen.findByText('No API keys created yet.')).toBeInTheDocument();
+    expect(screen.queryByText('Needs a web sign-in')).not.toBeInTheDocument();
   });
 });

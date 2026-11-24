@@ -4,6 +4,7 @@ import { DataSource } from 'typeorm';
 
 import { LoggerService } from '@ci/common/logging';
 import { Cron } from '@ci/common/schedule';
+import { listOnboardedUserIds } from '@ci/domains/user';
 
 import {
   type AutoMergeResult,
@@ -92,7 +93,7 @@ export class DeterministicPersonMergeCron {
   async sweep(budgets: { perUserMs?: number; tickMs?: number } = {}): Promise<AutoMergeResult> {
     const perUserMs = budgets.perUserMs ?? PER_USER_BUDGET_MS;
     const tickDeadline = Date.now() + (budgets.tickMs ?? TICK_BUDGET_MS);
-    const totals: AutoMergeResult = { merged: 0, skipped: 0, demoted: 0, considered: 0 };
+    const totals: AutoMergeResult = { merged: 0, skipped: 0, demoted: 0, retired: 0, considered: 0 };
     const userIds = await this.listOnboardedUserIds();
     let users = 0;
 
@@ -117,6 +118,7 @@ export class DeterministicPersonMergeCron {
         totals.merged += result.merged;
         totals.skipped += result.skipped;
         totals.demoted += result.demoted;
+        totals.retired += result.retired;
         totals.considered += result.considered;
       } catch (error) {
         // Per-user, like every other fan-out here: one account's failed drain
@@ -134,11 +136,7 @@ export class DeterministicPersonMergeCron {
   }
 
   /** The same population every other fan-out on this appliance covers. */
-  private async listOnboardedUserIds(): Promise<string[]> {
-    const rows = (await this.dataSource.query('SELECT id FROM ci.users WHERE onboarded = true')) as Array<{
-      id: string;
-    }>;
-
-    return rows.map((row) => String(row.id));
+  private listOnboardedUserIds(): Promise<string[]> {
+    return listOnboardedUserIds(this.dataSource);
   }
 }

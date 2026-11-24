@@ -10,6 +10,7 @@
 export {
   capabilityAllows,
   capabilityRequiredFor,
+  reachesThirdParty,
   removesData,
   type GatedPrivacy,
 } from '@ci/tool-core';

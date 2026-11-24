@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from 'react';
 
 import { ErrorPage, LoadingPage, useDeviceLayout } from '@ci/common';
 import { Dialog, IconButton, cn } from '@ci/shadcn';
@@ -91,11 +91,30 @@ export function FeedModal({ onClose }: Props) {
 
   const [{ data: action, loading: actionLoading, error: actionError }] = useActionService(actionId ?? null);
   const [{ thread }] = useThreadService(action?.threadId ?? null);
+  // An action an engine derived (Confirm home, a metric suggestion) has no
+  // thread. The first turn about it starts one, which the server opens with the
+  // action and links to it (`actionId` below). Later turns in this window
+  // continue that thread; it is not loaded here, because the turns already on
+  // screen are this window's own, and a reload reads it through the action.
+  // Kept with the action it was started for, so a window that moves to
+  // another action does not carry on in this one's thread.
+  const [started, setStarted] = useState<{ actionId: string; threadId: string } | null>(null);
+  const startedThreadId = started && started.actionId === action?.id ? started.threadId : null;
+  const handleNewThread = useCallback(
+    (threadId: string) => {
+      if (action?.id) {
+        setStarted({ actionId: action.id, threadId });
+      }
+    },
+    [action?.id],
+  );
   const [
     { stream, loading: chatRequestLoading, streaming: chatRequestStreaming, hasStartedReceiving },
     { submit: submitChatRequest, stop: stopChatRequest, attach: attachChatStream, detach: detachChatStream },
   ] = useChatRequester({
-    threadId: thread?.id ?? null,
+    threadId: thread?.id ?? startedThreadId,
+    actionId: action?.id ?? null,
+    onNewThread: handleNewThread,
   });
 
   useEffect(() => {
@@ -187,8 +206,20 @@ export function FeedModal({ onClose }: Props) {
 
   const messages = useMemo(() => {
     const baseMessages = thread?.messages ?? [];
+
+    const generating = thread?.generationStatus === 'queued' || thread?.generationStatus === 'running';
+    const withoutInFlight =
+      generating && baseMessages[baseMessages.length - 1]?.role === 'assistant'
+        ? baseMessages.slice(0, -1)
+        : baseMessages;
+
+    // A thread the server opened about this action already starts with the
+    // action's own text (`OllamaController.startThread`). Prepending it again
+    // showed it twice.
+    const opensWithAction =
+      withoutInFlight[0]?.role === 'assistant' && withoutInFlight[0]?.content === action?.text;
     const actionMessage =
-      action?.text != null
+      action?.text != null && !opensWithAction
         ? [
             {
               role: 'assistant',
@@ -196,12 +227,6 @@ export function FeedModal({ onClose }: Props) {
             },
           ]
         : [];
-
-    const generating = thread?.generationStatus === 'queued' || thread?.generationStatus === 'running';
-    const withoutInFlight =
-      generating && baseMessages[baseMessages.length - 1]?.role === 'assistant'
-        ? baseMessages.slice(0, -1)
-        : baseMessages;
 
     if (isMobile) {
       return [...actionMessage, ...withoutInFlight];
@@ -239,10 +264,15 @@ export function FeedModal({ onClose }: Props) {
               model selector that used to sit here now lives in Settings ▸ Model. */}
           <div className="flex-1" />
 
-          <div className="font-bold">{action?.title}</div>
+          {/* min-w-0 and break-words let a title with one long word (a pasted
+              address) wrap instead of pushing the buttons past the edge. */}
+          <div className="min-w-0 break-words font-bold">{action?.title}</div>
 
           <div className="flex flex-1 justify-end gap-1">
-            {chatContext ? <ChatWithAgentMenu context={chatContext} size="sm" /> : null}
+            {/* The icon menu, not the two labelled buttons: at phone width those
+                pushed Close past the right edge. With no keyboard there was
+                then no way out. The menu still opens with "Open chat". */}
+            {chatContext ? <ChatWithAgentMenu context={chatContext} /> : null}
             <IconButton variant="ghost" onClick={onClose} label={t('COMMON_CLOSE')}>
               <X />
             </IconButton>
@@ -272,6 +302,15 @@ export function FeedModal({ onClose }: Props) {
       <Dialog.Content
         className="h-[calc(100%-2rem)] md:max-w-[70vw] md:h-[70vh] p-0 flex flex-col gap-0"
         showCloseButton={false}
+        // Radix focuses the first focusable element, the Close button, whose
+        // tooltip opens on focus; the first Esc then only closed the tooltip.
+        // Park focus on the window instead. The action is still loading when
+        // the window opens, so the chat box is disabled here; `autoFocus` on
+        // the Chat below moves focus into it once the action arrives.
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          (event.currentTarget as HTMLElement | null)?.focus();
+        }}
       >
         <Dialog.Header
           className={cn(
@@ -286,7 +325,9 @@ export function FeedModal({ onClose }: Props) {
           <div className="flex items-center justify-between flex-1">
             {(action?.tags?.length ?? 0) > 0 && (
               <div className="flex flex-wrap gap-2">
-                {action?.tags.map((tag) => <Tag key={tag} text={tag} />)}
+                {action?.tags.map((tag) => (
+                  <Tag key={tag} text={tag} />
+                ))}
               </div>
             )}
           </div>
@@ -308,9 +349,7 @@ export function FeedModal({ onClose }: Props) {
 
             <div className="flex-1 prose dark:prose-invert">
               <div className="mb-2 flex items-center justify-between gap-2">
-                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  Why this suggestion
-                </div>
+                <div className="text-xs font-semibold text-muted-foreground">Why this suggestion</div>
                 {chatContext ? <ChatWithAgentMenu context={chatContext} size="sm" /> : null}
               </div>
               {rationaleText != null && <Markdown>{rationaleText}</Markdown>}
@@ -320,9 +359,7 @@ export function FeedModal({ onClose }: Props) {
                 // container, and a dl/ul here would pick up typography margins
                 // meant for rendered Markdown.
                 <div className="mt-3 rounded-lg border border-border bg-muted/30 px-3 py-2.5 text-sm">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                    Evidence
-                  </div>
+                  <div className="text-xs font-semibold text-muted-foreground">Evidence</div>
 
                   <div className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
                     {evidenceRows.map((row) => (
@@ -344,6 +381,7 @@ export function FeedModal({ onClose }: Props) {
           </div>
 
           <Chat
+            autoFocus
             placeholder={renderTitle ? 'Continue the conversation...' : ''}
             disabled={!renderTitle}
             loading={chatRequestLoading}

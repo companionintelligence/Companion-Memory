@@ -58,10 +58,33 @@ export async function captureFromCamera(mode?: CameraMode): Promise<File | null>
   return files[0] ?? null;
 }
 
-export async function chooseFromLibrary(): Promise<File[]> {
+/**
+ * The photo library, narrowed to the selected kind. The system picker filters
+ * on the input's MIME types, so asking for `image/*` alone shows photos only
+ * and `video/*` alone shows clips only; the old `image/*,video/*` showed both
+ * under either tab. No kind keeps the combined picker.
+ */
+export async function chooseFromLibrary(kind?: CameraMode): Promise<File[]> {
+  if (kind === 'photo') {
+    return pickFromUserDevice({ accept: 'image/*', multiple: true });
+  }
+
+  if (kind === 'video') {
+    return pickFromUserDevice({ accept: 'video/*', multiple: true });
+  }
+
   return pickMediaFromLibrary({ multiple: true });
 }
 
 export async function chooseFiles(): Promise<File[]> {
   return pickDocuments({ multiple: true });
+}
+
+/**
+ * Audio files from the device. There is no "audio library" the way there is a
+ * photo library, so this is the system file picker narrowed to audio types —
+ * the phone's document picker on Android and iOS, not the photos picker.
+ */
+export async function chooseAudioFiles(): Promise<File[]> {
+  return pickFromUserDevice({ accept: 'audio/*', multiple: true });
 }

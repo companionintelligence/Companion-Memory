@@ -29,11 +29,14 @@ import {
 import {
   DataSourceCatalogService,
   type DataSourceSummary,
+  type BundleCatalogEntry,
   type SourceCatalogEntry,
 } from '../services/DataSourceCatalogService';
 import { ImportRetentionService, type DiscardedRun } from '../services/ImportRetentionService';
 import { ImportRunService } from '../services/ImportRunService';
 import { ObjectCountService, type ObjectCountEntry } from '../services/ObjectCountService';
+import { isStageStalled } from '../services/stageLiveness';
+import { importRootsCallerFor } from '../sources/importRoots';
 
 /** A run as the progress UI reads it. */
 export interface RunSummary {
@@ -70,6 +73,13 @@ export interface RunSummary {
    * fetching every run's stages. Zero for a run that has not pushed yet.
    */
   records?: number;
+  /**
+   * A stage of this run is `running` but has stopped heartbeating — see
+   * {@link StageSummary.stalled}. The run's own `status` is a cache written on
+   * transitions, so without this it goes on reading `running` for as long as
+   * recovery takes. On the list and the detail; absent where neither computed it.
+   */
+  stalled?: boolean;
 }
 
 /** One box of the stage bar. */
@@ -105,6 +115,20 @@ export interface StageSummary {
    */
   startedAt: Date | null;
   finishedAt: Date | null;
+  /**
+   * The claim's last sign of life. A running stage is touched by its worker's
+   * heartbeat and every progress write, so this is "when did anything last
+   * happen here" — the number that tells a slow stage from an abandoned one.
+   */
+  heartbeatAt: Date;
+  /**
+   * `running`, and silent past `IMPORT_STAGE_STALLED_SECONDS`: its worker is
+   * gone or wedged. Until this existed that read as a plain `running`, progress
+   * frozen and no error, for as long as recovery took to notice. If the worker
+   * is gone, the orphan reaper retries the stage within minutes, and
+   * `detail.interrupted` then says what happened.
+   */
+  stalled: boolean;
 }
 
 export interface RunDetail extends RunSummary {
@@ -142,7 +166,7 @@ export interface StartPushBody {
 }
 
 export interface RecognizeBody {
-  /** Absolute path on the appliance, within a configured import root. */
+  /** Absolute path on the appliance: the caller's own inbox, or a configured import root (administrator only). */
   path?: string;
 }
 
@@ -190,6 +214,19 @@ export class ImportRunsController {
   }
 
   /**
+   * The export bundles — Google Takeout, Meta Accounts Center, Amazon Privacy
+   * Central — each ONE download that covers several of the catalog's sources.
+   * The wizard shows a bundle as one picker button and one export card in
+   * place of its members' own. Authored beside the guides so every export
+   * instruction the wizard shows comes from the backend.
+   */
+  @UseGuards(JwtOrApiKeyAuthGuard)
+  @Get('sources/bundles')
+  sourceBundles(): BundleCatalogEntry[] {
+    return this.catalog.bundles();
+  }
+
+  /**
    * How much of each memory kind this user's imports have actually put in
    * `ci.*`, per importer — what the picker's tiles show under "24K Mail",
    * "1.2M Photos". Read from the live tables themselves, never from run
@@ -223,9 +260,10 @@ export class ImportRunsController {
    * ends up in access logs and proxy history, and the reply is not cacheable
    * anyway — the folder it describes changes.
    *
-   * Confined to `CI_IMPORT_ROOTS`, exactly as the MCP tool is. A path outside
-   * them answers `allowed: false` with the remedy rather than 4xx: "not
-   * permitted, upload instead" is a state the caller renders, not a fault.
+   * Confined to the caller's own inbox, plus `CI_IMPORT_ROOTS` for the
+   * administrator, exactly as the MCP tool is. A path outside them answers
+   * `allowed: false` with the remedy rather than 4xx: "not permitted, upload
+   * instead" is a state the caller renders, not a fault.
    */
   @UseGuards(JwtOrApiKeyAuthGuard)
   @Post('recognize')
@@ -236,11 +274,12 @@ export class ImportRunsController {
       throw new BadRequestException('path is required');
     }
 
-    // The caller's email scopes which inbox subtree they may read — their own.
+    // The caller's account scopes which inbox subtree they may read — their
+    // own — and only the administrator reaches the configured roots.
     const userId = requireUserId(context);
     const user = await this.users.findById({ userId }, userId);
 
-    return recognizePathWithinRoots(body.path, user?.email ?? null);
+    return recognizePathWithinRoots(body.path, importRootsCallerFor(user));
   }
 
   /** Start importing a staged upload. */
@@ -289,12 +328,14 @@ export class ImportRunsController {
     const runs = await this.runs.listRuns(
       { userId },
       {
-        limit: Number.isFinite(parsed) ? parsed : undefined,
+        // A positive whole number, or the default. `-1` reached the query as
+        // a negative LIMIT and answered 500.
+        limit: Number.isInteger(parsed) && (parsed as number) > 0 ? parsed : undefined,
         before: parseBeforeCursor(beforeCreatedAt, beforeId),
       },
     );
 
-    return runs.map((run) => ({ ...toRunSummary(run), records: run.records }));
+    return runs.map((run) => ({ ...toRunSummary(run), records: run.records, stalled: run.stalled }));
   }
 
   /**
@@ -370,7 +411,9 @@ export class ImportRunsController {
       throw new NotFoundException(`No import run ${runId}`);
     }
 
-    return { ...toRunSummary(detail.run), stages: detail.stages.map(toStageSummary) };
+    const stages = detail.stages.map(toStageSummary);
+
+    return { ...toRunSummary(detail.run), stalled: stages.some((stage) => stage.stalled), stages };
   }
 
   /**
@@ -716,5 +759,7 @@ function toStageSummary(stage: ImportStage): StageSummary {
     detail: stage.detail ?? {},
     startedAt: stage.startedAt,
     finishedAt: stage.finishedAt,
+    heartbeatAt: stage.updatedAt,
+    stalled: isStageStalled(stage),
   };
 }

@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { fetchJson } from '@ci/common';
+import {
+  apiFetch,
+  apiKeyHeaders,
+  assertApplianceWritable,
+  buildApiUrl,
+  fetchJson,
+  isOfflineWriteError,
+} from '@ci/common';
 
 import { useAuth } from '@/hooks';
 
@@ -75,6 +82,27 @@ export interface CatalogSource {
 }
 
 /**
+ * One export bundle from `GET /import/sources/bundles`: a platform whose ONE
+ * download covers several catalog sources (Google Takeout, Meta Accounts
+ * Center, Amazon Privacy Central). The wizard shows it as a single picker
+ * button and export card in place of its members' own; the parse finds every
+ * member inside the archive. Authored in the backend beside the guides.
+ */
+export interface ImportBundle {
+  readonly id: string;
+  readonly ecosystem: string;
+  readonly title: string;
+  readonly blurb: string;
+  readonly url?: string;
+  readonly stepsTitle?: string;
+  readonly steps: readonly string[];
+  readonly altPath?: { readonly title: string; readonly url?: string; readonly steps: readonly string[] };
+  /** Catalog source ids this single download covers. */
+  readonly members: readonly string[];
+  readonly notes?: readonly string[];
+}
+
+/**
  * How many rows one importer has actually put in `ci.*`, for one object kind
  * — the picker tile's "24K Mail" line. From `GET
  * /import/sources/object-counts`, read from the live destination tables
@@ -133,6 +161,15 @@ export interface ActiveImportStage extends ImportStage {
    * long it took. Null for `blocked`, which is not waiting on anything yet.
    */
   readonly elapsedMs: number | null;
+  /** The claim's last sign of life — heartbeat or progress write. Absent from older servers. */
+  readonly heartbeatAt?: string | null;
+  /**
+   * `running`, but silent past the server's threshold: its worker is gone or
+   * wedged. Beside `queueState` rather than a fifth value of it, because the
+   * stage still holds its slot. The appliance retries a stage whose worker is
+   * gone within minutes; until then, this is the only honest word for it.
+   */
+  readonly stalled?: boolean;
 }
 
 export interface ActiveImportRun extends ImportRun {
@@ -348,9 +385,15 @@ export function useImportApi() {
    * the reason `useJobsAuth` documents — the conditional form infers
    * `{ Authorization?: undefined }`, which `exactOptionalPropertyTypes` refuses
    * to widen.
+   *
+   * The keystore key is added here too, because the multipart upload, `post`
+   * and `del` below do NOT go through `fetchJson`: without it those requests
+   * reach the server unauthenticated on a phone. Read per call, like the token,
+   * so a long-lived closure signs with whatever is live at SEND time. Repeating
+   * it on a `fetchJson` call is harmless — same header, same value.
    */
   const authHeaders = useCallback((): Record<string, string> => {
-    const headers: Record<string, string> = {};
+    const headers: Record<string, string> = { ...apiKeyHeaders() };
 
     if (tokenRef.current) {
       headers.Authorization = `Bearer ${tokenRef.current}`;
@@ -368,6 +411,12 @@ export function useImportApi() {
   const listCatalog = useCallback(
     async (): Promise<CatalogSource[]> =>
       (await fetchJson<CatalogSource[]>('/api/import/sources/catalog', { headers: authHeaders() })) ?? [],
+    [authHeaders],
+  );
+
+  const listBundles = useCallback(
+    async (): Promise<ImportBundle[]> =>
+      (await fetchJson<ImportBundle[]>('/api/import/sources/bundles', { headers: authHeaders() })) ?? [],
     [authHeaders],
   );
 
@@ -446,21 +495,45 @@ export function useImportApi() {
   const uploadFile = useCallback(
     (file: File, onProgress?: (loadedBytes: number, totalBytes: number) => void): Promise<StagedDrop> =>
       new Promise<StagedDrop>((resolve, reject) => {
+        // The write guard runs inside `apiFetch`; an XHR never passes through it, so it is
+        // asked here, before any bytes are read — a refused upload costs nothing.
+        try {
+          assertApplianceWritable({ url: '/api/import/uploads' });
+        } catch (err) {
+          reject(err);
+
+          return;
+        }
+
         const form = new FormData();
 
         form.append('files', file);
 
         const xhr = new XMLHttpRequest();
 
-        xhr.open('POST', '/api/import/uploads');
+        // `buildApiUrl`, not the bare path: on the native shell the page origin is
+        // `capacitor://localhost`, and Capacitor's XHR patch treats a relative URL
+        // as the WebView's own — it never calls the native `open()`, so the very
+        // next `setRequestHeader` throws "The object is in an invalid state", and
+        // every wizard upload from a phone failed with exactly that text.
+        xhr.open('POST', buildApiUrl('/api/import/uploads'));
 
         for (const [name, value] of Object.entries(authHeaders())) {
           xhr.setRequestHeader(name, value);
         }
 
+        // `event.total` is the whole multipart body: the file plus its boundary
+        // and part headers, a few hundred bytes the file itself does not have.
+        // Callers measure against `file.size`, so passing the raw count read
+        // "636 B of 435 B" and 146% on a small contacts.vcf. Report the file's
+        // share of what has gone instead. It rounds down and is capped at the
+        // file's size, so it reaches 100% only once the whole body is sent.
         xhr.upload.onprogress = (event) => {
           if (event.lengthComputable) {
-            onProgress?.(event.loaded, event.total);
+            const share = event.total > 0 ? event.loaded / event.total : 0;
+            const sent = Math.min(file.size, Math.floor(share * file.size));
+
+            onProgress?.(sent, file.size);
           }
         };
 
@@ -643,6 +716,7 @@ export function useImportApi() {
       ready: Boolean(authenticated),
       listSources,
       listCatalog,
+      listBundles,
       getObjectCounts,
       listRuns,
       listUnpushed,
@@ -666,6 +740,7 @@ export function useImportApi() {
       authenticated,
       listSources,
       listCatalog,
+      listBundles,
       getObjectCounts,
       listRuns,
       listUnpushed,
@@ -961,8 +1036,11 @@ export function useActiveImports(
   return { snapshot, error, refresh };
 }
 
+// `apiFetch` resolves the path against the Memory origin (a no-op on web) and, on
+// the native shells, goes out through CapacitorHttp — a bare `fetch('/api/...')`
+// there is a request to the app's own `capacitor://localhost` bundle.
 async function del<T>(url: string, headers: Record<string, string>): Promise<T> {
-  const response = await fetch(url, { method: 'DELETE', headers });
+  const response = await apiFetch(url, { method: 'DELETE', headers });
 
   if (!response.ok) {
     throw new Error(await describeFailure(response, 'Request failed'));
@@ -972,7 +1050,7 @@ async function del<T>(url: string, headers: Record<string, string>): Promise<T> 
 }
 
 async function post<T>(url: string, headers: Record<string, string>, body: unknown): Promise<T> {
-  const response = await fetch(url, {
+  const response = await apiFetch(url, {
     method: 'POST',
     headers: { ...headers, 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -996,14 +1074,20 @@ async function postUpload(form: FormData, headers: Record<string, string>): Prom
   let response: Response;
 
   try {
-    response = await fetch('/api/import/uploads', {
+    response = await apiFetch('/api/import/uploads', {
       method: 'POST',
       headers,
       body: form,
     });
-  } catch {
+  } catch (err) {
+    // The guard's refusal already says what to do; only a real network failure gets the hint.
+    if (isOfflineWriteError(err)) {
+      throw err;
+    }
+
     throw new Error(
       'Could not reach the appliance. If you dropped a folder, use Choose folder — or upload the .zip.',
+      { cause: err },
     );
   }
 

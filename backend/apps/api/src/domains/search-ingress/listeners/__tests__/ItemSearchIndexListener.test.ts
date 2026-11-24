@@ -22,6 +22,13 @@ function makeListener(
   };
   const embeddingGenerationService = { generateEmbedding: jest.fn().mockResolvedValue([0.1, 0.2]) };
   const embeddingService = {
+    upsertDocument: jest.fn(
+      async (_ctx: unknown, data: { text: string }, generate: (text: string) => Promise<number[]>) => {
+        await generate(data.text);
+
+        return 'embedded';
+      },
+    ),
     upsert: jest.fn().mockResolvedValue(null),
     remove: jest.fn().mockResolvedValue(true),
   };
@@ -117,9 +124,10 @@ describe('ItemSearchIndexListener — resolving the last-seen place name', () =>
 
     await listener.indexItem({ itemId: 'item-1' } as never);
 
-    expect(embeddingService.upsert).toHaveBeenCalledWith(
+    expect(embeddingService.upsertDocument).toHaveBeenCalledWith(
       { userId: 'user-1' },
       expect.objectContaining({ entityType: 'item', entityId: 'item-1' }),
+      expect.any(Function),
     );
   });
 });
@@ -238,7 +246,7 @@ describe('ItemSearchIndexListener — merge tombstones', () => {
       { userId: SYSTEM_USER },
       { entityType: 'item', entityId: 'loser' },
     );
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(vectorService.upsert).not.toHaveBeenCalled();
     expect(embeddingGenerationService.generateEmbedding).not.toHaveBeenCalled();
   });
@@ -250,7 +258,7 @@ describe('ItemSearchIndexListener.indexItem / updateItem', () => {
 
     await listener.indexItem({ itemId: 'ghost' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalled();
   });
 
@@ -263,7 +271,7 @@ describe('ItemSearchIndexListener.indexItem / updateItem', () => {
 
     await listener.indexItem({ itemId: 'item-1' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     // No point resolving a place name for an item we are about to refuse to index.
     expect(placeService.findById).not.toHaveBeenCalled();
   });
@@ -279,9 +287,10 @@ describe('ItemSearchIndexListener.indexItem / updateItem', () => {
 
     await listener.updateItem({ itemId: 'item-1' } as never);
 
-    expect(embeddingService.upsert).toHaveBeenCalledWith(
+    expect(embeddingService.upsertDocument).toHaveBeenCalledWith(
       { userId: 'user-1' },
-      { entityType: 'item', entityId: 'item-1', embedding: [0.1, 0.2] },
+      { entityType: 'item', entityId: 'item-1', text: expect.any(String) },
+      expect.any(Function),
     );
     expect(vectorService.upsert).toHaveBeenCalledWith(
       { userId: 'user-1' },
@@ -306,7 +315,7 @@ describe('ItemSearchIndexListener.indexItem / updateItem', () => {
 
     await listener.indexItem({ itemId: 'item-2' } as never);
 
-    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.upsertDocument).not.toHaveBeenCalled();
     expect(vectorService.upsert).not.toHaveBeenCalled();
   });
 });

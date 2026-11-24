@@ -2,17 +2,34 @@ import { openAsBlob } from 'node:fs';
 import { basename } from 'node:path';
 
 import type {
+  ApiKeyCheckResponse,
+  ApiKeyCreatedResponse,
+  ArenaStats,
+  AuditDeltasQuery,
+  AuthCsrfResponse,
+  AuthTokenResponse,
   DataSourceSummary,
+  DecisionRequest,
+  DecisionResponse,
   DoctorCheckSummary,
   DoctorReport,
   DropSummary,
+  EntityDeltasResponse,
   InboxBatchResult,
   InboxScan,
   IngestStatus,
+  JobsDashboardResponse,
+  ModelRoutingTiersResponse,
   OrchestrateStage,
   OrchestrateSummary,
   PathRecognition,
+  PipelineDeadLettersResponse,
+  PipelineStateResponse,
+  RankRequest,
+  RankResponse,
   RetryFailedPushResult,
+  RoutingDecision,
+  RoutingRequest,
   RunDetail,
   RunSummary,
   SourceCatalogEntry,
@@ -28,6 +45,8 @@ export type { IngestStatus } from './wire';
 export interface LlmEndpointConfig {
   backend: 'ollama' | 'openai_compatible';
   port: number;
+  /** The API root on an OpenAI-compatible backend (`/v1`, or Lemonade's `/api/v1`); absent on Ollama. */
+  basePath?: string;
   hostGateway: string;
   locked: boolean;
   endpoint: string;
@@ -42,11 +61,17 @@ export interface LlmEndpointPreflight {
   models: string[];
   message?: string;
   status?: number;
+  /** Why the request got no HTTP answer (`refused`, `timeout`, `host_not_found`, `no_route`, `reset`, `tls`). */
+  reason?: string;
+  /** A command to run on the host that the message refers to: a ufw rule for a firewall timeout. */
+  fixCommand?: string;
 }
 
 export interface LlmEndpointUpdate {
   backend: 'ollama' | 'openai_compatible';
   port: number;
+  /** OpenAI-compatible only: where the server mounts its API; `/v1` when omitted. */
+  basePath?: string;
   /** Write-only replacement for the backend credential. */
   apiKey?: string;
   /** Remove the appliance-saved credential and fall back to runtime config. */
@@ -87,10 +112,11 @@ export interface ClientOptions {
 }
 
 interface RequestOptions {
-  method?: 'GET' | 'POST' | 'PATCH';
+  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
   body?: unknown;
   form?: FormData;
   query?: Record<string, string | number | undefined>;
+  headers?: Record<string, string>;
 }
 
 /**
@@ -106,10 +132,12 @@ interface RequestOptions {
  * equivalent: they are the same `ImportRunService.startRun` call, in the same
  * process, against the same queue.
  *
- * The paths carry no `/api` prefix because the API has no global one. The
- * streaming orchestration call carries `/api` literally because that route
- * declares it itself; ingest status lives on the authenticated `/v1` lifecycle
- * surface.
+ * The paths carry no `/api` prefix because the API has no global one: they are
+ * the API's own routes, which is what `--server` names (`localhost:3030` by
+ * default). The gateway publishes the same routes under `/api/` and strips the
+ * prefix before forwarding, so a gateway URL is not a `--server` this client
+ * can use (the SPA answers the unprefixed paths). Ingest status lives on the
+ * authenticated `/v1` lifecycle surface.
  */
 export class ImportApiClient {
   private readonly fetchImpl: typeof fetch;
@@ -120,6 +148,10 @@ export class ImportApiClient {
 
   get baseUrl(): string {
     return this.options.baseUrl;
+  }
+
+  get apiKey(): string | null {
+    return this.options.apiKey;
   }
 
   // ---------------------------------------------------------------------------
@@ -200,6 +232,87 @@ export class ImportApiClient {
   }
 
   // ---------------------------------------------------------------------------
+  // Authentication and API keys
+  // ---------------------------------------------------------------------------
+
+  getCsrfToken(): Promise<AuthCsrfResponse> {
+    return this.request('/authenticate/csrf');
+  }
+
+  authenticate(body: { username: string; password: string }, csrfToken: string): Promise<AuthTokenResponse> {
+    return this.request('/authenticate', {
+      method: 'POST',
+      body,
+      headers: { 'x-csrf-token': csrfToken },
+    });
+  }
+
+  createApiKey(
+    body: { name: string; capability?: 'read' | 'write' | 'full'; expiresInDays?: number },
+    bearerToken: string,
+  ): Promise<ApiKeyCreatedResponse> {
+    return this.request('/keys', {
+      method: 'POST',
+      body,
+      headers: { authorization: `Bearer ${bearerToken}` },
+    });
+  }
+
+  checkApiKey(): Promise<ApiKeyCheckResponse> {
+    return this.request('/keys/check');
+  }
+
+  revokeCurrentApiKey(): Promise<{ ok: boolean; revokedId?: string }> {
+    return this.request('/keys/current', { method: 'DELETE' });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Dual-engine inference & model routing
+  // ---------------------------------------------------------------------------
+
+  getModelRoutingTiers(): Promise<ModelRoutingTiersResponse> {
+    return this.request('/model-routing/tiers');
+  }
+
+  getModelRoutingArena(): Promise<ArenaStats> {
+    return this.request('/model-routing/arena');
+  }
+
+  planModelRouting(body: RoutingRequest): Promise<RoutingDecision> {
+    return this.request('/model-routing/plan', { method: 'POST', body });
+  }
+
+  decideModelRouting(body: DecisionRequest): Promise<DecisionResponse> {
+    return this.request('/model-routing/decide', { method: 'POST', body });
+  }
+
+  rankModelRouting(body: RankRequest): Promise<RankResponse> {
+    return this.request('/model-routing/rank', { method: 'POST', body });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Audit, pipeline state, and jobs dashboard
+  // ---------------------------------------------------------------------------
+
+  getAuditDeltas(query: AuditDeltasQuery): Promise<EntityDeltasResponse> {
+    return this.request('/audit/deltas', { query: { ...query } });
+  }
+
+  getPipelineState(): Promise<PipelineStateResponse> {
+    return this.request('/pipeline/state');
+  }
+
+  getDeadLetters(
+    query: { queue?: string; stage?: string; limit?: number } = {},
+  ): Promise<PipelineDeadLettersResponse> {
+    return this.request('/pipeline/dead-letters', { query });
+  }
+
+  getJobsDashboard(): Promise<JobsDashboardResponse> {
+    return this.request('/jobs/dashboard');
+  }
+
+  // ---------------------------------------------------------------------------
   // Inbox
   // ---------------------------------------------------------------------------
 
@@ -265,7 +378,7 @@ export class ImportApiClient {
     stages: OrchestrateStage[] | undefined,
     options: { abortOnError?: boolean; onLine?: (line: Record<string, unknown>) => void } = {},
   ): Promise<OrchestrateSummary> {
-    const url = new URL('/api/maintenance/orchestrate', this.options.baseUrl);
+    const url = new URL('/maintenance/orchestrate', this.options.baseUrl);
     const headers: Record<string, string> = {
       'content-type': 'application/json',
       accept: 'application/x-ndjson',
@@ -294,7 +407,7 @@ export class ImportApiClient {
       throw new ApiError(
         response.status,
         await describeFailure(response, Boolean(this.options.apiKey)),
-        '/api/maintenance/orchestrate',
+        '/maintenance/orchestrate',
       );
     }
 
@@ -310,7 +423,7 @@ export class ImportApiClient {
           totalDurationMs: line.totalDurationMs,
         } as OrchestrateSummary;
       } else if (line.type === 'error') {
-        throw new ApiError(500, String(line.error), '/api/maintenance/orchestrate');
+        throw new ApiError(500, String(line.error), '/maintenance/orchestrate');
       } else {
         options.onLine?.(line);
       }
@@ -323,7 +436,7 @@ export class ImportApiClient {
       throw new ApiError(
         502,
         'The orchestration stream ended before it reported a result — the appliance may have restarted.',
-        '/api/maintenance/orchestrate',
+        '/maintenance/orchestrate',
       );
     }
 
@@ -343,9 +456,9 @@ export class ImportApiClient {
       }
     }
 
-    const headers: Record<string, string> = { accept: 'application/json' };
+    const headers: Record<string, string> = { accept: 'application/json', ...options.headers };
 
-    if (this.options.apiKey) {
+    if (this.options.apiKey && !headers.authorization) {
       headers['x-api-key'] = this.options.apiKey;
     }
 

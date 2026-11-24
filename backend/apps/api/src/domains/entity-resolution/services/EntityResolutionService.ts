@@ -55,6 +55,19 @@ export type ResolvedEntity =
   | { type: 'task'; id: string; entity: Task }
   | { type: 'thread'; id: string; entity: Thread };
 
+/**
+ * Drops the people, places and concepts the user asked Memory to forget.
+ * `memory.forget` in archive mode sets their `ci.entities.is_active` false and
+ * un-indexes them, and a merge tombstone is inactive too, but an index row
+ * written before that, or by an update that raced it, must not bring them back.
+ * Every search consumer hydrates here: the `search` query (the header box, the
+ * explorer, saved searches, the Add relationship picker and the note `[[`
+ * menu), chat recall, forage and the activity timeline's counts.
+ */
+function withoutArchived<T extends { isActive?: boolean | null }>(rows: (T | null)[]): (T | null)[] {
+  return rows.map((row) => (row?.isActive === false ? null : row));
+}
+
 @Injectable()
 export class EntityResolutionService {
   constructor(
@@ -92,6 +105,15 @@ export class EntityResolutionService {
     identifiers: EntityIdentifier<EntityType>[],
   ): Promise<Map<string, ResolvedEntity>> {
     const grouped = this.groupByType(identifiers);
+    // A page of search hits holds a few of the seventeen types; the other
+    // services are not asked at all. (`In([])` is cheap in Postgres, but it is
+    // still a round trip each, on every page.)
+    const idsOf = (type: EntityType): string[] => grouped.get(type) ?? [];
+    const lookup = <T>(type: EntityType, fetch: (ids: string[]) => Promise<T[]>): Promise<T[]> => {
+      const ids = idsOf(type);
+
+      return ids.length === 0 ? Promise.resolve([]) : fetch(ids);
+    };
 
     const [
       actions,
@@ -112,23 +134,23 @@ export class EntityResolutionService {
       tasks,
       threads,
     ] = await Promise.all([
-      this.actionService.findByIds(context, grouped.get('action') ?? []),
-      this.answerService.findByIds(context, grouped.get('answer') ?? []),
-      this.browserActivityService.findByIds(context, grouped.get('browser-activity') ?? []),
-      this.communicationService.findByIds(context, grouped.get('communication') ?? []),
-      this.conceptService.findByIds(context, grouped.get('concept') ?? []),
-      this.contentService.findByIds(context, grouped.get('content') ?? []),
-      this.eventService.findByIds(context, grouped.get('event') ?? []),
-      this.fileService.findByIds(context, grouped.get('file') ?? []),
-      this.fileChunkService.findByIds(grouped.get('file-chunk') ?? []),
-      this.itemService.findByIds(context, grouped.get('item') ?? []),
-      this.noteService.findByIds(context, grouped.get('note') ?? []),
-      this.personService.findByIds(context, grouped.get('person') ?? []),
-      this.placeService.findByIds(context, grouped.get('place') ?? []),
-      this.productModelService.findByIds(context, grouped.get('product') ?? []),
-      this.findReceiptsByIds(context.userId, grouped.get('receipt') ?? []),
-      this.taskService.findByIds(context, grouped.get('task') ?? []),
-      this.threadService.findByIds(context, grouped.get('thread') ?? []),
+      lookup('action', (ids) => this.actionService.findByIds(context, ids)),
+      lookup('answer', (ids) => this.answerService.findByIds(context, ids)),
+      lookup('browser-activity', (ids) => this.browserActivityService.findByIds(context, ids)),
+      lookup('communication', (ids) => this.communicationService.findByIds(context, ids)),
+      lookup('concept', (ids) => this.conceptService.findByIds(context, ids)),
+      lookup('content', (ids) => this.contentService.findByIds(context, ids)),
+      lookup('event', (ids) => this.eventService.findByIds(context, ids)),
+      lookup('file', (ids) => this.fileService.findByIds(context, ids)),
+      lookup('file-chunk', (ids) => this.fileChunkService.findByIds(context, ids)),
+      lookup('item', (ids) => this.itemService.findByIds(context, ids)),
+      lookup('note', (ids) => this.noteService.findByIds(context, ids)),
+      lookup('person', (ids) => this.personService.findByIds(context, ids)),
+      lookup('place', (ids) => this.placeService.findByIds(context, ids)),
+      lookup('product', (ids) => this.productModelService.findByIds(context, ids)),
+      lookup('receipt', (ids) => this.findReceiptsByIds(context.userId, ids)),
+      lookup('task', (ids) => this.taskService.findByIds(context, ids)),
+      lookup('thread', (ids) => this.threadService.findByIds(context, ids)),
     ]);
 
     const map = new Map<string, ResolvedEntity>();
@@ -137,14 +159,14 @@ export class EntityResolutionService {
     this.addToMap(map, 'answer', answers);
     this.addToMap(map, 'browser-activity', browserActivities);
     this.addToMap(map, 'communication', communications);
-    this.addToMap(map, 'concept', concepts);
+    this.addToMap(map, 'concept', withoutArchived(concepts));
     this.addToMap(map, 'content', contents);
     this.addToMap(map, 'event', events);
     this.addToMap(map, 'file', files);
     this.addToMap(map, 'item', items);
     this.addToMap(map, 'note', notes);
-    this.addToMap(map, 'person', people);
-    this.addToMap(map, 'place', places);
+    this.addToMap(map, 'person', withoutArchived(people));
+    this.addToMap(map, 'place', withoutArchived(places));
     this.addToMap(map, 'product', products);
     this.addToMap(map, 'receipt', receipts);
     this.addToMap(map, 'task', tasks);

@@ -1,7 +1,19 @@
 import type { LatLngBounds } from 'leaflet';
 import { describe, expect, it } from 'vitest';
 
-import { boundsToBbox, bboxCenter, clampBboxSpan, formatBbox, parseBbox, type Bbox } from './bbox';
+import {
+  asAreas,
+  boundsToBbox,
+  bboxCenter,
+  clampBboxSpan,
+  formatAreas,
+  formatBbox,
+  parseAreas,
+  parseBbox,
+  readAreasParam,
+  unionBbox,
+  type Bbox,
+} from './bbox';
 
 describe('parseBbox', () => {
   it('parses four finite numbers into a tuple', () => {
@@ -118,5 +130,43 @@ describe('clampBboxSpan', () => {
     const clamped = clampBboxSpan(bbox, 120, 60);
 
     expect(clamped[3] - clamped[1]).toBeLessThanOrEqual(60);
+  });
+});
+
+describe('areas (several rectangles, ORed by the search)', () => {
+  const london: Bbox = [-0.5, 51.3, 0.3, 51.7];
+  const paris: Bbox = [2.2, 48.8, 2.5, 48.9];
+
+  it('round-trips a list through the ?areas param, semicolon-separated', () => {
+    const raw = formatAreas([london, paris]);
+
+    expect(raw).toBe('-0.500000,51.300000,0.300000,51.700000;2.200000,48.800000,2.500000,48.900000');
+    expect(parseAreas(raw)).toEqual([london, paris]);
+  });
+
+  it('drops a malformed entry and keeps the rest, and is undefined with nothing usable', () => {
+    expect(parseAreas('1,2,3;2.2,48.8,2.5,48.9')).toEqual([paris]);
+    expect(parseAreas('1,2,3')).toBeUndefined();
+    expect(parseAreas('')).toBeUndefined();
+    expect(parseAreas(null)).toBeUndefined();
+  });
+
+  it('reads ?areas first, then an old ?bbox link as a one-entry list', () => {
+    expect(readAreasParam(new URLSearchParams('areas=2.2,48.8,2.5,48.9&bbox=1,2,3,4'))).toEqual([paris]);
+    expect(readAreasParam(new URLSearchParams('bbox=2.2,48.8,2.5,48.9'))).toEqual([paris]);
+    expect(readAreasParam(new URLSearchParams('view=map'))).toBeUndefined();
+  });
+
+  it('accepts a server list only where every entry is four finite numbers', () => {
+    expect(asAreas([london, paris])).toEqual([london, paris]);
+    expect(asAreas([[1, 2, 3], paris, null])).toEqual([paris]);
+    expect(asAreas([[1, null, 3, 4]])).toBeUndefined();
+    expect(asAreas(null)).toBeUndefined();
+  });
+
+  it('unions rectangles into the one box that frames them all', () => {
+    expect(unionBbox([london, paris])).toEqual([-0.5, 48.8, 2.5, 51.7]);
+    expect(unionBbox([paris])).toEqual(paris);
+    expect(unionBbox([])).toBeUndefined();
   });
 });

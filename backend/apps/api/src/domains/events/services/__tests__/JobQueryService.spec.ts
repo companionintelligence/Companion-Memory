@@ -9,7 +9,6 @@ import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/supp
 import { DEAD_LETTER_QUEUE } from '../../constants';
 import { JobCategoryMetricEntity } from '../../entities/JobCategoryMetricEntity';
 import { JobMetricEntity } from '../../entities/JobMetricEntity';
-import { PgBossArchiveEntity } from '../../entities/PgBossArchiveEntity';
 import { PgBossJobEntity } from '../../entities/PgBossJobEntity';
 import { JOB_CATEGORIES, UNCLASSIFIED_CATEGORY } from '../../taxonomy';
 import { JobQueryService } from '../JobQueryService';
@@ -18,7 +17,7 @@ describe('JobQueryService — the auth guard (no database required)', () => {
   function makeService() {
     const noop = { createQueryBuilder: jest.fn() };
 
-    return new JobQueryService(noop as never, noop as never, noop as never, noop as never);
+    return new JobQueryService(noop as never, noop as never, noop as never);
   }
 
   it('list() refuses a request with no user context', async () => {
@@ -111,7 +110,7 @@ describe('JobQueryService — the category filter (no database required)', () =>
     });
 
     const repo = { createQueryBuilder: jest.fn(() => builder) };
-    const service = new JobQueryService(repo as never, repo as never, repo as never, repo as never);
+    const service = new JobQueryService(repo as never, repo as never, repo as never);
 
     (
       service as unknown as {
@@ -200,7 +199,7 @@ describe('JobQueryService.facetCounts — the fold behind the chips', () => {
     });
 
     const repo = { createQueryBuilder: jest.fn(() => builder) };
-    const service = new JobQueryService(repo as never, repo as never, repo as never, repo as never);
+    const service = new JobQueryService(repo as never, repo as never, repo as never);
 
     return (
       service as unknown as {
@@ -335,7 +334,7 @@ describeWithDatabase(`JobQueryService — against real Postgres (${availability.
             password: connection.password,
             database: connection.database,
           }),
-      entities: [PgBossJobEntity, PgBossArchiveEntity, JobMetricEntity, JobCategoryMetricEntity],
+      entities: [PgBossJobEntity, JobMetricEntity, JobCategoryMetricEntity],
       synchronize: false,
     });
 
@@ -347,7 +346,6 @@ describeWithDatabase(`JobQueryService — against real Postgres (${availability.
 
     service = new JobQueryService(
       dataSource.getRepository(PgBossJobEntity),
-      dataSource.getRepository(PgBossArchiveEntity),
       dataSource.getRepository(JobMetricEntity),
       dataSource.getRepository(JobCategoryMetricEntity),
     );

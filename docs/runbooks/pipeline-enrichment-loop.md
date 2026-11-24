@@ -151,6 +151,8 @@ candidates(stage, metered, n) AS (
   UNION ALL SELECT 'enrich.estimate_location', false, (SELECT count(*) FROM ci.events s, me
      WHERE s.user_id = me.user_id AND COALESCE(s.is_deleted, false) = false
        AND COALESCE(s.is_predicted, false) = false
+       AND COALESCE(s.status, 'confirmed') NOT IN ('cancelled', 'no_show', 'skipped')
+       AND COALESCE(s.metadata->>'Canceled', '') <> 'true'
        AND s.source_system IN ('calendar','apple_photos','google_photos','apple_health','google_fit','fitbit',
                                'strava','garmin','withings','uber','lyft','flighty','amazon','paypal','venmo',
                                'google_purchases','google_maps_places','google_location'))
@@ -173,7 +175,10 @@ candidates(stage, metered, n) AS (
        AND s.merged_into_entity_id IS NULL)
   UNION ALL SELECT 'promote.place', false, (SELECT count(*) FROM ci.events s, me
      WHERE s.user_id = me.user_id AND s.location_coordinates IS NOT NULL AND s.location_name IS NOT NULL
-       AND btrim(s.location_name) <> '' AND COALESCE(s.is_deleted, false) = false)
+       AND btrim(s.location_name) <> '' AND COALESCE(s.is_deleted, false) = false
+       AND COALESCE(s.is_predicted, false) = false
+       AND COALESCE(s.status, 'confirmed') NOT IN ('cancelled', 'no_show', 'skipped')
+       AND COALESCE(s.metadata->>'Canceled', '') <> 'true')
   UNION ALL SELECT 'promote.object', false, (SELECT count(*) FROM ci.events s, me
      WHERE s.user_id = me.user_id AND s.event_type IN ('purchase','order')
        AND COALESCE(s.is_deleted, false) = false)

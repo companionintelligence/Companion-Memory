@@ -59,8 +59,6 @@ export interface ConsumptionSweepSummary {
  */
 @Injectable()
 export class ConsumptionSweepCron {
-  private running = false;
-
   constructor(
     private readonly store: PostgresConsumptionStore,
     private readonly logger: LoggerService,
@@ -68,31 +66,19 @@ export class ConsumptionSweepCron {
     this.logger.setContext(ConsumptionSweepCron.name);
   }
 
-  @Cron(CONSUMPTION_SWEEP_CRON, { name: 'ConsumptionSweepCron.sweepOnSchedule', role: 'worker' })
+  // `exclusive`: a slow sweep must not stack — two overlapping runs would
+  // contend on the same rows and buy nothing, since whatever this run leaves
+  // behind is still idle an hour from now. The decorator holds that guard and
+  // logs the skip and any failure.
+  @Cron(CONSUMPTION_SWEEP_CRON, {
+    name: 'ConsumptionSweepCron.sweepOnSchedule',
+    role: 'worker',
+    exclusive: true,
+  })
   async sweepOnSchedule(): Promise<void> {
-    // A slow sweep must not stack: two overlapping runs would contend on the
-    // same rows and buy nothing, since whatever this run leaves behind is
-    // still idle an hour from now.
-    if (this.running) {
-      this.logger.warn('Skipping consumption-store sweep; previous run still in progress');
+    const swept = await this.sweepOnce();
 
-      return;
-    }
-
-    this.running = true;
-
-    try {
-      const swept = await this.sweepOnce();
-
-      this.logger.log('Consumption-store sweep complete', { windows: swept.windows, nonces: swept.nonces });
-    } catch (err) {
-      this.logger.error(
-        'Consumption-store sweep failed',
-        err instanceof Error ? err : new Error(String(err)),
-      );
-    } finally {
-      this.running = false;
-    }
+    this.logger.log('Consumption-store sweep complete', { windows: swept.windows, nonces: swept.nonces });
   }
 
   /** Public so a test — or an operator — can sweep without waiting an hour. */

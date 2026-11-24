@@ -1,7 +1,5 @@
 # Tooltips and i18n (web frontend)
 
-> **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-
 Two conventions that travel together: every icon-only control gets a tooltip, and
 the tooltip text comes from a translation key.
 

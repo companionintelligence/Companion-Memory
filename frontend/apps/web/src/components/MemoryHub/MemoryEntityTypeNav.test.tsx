@@ -6,7 +6,7 @@
  * one stays collapsed so the desktop hover animation still has somewhere to go.
  */
 import { fireEvent, screen, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { DropdownProvider, excludedEntityTypesFor } from '@/components/SearchBox/useDropdown';
 import { renderWithProviders } from '@/test/renderWithProviders';
@@ -207,15 +207,31 @@ describe('the What strip shares its line with the filter controls without being 
   // their own wrapping never engaged: at 1,400 px the strip was a 57 px sliver
   // scrolling behind them, and below ~1,350 px they dropped to a second line
   // and ran off the right edge. The controls are the flexible item now.
-  it('floors the strip at 16rem from xl up and never lets it grow past its content', () => {
+  // The floor is every button at rest. A fixed 16rem hid the Tags button with
+  // the rail pinned below ~1,600 px; `min-w-max` counted a label sliding out
+  // under the pointer, so hovering a button pushed the controls down a line.
+  it('floors the strip at its buttons at rest from xl up and never lets it grow past its content', () => {
     const { container } = renderNav();
 
-    const strip = container.querySelector('.overflow-x-auto');
+    // The strip's place on the line is the box around the scroller that also
+    // holds its "more this way" arrows (ScrollMoreArrows), so the sizing is there.
+    const strip = container.querySelector<HTMLElement>('.overflow-x-auto')?.parentElement;
 
     expect(strip).not.toBeNull();
     expect(strip).toHaveClass('flex-1', 'basis-0', 'min-w-0');
-    expect(strip).toHaveClass('xl:min-w-[16rem]', 'xl:max-w-max');
-    expect(strip).not.toHaveClass('md:basis-auto', 'md:min-w-[16rem]');
+    expect(strip).toHaveClass('xl:min-w-(--what-strip-floor)', 'xl:max-w-max');
+    expect(strip).not.toHaveClass('md:basis-auto', 'md:min-w-[16rem]', 'xl:min-w-max');
+    // Eight buttons, four with a caret, seven gaps: 392 px at the 17px root.
+    expect(strip?.style.getPropertyValue('--what-strip-floor')).toBe('calc(22.125rem + 16px)');
+  });
+
+  it("floors the events explorer's strip at its own four buttons", () => {
+    const { container } = renderNav('/memory/events');
+
+    const strip = container.querySelector<HTMLElement>('.overflow-x-auto')?.parentElement;
+
+    // Messages, Events (caret), Browser, Tags (caret): 193 px, not /memory's 392.
+    expect(strip?.style.getPropertyValue('--what-strip-floor')).toBe('calc(10.875rem + 8px)');
   });
 
   it('gives the filter controls their own line below xl, and a floored share of the line from xl up', () => {
@@ -227,5 +243,50 @@ describe('the What strip shares its line with the filter controls without being 
     expect(controls).toHaveClass('basis-full', 'min-w-0', 'xl:flex-1', 'xl:basis-[24rem]');
     expect(controls).not.toHaveClass('md:basis-auto', 'md:flex-1');
     expect(container.querySelector('.w-max')).not.toBeNull();
+  });
+});
+
+// useDeviceLayout reads window.matchMedia; drive it to force the phone
+// branch, the same pattern as MobileMemoryPage.test.tsx.
+function setViewport(mobile: boolean) {
+  window.matchMedia = ((query: string) => ({
+    matches: query.includes('max-width') ? mobile : query.includes('landscape') ? !mobile : false,
+    media: query,
+    onchange: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })) as unknown as typeof window.matchMedia;
+}
+
+describe('the What menus on a phone', () => {
+  afterEach(() => {
+    setViewport(false);
+    document.body.style.pointerEvents = '';
+  });
+
+  it('open modal, so a tap away only closes the menu and reaches nothing underneath', () => {
+    setViewport(true);
+    renderNav();
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Things' }), { button: 0 });
+    screen.getByRole('button', { name: 'Only Products' });
+
+    // Radix's modal layer is what swallows the outside tap: it turns pointer
+    // events off for the rest of the page while the menu is open — and the
+    // shield catches what that misses (map pins turn them back on).
+    expect(document.body.style.pointerEvents).toBe('none');
+    expect(screen.getByTestId('menu-shield')).toBeInTheDocument();
+  });
+
+  it('stay non-modal on desktop', () => {
+    renderNav();
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Things' }), { button: 0 });
+    screen.getByRole('button', { name: 'Only Products' });
+
+    expect(document.body.style.pointerEvents).toBe('');
   });
 });

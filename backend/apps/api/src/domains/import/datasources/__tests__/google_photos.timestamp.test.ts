@@ -19,7 +19,7 @@ import exifr from 'exifr';
 
 // Stub child_process.execFile so the video-fallback ffprobe call is
 // deterministic without the binary (same pattern + promisify caveat as
-// _exif.test.ts: the callback must deliver one {stdout, stderr} object).
+// common/media/__tests__/exif.test.ts: the callback must deliver one {stdout, stderr} object).
 jest.mock('node:child_process', () => ({
   ...jest.requireActual<typeof import('node:child_process')>('node:child_process'),
   execFile: jest.fn(),
@@ -31,7 +31,7 @@ import { execFile } from 'node:child_process';
 // execFile) before any `const` in this file initializes. Grab the handle after.
 const mockExecFile = execFile as unknown as jest.Mock;
 
-import { _resetFfprobeAvailability } from '../_exif';
+import { _resetFfprobeAvailability } from '@ci/common/media/exif';
 import { allDataSources } from '../registry';
 import type { ImportParams } from '../timeline';
 import '../google_photos';

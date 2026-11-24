@@ -18,9 +18,8 @@ function makeListener(opts: { fileExists?: boolean } = {}) {
   const { fileExists = true } = opts;
 
   const fileService = {
-    findById: jest.fn(
-      async (_ctx: unknown, id: string): Promise<StubFile | null> =>
-        fileExists ? { id, createdAt: new Date('2026-01-02T03:04:05.000Z'), externalCreatedAt: null } : null,
+    findById: jest.fn(async (_ctx: unknown, id: string): Promise<StubFile | null> =>
+      fileExists ? { id, createdAt: new Date('2026-01-02T03:04:05.000Z'), externalCreatedAt: null } : null,
     ),
   };
 

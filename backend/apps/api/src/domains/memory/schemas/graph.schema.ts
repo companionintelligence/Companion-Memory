@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { ENTITY_TYPES, RELATIONSHIP_TYPES } from '../graph.types';
 

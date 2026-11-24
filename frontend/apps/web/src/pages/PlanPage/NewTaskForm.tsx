@@ -1,12 +1,12 @@
 import { useRef, useState } from 'react';
 
-import { useMutation } from '@apollo/client';
+import { useMutation } from '@apollo/client/react';
 import { Button, Input } from '@ci/shadcn';
 import { Plus } from '@ci/shadcn/icons';
 
 import { gql } from '@/graphql';
 
-const CREATE_TASK = gql(`
+export const CREATE_TASK = gql(`
   mutation CreateTask($input: CreateTaskInput!) {
     createTask(input: $input) {
       success

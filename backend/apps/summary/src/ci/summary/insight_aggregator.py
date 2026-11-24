@@ -140,25 +140,30 @@ class InsightAggregator:
         self, user_id: UUID, since: datetime, until: datetime
     ) -> list[dict[str, Any]]:
         """Get recent graph deltas (entity and relationship changes)."""
+        # Entity rows no longer carry a synthesized changed_fields.name (only an
+        # actual rename does), so the entity's current name is joined in for
+        # the prompt to fall back on.
         query = """
         SELECT
-            delta_id,
-            entity_id,
-            relationship_id,
-            node_type,
-            entity_type,
-            relationship_type,
-            from_entity_id,
-            to_entity_id,
-            change_type,
-            changed_fields,
-            change_reason,
-            changed_at
-        FROM ci.graph_deltas
-        WHERE owner_user_id = :user_id
-          AND changed_at >= :since
-          AND changed_at < :until
-        ORDER BY changed_at DESC
+            d.delta_id,
+            d.entity_id,
+            d.relationship_id,
+            d.node_type,
+            d.entity_type,
+            d.relationship_type,
+            d.from_entity_id,
+            d.to_entity_id,
+            d.change_type,
+            d.changed_fields,
+            d.change_reason,
+            d.changed_at,
+            ent.name AS entity_name
+        FROM ci.graph_deltas d
+        LEFT JOIN ci.entities ent ON ent.entity_id = d.entity_id
+        WHERE d.owner_user_id = :user_id
+          AND d.changed_at >= :since
+          AND d.changed_at < :until
+        ORDER BY d.changed_at DESC
         LIMIT 50
         """
         return db.execute_query(

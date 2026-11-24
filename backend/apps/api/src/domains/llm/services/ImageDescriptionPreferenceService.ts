@@ -1,10 +1,12 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { EventService } from '@ci/domains/events';
 import { ImageDescriptionBackfillRequestEvent } from '@ci/domains/files';
-import { PersonService, UserContextService } from '@ci/domains/memory';
+import { PersonService, UserContextService, ensureSelfEntityId } from '@ci/domains/memory';
 
+import { ChatModelPreferenceService } from './ChatModelPreferenceService';
 import { OllamaService } from './OllamaService';
 
 /**
@@ -30,27 +32,65 @@ import { OllamaService } from './OllamaService';
  */
 @Injectable()
 export class ImageDescriptionPreferenceService {
-  private readonly cache = new Map<string, { enabled: boolean; expiresAt: number }>();
+  /**
+   * `chatModel` is the user's stored chat-model choice the value was read
+   * under. The default and the override both belong to a model, so a value read
+   * for one model must not answer for another: it used to, for up to the full
+   * 60 s after a switch, and flipping the switch in that window stored the
+   * opposite of what the person meant for the new model.
+   */
+  private readonly cache = new Map<
+    string,
+    { enabled: boolean; chatModel: string | null; expiresAt: number }
+  >();
+
+  /**
+   * Bumped by {@link invalidate}. A read that started before a write and
+   * finishes after it carries the old answer; without this it put that answer
+   * back in the cache right after `setEnabled` cleared it, and background jobs
+   * used it for the next 60 s.
+   */
+  private readonly generations = new Map<string, number>();
 
   constructor(
     private readonly personService: PersonService,
     private readonly userContextService: UserContextService,
     private readonly eventService: EventService,
     private readonly ollamaService: OllamaService,
+    /**
+     * For `SELF_ENTITY_PROVISIONER`, resolved lazily by `ensureSelfEntityId`.
+     * Optional so a hand-built service (the unit tests) still constructs; without
+     * it a user who has no self entity gets the old error rather than a new one.
+     */
+    @Optional() private readonly moduleRef?: ModuleRef,
+    /**
+     * Read to tell when the cached value belongs to a different chat model.
+     * It keeps its own 60 s cache, cleared in this process when the choice is
+     * set, so most checks are a map lookup; when that cache has expired the
+     * check reads the self entity once. Optional so hand-built services (the
+     * unit tests) still construct; without it the cache only expires.
+     */
+    @Optional() private readonly chatModelPreference?: ChatModelPreferenceService,
   ) {}
 
   invalidate(userId: string): void {
     this.cache.delete(userId);
+    this.generations.set(userId, (this.generations.get(userId) ?? 0) + 1);
   }
 
   async isEnabled(userId: string): Promise<boolean> {
+    const generation = this.generations.get(userId) ?? 0;
+    const chatModel = (await this.chatModelPreference?.getChatModel(userId)) ?? null;
     const cached = this.cache.get(userId);
-    if (cached && cached.expiresAt > Date.now()) {
+    if (cached && cached.chatModel === chatModel && cached.expiresAt > Date.now()) {
       return cached.enabled;
     }
 
     const enabled = await this.readEnabled(userId);
-    this.cache.set(userId, { enabled, expiresAt: Date.now() + 60_000 });
+
+    if ((this.generations.get(userId) ?? 0) === generation) {
+      this.cache.set(userId, { enabled, chatModel, expiresAt: Date.now() + 60_000 });
+    }
 
     return enabled;
   }
@@ -63,13 +103,16 @@ export class ImageDescriptionPreferenceService {
    */
   async setEnabled(context: UserServiceContext, enabled: boolean | null): Promise<boolean> {
     const userId = context.userId!;
-    const selfIdentity = await this.userContextService.getSelfIdentity(userId);
-
-    if (!selfIdentity) {
-      throw new Error('Self entity not found');
-    }
-
+    // Read BEFORE the self entity is provisioned. A user with none reads as "off"
+    // (`readEnabled` finds no identity), so the first time they turn this on for a
+    // vision model is a genuine off→on transition and must fire the backfill; read
+    // afterwards it would already show the model's automatic default, and the
+    // transition — and the descriptions of every image already imported — would
+    // be lost.
     const wasEnabled = await this.readEnabled(userId);
+    // Provisioned when the user has none: an imported account has no self entity
+    // to store the override on, and this write answered 500 for it.
+    const selfEntityId = await ensureSelfEntityId(context, this.userContextService, this.moduleRef);
     const { model } = await this.ollamaService.resolveVisionModel(userId);
 
     // A true leaf write — `image_description_overrides.<model>`, not the
@@ -81,7 +124,7 @@ export class ImageDescriptionPreferenceService {
     // `enabled: null` clears the override (readEnabled treats a non-boolean
     // stored value as "automatic"); jsonb_set cannot delete the key, but a
     // stored JSON null reads back as exactly that.
-    await this.personService.patchPropertyLeaves(context, selfIdentity.entityId, [
+    await this.personService.patchPropertyLeaves(context, selfEntityId, [
       { path: ['planner', 'image_description_overrides', model], value: enabled },
       { path: ['planner', 'source'], value: 'settings' },
     ]);

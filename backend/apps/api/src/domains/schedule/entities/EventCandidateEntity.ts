@@ -17,7 +17,7 @@ export type CandidateStatus = 'open' | 'accepted' | 'snoozed' | 'declined' | 'ne
 
 /** Machine-readable provenance behind a candidate's `rationale`. */
 export interface RationaleSource {
-  kind: 'summary' | 'insight' | 'answer' | 'item' | 'relationship' | 'due' | 'action';
+  kind: 'summary' | 'insight' | 'answer' | 'item' | 'relationship' | 'due' | 'action' | 'task';
   id: string;
   note?: string;
 }

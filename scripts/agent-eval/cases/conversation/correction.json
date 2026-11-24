@@ -1,0 +1,32 @@
+{
+  "id": "conversation_correction",
+  "capability": "conversation",
+  "title": "A correction in the next turn replaces the earlier statement",
+  "conversation": [
+    {
+      "role": "user",
+      "content": "For this chat only, my favorite restaurant is Cedar. Reply with just OK."
+    },
+    {
+      "role": "user",
+      "content": "Correction: I stopped liking Cedar. I have no favorite restaurant. Reply with just OK."
+    },
+    {
+      "role": "user",
+      "content": "What is my favorite restaurant, using only what I said in this chat?"
+    }
+  ],
+  "turns": [
+    {},
+    {},
+    {
+      "answer_contains_any": [
+        "no favorite",
+        "don't have a favorite",
+        "do not have a favorite",
+        "no longer"
+      ],
+      "answer_must_not_contain": ["favorite restaurant is Cedar", "favorite is Cedar"]
+    }
+  ]
+}

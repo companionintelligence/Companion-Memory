@@ -124,17 +124,10 @@ export class BrowserActivitySearchIndexListener {
         reason: skipReason,
       });
     } else {
-      const embedding = await this.embeddingGenerationService.generateEmbedding(searchDocument!);
-
-      await this.embeddingService.upsert(
-        {
-          userId: browserActivity.user.id,
-        },
-        {
-          entityType: 'browser-activity',
-          entityId: browserActivity.id,
-          embedding,
-        },
+      await this.embeddingService.upsertDocument(
+        { userId: browserActivity.user.id },
+        { entityType: 'browser-activity', entityId: browserActivity.id, text: searchDocument! },
+        (text) => this.embeddingGenerationService.generateEmbedding(text),
       );
 
       // An updated browser activity that became embeddable is no longer skipped.

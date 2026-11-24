@@ -6,14 +6,14 @@
  * useQuery/useMutation are mocked (per useRescheduleEvent.test.ts's pattern)
  * so this stays about the hook's own mapping and call wiring.
  */
-import { useMutation, useQuery } from '@apollo/client';
+import { useMutation, useQuery } from '@apollo/client/react';
 import { renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useActionListService } from './useActionListService';
 
-vi.mock('@apollo/client', async (orig) => ({
-  ...(await orig<typeof import('@apollo/client')>()),
+vi.mock('@apollo/client/react', async (orig) => ({
+  ...(await orig<typeof import('@apollo/client/react')>()),
   useQuery: vi.fn(),
   useMutation: vi.fn(),
 }));

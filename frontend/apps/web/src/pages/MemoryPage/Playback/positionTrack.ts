@@ -274,7 +274,7 @@ const POSITION_TRACK_EXTENT_QUERY = gql(`
  * real one and should propagate exactly like the REST adapter's non-404 path
  * already does.
  */
-export function createGraphqlPositionTrackSource(client: ApolloClient<object>): PositionTrackSource {
+export function createGraphqlPositionTrackSource(client: ApolloClient): PositionTrackSource {
   return {
     async fetchPage({ start, end, after, limit, signal }: FetchPageArgs): Promise<PositionTrackPage> {
       const inclusiveEnd = new Date(new Date(end).getTime() + 1).toISOString();

@@ -7,7 +7,7 @@ import {
   GraphIngestService,
   type GraphRelationshipInputDto,
 } from '@ci/domains/graph';
-import { ContentService, CalendarEventService, platformIdentity } from '@ci/domains/memory';
+import { ContentService, CalendarEventService, facebookPageLikeIdentity } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 import { FACEBOOK_SOURCE_SYSTEM, FACEBOOK_SOURCE_TYPE } from '../FacebookMediaService';
@@ -39,8 +39,9 @@ export function pageEntityKey(pageId: string): string {
  * same idempotent path the archive importer and the graph enrichment use
  * for their Person/Organization/Concept nodes: keyed on
  * `facebook:organization:<page-id>`, so a re-sync updates the node rather
- * than minting another. The event is keyed on the provenance triple
- * `ETL / facebook / like:<page-id>`, which `CalendarEventService.create` already
+ * than minting another. The event is keyed on `facebook / like:<page-id>`
+ * (facebookPageLikeIdentity — the same key the archive importer mints for the
+ * Page in pages_you've_liked.json), which `CalendarEventService.create` already
  * treats as find-or-create.
  */
 @Injectable()
@@ -98,7 +99,7 @@ export class FacebookLikesTransformService {
             participant_entity_ids: organizationId ? [organizationId] : undefined,
             source_type: FACEBOOK_SOURCE_TYPE,
             ...(() => {
-              const identity = platformIdentity(FACEBOOK_SOURCE_SYSTEM, `like:${like.id}`);
+              const identity = facebookPageLikeIdentity(like.id);
 
               return { source_system: identity.system, source_id: identity.id };
             })(),

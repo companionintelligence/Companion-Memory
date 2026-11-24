@@ -139,4 +139,28 @@ describe('PullToRefresh', () => {
     await waitFor(() => expect(screen.getByTestId('pull-to-refresh')).toHaveAttribute('aria-hidden', 'true'));
     expect(onRefresh).not.toHaveBeenCalled();
   });
+
+  // The phone drawer claims a sideways drag by cancelling its touchmove in the
+  // capture phase. A drawer drag that drifts down on its way across must not
+  // also count as a pull.
+  it('leaves a touch alone once another gesture has cancelled it', async () => {
+    stubViewport(true);
+    const onRefresh = vi.fn(() => Promise.resolve());
+
+    renderWithProviders(<PullToRefresh onRefresh={onRefresh}>{list()}</PullToRefresh>);
+
+    await screen.findByTestId('pull-to-refresh');
+
+    const claim = (event: TouchEvent) => event.preventDefault();
+    document.addEventListener('touchmove', claim, { capture: true, passive: false });
+
+    try {
+      pull(screen.getByTestId('scroller'));
+    } finally {
+      document.removeEventListener('touchmove', claim, { capture: true });
+    }
+
+    expect(screen.getByTestId('pull-to-refresh')).toHaveAttribute('aria-hidden', 'true');
+    expect(onRefresh).not.toHaveBeenCalled();
+  });
 });

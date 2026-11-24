@@ -1,0 +1,117 @@
+{
+  "dashboard": {
+    "response": {
+      "summary": {
+        "pending": 5,
+        "active": 2,
+        "retry": 1,
+        "completed": 40,
+        "failed": 3,
+        "cancelled": 0,
+        "deadLettered": 1,
+        "scheduled": 0
+      },
+      "archiveDistribution": [
+        {
+          "jobName": "hbpe-scheduled",
+          "count": 40
+        }
+      ],
+      "activeDistribution": [
+        {
+          "jobName": "hbpe-scheduled",
+          "count": 2
+        }
+      ],
+      "queueDistribution": [
+        {
+          "queue": "hbpe-scheduled",
+          "count": 7
+        }
+      ],
+      "smartRotationDistribution": [
+        {
+          "workType": "answer-inference",
+          "count": 1
+        }
+      ],
+      "jobs": [
+        {
+          "id": "0193a3c4-0000-7000-8000-0000000000a1",
+          "queue": "hbpe-scheduled",
+          "state": "active",
+          "priority": 0,
+          "retryLimit": 2,
+          "retryCount": 0,
+          "retryDelay": 60,
+          "retryBackoff": true,
+          "createdOn": "2026-11-12T03:00:00.000Z",
+          "startAfter": "2026-11-12T03:00:00.000Z",
+          "startedOn": "2026-11-12T03:00:02.000Z",
+          "deadLetter": "dead-letter",
+          "policy": "standard",
+          "event": "hbpe.nightly",
+          "workType": null,
+          "payloadBytes": 96,
+          "failure": null
+        }
+      ],
+      "archive": [
+        {
+          "id": "0193a3c4-0000-7000-8000-0000000000a2",
+          "queue": "hbpe-scheduled",
+          "state": "failed",
+          "priority": 0,
+          "retryLimit": 2,
+          "retryCount": 2,
+          "retryDelay": 60,
+          "retryBackoff": true,
+          "createdOn": "2026-11-11T03:00:00.000Z",
+          "startAfter": "2026-11-11T03:00:00.000Z",
+          "startedOn": "2026-11-11T03:00:02.000Z",
+          "completedOn": "2026-11-11T03:04:00.000Z",
+          "deadLetter": "dead-letter",
+          "policy": "standard",
+          "event": "hbpe.nightly",
+          "workType": null,
+          "payloadBytes": 96,
+          "failure": {
+            "message": "sidecar returned 503",
+            "failedAt": "2026-11-11T03:04:00.000Z"
+          },
+          "archivedOn": "2026-11-11T03:04:00.000Z"
+        }
+      ],
+      "schedules": [],
+      "crons": [
+        {
+          "name": "PythonFunctionCrons.hbpeNightly",
+          "cron": "0 3 * * *",
+          "timezone": null,
+          "running": true,
+          "nextRunAt": "2026-11-13T03:00:00.000Z",
+          "lastRunAt": "2026-11-12T03:00:00.000Z",
+          "lastSuccessAt": "2026-11-12T03:00:00.000Z",
+          "overdue": false,
+          "disabled": false,
+          "role": "worker",
+          "servedHere": true
+        }
+      ],
+      "queues": [
+        {
+          "name": "hbpe-scheduled",
+          "policy": "standard",
+          "retryLimit": 2,
+          "retryDelay": 60,
+          "retryBackoff": true,
+          "expireInSeconds": 14400,
+          "retentionMinutes": null,
+          "deadLetter": "dead-letter",
+          "createdOn": "2026-08-01T00:00:00.000Z",
+          "updatedOn": "2026-11-01T00:00:00.000Z"
+        }
+      ]
+    }
+  }
+}

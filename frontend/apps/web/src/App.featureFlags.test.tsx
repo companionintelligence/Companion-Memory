@@ -34,8 +34,9 @@ vi.mock('@/hooks/useAuth', () => ({
       loading: false,
       initializing: false,
       error: null,
+      signOutPrompt: { open: false, unsentCaptures: 0 },
     },
-    { login: vi.fn(), logout: vi.fn(), signup: vi.fn() },
+    { login: vi.fn(), logout: vi.fn(), confirmSignOut: vi.fn(), cancelSignOut: vi.fn(), signup: vi.fn() },
   ],
 }));
 
@@ -67,13 +68,8 @@ vi.mock('@/components/ThemePicker', async (importOriginal) => {
 });
 
 vi.mock('@/api/ApolloProvider', async () => {
-  const {
-    ApolloClient,
-    ApolloLink,
-    ApolloProvider: Provider,
-    InMemoryCache,
-    Observable,
-  } = await import('@apollo/client');
+  const { ApolloClient, ApolloLink, InMemoryCache, Observable } = await import('@apollo/client');
+  const { ApolloProvider: Provider } = await import('@apollo/client/react');
 
   const client = new ApolloClient({
     cache: new InMemoryCache(),

@@ -16,19 +16,23 @@
  *     decompressed bytes are re-checked during the write, so a lying header
  *     can't smuggle a zip bomb through.
  *
- * Small archives go through adm-zip (fast, no subprocess). adm-zip reads the
- * WHOLE archive into memory (`readFileSync`) and decompresses each entry into a
- * Buffer synchronously, so a multi-GB drop would block the event loop (freezing
- * everything sharing the worker for the whole extraction) and spike RSS by
- * gigabytes or OOM. Above a size threshold we therefore never touch adm-zip: we
- * validate the archive from its central directory (via `unzip -Z1` / `unzip -l`,
- * which don't decompress or buffer payloads) and then STREAM the extraction
- * through the system `unzip` binary — the same fallback `./unpack` uses for the
- * 40-50GB Google Takeout / Apple Photos exports. This keeps the zip-slip and
- * declared-size guards on both paths.
+ * Small archives go through adm-zip (fast, no extraction subprocess). adm-zip
+ * reads the WHOLE archive into memory (`readFileSync`) and decompresses each
+ * entry into a Buffer synchronously, so a multi-GB drop would block the event
+ * loop (freezing everything sharing the worker for the whole extraction) and
+ * spike RSS by gigabytes or OOM. Above a size threshold, whether that is the
+ * archive's own size or what its entries declare they unpack to, we therefore
+ * never touch adm-zip: we validate the archive from its central directory (via
+ * `unzip -Z1` / `unzip -Zt`, which don't decompress or buffer payloads) and
+ * then STREAM the extraction through the system `unzip` binary, the same
+ * fallback `./unpack` uses for the 40-50GB Google Takeout / Apple Photos
+ * exports. This keeps the zip-slip and declared-size guards on both paths.
  *
- * .tar.gz is intentionally not handled: Node's zlib alone can't walk a tarball
- * and no tar dependency is carried here.
+ * A .tar.gz / .tgz (Mastodon's archive, GitHub's account export) goes through
+ * `extractViaTar` instead, with the same caps and containment. A tarball has no
+ * central directory, so it is read twice: once for the headers, which are
+ * checked before any byte is written, and once to write. Only regular files
+ * and folders are written; links, devices and FIFOs in a tarball are skipped.
  */
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -36,17 +40,17 @@ import path from 'node:path';
 import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 
 import AdmZip from 'adm-zip';
+import { Parser as TarParser, type ReadEntry, Unpack as TarUnpack } from 'tar';
 
-import { systemExtract } from './systemExtract';
 import {
+  ArchiveEscapeError,
   assertEntryInside,
   assertParentInside,
-  CorruptArchiveError,
-  diagnoseArchive,
-  freeBytesAt,
-  InsufficientDiskError,
+  existsNoFollow,
   stripListedSymlinks,
-} from './unpack';
+} from './containment';
+import { systemExtract } from './systemExtract';
+import { CorruptArchiveError, diagnoseArchive, freeBytesAt, InsufficientDiskError } from './unpack';
 
 export interface ExtractLimits {
   /** Max number of entries in the archive (default 100k). */
@@ -54,10 +58,11 @@ export interface ExtractLimits {
   /** Max total uncompressed bytes (default 10 GB). */
   maxTotalBytes?: number;
   /**
-   * On-disk archive size (bytes) at/above which adm-zip is skipped and the
-   * archive is streamed through the system `unzip` instead. Defaults to 1 GB,
-   * matching unpack.ts's LARGE_ZIP_BYTES. Exposed mainly so tests can force the
-   * streaming path on a tiny fixture.
+   * Size (bytes) at/above which adm-zip is skipped and the archive is streamed
+   * through the system `unzip` instead. Compared with the archive's on-disk
+   * size and with the total its entries declare once unpacked; either one
+   * reaching it streams. Defaults to 1 GB, matching unpack.ts's LARGE_ZIP_BYTES.
+   * Exposed mainly so tests can force the streaming path on a tiny fixture.
    */
   largeArchiveThreshold?: number;
   /**
@@ -76,8 +81,8 @@ export interface ExtractResult {
   destDir: string;
   /** Number of files written. */
   files: number;
-  /** Which extractor ran: in-memory adm-zip, or streaming system `unzip`. */
-  method: 'adm-zip' | 'system-unzip';
+  /** Which extractor ran: in-memory adm-zip, streaming system `unzip`, or `tar` for a tarball. */
+  method: 'adm-zip' | 'system-unzip' | 'tar';
   /** The staged archive was deleted after a fully-successful extraction. */
   archiveDeleted?: boolean;
   /**
@@ -115,8 +120,9 @@ function assertDiskFits(declaredBytes: number | null, destDir: string): void {
 
 const DEFAULT_MAX_ENTRIES = 100_000;
 const DEFAULT_MAX_TOTAL_BYTES = 10 * 1024 ** 3; // 10 GB uncompressed
-// Above this on-disk size, skip adm-zip (whole-archive-in-memory + synchronous
-// per-entry decompress) and stream via `unzip`. Matches unpack.ts.
+// At or above this size, on disk or declared unpacked, skip adm-zip
+// (whole-archive-in-memory + synchronous per-entry decompress) and stream via
+// `unzip`. Matches unpack.ts.
 const DEFAULT_LARGE_ARCHIVE_BYTES = 1_000_000_000; // 1 GB
 
 let systemUnzipProbe: boolean | undefined;
@@ -132,22 +138,24 @@ function systemUnzipAvailable(): boolean {
   return systemUnzipProbe;
 }
 
+const TARBALL_RE = /\.(tar\.gz|tgz)$/i;
+
 /** True when this path looks like an archive the intake path should expand. */
 export function isExtractableArchive(p: string): boolean {
-  return /\.zip$/i.test(p);
+  return /\.zip$/i.test(p) || TARBALL_RE.test(p);
 }
 
 /** Resolve the sibling directory an archive extracts into. */
 function extractionDestDir(archivePath: string): string {
-  const base = archivePath.replace(/\.zip$/i, '');
+  const base = archivePath.replace(/\.(zip|tar\.gz|tgz)$/i, '');
 
   return path.resolve(fs.existsSync(base) && !fs.statSync(base).isDirectory() ? `${base}.extracted` : base);
 }
 
 /**
  * Reject an entry name whose resolved path escapes the extraction dir. The
- * shared check in unpack.ts, so both extractors refuse the same names with the
- * same error class.
+ * shared check in containment.ts, so both extractors refuse the same names with
+ * the same error class.
  */
 const assertInside = assertEntryInside;
 
@@ -252,30 +260,26 @@ function listEntryNames(archivePath: string): string[] {
 }
 
 /**
- * Total UNCOMPRESSED bytes across all entries, parsed from the `unzip -l`
- * footer (`<bytes>  <n> files`). Reads only the central directory, so it never
- * decompresses or buffers payloads. Returns null if the footer can't be parsed,
- * in which case the caller skips the declared-size check (the entry-count and
- * zip-slip guards still apply).
+ * Total UNCOMPRESSED bytes across all entries, parsed from the one-line
+ * `unzip -Zt` summary (`<n> files, <bytes> bytes uncompressed, ...`). Reads
+ * only the central directory and prints one line whatever the entry count, so
+ * it never decompresses or buffers payloads. Returns null without a system
+ * `unzip` or when the summary can't be parsed, in which case the caller skips
+ * the declared-size check (the entry-count and zip-slip guards still apply).
  */
 function declaredUncompressedBytes(archivePath: string): number | null {
-  const l = spawnSync('unzip', ['-l', archivePath], {
-    encoding: 'utf8',
-    maxBuffer: 1 << 30,
-  });
-  if (l.status !== 0) {
+  if (!systemUnzipAvailable()) {
     return null;
   }
 
-  let total: number | null = null;
-  for (const line of l.stdout.split('\n')) {
-    const m = line.match(/^\s*(\d+)\s+\d+\s+files?\s*$/);
-    if (m) {
-      total = Number(m[1]);
-    }
+  const t = spawnSync('unzip', ['-Zt', archivePath], { encoding: 'utf8' });
+  if (t.status !== 0) {
+    return null;
   }
 
-  return total;
+  const m = (t.stdout ?? '').match(/^\s*\d+ files?, (\d+) bytes uncompressed/m);
+
+  return m ? Number(m[1]) : null;
 }
 
 /**
@@ -292,6 +296,7 @@ async function extractViaSystemUnzip(
   destDir: string,
   maxEntries: number,
   maxTotalBytes: number,
+  declared: number | null,
 ): Promise<ExtractResult> {
   const names = listEntryNames(archivePath);
   if (names.length > maxEntries) {
@@ -302,7 +307,6 @@ async function extractViaSystemUnzip(
     assertInside(destDir, name);
   }
 
-  const declared = declaredUncompressedBytes(archivePath);
   if (declared !== null && declared > maxTotalBytes) {
     throw new Error(
       `archive would extract ${(declared / 1e9).toFixed(1)}GB ` +
@@ -311,6 +315,23 @@ async function extractViaSystemUnzip(
   }
 
   assertDiskFits(declared, destDir);
+
+  // `unzip` replaces a link sitting on a file's own path but follows one in a
+  // directory above it, so a link that an earlier attempt left in this tree
+  // would carry an honest name like `link/x.txt` outside it. A fresh
+  // destination holds no links. A resumed one gets the refusal the in-memory
+  // path gives, checked once per directory rather than once per entry.
+  if (existsNoFollow(destDir)) {
+    const checked = new Set<string>();
+    for (const name of names) {
+      const target = path.resolve(destDir, name);
+      const parent = path.dirname(target);
+      if (!checked.has(parent)) {
+        checked.add(parent);
+        assertParentInside(destDir, target);
+      }
+    }
+  }
 
   // Containment was asserted above against the archive's own entry names, so it
   // holds whichever extractor systemExtract picks. `exclusiveDest` says this
@@ -337,15 +358,251 @@ async function extractViaSystemUnzip(
   };
 }
 
+/** Tarball entry types that are written. Everything else is skipped. */
+const TAR_WRITTEN_TYPES: ReadonlySet<string> = new Set(['File', 'OldFile', 'ContiguousFile', 'Directory']);
+const TAR_FILE_TYPES: ReadonlySet<string> = new Set(['File', 'OldFile', 'ContiguousFile']);
+// Linux's PATH_MAX: a longer entry name could never be written. A pax header
+// can carry a name of up to 1MB that compresses to almost nothing, so this is
+// checked on the header, before the name is used for anything.
+const MAX_TAR_ENTRY_PATH_BYTES = 4096;
+// NAME_MAX, and node-tar's own default depth limit. The strict writer refuses
+// both mid-extraction, after earlier entries are already on disk, so the header
+// pass refuses them first.
+const MAX_TAR_NAME_BYTES = 255;
+const MAX_TAR_DEPTH = 1024;
+
+/**
+ * Read every header of a tarball without writing anything. `onEntry` throwing
+ * stops the read at that entry and rejects with what it threw, so an archive
+ * over the entry cap is not read to its end first. Strict: a damaged or
+ * truncated archive rejects rather than yielding the entries before the damage.
+ */
+function readTarHeaders(archivePath: string, onEntry: (entry: ReadEntry) => void): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const settle = (err?: unknown) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      source.destroy();
+      if (err) {
+        reject(err instanceof Error ? err : new Error(String(err)));
+      } else {
+        resolve();
+      }
+    };
+
+    const source = fs.createReadStream(archivePath);
+    const parser = new TarParser({
+      strict: true,
+      onReadEntry: (entry) => {
+        try {
+          onEntry(entry);
+        } catch (err) {
+          parser.abort(err as Error);
+        }
+
+        entry.resume();
+      },
+    });
+
+    parser.on('error', (err: unknown) => settle(err));
+    parser.on('end', () => settle());
+    source.on('error', (err) => settle(err));
+    source.pipe(parser);
+  });
+}
+
+/**
+ * Extract a .tar.gz / .tgz with the guards the zip paths apply. Every header
+ * is read first: an entry that is absolute, steps through `..`, resolves
+ * outside `destDir` or has a name longer than a path can be, more entries than
+ * `maxEntries`, or more declared bytes than `maxTotalBytes` rejects the whole
+ * archive before anything is written.
+ * Then only regular files and folders are written, with plain permissions and
+ * the process's own ownership; links, devices and FIFOs are skipped, the way
+ * the zip paths strip symlinks.
+ */
+async function extractViaTar(
+  archivePath: string,
+  destDir: string,
+  maxEntries: number,
+  maxTotalBytes: number,
+): Promise<ExtractResult> {
+  let entries = 0;
+  let declaredBytes = 0;
+  let files = 0;
+  // A resumed extraction lands in the tree an earlier attempt left; a link
+  // there would carry an honest name elsewhere. Same check as the unzip path,
+  // made entry by entry here rather than over a list of every name, which a
+  // small archive could make gigabytes long.
+  const resumed = existsNoFollow(destDir);
+  let lastCheckedParent: string | undefined;
+  // What the header pass refused, as opposed to what it could not read.
+  let refusal: Error | undefined;
+  const refuse = (err: Error): never => {
+    refusal = err;
+    throw err;
+  };
+
+  try {
+    await readTarHeaders(archivePath, (entry) => {
+      entries += 1;
+      if (entries > maxEntries) {
+        refuse(new Error(`archive has more than ${maxEntries} entries (cap ${maxEntries})`));
+      }
+
+      if (Buffer.byteLength(entry.path) > MAX_TAR_ENTRY_PATH_BYTES) {
+        refuse(
+          new Error(
+            `archive entry name is longer than ${MAX_TAR_ENTRY_PATH_BYTES} bytes: ${entry.path.slice(0, 80)}…`,
+          ),
+        );
+      }
+
+      const segments = entry.path.split('/');
+      if (
+        segments.length > MAX_TAR_DEPTH ||
+        segments.some((segment) => Buffer.byteLength(segment) > MAX_TAR_NAME_BYTES) ||
+        Buffer.byteLength(path.resolve(destDir, entry.path)) >= MAX_TAR_ENTRY_PATH_BYTES
+      ) {
+        refuse(new Error(`archive entry name cannot be written on this disk: ${entry.path.slice(0, 80)}…`));
+      }
+
+      // node-tar would strip a leading `/` and skip a `..` entry with a
+      // warning; either one means the archive was built to write elsewhere.
+      if (
+        path.isAbsolute(entry.path) ||
+        /^[a-z]:/i.test(entry.path) ||
+        entry.path.split(/[\\/]/).includes('..')
+      ) {
+        refuse(new ArchiveEscapeError(`archive entry escapes extraction dir: ${entry.path}`));
+      }
+
+      try {
+        assertInside(destDir, entry.path);
+      } catch (err) {
+        refuse(err as Error);
+      }
+
+      if (TAR_FILE_TYPES.has(entry.type)) {
+        files += 1;
+        declaredBytes += entry.size;
+        if (declaredBytes > maxTotalBytes) {
+          refuse(
+            new Error(
+              `archive would extract more than ${(maxTotalBytes / 1e9).toFixed(1)}GB ` +
+                `(cap ${(maxTotalBytes / 1e9).toFixed(1)}GB)`,
+            ),
+          );
+        }
+      }
+
+      if (resumed && TAR_WRITTEN_TYPES.has(entry.type)) {
+        const target = path.resolve(destDir, entry.path);
+        const parent = path.dirname(target);
+        // Entries come folder by folder, so one remembered parent saves most
+        // repeat checks without a set that grows with the archive.
+        if (parent !== lastCheckedParent) {
+          lastCheckedParent = parent;
+          try {
+            assertParentInside(destDir, target);
+          } catch (err) {
+            refuse(err as Error);
+          }
+        }
+      }
+    });
+  } catch (err) {
+    if (refusal) {
+      throw refusal;
+    }
+
+    // node-tar's zip-bomb guard. The archive read fine and was refused, so
+    // "re-download the export" (CorruptArchiveError's advice) would not help.
+    if (/max decompression ratio exceeded/.test((err as Error).message)) {
+      throw new Error(`archive refused: ${(err as Error).message}`, { cause: err });
+    }
+
+    throw new CorruptArchiveError([
+      { archive: archivePath, reason: `it is not a readable .tar.gz (${(err as Error).message})` },
+    ]);
+  }
+
+  assertDiskFits(declaredBytes, destDir);
+
+  fs.mkdirSync(destDir, { recursive: true });
+
+  try {
+    await writeTarEntries(archivePath, destDir);
+  } catch (err) {
+    throw new Error(`archive extraction failed (${(err as Error).message})`, { cause: err });
+  }
+
+  return { destDir, files, method: 'tar' };
+}
+
+/**
+ * The write pass. `tar.extract` rejects on the first error but its unpacker
+ * keeps reading and writing every entry after it, so a failed stage would
+ * still be filling the destination while a retry or the run's cleanup works
+ * on the same tree. This aborts the unpacker and closes the file on the first
+ * error instead.
+ */
+function writeTarEntries(archivePath: string, destDir: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let failed = false;
+    const source = fs.createReadStream(archivePath);
+    const unpack = new TarUnpack({
+      cwd: destDir,
+      strict: true,
+      preserveOwner: false,
+      filter: (_p, entry) => TAR_WRITTEN_TYPES.has((entry as ReadEntry).type),
+      onReadEntry: (entry) => {
+        // Plain permissions whatever the archive says: no setuid bits, and no
+        // 000 file the parsers could not open.
+        entry.mode = entry.type === 'Directory' ? 0o755 : 0o644;
+      },
+    });
+
+    const fail = (err: unknown) => {
+      if (failed) {
+        return;
+      }
+
+      failed = true;
+      source.destroy();
+      const error = err instanceof Error ? err : new Error(String(err));
+      // Abort stops the parse, but entries it already queued would still be
+      // written. Every path is deeper than -1, so the path check skips them.
+      // Both raise errors of their own, which `failed` swallows.
+      unpack.maxDepth = -1;
+      unpack.abort(error);
+      reject(error);
+    };
+
+    unpack.on('error', fail);
+    unpack.on('close', () => {
+      if (!failed) {
+        resolve();
+      }
+    });
+    source.on('error', fail);
+    source.pipe(unpack);
+  });
+}
+
 /**
  * Extract `archivePath` into a sibling directory named after the archive
  * (`export.zip` → `export/`; falls back to `export.extracted/` if a FILE with
  * that name already exists). Small archives extract in-memory via adm-zip;
- * archives at/above `largeArchiveThreshold` (default 1 GB) stream through the
- * system `unzip` so the worker's event loop isn't blocked and RSS doesn't
- * balloon. Throws on zip-slip attempts, cap violations, and unreadable
- * archives — the caller decides whether that fails the stage or is reported and
- * retried.
+ * archives at/above `largeArchiveThreshold` (default 1 GB), on disk or once
+ * unpacked, stream through the system `unzip` so the worker's event loop isn't
+ * blocked and RSS doesn't balloon. Throws on zip-slip attempts, cap
+ * violations, and unreadable archives. The caller decides whether that fails
+ * the stage or is reported and retried.
  */
 export async function extractUploadedArchive(
   archivePath: string,
@@ -356,6 +613,12 @@ export async function extractUploadedArchive(
   const largeThreshold = limits.largeArchiveThreshold ?? DEFAULT_LARGE_ARCHIVE_BYTES;
 
   const destDir = extractionDestDir(archivePath);
+
+  if (TARBALL_RE.test(archivePath)) {
+    const result = await extractViaTar(archivePath, destDir, maxEntries, maxTotalBytes);
+
+    return deleteAfterExtract(archivePath, result, limits);
+  }
 
   let archiveSize = 0;
   try {
@@ -377,8 +640,18 @@ export async function extractUploadedArchive(
   // and decompress each entry synchronously. Stream via `unzip` instead — the
   // same path unpack.ts takes above 1 GB. If the system `unzip` isn't available
   // we can't stream, so surface that.
+  //
+  // "Big" is what the archive unpacks to as well as its own size. adm-zip
+  // inflates each entry into one Buffer, which cannot pass 2 GiB, so a 2.9 MB
+  // zip holding a 3 GB file of zeros (a large JSON or CSV export compresses
+  // nearly as well) failed with Node's raw `The value of "length" is out of
+  // range` and extracted nothing. The central directory states each entry's
+  // size, so asking costs one summary line, not a decompression. The streaming
+  // path checks the same figure against the cap, so it is read once here.
+  const declared = declaredUncompressedBytes(archivePath);
+
   let result: ExtractResult;
-  if (archiveSize >= largeThreshold) {
+  if (archiveSize >= largeThreshold || (declared !== null && declared >= largeThreshold)) {
     if (!systemUnzipAvailable()) {
       throw new Error(
         `archive is ${(archiveSize / 1e9).toFixed(1)}GB (exceeds in-memory unzip) ` +
@@ -386,11 +659,19 @@ export async function extractUploadedArchive(
       );
     }
 
-    result = await extractViaSystemUnzip(archivePath, destDir, maxEntries, maxTotalBytes);
+    result = await extractViaSystemUnzip(archivePath, destDir, maxEntries, maxTotalBytes, declared);
   } else {
     result = await extractViaAdmZip(archivePath, destDir, maxEntries, maxTotalBytes);
   }
 
+  return deleteAfterExtract(archivePath, result, limits);
+}
+
+function deleteAfterExtract(
+  archivePath: string,
+  result: ExtractResult,
+  limits: ExtractLimits,
+): ExtractResult {
   // Reclaim the staged copy the moment the extraction fully succeeded — any
   // throw above leaves the archive untouched for a retry.
   if (limits.deleteArchiveAfterExtract) {

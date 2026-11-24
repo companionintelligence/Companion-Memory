@@ -2,7 +2,7 @@ import { GlobalUID } from '@ci/common';
 import { IconButton, Tooltip } from '@ci/shadcn';
 import { Pencil, Share2, Trash } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 
 import { useFeatures } from '@/common/feature';
 import { visualForRawType } from '@/components/entities/entityVisuals';
@@ -22,6 +22,8 @@ function activeFilterDimensions(
     eventTypes?: string[] | null;
     semantic?: boolean | null;
     direction?: string | null;
+    areas?: ((number | null)[] | null)[] | null;
+    bbox?: (number | null)[] | null;
   } | null,
 ): string[] {
   if (!filters) {
@@ -32,7 +34,10 @@ function activeFilterDimensions(
   // fixer collapses to inline `{ … }` that the Prettier CI check then rejects.
   const dimensions: Array<[boolean, string]> = [
     [Boolean(filters.people?.length), 'Who'],
-    [Boolean(filters.places?.length || filters.hasLocation), 'Where'],
+    [
+      Boolean(filters.places?.length || filters.hasLocation || filters.areas?.length || filters.bbox?.length),
+      'Where',
+    ],
     [Boolean(filters.startTime || filters.endTime || filters.datePreset), 'When'],
     [Boolean(filters.eventTypes?.length), 'Activity'],
     [Boolean(filters.connectors?.length), 'How'],
@@ -45,7 +50,8 @@ function activeFilterDimensions(
 
 interface Props {
   savedSearch: FragmentType<typeof SavedSearchGridItemFragment>;
-  openSavedSearchEditModal: (e: React.MouseEvent) => void;
+  /** When omitted, Edit opens this search on the Memory filters. */
+  openSavedSearchEditModal?: (e: React.MouseEvent) => void;
   openSavedSearchShareModal: (e: React.MouseEvent) => void;
   openSavedSearchDeleteModal: (e: React.MouseEvent) => void;
 }
@@ -71,6 +77,10 @@ export const SavedSearchGridItemFragment = gql(`
       hasLocation
       semantic
       direction
+      fileKinds
+      view
+      areas
+      bbox
     }
     isPublic
     shareToken
@@ -85,6 +95,7 @@ export function SavedSearch({
   openSavedSearchDeleteModal,
 }: Props) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const savedSearch = useFragment(SavedSearchGridItemFragment, savedSearchMasked);
   const filterDims = activeFilterDimensions(savedSearch.filters);
   // Sharing (the "make public" control) is gated while the access model is hardened.
@@ -101,7 +112,7 @@ export function SavedSearch({
           <div className="flex min-w-0 items-center gap-2">
             <span className="truncate font-medium">{savedSearch.name || 'Untitled saved search'}</span>
             {savedSearch.isSeed && (
-              <span className="inline-flex shrink-0 items-center rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              <span className="inline-flex shrink-0 items-center rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
                 Starter
               </span>
             )}
@@ -165,7 +176,20 @@ export function SavedSearch({
             e.stopPropagation();
           }}
         >
-          <IconButton onClick={openSavedSearchEditModal} variant="ghost" label={t('SAVED_SEARCH_EDIT')}>
+          <IconButton
+            onClick={(event) => {
+              if (openSavedSearchEditModal) {
+                openSavedSearchEditModal(event);
+
+                return;
+              }
+
+              navigate(`/memory?saved_search=${GlobalUID.parse('saved-search', savedSearch.id)}`);
+            }}
+            variant="ghost"
+            label={t('SAVED_SEARCH_EDIT')}
+            className="max-device:size-11"
+          >
             <Pencil className="h-4 w-4" />
           </IconButton>
           {sharingEnabled && (
@@ -173,7 +197,12 @@ export function SavedSearch({
               <Share2 className="h-4 w-4" />
             </IconButton>
           )}
-          <IconButton onClick={openSavedSearchDeleteModal} variant="ghost" label={t('SAVED_SEARCH_DELETE')}>
+          <IconButton
+            onClick={openSavedSearchDeleteModal}
+            variant="ghost"
+            label={t('SAVED_SEARCH_DELETE')}
+            className="max-device:size-11"
+          >
             <Trash className="h-4 w-4" />
           </IconButton>
         </div>

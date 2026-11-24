@@ -7,7 +7,7 @@ import { renderWithProviders } from '@/test/renderWithProviders';
 
 import type { MemoryEntityOf } from '../../useEntityService';
 
-import { EntityDrawerHostProvider } from './drawerHost';
+import { EntityDrawerHostProvider, type EntityDrawerHost } from './drawerHost';
 import { GET_RECEIPT_DOCUMENT, GET_RECEIPT_LINES, ReceiptDetails } from './ReceiptDetails';
 
 vi.mock('@/components/ChatWithAgent', () => ({
@@ -95,10 +95,7 @@ const document = {
   },
 };
 
-function renderDrawer(
-  host: { setActiveEntity: ReturnType<typeof vi.fn>; refetch: ReturnType<typeof vi.fn> },
-  data: ReturnType<typeof lines> = lines(),
-) {
+function renderDrawer(host: ReturnType<typeof newHost>, data: ReturnType<typeof lines> = lines()) {
   return renderWithProviders(
     <EntityDrawerHostProvider value={host}>
       <Sheet open>
@@ -114,7 +111,10 @@ function renderDrawer(
   );
 }
 
-const newHost = () => ({ setActiveEntity: vi.fn(), refetch: vi.fn() });
+const newHost = () => ({
+  setActiveEntity: vi.fn<EntityDrawerHost['setActiveEntity']>(),
+  refetch: vi.fn<EntityDrawerHost['refetch']>(),
+});
 
 describe('ReceiptDetails', () => {
   /**

@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import { type RequestContext, type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
@@ -240,9 +240,7 @@ export class PersonaComposeService {
         { kind: 'insight' as const, id: 'persona-compose', note: 'how you’d do it' },
         ...result.evidence.slice(0, 3).map((e) => ({
           kind: (e.kind === 'answer' ? 'answer' : e.kind === 'summary' ? 'summary' : 'insight') as
-            | 'answer'
-            | 'summary'
-            | 'insight',
+            'answer' | 'summary' | 'insight',
           id: e.id ?? e.kind,
           note: e.note,
         })),
@@ -532,7 +530,12 @@ function slug(value: string): string {
 function fallbackPersonaBrief(markdown: string): string {
   const summary = markdown.match(/- Summary:\s*(.+)/)?.[1];
   if (summary) {
-    return `You tend to operate like this: ${summary.trim()}`;
+    // `fenceUntrusted` backslash-escapes a leading `**`/`#`/`-` so the value cannot
+    // start a line of the prompt. Mid-sentence here it needs no escape, and the card
+    // renders this as Markdown: a kept `\**Personality:**` reads `*Personality:*`.
+    const value = summary.trim().replace(/^\\(?=[#>\-*+=|`~_\d])/, '');
+
+    return `You tend to operate like this: ${value}`;
   }
 
   return 'Companion has some graph preferences for you, but the dossier is still thin.';

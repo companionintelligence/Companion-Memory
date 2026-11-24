@@ -11,8 +11,13 @@ export type {
   SourceLedgerOptions,
   SourceTriple,
 } from './bulkUpsert';
+export { countAffected } from './countAffected';
+export { summarizeDatabaseError } from './databaseErrorSummary';
+export type { DatabaseErrorSummary } from './databaseErrorSummary';
 export { appendRecordSources } from './recordSources';
 export type { RecordSourceRow } from './recordSources';
+export { isUuidInput, OWNED_TABLES, quotedId, refuseForeignLinks } from './refuseForeignLinks';
+export type { OwnedLink } from './refuseForeignLinks';
 export {
   INGEST_MERGE_KINDS,
   INGEST_PRODUCER_PREFERENCE,
@@ -21,7 +26,11 @@ export {
 } from './ingestRefreshColumns';
 export type { IngestEntityKind } from './ingestRefreshColumns';
 export { keysetPaginate, resolvePageShape, MAX_PAGE_SIZE, DEFAULT_PAGE_SIZE } from './keysetPaginate';
-export type { KeysetPageArgs, KeysetPage } from './keysetPaginate';
+export type { KeysetCountOptions, KeysetPageArgs, KeysetPage } from './keysetPaginate';
+export { keysetPaginateBy, type KeysetByOptions, type KeysetByPage } from './keysetPaginateBy';
+export { multiKeySeek, seekOrder, type SeekKey, type SeekValue } from './multiKeySeek';
+export { keysetOrderOf, keysetSeek } from './keysetSeek';
+export type { KeysetOrder, KeysetSeekParams } from './keysetSeek';
 export { withoutUndefined } from './withoutUndefined';
 export {
   assertSchemaIntegrity,
@@ -61,3 +70,4 @@ export {
   retryOnTransientDatabaseError,
 } from './transientDatabaseError';
 export type { DatabaseAbsence, TransientRetryNotice, TransientRetryPolicy } from './transientDatabaseError';
+export { touchedHourlyBucketsSql, type HourlyActivityOptions } from './hourlyBuckets';

@@ -7,11 +7,13 @@ import { AddMenu } from '../AddMenu';
 import { usePowerRail } from '../PowerRailContext';
 import { RailEdgeToggle } from '../RailEdgeToggle';
 
+import { EntityBackBar } from './EntityBackBar';
+
 /**
  * Phone header: chevron, search, chips, and Add in one row, in the layout
  * flow so page content starts below it instead of under it.
  */
-export function MobileTopBar() {
+function PhoneHeader() {
   const { expanded, toggle } = usePowerRail();
   const { pathname } = useLocation();
   const isSharedView = pathname.startsWith('/shared/');
@@ -30,5 +32,18 @@ export function MobileTopBar() {
       </div>
       <AddMenu />
     </header>
+  );
+}
+
+/**
+ * The phone header, and under it — on an entity's full page only — a Back row,
+ * because the phone has no other way back (see {@link EntityBackBar}).
+ */
+export function MobileTopBar() {
+  return (
+    <>
+      <PhoneHeader />
+      <EntityBackBar />
+    </>
   );
 }

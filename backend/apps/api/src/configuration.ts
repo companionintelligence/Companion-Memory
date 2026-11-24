@@ -3,8 +3,10 @@ import './bootstrap';
 import path from 'node:path';
 
 import config from 'config';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
+import { enforceNoCommittedSecrets } from './common/committedSecrets';
+import { isDeclaredEmbedModel } from './common/embeddings/embedModelIdentity';
 import { resolveLlmUrlForRuntime } from './domains/llm/services/llmEndpointShared';
 
 /**
@@ -60,6 +62,14 @@ export const DEFAULT_CHAT_MODEL = 'gemma4:e4b';
  * box has not got.
  */
 export const DEFAULT_UTILITY_MODEL = DEFAULT_CHAT_MODEL;
+
+/**
+ * What `llm.apiKey` holds when LLM_API_KEY is empty or unset. `.env.default` and the local and
+ * staging compose files set the same word. It still goes out as the bearer, since some
+ * OpenAI-compatible servers want a token of any value. Nobody chose it though, so
+ * `LlmEndpointService.getView` does not count it as a configured credential.
+ */
+export const LLM_API_KEY_PLACEHOLDER = 'ollama';
 
 const booleanStringSchema = z.preprocess((val) => {
   if (val === 'true') {
@@ -155,13 +165,27 @@ export const ConfigSchema = z.object({
        * are forwarded here. Empty = local notifications only.
        */
       pushRelayUrl: z.string().default(''),
-      // Comma-separated OAuth client ids allow-listed as service accounts (e.g.
-      // "hbpe-sidecar,summary-sidecar"). A Portal-signed token presenting one of
-      // these client ids is treated as a Portal-brokered service credential: it
-      // acts on behalf of the user named in its `sub` claim instead of being
-      // JIT-provisioned as a human login. Replaces the shared HS256 secret the
-      // sidecars used to self-sign with. See unified-identity-plan.md · B5.
+      // Comma-separated OAuth client ids allow-listed as service accounts. A
+      // Portal-signed token presenting one of these client ids is treated as a
+      // Portal-brokered service credential: it acts on behalf of the user named
+      // in its `sub` claim instead of being JIT-provisioned as a human login, and
+      // only when addressed to this appliance, confined to the api-key scopes in
+      // its `scope` claim. Empty by default: the HBPE and Summary sidecars
+      // authenticate with SIDECAR_AUTH_SECRET, and nothing ships a service client.
       serviceClients: z.string().default(''),
+      /**
+       * This appliance's own audience: the value CI-Portal puts in `aud` when it addresses a token
+       * to this box. Empty means "derive it from the Hub device id" (`ciPortal.deviceId`, which the
+       * Hub passes as `HUB_DEVICE_ID`) as `urn:ci:device:<id>`. Only a token addressed to this box
+       * carries the bearer's full authority; see `PortalTokenService`.
+       */
+      applianceAudience: z.string().default(''),
+      /**
+       * Comma-separated client ids that are capture agents (the browser extension, the importer,
+       * Companion Capture, the glasses). Their Portal tokens get the `capture` scope with `write`
+       * capability, enforced exactly as for an api key, wherever they were addressed.
+       */
+      captureClients: z.string().default(''),
     }),
     // Traefik forward-auth identity header signed by CI-Hub. When enabled, the
     // server verifies the HMAC-SHA256 signature on X-CI-Hub-User before trusting
@@ -171,7 +195,20 @@ export const ConfigSchema = z.object({
     // security-trust-and-ops.md.
     hubForwardAuth: z.object({
       enabled: z.boolean(),
+      // The Hub-wide secret. Authenticates the Hub connect exchange and the agent
+      // doorbell, and verifies the unbound identity format an older Hub sends.
       secret: z.string(),
+      // This app's own forward-auth key (CI_HUB_FORWARD_AUTH_IDENTITY_SECRET) and
+      // its app URN (CI_APP_URN), both written by a Hub that signs the bound
+      // assertion. Together they switch on audience-bound verification; see
+      // `forwardAuthPolicy` in common/crypto/hub-forward-auth.ts.
+      identitySecret: z.string().default(''),
+      audience: z.string().default(''),
+      // `true` (default) requires the bound assertion, so Hub sign-in is off
+      // until the Hub has provided both values above. `auto` is kept so older
+      // env values parse, and means `true`. `false` is the legacy opt-in that
+      // also accepts the unbound format (unless only one value above is set).
+      requireAudience: z.enum(['auto', 'true', 'false']).default('true'),
       maxSkewMs: z.coerce.number().int().positive(),
     }),
     // Brute-force throttle on the local password login. An appliance is a single
@@ -233,6 +270,9 @@ export const ConfigSchema = z.object({
       slack: z.object({
         id: z.string(),
       }),
+      dropbox: z.object({
+        id: z.string(),
+      }),
     }),
     openid: z.object({
       callbackUrl: z.string(),
@@ -267,8 +307,9 @@ export const ConfigSchema = z.object({
       hubOrigins: z.string().optional().default(''),
       // Docker-network origin Memory uses to ring Hub's targeted wake. The
       // public CI_HUB_ORIGINS list is for browser redirects; this is the
-      // appliance-local hop. Override with CI_HUB_INTERNAL_URL.
-      hubInternalUrl: z.string().optional().default('http://ci-os-hub:3000'),
+      // appliance-local hop. Override with CI_HUB_INTERNAL_URL; unset, it is
+      // worked out after parsing (see `resolveHubInternalUrl`).
+      hubInternalUrl: z.string().optional().default(''),
 
       /**
        * DEV ONLY. Ring OpenClaw's `/hooks/wake` directly, skipping Hub.
@@ -334,11 +375,12 @@ export const ConfigSchema = z.object({
   }),
   // OpenAI-compatible chat backend (Hub-injected LLM_* env, or Settings → Model).
   // When the chat port differs from Ollama's, the NestJS chat path speaks OpenAI
-  // protocol (vLLM, etc.); embeddings continue to use OLLAMA_HOST / OLLAMA_EMBED_HOST.
+  // protocol (vLLM, etc.). Embeddings follow it when it serves the embedder, else
+  // OLLAMA_HOST; LLM_EMBEDDING_API_BASE pins them (EmbeddingGenerationService.resolveTarget).
   llm: z
     .object({
       apiBase: z.string().optional(),
-      apiKey: z.string().default('ollama'),
+      apiKey: z.string().default(LLM_API_KEY_PLACEHOLDER),
       chatModel: z.string().default(DEFAULT_CHAT_MODEL),
       /** Background extraction/classification model. See {@link DEFAULT_UTILITY_MODEL}. */
       utilityModel: z.string().default(DEFAULT_UTILITY_MODEL),
@@ -354,6 +396,35 @@ export const ConfigSchema = z.object({
        * too short costs churn, too long costs a person's patience.
        */
       firstResponseTimeoutMs: z.coerce.number().int().positive().default(90_000),
+      /**
+       * Budget for ONE background answer-inference generation (AnswerInferenceListener):
+       * it replaces `firstResponseTimeoutMs` for that call and is also the listener's own abort
+       * timer. The call is non-streaming, so the first byte IS the finished answer. Through a
+       * Hub pool a prompt placed on a slow CPU node waits far longer than a local GPU does:
+       * comparable pool calls (14-36k tokens) took 54-147 s to first byte on such a node, and
+       * the old 60 s abort cut this call there (`clientClosed` at 59,991 ms in the pool log).
+       *
+       * 270 s sits strictly below undici's 300 s `headersTimeout`, which bounds both the native
+       * Ollama client and the OpenAI SDK (both go through undici fetch) and is also the Hub
+       * pool's non-stream completion default, so THIS is the bound that fires and the socket is
+       * closed by us. A value above ~300 s does nothing: undici cuts the request there. It also
+       * leaves the job's 600 s queue expiry room for the retrieval embeds that run first. Raising
+       * it holds the single-slot `ollama-background` lane (shared with thread titles) that much
+       * longer per attempt, on a plain single-node appliance too, so it is a deliberate trade.
+       */
+      answerInferenceTimeoutMs: z.coerce.number().int().positive().default(270_000),
+      /**
+       * The least time between two answer-inference dispatches for ONE owner, in minutes.
+       *
+       * Both selectors (`AnswerInferenceCron`, the smart-rotation `answer_infer` work) skip an
+       * owner whose last `infer.question.answer` job was created more recently than this, and
+       * skip an owner who still has one waiting or running whatever this says — see
+       * `inferenceDispatchGate.ts`. 20 is the smart-rotation cadence: three inferences an hour
+       * per person. The legacy cron used to send one a MINUTE per person with no backlog check,
+       * which on a four-person appliance was 240 jobs an hour, around the clock, and a queue that
+       * never drained.
+       */
+      answerInferenceIntervalMinutes: z.coerce.number().int().positive().default(20),
       chat: z
         .object({
           groundedRecall: z
@@ -469,7 +540,11 @@ export const ConfigSchema = z.object({
   // url/jwtSecret = feature scaffolded but not enabled (the endpoint returns 503).
   // See infrastructure/powersync/README.md.
   powersync: z.object({
-    /** Public URL of the PowerSync service the client connects to. */
+    /**
+     * Where clients reach the PowerSync service. An absolute URL is handed out as is; a
+     * path (`/powersync`) is joined to the origin each token request arrived on, for an
+     * appliance reached through more than one address (Hub installs).
+     */
     url: z.string().default(''),
     /** Shared HS256 secret the PowerSync service's client_auth trusts. */
     jwtSecret: z.string().default(''),
@@ -511,16 +586,41 @@ export const ConfigSchema = z.object({
     restUrl: z.string(),
   }),
   // Embedding/indexing pipeline knobs. These let a deployment point the embedder
-  // at a GPU/alternate-host Ollama and tune throughput for bulk imports without
-  // code changes. `host` defaults to services.ollama.host (resolved below) so the
-  // embedder follows the main Ollama host unless OLLAMA_EMBED_HOST overrides it.
+  // at another engine or host and tune throughput for bulk imports without code
+  // changes. `apiBase` defaults to services.ollama.host (resolved below) so the
+  // embedder follows the main Ollama host unless LLM_EMBEDDING_API_BASE pins it.
   embedding: z.object({
-    /** Ollama host used for embedding calls. Falls back to services.ollama.host. */
-    host: z.string().optional(),
+    /**
+     * The embedding endpoint pinned for this process (LLM_EMBEDDING_API_BASE),
+     * the sibling of LLM_API_BASE: an OpenAI-style base such as
+     * `http://host:13305/api/v1`, or a bare host. Stored as the root — a trailing
+     * `/v1` is dropped — because the embedder speaks the native `/api/embed`
+     * there first and `/v1/embeddings` when that route is missing. Unset, the
+     * embedder follows the chat backend when that serves it, else the Ollama
+     * host — see EMBED_HOST_EXPLICITLY_CONFIGURED and
+     * EmbeddingGenerationService.resolveTarget.
+     */
+    apiBase: z.string().optional(),
+    /**
+     * OLLAMA_EMBED_HOST, the name this setting had while embeddings were
+     * Ollama-only. Read as a fallback for `apiBase`, with a warning, so an
+     * older CI-Hub manifest or `.env` keeps working; remove once nothing sets it.
+     */
+    legacyHost: z.string().optional(),
     /** Embedding model name (must match the pgvector column dimensionality). */
     model: z.string().default('nomic-embed-text'),
     /** Max texts sent to Ollama's /api/embed in a single HTTP request. */
     batchSize: z.coerce.number().int().positive().default(32),
+    /**
+     * Longest text sent to the embedder, in characters; anything past it is
+     * cut. Ollama's `/api/embed` truncated to the model's window itself (2048
+     * tokens for nomic-embed-text as Ollama runs it), and the OpenAI dialect
+     * has no such option — llama-server refuses an over-long input outright
+     * (see `isInputTooLong`). 8,000 characters is about 2,000 tokens of prose,
+     * the same bound the Summary sidecar applies (`text[:8000]`), and past
+     * nomic's 2048-token training window the vectors get worse, not better.
+     */
+    maxInputChars: z.coerce.number().int().positive().default(8000),
     /** Max concurrent in-flight Ollama embedding HTTP requests. */
     concurrency: z.coerce.number().int().positive().default(12),
     /**
@@ -782,7 +882,10 @@ export const ConfigSchema = z.object({
        * Off leaves `purge_after` unenforced — deletion revokes access and keeps
        * the data. Any deployment that tells its users their data is deleted must
        * leave this on; it exists so an operator mid-incident can stop an
-       * irreversible job without editing code.
+       * irreversible job without editing code. It stops every purge: the hourly
+       * run and the one `POST /users/me/delete` starts inline. Deletion requests
+       * still end accounts (access, share links and peer links are closed); their
+       * rows wait until it is switched back on.
        */
       enabled: booleanStringSchema.default(true),
       /**
@@ -1145,9 +1248,9 @@ export const ConfigSchema = z.object({
     /**
      * Enables saved-search sharing: the `/shared/<token>` capability-link path
      * (resolving a shared saved search and running it as its owner) and the
-     * frontend "make public" control. Off by default — the access model is still
-     * being hardened, so the shared-URL surface stays dark unless explicitly
-     * enabled.
+     * frontend "make public" control. On by default (config/default.json, since
+     * 23151975e). ENABLE_SHARED_SEARCH=false turns the path and the control off,
+     * and a share token then resolves as an unknown one does.
      */
     'shared.search': booleanStringSchema,
     /** Shows would-you-rather preference steps during onboarding (food/movie/activity). */
@@ -1173,12 +1276,23 @@ export const ConfigSchema = z.object({
      * and per-item redaction are all in place — the reason it shipped dark
      * ("while the surface is being built") no longer holds.
      *
-     * Enabling this does NOT open federation: an inbound peer ask additionally
-     * requires `peers.audience` to be configured, and the peer route refuses
-     * every request until it is. What this flag turns on is the LOCAL ask
-     * surface, where every ask still defaults to owner review.
+     * Enabling this does NOT open federation on its own. An inbound peer ask that
+     * carries a Portal token also needs `peers.audience`, and one signed under a
+     * self-certifying keyid (`did:keri:D<x>`, `did:key`) needs
+     * `peers.memoryEndpoint` and a link the owner made for that identifier; the
+     * peer route refuses each kind until then. The flag also gates the outbound
+     * sendPeerAsk mutation. What this flag turns on is the LOCAL ask surface,
+     * where every ask still defaults to owner review.
      */
     ask: booleanStringSchema,
+    /**
+     * Trust Tasks (https://trusttasks.org) as a second front door to the peer-ask pipeline:
+     * `POST /agent/v1/trust-tasks`, authenticated by an in-band `eddsa-jcs-2022` proof over the whole
+     * document. OFF by default, and it opens nothing on its own: it also needs the `ask` flag, a usable
+     * `peers.signingKeyJwk` (every response is signed) and an active peer link for the sender. Off, the
+     * route answers exactly as a box without it does. See docs/trust-tasks.md.
+     */
+    'trust.tasks': booleanStringSchema,
     /**
      * Lets context-prompt generation ask one number-grounded selector from
      * ci_derived.daily_metrics. Default on; the 14-day coverage floor refuses
@@ -1204,6 +1318,32 @@ export const ConfigSchema = z.object({
      */
     'solid.protocol': booleanStringSchema,
     /**
+     * Master gate for RFC 9728 OAuth 2.0 Protected Resource Metadata (MCP 2026-07-28 discovery).
+     * Off by default — endpoints return 404 until explicitly enabled.
+     */
+    'mcp.prm': booleanStringSchema,
+    /**
+     * Master gate for Portable Web Spaces (PWS) storage facade (`/pws/*`):
+     * W3C CCG v0.5 permissioned storage hierarchy (Space > Collection > Resource)
+     * with zCap object capabilities. Off by default (routes 404).
+     */
+    'pws.storage': booleanStringSchema,
+    /**
+     * Master gate for IdentiKey challenge/response auth protocol (identikey-auth Phase 1):
+     * Verifier endpoints for Ed25519/P-256 single-use challenge verification. Off by default (routes 404).
+     */
+    'auth.identikey': booleanStringSchema,
+    /**
+     * Master gate for Verifiable Trust Community (OpenVTC) credentials & status lists:
+     * W3C VC 2.0 / DTG Credentials verification. Off by default (routes 404).
+     */
+    'vtc.credentials': booleanStringSchema,
+    /**
+     * Master gate for DIDComm Messaging v2.1:
+     * Pack/unpack envelopes and mediator routing. Off by default (routes 404).
+     */
+    'didcomm.messaging': booleanStringSchema,
+    /**
      * Serve the GraphiQL IDE at `GET /graphiql`. The page is static HTML that
      * authenticates per request with a pasted API key (see docs/graphql-api.md),
      * so it cannot sit behind the auth guard — which is why it was served
@@ -1224,7 +1364,10 @@ export const ConfigSchema = z.object({
      * a plain read (every connected-MCP tool is labelled this way), from the
      * owner's own chat is queued as an approval card under the `balanced` and
      * `cautious` dials and runs unattended only under `hands_off`; an external
-     * read (`messaging.listMessages`) asks only under `cautious`. See
+     * read asks only under `cautious`, unless it reaches a third party
+     * (`media.streamingAvailability`) and chat makes it after a lookup in the
+     * same turn, when `balanced` asks too. A read from the owner's own server
+     * (`messaging.listMessages`) does not. See
      * `PendingActionService.trustForToolCall` for the mapping and for why the
      * dial is read directly rather than through the inference scorer.
      * `?tier=local` execute calls are queued rather than run.
@@ -1245,15 +1388,38 @@ export const ConfigSchema = z.object({
     deviceId: z.string().optional(),
     apiKey: z.string().optional(),
   }),
+  // Memory Desktop only: the file the desktop app keeps up to date while it runs
+  // (frontend/apps/desktop/src-tauri/src/presence.rs), mounted read-only by its
+  // compose overlay. Empty everywhere else, which turns DesktopAppService off.
+  desktopApp: z
+    .object({
+      presenceFile: z.string().default(''),
+    })
+    .default({}),
   // Peer federation (CI-Server #1711 Phase 3). `directoryUrl` is CI-Portal's
-  // peer-discovery API base (handle → Companion endpoint + issuer); empty
-  // disables discovery, and with it any outbound ask. Inbound peer asks are
-  // additionally gated by the `ask` feature flag.
+  // peer-discovery API base (handle → Companion endpoint + issuer). Empty
+  // disables directory lookups (PeerDirectoryService), which nothing calls yet;
+  // it does not affect outbound asks. Those post to the endpoint stored on the
+  // caller's peer link, and need the `ask` flag, an active link, `handle` (a
+  // receiver refuses an empty askerHandle), and a Portal token for the peer or
+  // `signingKeyJwk` (only the box's administrator may send with the key alone).
+  // Inbound peer asks need the `ask` flag plus `audience` (Portal-token asks) or
+  // `memoryEndpoint` (signed did:keri:D<x> or did:key asks).
   peers: z.object({
     directoryUrl: z.string().optional(),
-    /** This box's own Companion endpoint, published to the directory. */
+    /**
+     * This box's own `/agent/v1` base: the address the owner gives peers, which
+     * they store on their link to this box (behind Companion Memory's gateway,
+     * https://<host>/api/agent/v1). Inbound signatures are checked against the
+     * `@target-uri` rebuilt from it, so signed did:keri:D<x> and did:key asks
+     * need it. Nothing publishes it to the directory.
+     */
     memoryEndpoint: z.string().optional(),
-    /** This box's Portal handle. */
+    /**
+     * The handle this box sends as `askerHandle` on its outbound asks; a receiver refuses an empty
+     * one. Memory does not register it in the CI-Portal directory or check it against the Portal's
+     * handle rules.
+     */
     handle: z.string().optional(),
     /**
      * The audience value CI-Portal mints into tokens addressed to THIS box.
@@ -1267,14 +1433,16 @@ export const ConfigSchema = z.object({
     /**
      * REQUIRE a valid RFC 9421 message signature on the inbound peer surface.
      *
-     * Off by default, and deliberately a separate knob from having a key: a box
-     * that starts signing must not immediately stop talking to peers that have
-     * not yet upgraded. The rollout is (1) both sides configure a key and sign,
-     * (2) both sides turn this on. Turning it on with peers that do not sign
-     * refuses them -- which is the point, but it is the operator's call and not
-     * a side effect of setting a key.
+     * ON by default since every person got a key of their own
+     * (`PeerIdentityService`) and every outbound ask and collect is signed with
+     * it. Off was a rollout setting, for the time when only a hand-configured
+     * box key could sign; with it off a leaked Portal token was a complete
+     * impersonation of a peer for its lifetime, and a replay went undetected.
+     * Turning it off again accepts unsigned Portal-token asks from peers whose
+     * link records no key, for a peer running a release from before per-person
+     * keys; a link that records a key always needs a signature either way.
      */
-    requireHttpSignature: z.coerce.boolean().default(false),
+    requireHttpSignature: z.coerce.boolean().default(true),
     /**
      * This box's Ed25519 signing key, as a PRIVATE JWK (JSON string or object).
      *
@@ -1330,6 +1498,18 @@ export const ConfigSchema = z.object({
      * actually parses `"true"`/`"false"` strings correctly.
      */
     allowCgnatEndpoints: booleanStringSchema.default(false),
+    /**
+     * Let an owner look a person up by `name@host` on Local.Pub (WebFinger and the ActivityPub
+     * actor, read for a display name, the DIDs it lists, and the Companion address and `did:key` a
+     * profile field names), through the `localPubPeerLookup` query.
+     *
+     * OFF by default, and off means this box never makes that call: the host in a handle is
+     * chosen by whoever typed it, so unlike `directoryUrl` it is not operator config. A lookup
+     * returns what a profile CLAIMS and creates no link; see `LocalPubDiscoveryService`.
+     * `booleanStringSchema` for the same reason as `allowCgnatEndpoints`: it is set from an env
+     * var, and `z.coerce.boolean()` would read the string `"false"` as `true`.
+     */
+    localPubEnabled: booleanStringSchema.default(false),
   }),
   /**
    * Where the abuse-control counters live -- the rate-limit windows and the
@@ -1461,14 +1641,69 @@ function llmUrlForThisRuntime(label: string, value: string | undefined): string 
 
 parsed.services.ollama.host = llmUrlForThisRuntime('OLLAMA_HOST', parsed.services.ollama.host);
 parsed.llm.apiBase = llmUrlForThisRuntime('LLM_API_BASE', parsed.llm.apiBase);
-parsed.embedding.host = llmUrlForThisRuntime('OLLAMA_EMBED_HOST', parsed.embedding.host);
 
-// The embedder follows the main Ollama host unless an explicit embedding host is
-// configured (OLLAMA_EMBED_HOST), so a GPU/alternate-host Ollama can be pointed
-// at for embeddings only without touching the prompt/inference host. Corrected
-// above first, so an inherited host arrives already right for this runtime.
-if (!parsed.embedding.host) {
-  parsed.embedding.host = parsed.services.ollama.host;
+// Captured BEFORE the default below fills it in: whether an operator (or the
+// Hub installer) pinned the embedding endpoint — LLM_EMBEDDING_API_BASE, or its
+// old name OLLAMA_EMBED_HOST — as distinct from the embedder following the chat
+// backend or the Ollama host. `EmbeddingGenerationService` embeds where it is
+// told when this is true, and otherwise on the chat backend when that backend
+// serves the embedder (see `resolveTarget` there). Same `config.has` reasoning
+// as UTILITY_MODEL_EXPLICITLY_CONFIGURED below: default.json carries neither
+// key, so only the env mapping can put one there.
+export const EMBED_HOST_EXPLICITLY_CONFIGURED =
+  (config.has('embedding.apiBase') && Boolean(config.get('embedding.apiBase'))) ||
+  (config.has('embedding.legacyHost') && Boolean(config.get('embedding.legacyHost')));
+
+if (!parsed.embedding.apiBase?.trim() && parsed.embedding.legacyHost?.trim()) {
+  console.warn(
+    '[config] OLLAMA_EMBED_HOST is deprecated; set LLM_EMBEDDING_API_BASE instead (same value, ' +
+      'any engine). Using it for this process.',
+  );
+  parsed.embedding.apiBase = parsed.embedding.legacyHost;
+}
+
+// Stored as the root the native `/api/embed` lives under: `.../v1` and
+// `.../api/v1` (Lemonade) both mean "this server", and the embedder adds the
+// route it needs. Corrected for this runtime first, like the chat base, so an
+// inherited value arrives already right.
+parsed.embedding.apiBase = llmUrlForThisRuntime(
+  'LLM_EMBEDDING_API_BASE',
+  parsed.embedding.apiBase?.trim() || undefined,
+)?.replace(/\/+$/, '');
+if (parsed.embedding.apiBase?.endsWith('/v1')) {
+  parsed.embedding.apiBase = parsed.embedding.apiBase.slice(0, -'/v1'.length);
+}
+
+// The embedder follows the main Ollama host unless an embedding endpoint is
+// pinned, so a GPU/alternate-host engine can be pointed at for embeddings only
+// without touching the chat endpoint.
+if (!parsed.embedding.apiBase) {
+  parsed.embedding.apiBase = parsed.services.ollama.host;
+}
+
+// CI-Hub names the embedder it installed in LLM_DEFAULT_EMBEDDING_MODEL (its `embedding_model` handout,
+// which the Summary sidecar already reads). This process used to read only CI_EMBED_MODEL, so it asked
+// Hub's endpoint for `nomic-embed-text` whatever Hub had installed: fine beside Ollama, a failed embed
+// on every row on a Lemonade-only node, whose embedder is `nomic-embed-text-v1.5-GGUF` (the same
+// weights; see embedModelIdentity.ts). An operator's CI_EMBED_MODEL still wins, and is still held to
+// the declared generations at boot. A handed-out name with no declared generation is refused here
+// with an error line instead of failing boot: an older Hub hands out Lemonade's v1
+// (`nomic-embed-text-v1-GGUF`), a different vector space from every existing index, and embedding
+// with it would scramble search rather than fix it.
+if (!process.env.CI_EMBED_MODEL?.trim()) {
+  const handedOut = process.env.LLM_DEFAULT_EMBEDDING_MODEL?.trim();
+
+  if (handedOut && handedOut !== parsed.embedding.model) {
+    if (isDeclaredEmbedModel(handedOut)) {
+      parsed.embedding.model = handedOut;
+    } else {
+      console.error(
+        `[config] LLM_DEFAULT_EMBEDDING_MODEL=${handedOut} has no declared embedding generation ` +
+          `(EMBED_MODEL_GENERATIONS in common/embeddings/embedModelIdentity.ts); embedding with ` +
+          `${parsed.embedding.model} instead. Update CI-Hub, or set CI_EMBED_MODEL deliberately.`,
+      );
+    }
+  }
 }
 
 if (!parsed.llm.apiBase) {
@@ -1476,7 +1711,7 @@ if (!parsed.llm.apiBase) {
 }
 
 if (!parsed.llm.apiKey) {
-  parsed.llm.apiKey = 'ollama';
+  parsed.llm.apiKey = LLM_API_KEY_PLACEHOLDER;
 }
 
 if (!parsed.llm.chatModel) {
@@ -1503,6 +1738,46 @@ export const UTILITY_MODEL_EXPLICITLY_CONFIGURED =
 if (!parsed.llm.utilityModel) {
   parsed.llm.utilityModel = DEFAULT_UTILITY_MODEL;
 }
+
+/**
+ * Where Memory rings the Hub's wake endpoint (`HubDoorbellService`): `CI_HUB_INTERNAL_URL` when set,
+ * else the origin of `HUB_INFERENCE_URL`, else {@link DEFAULT_HUB_INTERNAL_URL}.
+ *
+ * No Hub sets `CI_HUB_INTERNAL_URL`. Every Hub does hand its apps `HUB_INFERENCE_URL`, built from its
+ * own container name and API port (`http://ci-hub:5002/api/inference/v1` on Hub 0.3.7), so its origin
+ * is the Hub as this container reaches it. The old default, `http://ci-os-hub:3000`, named a port the
+ * Hub does not listen on: every Dispatch rang a refused connection, OpenClaw never heard it, and the
+ * thread said "OpenClaw did not check in" two minutes later.
+ */
+export const DEFAULT_HUB_INTERNAL_URL = 'http://ci-os-hub:5002';
+
+export function resolveHubInternalUrl(
+  configured: string | undefined,
+  hubInferenceUrl: string | undefined,
+): string {
+  const explicit = configured?.trim();
+
+  if (explicit) {
+    return explicit;
+  }
+
+  try {
+    const url = new URL(hubInferenceUrl?.trim() ?? '');
+
+    if (url.protocol === 'http:' || url.protocol === 'https:') {
+      return url.origin;
+    }
+  } catch {
+    // Unset or not a URL: the Hub's default address.
+  }
+
+  return DEFAULT_HUB_INTERNAL_URL;
+}
+
+parsed.auth.connect.hubInternalUrl = resolveHubInternalUrl(
+  parsed.auth.connect.hubInternalUrl,
+  process.env.HUB_INFERENCE_URL,
+);
 
 // GEOCODING_API_KEY takes precedence; fall back to the legacy GOOGLE_MAPS_KEY so
 // existing deployments keep working until the billed key is supplied. (config's
@@ -1602,6 +1877,24 @@ if (/^0{64}$/i.test(parsed.auth.encryption.fieldKey)) {
   console.warn(msg);
 }
 
+// Secrets that still hold a value committed to this repository: a replace-me-
+// placeholder from .env.default, or the variable's own name that default.json
+// falls back to. Refused in production mode, a warning in development (where
+// existing .env files carry them). See common/committedSecrets.ts.
+enforceNoCommittedSecrets(
+  {
+    AUTH_TOKEN_SECRET: parsed.auth.jwt.authTokenSecret,
+    AUTH_REFRESH_TOKEN_SECRET: parsed.auth.jwt.refreshTokenSecret,
+    AUTH_SESSION_PEPPER: parsed.auth.session.fieldPepper,
+    AUTH_CSRF_TOKEN_SECRET: parsed.auth.csrf.secret,
+    OBJECT_STORE_USERNAME: parsed.staticfiles.auth.accessKeyId,
+    OBJECT_STORE_PASSWORD: parsed.staticfiles.auth.secretAccessKey,
+    SIDECAR_AUTH_SECRET: parsed.services.sidecarAuthSecret,
+    POWERSYNC_JWT_SECRET: parsed.powersync.jwtSecret,
+  },
+  process.env.NODE_ENV,
+);
+
 // The sidecars refuse every request without this bearer, so an API that lacks it
 // is one whose imports never summarise and whose forecasts never train — and a
 // sidecar it could still reach would be one anyone could reach. Refuse to boot
@@ -1627,6 +1920,33 @@ if (parsed.peers.allowCgnatEndpoints) {
       '100.64.0.0/10 (CGNAT space, including Tailscale). This box will treat that range as reachable ' +
       'peer infrastructure. Only enable this if you have deliberately linked your appliances over a ' +
       'private network you trust; RFC1918, loopback and link-local space remain blocked regardless.',
+  );
+}
+
+/**
+ * True when the inbound peer surface accepts a Portal-token ask that carries no
+ * message signature: `peers.audience` is bound (so Portal-token asks are served
+ * at all, see `PeerAskController`) and `peers.requireHttpSignature` is off.
+ *
+ * Not the shipped default (the requirement ships on); an operator who turns it off gets it. The bearer
+ * token alone then authenticates an ask from a peer whose link records no key
+ * (a link that records one always needs a signature, see `PeerAskController`), so a leaked token works for its whole
+ * lifetime and replay is not detected; only a signature binds the token to one
+ * request. The default stays off for interoperability with peers that do not
+ * sign yet, so this is surfaced rather than refused.
+ */
+export function acceptsUnsignedPeerAsks(
+  peers: { audience?: string; requireHttpSignature?: boolean } = parsed.peers,
+): boolean {
+  return Boolean(peers.audience?.trim()) && peers.requireHttpSignature !== true;
+}
+
+if (acceptsUnsignedPeerAsks()) {
+  console.warn(
+    '[configuration] peers.audience is set and peers.requireHttpSignature is off — inbound peer asks ' +
+      'that carry only a Portal token are accepted without an HTTP message signature from any peer ' +
+      'whose link records no key, so a leaked token is enough to ask as such a peer and a replayed request is not detected. Turn on ' +
+      'peers.requireHttpSignature once every linked peer signs (see docs/peer-federation.md).',
   );
 }
 

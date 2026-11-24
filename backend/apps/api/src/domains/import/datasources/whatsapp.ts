@@ -4,11 +4,15 @@ import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import readline from 'node:readline';
 
+import { wallClockToUTC, type WallClock } from '@ci/common/time/zoned';
+
+import { serviceInboxFolders } from '../sources/inboxFolders';
+
 import { mediaAttachmentsFor, mediaItemForAsset, insideRoot } from './_ai_media';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams, MediaAttachment } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 // iOS 12-hr: [M/D/YY, H:MM:SS AM] Sender: message
 // iOS 24-hr: [M/D/YY, H:MM:SS] Sender: message  (common outside US)
@@ -20,6 +24,62 @@ import { timeframeContains } from './timeline';
 // starting its own — the source of the cross-sender content merging.
 const IOS_RE =
   /^\[(\d{1,2}\/\d{1,2}\/\d{2,4}), (\d{1,2}:\d{2}(?::\d{2})?(?:\s?[AP]M)?)\] ([^:]+):[ ]?([\s\S]*)$/;
+
+/**
+ * The AM or PM of a 12-hour header as phones outside the US write it too:
+ * lowercase (`10:02 am`, English in India or Australia), with dots (`a.m.`,
+ * `p. m.`) and after a narrow or ordinary no-break space, which `\s` matches.
+ * {@link IOS_RE} and {@link ANDROID_12H_RE} take only `AM` and `PM`.
+ */
+const ANY_MARKER = String.raw`[AaPp]\.?\s?[Mm]\.?`;
+
+/** {@link IOS_RE} with {@link ANY_MARKER}. */
+const IOS_ANY_MARKER_RE = new RegExp(
+  String.raw`^\[(\d{1,2}\/\d{1,2}\/\d{2,4}), (\d{1,2}:\d{2}(?::\d{2})?(?:\s?${ANY_MARKER})?)\] ([^:]+):[ ]?([\s\S]*)$`,
+);
+
+/** A header's time with {@link ANY_MARKER}, split into the clock and the marker's first letter. */
+const ANY_MARKER_TIME_RE = new RegExp(String.raw`^(\d{1,2}:\d{2}(?::\d{2})?)\s?(?:([AaPp])\.?\s?[Mm]\.?)?$`);
+
+/** A time written with {@link ANY_MARKER} as `H:MM[:SS] AM`, the shape `new Date` and {@link iosWallClock} read. */
+function normalisedTime(time: string): string {
+  const m = ANY_MARKER_TIME_RE.exec(time.trim());
+
+  if (m == null) {
+    return time;
+  }
+
+  return m[2] ? `${m[1]} ${m[2].toUpperCase()}M` : m[1];
+}
+
+/** A day-first `D/M/Y` date as `M/D/Y`, the order `new Date` and {@link iosWallClock} read. */
+function monthFirst(date: string): string {
+  const [day, month, year] = date.split('/');
+
+  return `${month}/${day}/${year}`;
+}
+
+/**
+ * The time in the ids of a file read with {@link ANY_MARKER_SHAPES}: the date's
+ * numbers as written and the clock on 24 hours, as `14-11-26T19:15`. No such
+ * file was saved before, so its ids need no old reading. These read neither
+ * the date order nor a zone: a newer export of the chat whose dates settle the
+ * order the other way, or an import on a server in another zone, gives every
+ * message the same id. Undefined when the time doesn't read.
+ */
+function writtenIdTime(date: string, time: string): string | undefined {
+  const t = IOS_TIME_RE.exec(normalisedTime(time).trim());
+
+  if (t == null) {
+    return undefined;
+  }
+
+  const two = (n: number | string) => String(n).padStart(2, '0');
+  const [first, second, year] = date.split('/');
+
+  return `${two(first)}-${two(second)}-${year}T${two(hour24(Number(t[1]), t[4]))}:${t[2]}${t[3] ? `:${t[3]}` : ''}`;
+}
+
 /**
  * The chat's name, from the only place an export records it: the directory.
  *
@@ -52,33 +112,433 @@ const IOS_RE =
  * name — a single thread id for every chat in the export, and one identity
  * namespace for every message id. Whichever half of the path actually names the
  * chat has to win, and that is the more specific half.
+ *
+ * Null when the folder was named by the system rather than by an export (see
+ * {@link namedBySystem}). A `_chat.txt` dropped straight into
+ * `<inbox>/whatsapp/` was named "whatsapp": every message of the same export
+ * uploaded earlier through the wizard was saved a second time under that name
+ * and two different chats dropped that way shared one thread. Null too when
+ * the folder name is nothing but the exporter's prefix: an upload replaces
+ * every non-ASCII character with `_`, so a chat named in another script
+ * arrived as `WhatsApp_Chat_-___` and every such chat was called "Chat". The
+ * caller names these chats from their transcript instead
+ * ({@link conversationNameFromTranscript}).
  */
-function conversationNameFrom(chatPath: string): string {
-  const normalise = (value: string): string =>
-    value
-      // Underscores stand in for characters the exporter or the upload path
-      // could not keep — including the `|` in this corpus's own chat name.
-      .replace(/[_+]+/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-
+function conversationNameFrom(chatPath: string): string | null {
   const stripPrefix = (value: string): string =>
     value.replace(/^WhatsApp Chat(\s+(?:with|-))?\s*/i, '').trim();
 
   // `_chat.txt` — the generic transcript name — normalises to '' and falls
   // through to the directory, which is where that layout keeps the chat name.
-  const fromFile = stripPrefix(normalise(path.basename(chatPath, '.txt').replace(/_chat/i, '')));
+  const fromFile = stripPrefix(normaliseName(path.basename(chatPath, '.txt').replace(/_chat/i, '')));
   if (fromFile) {
     return fromFile;
   }
 
-  const fromDirectory = stripPrefix(normalise(path.basename(path.dirname(chatPath))));
+  const directory = path.basename(path.dirname(chatPath));
 
-  return fromDirectory || 'Chat';
+  if (namedBySystem(directory)) {
+    return null;
+  }
+
+  return stripPrefix(normaliseName(directory)) || null;
+}
+
+function normaliseName(value: string): string {
+  // Underscores stand in for characters the exporter or the upload path
+  // could not keep, such as the `|` in this corpus's own chat name.
+  return value.replace(/[_+]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/** The inbox's service folders (`whatsapp`, `google-takeout`, …): folders the inbox made, not names an export chose. */
+const INBOX_SERVICE_FOLDERS = new Set(serviceInboxFolders().map((folder) => folder.toLowerCase()));
+
+/** An import run's scratch folder, named after the run's id. No export names a chat like this. */
+const RUN_FOLDER_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The zip the import wizard packs loose files into, `<card title> (<n> files).zip`,
+ * as it reads once the upload has sanitised and unpacked it (`WhatsApp__3_files_`
+ * normalises to `WhatsApp 3 files`). Picking `_chat.txt` and its photos with
+ * "Choose files" lands them in one of these. The count changes with every
+ * upload of the same chat.
+ */
+const LOOSE_FILES_FOLDER_RE = /^(?!WhatsApp Chat\b).+ \(?\d+ files\)?$/i;
+
+/**
+ * A folder the inbox, an import run or the wizard named, which says nothing
+ * about the chat inside it: the inbox's own `whatsapp/`, the run's scratch
+ * folder a bare `_chat.txt` is moved into, or the wizard's loose-files zip.
+ */
+function namedBySystem(directory: string): boolean {
+  return (
+    INBOX_SERVICE_FOLDERS.has(directory.toLowerCase()) ||
+    RUN_FOLDER_RE.test(directory) ||
+    LOOSE_FILES_FOLDER_RE.test(normaliseName(directory))
+  );
+}
+
+const ENCRYPTION_NOTICE_RE = /^Messages and calls are end-to-end encrypted/i;
+
+/** Bidi and direction marks anywhere in a name. WhatsApp wraps a phone number in U+202A and U+202C. */
+const INVISIBLE_MARKS_RE = /[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+
+/** Characters a filename cannot hold. The exporter writes `_` for them (`LITA | …` became `LITA _ …`). */
+const FILENAME_UNSAFE_RE = /[\\/:*?"<>|]/g;
+
+/**
+ * The notice's sender spelled the way the folder route spells the same chat.
+ * Without this the transcript called the corpus's own chat
+ * "LITA | Companion Tech Team" while its zip, uploaded or dropped in the inbox,
+ * was "LITA Companion Tech Team", so the two never deduped.
+ */
+function chatNameFromSender(sender: string): string {
+  return normaliseName(sender.replace(INVISIBLE_MARKS_RE, '').replace(FILENAME_UNSAFE_RE, '_'));
+}
+
+/**
+ * A chat's name from its own transcript, for a `_chat.txt` whose folder does
+ * not name the chat.
+ *
+ * iOS starts every export with WhatsApp's encryption notice, sent "by" the chat
+ * itself: `[1/3/21, 9:00:00 AM] Alice: Messages and calls are end-to-end
+ * encrypted. …`. That sender is the name the export's zip carries too
+ * (`WhatsApp Chat - Alice.zip`), so the chat gets the same identity as an
+ * upload of that zip and dedupes against it. A transcript without the notice
+ * is named after the people in it, sorted, which at least keeps two different
+ * chats in two threads.
+ */
+async function conversationNameFromTranscript(chatPath: string, format: ChatFormat): Promise<string> {
+  const input = fs.createReadStream(chatPath, { encoding: 'utf8' });
+  const rl = readline.createInterface({ input, crlfDelay: Infinity });
+  const senders = new Set<string>();
+
+  try {
+    for await (const line of rl) {
+      // Only the sender and text are read here, so the times need no account zone.
+      const parsed = parseWALine(line, undefined, format);
+
+      if (parsed == null || parsed.system) {
+        continue;
+      }
+
+      if (senders.size === 0 && ENCRYPTION_NOTICE_RE.test(stripLeadingInvisible(parsed.text))) {
+        const name = chatNameFromSender(parsed.sender);
+
+        if (name) {
+          return name;
+        }
+      }
+
+      senders.add(parsed.sender);
+    }
+  } finally {
+    rl.close();
+    // Closing readline does not close its input. Returning at the notice left
+    // the stream paused on its first chunk with the file still open, one
+    // descriptor per chat for the life of the process.
+    input.destroy();
+  }
+
+  return [...senders].sort().join(', ') || 'Chat';
 }
 
 // Android: DD/MM/YYYY, HH:MM - Sender: message
-const ANDROID_RE = /^(\d{2}\/\d{2}\/\d{4}), (\d{2}:\d{2}) - ([^:]+):[ ]?([\s\S]*)$/;
+// The sender is split off afterwards ({@link androidSender}): the lines
+// WhatsApp writes itself have the same header and no sender.
+const ANDROID_RE = /^(\d{2}\/\d{2}\/\d{4}), (\d{2}:\d{2}) - ([\s\S]*)$/;
+
+// Android with a 12-hour clock, as in US English: M/D/YY, H:MM AM - Sender:
+// message. Newer phones put a U+202F NARROW NO-BREAK SPACE before AM/PM, which
+// `\s` matches. Some phones write the day first; see {@link chatFormat}.
+const ANDROID_12H_RE = /^(\d{1,2})\/(\d{1,2})\/(\d{2}), (\d{1,2}:\d{2}\s[AP]M) - ([\s\S]*)$/;
+
+/** {@link ANDROID_12H_RE} with {@link ANY_MARKER} and a four-digit year as well: `14/11/2026, 7:15 pm - `. */
+const ANDROID_12H_ANY_MARKER_RE = new RegExp(
+  String.raw`^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4}), (\d{1,2}:\d{2}\s?${ANY_MARKER}) - ([\s\S]*)$`,
+);
+
+/** The header patterns a chat's file is read with. */
+interface HeaderShapes {
+  ios: RegExp;
+  android12h: RegExp;
+  anyMarker: boolean;
+}
+
+/**
+ * The patterns every saved message id comes from. A file whose first header is
+ * in one of these shapes is read with them, so it keeps the ids it was saved
+ * with.
+ */
+const STRICT_SHAPES: HeaderShapes = { ios: IOS_RE, android12h: ANDROID_12H_RE, anyMarker: false };
+
+/**
+ * For a file whose first header is in a shape only these read. Such a file
+ * imported nothing, or only from a line pasted into it, so no saved id is
+ * worth keeping its reading for. Inside a strict file a line in one of these
+ * shapes is text someone pasted into a message, as it always was.
+ */
+const ANY_MARKER_SHAPES: HeaderShapes = {
+  ios: IOS_ANY_MARKER_RE,
+  android12h: ANDROID_12H_ANY_MARKER_RE,
+  anyMarker: true,
+};
+
+/** The kind of header a chat's file is written in, plus the order of its dates. */
+interface ChatFormat {
+  kind: 'ios' | 'android' | 'android12h' | undefined;
+  /** For a 12-hour Android or an iPhone export: its dates are written day first. */
+  dayFirst: boolean;
+  /** Read with {@link ANY_MARKER_SHAPES}. */
+  anyMarker: boolean;
+}
+
+/** A two-digit year as `new Date` reads it: 00-49 are 20xx, 50-99 are 19xx. */
+function fullYear(year: number): number {
+  return year < 100 ? year + (year < 50 ? 2000 : 1900) : year;
+}
+
+/** Days since the epoch of a 12-hour Android date read one way or the other. */
+function androidDay(first: number, second: number, year: number, dayFirst: boolean): number {
+  const [day, month] = dayFirst ? [first, second] : [second, first];
+
+  return Date.UTC(fullYear(year), month - 1, day) / 86_400_000;
+}
+
+/**
+ * The kind of header a chat is written in, from its first header: an export
+ * is written in one kind throughout. In another kind of export a line in the
+ * new Android shapes is text someone pasted into a message. It is read the
+ * way it always was ({@link parseWALine}).
+ *
+ * The first header also picks the patterns. A file that starts in the strict
+ * shapes ({@link STRICT_SHAPES}) is read with them, as it always was, so a
+ * lowercase line pasted into it stays text. One that starts in a shape only
+ * {@link ANY_MARKER_SHAPES} reads is read with those, so a line pasted into it
+ * in the strict shapes doesn't decide how the whole chat is read.
+ *
+ * A 12-hour Android or an iPhone date doesn't say whether the day or the month
+ * comes first: `05/11/26, 9:31 PM` is May 11 on a US phone and November 5 on
+ * many others. Two things say which. One is the count of dates that read only
+ * one way: 14/11/26 can't be month first. The other is the closeness of the
+ * dates that read both ways: a chat from 05/11/26 to 07/11/26 spans two days
+ * read day first and two months read month first.
+ *
+ * A header pasted into a chat is one line against the chat's own, so the count
+ * decides when one side has at least two more dates than the other. A smaller
+ * lead can be one pasted line: a US chat from 1/3/26 to 1/10/26 with
+ * `[25/12/25 …]` pasted in counts one day-first date against none, but its
+ * own dates sit a week apart read month first and seven months apart read day
+ * first. So then the closeness decides. The lead of one decides only when the
+ * closeness says nothing. The closeness alone is wrong for a chat whose
+ * messages fall on the same day of each month: 03/01/25, 03/02/25 and
+ * 03/03/25 written day first sit a day apart read month first. That is why a
+ * clear count comes first.
+ *
+ * An iPhone export in the strict shapes was always read month first. It is
+ * read day first only when the count says so: by two or more, or by one with
+ * the closeness not against it. The closeness alone doesn't turn it around.
+ *
+ * A 12-hour Android export in the strict shapes keeps the rule its ids were
+ * saved with ({@link ParsedLine.idTime} reads its order). The first date with
+ * a number above 12 settles it. Until one does, the closeness decides. A file
+ * in which nothing decides is read month first, the US order.
+ *
+ * Reading stops at the header that settles a strict 12-hour Android file, or
+ * at a 24-hour Android header that comes first. Every other file is read to
+ * the end.
+ */
+async function chatFormat(chatPath: string): Promise<ChatFormat> {
+  const input = fs.createReadStream(chatPath, { encoding: 'utf8' });
+  const rl = readline.createInterface({ input, crlfDelay: Infinity });
+  let scan: FormatScan | undefined;
+
+  try {
+    for await (const line of rl) {
+      const cleaned = stripLeadingInvisible(line);
+
+      if (scan == null) {
+        if (
+          STRICT_SHAPES.ios.test(cleaned) ||
+          STRICT_SHAPES.android12h.test(cleaned) ||
+          ANDROID_RE.test(cleaned)
+        ) {
+          scan = new FormatScan(STRICT_SHAPES);
+        } else if (ANY_MARKER_SHAPES.ios.test(cleaned) || ANY_MARKER_SHAPES.android12h.test(cleaned)) {
+          scan = new FormatScan(ANY_MARKER_SHAPES);
+        } else {
+          continue;
+        }
+      }
+
+      scan.read(cleaned);
+
+      if (scan.settled) {
+        return scan.settled;
+      }
+    }
+  } finally {
+    rl.close();
+    input.destroy();
+  }
+
+  return scan?.result() ?? { kind: undefined, dayFirst: false, anyMarker: false };
+}
+
+/** {@link chatFormat} for one set of patterns, fed one line at a time. */
+class FormatScan {
+  private kind: 'ios' | 'android12h' | undefined;
+
+  /** The last date that reads both ways. */
+  private previous: [number, number, number] | undefined;
+
+  /** Days between one date that reads both ways and the next, added up read month first and read day first. */
+  private spanMonthFirst = 0;
+
+  private spanDayFirst = 0;
+
+  /** Dates that can only be day first. */
+  private dayFirstOnly = 0;
+
+  /** Dates that can only be month first. */
+  private monthFirstOnly = 0;
+
+  /** The format, once a line has settled it. */
+  settled: ChatFormat | undefined;
+
+  constructor(private readonly shapes: HeaderShapes) {}
+
+  /** Reads one line, its leading marks already stripped. */
+  read(cleaned: string): void {
+    if (this.settled) {
+      return;
+    }
+
+    const { anyMarker } = this.shapes;
+    let date: [number, number, number] | undefined;
+
+    if (this.kind !== 'ios') {
+      const m = this.shapes.android12h.exec(cleaned);
+
+      if (m) {
+        this.kind = 'android12h';
+        date = [Number(m[1]), Number(m[2]), Number(m[3])];
+      }
+    }
+
+    if (date == null && this.kind !== 'android12h') {
+      const m = this.shapes.ios.exec(cleaned);
+
+      if (m) {
+        this.kind = 'ios';
+        date = m[1].split('/').map(Number) as [number, number, number];
+      } else if (this.kind == null && ANDROID_RE.test(cleaned)) {
+        this.settled = { kind: 'android', dayFirst: false, anyMarker };
+
+        return;
+      }
+    }
+
+    if (date == null) {
+      return;
+    }
+
+    if (this.kind === 'android12h' && !anyMarker) {
+      // Its ids read the order, so the first date past the 12th settles it, as it always did.
+      if (date[1] > 12) {
+        this.settled = { kind: this.kind, dayFirst: false, anyMarker };
+
+        return;
+      }
+
+      if (date[0] > 12) {
+        this.settled = { kind: this.kind, dayFirst: true, anyMarker };
+
+        return;
+      }
+    } else if (date[0] > 12 || date[1] > 12) {
+      // Counted to the last line ({@link chatFormat}). A date past 12 both ways counts for neither.
+      if (date[1] <= 12) {
+        this.dayFirstOnly++;
+      } else if (date[0] <= 12) {
+        this.monthFirstOnly++;
+      }
+
+      return;
+    }
+
+    if (this.previous) {
+      this.spanMonthFirst += Math.abs(androidDay(...date, false) - androidDay(...this.previous, false));
+      this.spanDayFirst += Math.abs(androidDay(...date, true) - androidDay(...this.previous, true));
+    }
+
+    this.previous = date;
+  }
+
+  /** The format after the last line, or undefined when no line had a header in these patterns. */
+  result(): ChatFormat | undefined {
+    if (this.settled || this.kind == null) {
+      return this.settled;
+    }
+
+    const { anyMarker } = this.shapes;
+    // Each is day first (true), month first (false), or undefined when it doesn't say.
+    const lead = this.dayFirstOnly - this.monthFirstOnly;
+    const byCount = lead === 0 ? undefined : lead > 0;
+    const byClearCount = Math.abs(lead) >= 2 ? byCount : undefined;
+    const bySpan =
+      this.spanDayFirst === this.spanMonthFirst ? undefined : this.spanDayFirst < this.spanMonthFirst;
+    const dayFirst =
+      this.kind === 'ios' && !anyMarker
+        ? (byClearCount ?? (byCount === true && bySpan !== false))
+        : (byClearCount ?? bySpan ?? byCount ?? false);
+
+    return { kind: this.kind, dayFirst, anyMarker };
+  }
+}
+
+/** `Sender: message`, split at the first colon: how Android lines were always read. */
+const SENDER_RE = /^([^:]+):[ ]?([\s\S]*)$/;
+
+/** The same, except that a colon inside double quotes doesn't end the sender. */
+const QUOTED_SENDER_RE = /^((?:[^:"]|"[^"]*")+):[ ]?([\s\S]*)$/;
+
+interface Said {
+  sender: string;
+  text: string;
+}
+
+/** The text after an Android header split at its first colon ({@link SENDER_RE}), or null when it has none. */
+function firstColonSplit(rest: string): Said | null {
+  const m = SENDER_RE.exec(rest);
+
+  return m && { sender: m[1], text: m[2] };
+}
+
+/**
+ * The sender and text after an Android header, or null for a line WhatsApp
+ * wrote itself, which has no sender: `Robin Hale added Casey Moreno`.
+ * `firstColon` is `rest` split the old way ({@link firstColonSplit}).
+ *
+ * WhatsApp puts a group's name in double quotes in those lines. A name may
+ * hold a colon. Split at the first colon, `Robin Hale created group "Trip:
+ * Lisbon"` became a message from `Robin Hale created group "Trip`. So a colon
+ * inside quotes doesn't end the sender. When a line's quotes don't pair up,
+ * they can't be read that way and the first colon ends it, as before.
+ */
+function androidSender(rest: string, firstColon: Said | null): Said | null {
+  if (firstColon == null) {
+    return null;
+  }
+
+  if (firstColon.sender.includes('"') && rest.split('"').length % 2 === 1) {
+    const quoted = QUOTED_SENDER_RE.exec(rest);
+
+    return quoted && { sender: quoted[1], text: quoted[2] };
+  }
+
+  return firstColon;
+}
 
 // WhatsApp's iOS export prefixes many lines — overwhelmingly the ones
 // announcing an attachment or "omitted" media — with an invisible U+200E
@@ -99,33 +559,229 @@ function stripLeadingInvisible(line: string): string {
 
 interface ParsedLine {
   ts: Date | undefined;
+  /**
+   * What `new Date(…)` made of the header on this server, which is what
+   * {@link ParsedLine.ts} was before it moved to the account's zone. Only the
+   * message id uses it. The id carries a time, so an id built from `ts` would
+   * change for every message of a chat imported before. Importing a newer
+   * export of that chat (WhatsApp exports are cumulative) would then save every
+   * old message a second time. Changing the profile's zone later can't fork it
+   * either.
+   *
+   * It runs the old expression itself rather than re-reading the wall clock in
+   * `serverTimezone()`. The two disagree: a `TZ` that ICU can't name (such as
+   * `:/etc/localtime`) reports no zone, which `serverTimezone()` turns into UTC
+   * while `Date` still reads the host's clock. The repeated fall-back hour east
+   * of UTC also resolves the other way, so those ids would fork too.
+   *
+   * For the same reason a strict iPhone export written day first keeps the
+   * month first reading here, which is all the old code had: a date past the
+   * 12th leaves the id at `noTs`. Only {@link ParsedLine.ts} reads the file's
+   * own order.
+   */
+  idTime: Date | undefined;
+  /**
+   * For a file read with {@link ANY_MARKER_SHAPES}, the time its message ids
+   * carry instead of {@link ParsedLine.idTime}: the date as written and the
+   * clock on 24 hours ({@link writtenIdTime}).
+   */
+  idKey?: string;
   sender: string;
   text: string;
+  /**
+   * A line WhatsApp wrote itself, which an Android export writes with no
+   * sender (`14/11/2026, 10:02 - Robin Hale added Casey Moreno`). It is
+   * dropped along with the lines under it.
+   */
+  system?: boolean;
+  /**
+   * For a `system` line: the old pattern read it as a message, which took a
+   * sequence number. Only a day-first line with a colon in a quoted name was
+   * read that way. The others were added to the message before them or not
+   * read at all.
+   */
+  savedBefore?: boolean;
 }
 
-function parseWALine(line: string): ParsedLine | null {
+/** `d`, or undefined when it is an Invalid Date. */
+function dated(d: Date): Date | undefined {
+  return Number.isNaN(d.getTime()) ? undefined : d;
+}
+
+/**
+ * Out-of-range fields leave the line undated, with two edges. A day past a
+ * short month's end (2/30) rolls into the next month, as `new Date` did.
+ * `24:00`, which `new Date` read as the next day's midnight, is undated here.
+ * Neither appears in a real export.
+ */
+function validWallClock(w: WallClock): WallClock | undefined {
+  if (
+    w.month < 1 ||
+    w.month > 12 ||
+    w.day < 1 ||
+    w.day > 31 ||
+    w.hour > 23 ||
+    w.minute > 59 ||
+    w.second > 59
+  ) {
+    return undefined;
+  }
+
+  return w;
+}
+
+const IOS_TIME_RE = /^(\d{1,2}):(\d{2})(?::(\d{2}))?\s?([AP]M)?$/;
+
+/** A 12-hour clock's hour on 24 hours: 12 AM is 0 and 1 PM is 13. Without a marker it stays. */
+function hour24(hour: number, marker: string | undefined): number {
+  if (marker === 'PM' && hour < 12) {
+    return hour + 12;
+  }
+
+  if (marker === 'AM' && hour === 12) {
+    return 0;
+  }
+
+  return hour;
+}
+
+/** iOS `M/D/YY` (or `M/D/YYYY`) and `H:MM[:SS][ AM|PM]`. */
+function iosWallClock(date: string, time: string): WallClock | undefined {
+  const [month, day, rawYear] = date.split('/').map(Number);
+  const t = IOS_TIME_RE.exec(time.trim());
+
+  if (t == null) {
+    return undefined;
+  }
+
+  return validWallClock({
+    year: fullYear(rawYear),
+    month,
+    day,
+    hour: hour24(Number(t[1]), t[4]),
+    minute: Number(t[2]),
+    second: Number(t[3] ?? 0),
+  });
+}
+
+/** Android `DD/MM/YYYY` and `HH:MM`. */
+function androidWallClock(date: string, time: string): WallClock | undefined {
+  const [day, month, year] = date.split('/').map(Number);
+  const [hour, minute] = time.split(':').map(Number);
+
+  return validWallClock({ year, month, day, hour, minute, second: 0 });
+}
+
+/**
+ * One header line, with its time read in `accountZone`.
+ *
+ * Neither platform writes a zone or an offset: the times are what the phone's
+ * clock read. They used to go through `new Date(…)`, which reads them in the
+ * SERVER's zone. The same chat landed at different instants on different
+ * machines. In a UTC container a Pacific account's midnight New Year messages
+ * sat at 4 PM on Dec 31. The importer is told the account's zone
+ * (`ImportParams.timeZone`) and stores them there. Without one, the stored
+ * time stays the server's reading, the same instant the id carries. A
+ * day-first iPhone date is the exception: the id keeps the old month-first
+ * reading ({@link ParsedLine.idTime}).
+ *
+ * `format` is the file's own ({@link chatFormat}). A 12-hour header, or an
+ * Android header with no sender, is a header only in an Android export of its
+ * own kind. Anywhere else it is a line pasted into a message and stays part of
+ * that message, as it always did: reading it as a header would give every
+ * message after it a new id. A 12-hour export reads only its own headers. An
+ * iPhone or 24-hour line in one was pasted there too, and no 12-hour export was
+ * read before, so no id depends on reading it as a header.
+ */
+function parseWALine(line: string, accountZone: string | undefined, format: ChatFormat): ParsedLine | null {
   const cleaned = stripLeadingInvisible(line);
-  let m = IOS_RE.exec(cleaned);
-  if (m) {
-    const ts = new Date(`${m[1]} ${m[2]}`);
+  let wall: WallClock | undefined;
+  let idTime: Date | undefined;
+  let idKey: string | undefined;
+  // What `new Date` makes of the header read in the file's own date order. The
+  // stored time when the account has no zone.
+  let serverTime: Date | undefined;
+  let said: Said | null;
+  let rest = '';
+  let firstColon: Said | null = null;
+  const shapes = format.anyMarker ? ANY_MARKER_SHAPES : STRICT_SHAPES;
+  const twelveHour = format.kind === 'android12h';
+  const ios = twelveHour ? null : shapes.ios.exec(cleaned);
+  const android = twelveHour || ios ? null : ANDROID_RE.exec(cleaned);
+  const android12h = twelveHour ? shapes.android12h.exec(cleaned) : null;
 
-    return { ts: isNaN(ts.getTime()) ? undefined : ts, sender: m[3].trim(), text: m[4] };
+  if (ios) {
+    const date = format.kind === 'ios' && format.dayFirst ? monthFirst(ios[1]) : ios[1];
+    const time = format.anyMarker ? normalisedTime(ios[2]) : ios[2];
+
+    wall = iosWallClock(date, time);
+    serverTime = dated(new Date(`${date} ${time}`));
+    // The ids of a strict file read every date month first, as the old code
+    // did, so a day-first date past the 12th still gives `noTs`. Importing a
+    // newer export of a chat saved back then must find the same ids.
+    idTime = dated(new Date(`${ios[1]} ${ios[2]}`));
+    idKey = format.anyMarker ? writtenIdTime(ios[1], ios[2]) : undefined;
+    said = { sender: ios[3], text: ios[4] };
+  } else if (android) {
+    // DD/MM/YYYY as an ISO local date-time, exactly as the old code built it.
+    const [day, month, year] = android[1].split('/');
+
+    wall = androidWallClock(android[1], android[2]);
+    idTime = dated(new Date(`${year}-${month}-${day}T${android[2]}:00`));
+    // A 24-hour line pasted into an iPhone chat read with the new patterns:
+    // its id carries the time as written too, or it would follow the server's zone.
+    idKey = format.anyMarker ? writtenIdTime(android[1], android[2]) : undefined;
+    serverTime = idTime;
+    rest = android[3];
+    firstColon = firstColonSplit(rest);
+
+    if (format.kind !== 'android' && firstColon == null) {
+      return null;
+    }
+
+    said = format.kind === 'android' ? androidSender(rest, firstColon) : firstColon;
+  } else if (android12h) {
+    // As M/D/YY, the order the iPhone's dates are read in.
+    const [first, second, year, writtenTime] = android12h.slice(1, 5);
+    const written = `${first}/${second}/${year}`;
+    const date = format.dayFirst ? monthFirst(written) : written;
+    const time = format.anyMarker ? normalisedTime(writtenTime) : writtenTime;
+
+    wall = iosWallClock(date, time);
+    idTime = dated(new Date(`${date} ${time}`));
+    idKey = format.anyMarker ? writtenIdTime(written, writtenTime) : undefined;
+    serverTime = idTime;
+    rest = android12h[5];
+    said = androidSender(rest, firstColonSplit(rest));
+  } else {
+    return null;
   }
 
-  m = ANDROID_RE.exec(cleaned);
-  if (m) {
-    // Assume DD/MM/YYYY → YYYY-MM-DD
-    const parts = m[1].split('/');
-    const iso = `${parts[2]}-${parts[1]}-${parts[0]}T${m[2]}:00`;
-    const ts = new Date(iso);
+  const ts = accountZone == null ? serverTime : wall && wallClockToUTC(wall, accountZone);
 
-    return { ts: isNaN(ts.getTime()) ? undefined : ts, sender: m[3].trim(), text: m[4] };
+  if (said == null) {
+    // The old pattern read only day-first lines and split them at the first
+    // colon, so one of those with a colon was a message.
+    const savedBefore = android != null && firstColon != null;
+
+    return { ts, idTime, idKey, sender: '', text: rest, system: true, savedBefore };
   }
 
-  return null;
+  return { ts, idTime, idKey, sender: said.sender.trim(), text: said.text };
 }
 
 const SYSTEM_VERB_RE =
+  /^(Messages and calls are end-to-end encrypted|.+ (added|removed|left|created group|changed|deleted|updated))/i;
+
+/**
+ * The system-line pattern as it was used while the encryption notice was still
+ * saved: on the raw text, marker in front. Every marked line it missed was
+ * saved as a message and took a sequence number. `flush` reads it so such a
+ * line, dropped now, still takes that number and the ids after it stay where
+ * they were. A literal copy on purpose: when `SYSTEM_VERB_RE` learns another
+ * notice, this must not follow, or the ids would move again.
+ */
+const LEGACY_SYSTEM_VERB_RE =
   /^(Messages and calls are end-to-end encrypted|.+ (added|removed|left|created group|changed|deleted|updated))/i;
 
 /**
@@ -144,9 +800,15 @@ const SYSTEM_VERB_RE =
  * its own: it also sits on every `image omitted` placeholder and every
  * `<attached: …>` reference, which must be kept. So both conditions are
  * required, and each covers the other's failure.
+ *
+ * The verb pattern reads the text after the marker. Its notice alternative is
+ * anchored (`^Messages and calls…`), so with the marker still in front it
+ * never matched. Every iPhone export saved the encryption notice as a message
+ * from the other person, or in a group from the group. The `.+` alternative
+ * matched either way, because `.+` took the marker along with the name.
  */
 function isSystemLine(text: string): boolean {
-  return LEADING_INVISIBLE_RE.test(text) && SYSTEM_VERB_RE.test(text);
+  return LEADING_INVISIBLE_RE.test(text) && SYSTEM_VERB_RE.test(stripLeadingInvisible(text));
 }
 
 // Shared-location messages embed a maps link, e.g.
@@ -283,7 +945,9 @@ export class WhatsAppFileImporter implements FileImporter {
   }
 
   private async importChat(chatPath: string, params: ImportParams): Promise<void> {
-    const conversationName = conversationNameFrom(chatPath);
+    const format = await chatFormat(chatPath);
+    const conversationName =
+      conversationNameFrom(chatPath) ?? (await conversationNameFromTranscript(chatPath, format));
 
     // Attached media sits next to _chat.txt in the same export directory.
     const mediaDir = path.dirname(chatPath);
@@ -310,12 +974,22 @@ export class WhatsAppFileImporter implements FileImporter {
         return;
       }
 
-      if (isSystemLine(p.text)) {
+      if (p.system || isSystemLine(p.text)) {
         // Counted, not silent. The bare `return` here reported `dropped: 0` and
         // `reconciled: true` while discarding rows — and because it sits above
         // the attachment block, a photo whose caption tripped the old regex lost
         // its bytes with no record either.
         params.pipeline.drop?.('whatsapp_system_line');
+
+        // A line the old check let through (the iPhone encryption notice, an
+        // Android line with a colon in a quoted group name) was saved as a
+        // message and took a number. It still takes one. The ids after it end
+        // in that number: if they moved down by one, importing a chat that was
+        // imported back then would save every message in it a second time.
+        // No other Android system line ever took one.
+        if (p.system ? p.savedBefore : !LEGACY_SYSTEM_VERB_RE.test(p.text)) {
+          seq++;
+        }
 
         return;
       }
@@ -385,11 +1059,11 @@ export class WhatsAppFileImporter implements FileImporter {
 
       params.pipeline.push({
         item: {
-          id: `whatsapp:${conversationName}:${p.ts ? p.ts.toISOString() : 'noTs'}:${seq++}`,
+          id: `whatsapp:${conversationName}:${p.idKey ?? (p.idTime ? p.idTime.toISOString() : 'noTs')}:${seq++}`,
           classification: loc ? 'location' : 'message',
           timestamp: p.ts,
           ...(loc && { location: loc }),
-          content: { filename: '_chat.txt', mediaType: 'text/plain', data: async () => Buffer.from(p.text) },
+          content: textContent('_chat.txt', p.text),
           metadata: {
             Sender: p.sender,
             Conversation: conversationName,
@@ -410,8 +1084,10 @@ export class WhatsAppFileImporter implements FileImporter {
       });
     };
 
+    let unread = false;
+
     for await (const line of rl) {
-      const parsed = parseWALine(line);
+      const parsed = parseWALine(line, params.timeZone, format);
       if (parsed) {
         if (current) {
           flush(current);
@@ -420,11 +1096,19 @@ export class WhatsAppFileImporter implements FileImporter {
         current = parsed;
       } else if (current) {
         current.text += '\n' + line;
+      } else if (line.trim()) {
+        unread = true;
       }
     }
 
     if (current) {
       flush(current);
+    } else if (unread) {
+      // Not one line read as a header: the file is in a shape this parser
+      // doesn't know. Counted, so the run says so instead of finishing as a
+      // clean import of nothing.
+      total++;
+      params.pipeline.drop?.('whatsapp_no_header', path.basename(chatPath));
     }
 
     params.pipeline.consumed?.(total);

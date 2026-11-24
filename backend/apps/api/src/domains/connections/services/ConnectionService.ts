@@ -59,7 +59,7 @@ export class ConnectionService {
         }),
         active: true,
       },
-      relations: ['provider'],
+      relations: { provider: true },
     });
 
     return entities.map((entity) => ConnectionEntity.toEgressType(entity));
@@ -75,7 +75,7 @@ export class ConnectionService {
           },
         }),
       },
-      relations: ['provider'],
+      relations: { provider: true },
     });
 
     const map = new Map(entities.map((entity) => [entity.id, ConnectionEntity.toEgressType(entity)]));
@@ -93,7 +93,7 @@ export class ConnectionService {
           },
         }),
       },
-      relations: ['provider'],
+      relations: { provider: true },
     });
 
     return entity ? ConnectionEntity.toEgressType(entity) : null;
@@ -149,6 +149,36 @@ export class ConnectionService {
     return this.findById(context, id);
   }
 
+  /**
+   * Keep the redirect_uri a connection's OAuth authorization was sent with, for the code exchange
+   * that completes it ({@link Connection.oauthRedirectUri}).
+   */
+  async setOAuthRedirectUri(context: UserServiceContext, id: string, redirectUri: string): Promise<void> {
+    await this.connectionRepository.update(
+      { id, user: { id: context.userId } },
+      { oauthRedirectUri: redirectUri },
+    );
+  }
+
+  /**
+   * Whether an account other than `userId` has a connection (active or not) to the provider
+   * account `externalId` on `providerId`.
+   *
+   * For connectors where the provider account is a shared resource of the appliance rather than
+   * something each user signs in to: one signal-cli service can hold several numbers, and each
+   * number's messages belong to one person. Not scoped to the caller on purpose; it answers a
+   * yes/no about other accounts and returns nothing of theirs.
+   */
+  async externalAccountHeldByAnotherUser(
+    userId: string,
+    providerId: string,
+    externalId: string,
+  ): Promise<boolean> {
+    return this.connectionRepository.exists({
+      where: { providerId, externalId, userId: Not(userId) },
+    });
+  }
+
   async remove(context: ServiceContext, id: string): Promise<boolean> {
     const result = await this.connectionRepository.update(
       {
@@ -198,7 +228,7 @@ export class ConnectionService {
           },
         },
       ],
-      relations: ['user', 'provider'],
+      relations: { user: true, provider: true },
     });
 
     return entities.map((entity) => ({
@@ -219,7 +249,7 @@ export class ConnectionService {
 
     const entities = await this.connectionRepository.find({
       where: whereClause,
-      relations: ['provider'],
+      relations: { provider: true },
     });
 
     return entities.map((entity) => ConnectionEntity.toEgressType(entity));

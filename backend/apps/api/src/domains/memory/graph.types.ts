@@ -24,6 +24,9 @@ export const ENTITY_TYPES = [
   // it. Must satisfy the ci.entities CHECK `^[A-Z][A-Za-z]*$`.
   'Product',
   'Tag',
+  // A Facebook Page the user liked (TransformFacebookLikes). No CTI table and no
+  // per-type service, but ci.entities holds rows under this spelling.
+  'Organization',
 ] as const;
 
 export type EntityType = (typeof ENTITY_TYPES)[number];
@@ -103,6 +106,101 @@ export function graphNodeSourceRef(node: {
   const id = mapping.origin === 'entity' ? node.entity_id : node.linked_id;
 
   return id ? { type: mapping.resourceType, id } : null;
+}
+
+/** `valid_entity_type`, the CHECK on `ci.entities.entity_type`: letters only, a capital first. */
+const STORABLE_ENTITY_TYPE = /^[A-Z][A-Za-z]*$/;
+
+/** Each type in {@link ENTITY_TYPES}, under its lower-cased spelling. */
+const KNOWN_ENTITY_TYPES = new Map<string, EntityType>(
+  ENTITY_TYPES.map((type) => [type.toLowerCase(), type]),
+);
+
+/**
+ * The spelling `ci.entities` stores a graph type under. A type in {@link ENTITY_TYPES} comes back
+ * in its own spelling whatever case and surrounding whitespace it arrived in — `person` is
+ * `Person`, ` PLACE ` is `Place` — and any other type comes back exactly as given: a model may name
+ * a type the graph has never held, and picking a spelling for it is not this function's call.
+ *
+ * The spelling is not cosmetic. `valid_entity_type` refuses a lower-case first letter outright, so
+ * a `person` write fails the statement. A `PERSON` one is stored, and is then invisible to
+ * PersonService, whose TypeORM STI child repository matches `entity_type = 'Person'` exactly, as do
+ * the person search sweeps. `entities_linked_uniq` and an importer's upsert coordinate compare the
+ * type byte for byte, so a `PERSON` also lands beside a `Person` twin on the same linked key.
+ */
+export function canonicalEntityType(type: string): string {
+  return KNOWN_ENTITY_TYPES.get(type.trim().toLowerCase()) ?? type;
+}
+
+/** Whether `ci.entities` can store this spelling at all (`valid_entity_type`). */
+export function isStorableEntityType(type: string): boolean {
+  return STORABLE_ENTITY_TYPE.test(type);
+}
+
+/**
+ * Whether `requested` names the type `stored` already is: in another case (`person` for a
+ * Person), or as another name for it (`contact` for a Person, `place` for a Location, `thing` for
+ * an Item). Two graph types name the same thing when their nodes stand for the same kind of record
+ * in {@link GRAPH_TYPE_TO_SOURCE}, which groups them exactly as `GRAPH_TYPE_ALIASES` in
+ * `@ci/common/embeddings` does for search.
+ *
+ * A write that names the stored type this way is not a retype. `entity_type` is half the coordinate
+ * an importer upserts on, so turning an imported Location into a Place detaches it and the next
+ * import mints a second one beside it. A Person turned into a Contact also drops out of
+ * PersonService.
+ */
+export function sameEntityType(stored: string, requested: string): boolean {
+  const storedType = canonicalEntityType(stored);
+  const requestedType = canonicalEntityType(requested);
+
+  if (storedType.trim().toLowerCase() === requestedType.trim().toLowerCase()) {
+    return true;
+  }
+
+  const storedKind = GRAPH_TYPE_TO_SOURCE[storedType];
+  const requestedKind = GRAPH_TYPE_TO_SOURCE[requestedType];
+
+  return Boolean(storedKind && requestedKind && storedKind.resourceType === requestedKind.resourceType);
+}
+
+/**
+ * The kinds of node that ARE a `ci.entities` row, with no detail table behind them: a Person, a
+ * Place and a Concept. They are the ones `memory.forget` purges through `PersonService`,
+ * `PlaceService` and `ConceptService`, and the ones `ci.entity_identifiers` can resolve to.
+ */
+export type GraphEntityKind = 'person' | 'place' | 'concept';
+
+function entityTypesOf(resourceType: GraphEntityKind): string[] {
+  return Object.entries(GRAPH_TYPE_TO_SOURCE)
+    .filter(([, source]) => source.origin === 'entity' && source.resourceType === resourceType)
+    .map(([type]) => type);
+}
+
+/**
+ * Every `entity_type` spelling that stands for each {@link GraphEntityKind}, read off
+ * {@link GRAPH_TYPE_TO_SOURCE} so a spelling cannot be added there and missed here. A person is a
+ * `Person` or a `Contact`; a place is a `Location` (what the geocoder mints) or a `Place` (what
+ * `memory.remember` writes); a concept is a `Concept`.
+ */
+export const GRAPH_ENTITY_TYPES: Readonly<Record<GraphEntityKind, readonly string[]>> = {
+  person: entityTypesOf('person'),
+  place: entityTypesOf('place'),
+  concept: entityTypesOf('concept'),
+};
+
+/** Which {@link GraphEntityKind} a stored `entity_type` is, or `null` for any other node. */
+export function graphEntityKindOf(entityType: string | null | undefined): GraphEntityKind | null {
+  if (entityType == null) {
+    return null;
+  }
+
+  for (const kind of Object.keys(GRAPH_ENTITY_TYPES) as GraphEntityKind[]) {
+    if (GRAPH_ENTITY_TYPES[kind].includes(entityType)) {
+      return kind;
+    }
+  }
+
+  return null;
 }
 
 /**

@@ -3,6 +3,7 @@ import { rm } from 'node:fs/promises';
 
 import { DataSource } from 'typeorm';
 
+import type { EventService } from '@ci/domains/events';
 import { EntityIdentifierEntity, NodeEntity, RelationshipEntity } from '@ci/domains/graph';
 
 import { SYNTHETIC_TEST_USER_DOMAIN, syntheticTestUserEmail } from '../../../__tests__/support/applianceUser';
@@ -51,32 +52,37 @@ export const importDatabase = databaseAvailability(IMPORT_DATABASE_ENV);
  * Remove the inbox folder the appliance scaffolds for a synthetic user.
  *
  * These suites never touch the real inbox themselves, but the API does it for
- * them: it provisions `<inboxRoot>/<email>` for EVERY `ci.users` row — at boot
+ * them: it provisions `<inboxRoot>/<user id>` for EVERY `ci.users` row — at boot
  * and on user-created events (`ImportInboxService.onModuleInit`,
  * `InboxProvisionListener`) — so a dev server running alongside a test run
  * scaffolds folders for the harness's users. Deleting the row does not delete
- * the folder, and `import-harness-*_example.invalid` litter accumulated in the
- * real inbox until teardown learned to sweep it. Best-effort by nature: the
- * folder only exists if the server provisioned while the row did, and a server
- * that boots mid-teardown can still recreate it a beat later.
+ * the folder, and that litter accumulated in the real inbox until teardown
+ * learned to sweep it. Best-effort by nature: the folder only exists if the
+ * server provisioned while the row did, and a server that boots mid-teardown
+ * can still recreate it a beat later.
  *
- * Guarded to synthetic addresses because this is a recursive delete under a
- * shared mount whose other folders are real accounts' drop targets.
+ * Takes the id (the folder is keyed on it now) and the email, and refuses a
+ * non-synthetic address: this is a recursive delete under a shared mount whose
+ * other folders are real accounts' drop targets.
  */
-export async function removeSyntheticUserInbox(email: string): Promise<void> {
+export async function removeSyntheticUserInbox(userId: string, email: string): Promise<void> {
   if (!email.endsWith(`@${SYNTHETIC_TEST_USER_DOMAIN}`)) {
     throw new Error(`Refusing to remove the inbox folder of a non-synthetic address: ${email}`);
   }
 
-  await rm(userInboxDir(email), { recursive: true, force: true });
+  await rm(userInboxDir(userId), { recursive: true, force: true });
 }
 
 export interface StagingHarness {
   dataSource: DataSource;
   service: ImportRunService;
   stagedSources: StagedSourceService;
-  /** Records what {@link ImportRunService} enqueued, in place of a real queue. */
-  events: { send: jest.Mock };
+  /**
+   * Records what {@link ImportRunService} enqueued, in place of a real queue —
+   * unless the suite handed the harness a real event service, in which case
+   * this stub is unused.
+   */
+  events: { send: jest.Mock; getJob: jest.Mock; failJob: jest.Mock };
   userId: string;
   /** Stage a drop the way the upload endpoint would, and return its dropId. */
   stageDrop(filename?: string): Promise<string>;
@@ -98,8 +104,13 @@ export interface StagingHarness {
  *
  * A reachable database MISSING `ci_import` fails loudly, naming the command that
  * fixes it: a missing migration must never read as a passing test.
+ *
+ * `eventService` swaps the queue stub for a real one — the orphan-recovery
+ * spec hands in a `PGBossEventService` on a private pg-boss schema, because
+ * what it asserts is pg-boss's own behaviour. Everything else stays shared,
+ * cleanup included.
  */
-export async function createStagingHarness(): Promise<{
+export async function createStagingHarness(options: { eventService?: EventService } = {}): Promise<{
   harness: StagingHarness;
   teardown: () => Promise<void>;
 }> {
@@ -169,14 +180,33 @@ export async function createStagingHarness(): Promise<{
       log: jest.fn(),
       warn: jest.fn(),
       debug: jest.fn(),
+      error: jest.fn(),
     }) as never;
 
-  const events = { send: jest.fn(async () => undefined) };
+  const events = {
+    send: jest.fn(async () => undefined),
+    // This stub has no queue, so it cannot say what became of a job — and it
+    // REFUSES to, rather than answering "no such job". The difference matters
+    // because every suite on this database shares one appliance-wide sweep:
+    // `reclaimOrphanedStages` asks about a stage's job before it touches the
+    // stage, and "no such job" would send a sibling suite's sweep off to
+    // re-queue a stage that the orphan-recovery spec is holding against a REAL
+    // pg-boss. A refusal is caught and logged per stage, and leaves it alone.
+    getJob: jest.fn(async () => {
+      throw new Error('the staging harness has no queue to look a job up in');
+    }),
+    failJob: jest.fn(async () => false),
+  };
   // A REAL StagedSourceService over the same connection: the spine specs assert
   // claim/consume/release transitions, and a mock would agree with whatever
   // the spec author believed.
   const stagedSources = new StagedSourceService(dataSource.getRepository(StagedSourceEntity), stubLogger());
-  const service = new ImportRunService(dataSource, events as never, stagedSources, stubLogger());
+  const service = new ImportRunService(
+    dataSource,
+    (options.eventService ?? events) as never,
+    stagedSources,
+    stubLogger(),
+  );
 
   const userId = randomUUID();
   const userEmail = syntheticTestUserEmail('import-harness', userId);
@@ -293,7 +323,10 @@ export async function createStagingHarness(): Promise<{
 
     // Whatever the push stage resolved into `ci.*` belongs to this harness user
     // alone, so it goes with them. Entities before identifiers and the user
-    // last: both reference what precedes them.
+    // last: both reference what precedes them. The push makes the owner's self
+    // Person when the account has none and points `ci.users.entity_id` at it, so
+    // that pointer is cleared first or the entity delete trips the foreign key.
+    await attempt(`UPDATE ci.users SET entity_id = NULL WHERE id = $1::uuid`, [userId]);
     await attempt(`DELETE FROM ci.entity_identifiers WHERE owner_user_id = $1::uuid`, [userId]);
     await attempt(`DELETE FROM ci.entities WHERE owner_user_id = $1::uuid`, [userId]);
     await attempt(`DELETE FROM ci.users WHERE id = $1::uuid`, [userId]);
@@ -301,7 +334,7 @@ export async function createStagingHarness(): Promise<{
     // The row is gone; the inbox folder a running server scaffolded for it is
     // not, and nothing else will ever remove it (see removeSyntheticUserInbox).
     try {
-      await removeSyntheticUserInbox(userEmail);
+      await removeSyntheticUserInbox(userId, userEmail);
     } catch (err: unknown) {
       failures.push(err);
     }

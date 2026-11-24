@@ -40,6 +40,11 @@ class OutboxDatabaseKey(
      * time. [databaseFile] is consulted only to tell "first run" apart from "the key vanished
      * out from under an existing database", which are the same code path but very different
      * events.
+     *
+     * Only [SecureStoreDecryptionException] means the key is gone. A keystore that merely could
+     * not be used right now -- [SecureStoreUnavailableException], which is also what a
+     * transient failure becomes once [CompanionSecureStore] has retried it -- propagates
+     * untouched: the caller fails this attempt and the next one reads the same key.
      */
     fun rawKeySpec(databaseFile: File): String {
         val stored = try {

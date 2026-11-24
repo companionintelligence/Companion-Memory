@@ -1,7 +1,7 @@
 import { Field, Float, Int, ObjectType } from '@nestjs/graphql';
-import GraphQLJSONObject from 'graphql-type-json';
 
 import type { MetricAnomaly, MetricCorrelation, MetricSuggestion } from '@ci/domains/daily-metrics';
+import { GraphQLJSONObject } from '@ci/domains/graphql/scalars/JsonObjectScalar';
 
 @ObjectType({
   description:

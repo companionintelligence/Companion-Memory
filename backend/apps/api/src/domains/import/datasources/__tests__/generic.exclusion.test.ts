@@ -12,14 +12,14 @@
  * specialised parser had already read.
  */
 import fs from 'node:fs';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 
+import { tempDirsRemovedAfterEach } from '../../__tests__/support/tempDirs';
 import { dropGenericWhenSpecialised } from '../../stages/ParseStage';
 import { FacebookFileImporter } from '../facebook';
 import { allDataSources } from '../registry';
 import type { DataSourceRecognition, DirEntry } from '../registry';
-import type { ImportParams } from '../timeline';
+import { MEDIA_STORE_DIRNAME, type ImportParams } from '../timeline';
 import '../generic';
 
 import type { EmittedGraph } from './support/emitted';
@@ -49,9 +49,7 @@ async function runGeneric(root: string, excludePaths?: readonly string[]) {
   return pipeline.map((g) => path.relative(root, g.item.intermediateLocation as string));
 }
 
-async function mkdtemp(prefix: string): Promise<string> {
-  return fs.promises.mkdtemp(path.join(tmpdir(), prefix));
-}
+const { make: tempDir } = tempDirsRemovedAfterEach();
 
 async function writeFiles(dir: string, relPaths: string[]): Promise<void> {
   for (const rel of relPaths) {
@@ -63,7 +61,7 @@ async function writeFiles(dir: string, relPaths: string[]): Promise<void> {
 
 describe('GenericFileImporter — exclusion-aware walk', () => {
   it('walks every file when no exclusion is given (baseline, unchanged)', async () => {
-    const root = await mkdtemp('generic-excl-baseline-');
+    const root = await tempDir('generic-excl-baseline-');
     await writeFiles(root, ['a.txt', 'sub/b.txt']);
 
     const staged = await runGeneric(root);
@@ -71,8 +69,26 @@ describe('GenericFileImporter — exclusion-aware walk', () => {
     expect(staged.sort()).toEqual(['a.txt', 'sub/b.txt']);
   });
 
+  it("skips Synology's @eaDir thumbnails and the litter Windows leaves in a folder", async () => {
+    // A Synology Photos folder copied off the NAS: DSM keeps two thumbnails per
+    // photo under @eaDir, and each used to land as an extra, undated photo.
+    const root = await tempDir('generic-excl-nas-');
+    await writeFiles(root, [
+      '2026-10 Hallstatt/DSC01201.JPG',
+      '2026-10 Hallstatt/@eaDir/DSC01201.JPG/SYNOPHOTO_THUMB_M.jpg',
+      '2026-10 Hallstatt/@eaDir/DSC01201.JPG/SYNOPHOTO_THUMB_XL.jpg',
+      '2026-10 Hallstatt/Thumbs.db',
+      '2026-10 Hallstatt/desktop.ini',
+      'album notes.txt',
+    ]);
+
+    const staged = await runGeneric(root);
+
+    expect(staged.sort()).toEqual(['2026-10 Hallstatt/DSC01201.JPG', 'album notes.txt']);
+  });
+
   it('skips every file under an excluded subtree, staging what is outside it', async () => {
-    const root = await mkdtemp('generic-excl-basic-');
+    const root = await tempDir('generic-excl-basic-');
     await writeFiles(root, ['claimed/one.json', 'claimed/deep/two.json', 'loose.pdf']);
 
     const staged = await runGeneric(root, [path.join(root, 'claimed')]);
@@ -85,7 +101,7 @@ describe('GenericFileImporter — exclusion-aware walk', () => {
     // `parseOne`), so `startPath === entry.fullPath` is the common case, not
     // an edge case — a claim spanning the whole thing generic was asked to
     // walk must stop it before `fs.statSync` even runs, not just prune deeper.
-    const root = await mkdtemp('generic-excl-whole-');
+    const root = await tempDir('generic-excl-whole-');
     await writeFiles(root, ['a.txt']);
 
     const staged = await runGeneric(root, [root]);
@@ -109,7 +125,7 @@ describe('GenericFileImporter — exclusion-aware walk', () => {
    * the unfixed gate.
    */
   it('lets a loose file next to a recognized Facebook export reach generic, while the export itself does not get re-staged', async () => {
-    const root = await mkdtemp('generic-excl-facebook-');
+    const root = await tempDir('generic-excl-facebook-');
     // Bare `messages/` with nothing else -- facebook.ts's 0.6-confidence branch,
     // the audit's specific weak-signal case.
     await writeFiles(root, [
@@ -163,7 +179,7 @@ describe('GenericFileImporter — exclusion-aware walk', () => {
    * first attempt at this gate introduced).
    */
   it('does not re-stage multiple claimed subtrees, and still stages the genuinely unclaimed one', async () => {
-    const root = await mkdtemp('generic-excl-takeout-');
+    const root = await tempDir('generic-excl-takeout-');
     const voiceFiles = Array.from({ length: 25 }, (_, i) => `Takeout/Voice/Calls/call_${i}.json`);
     const photosFiles = Array.from({ length: 25 }, (_, i) => `Takeout/Google Photos/IMG_${i}.jpg`);
     await writeFiles(root, [
@@ -220,7 +236,7 @@ describe('GenericFileImporter — exclusion-aware walk', () => {
    * irrelevant to how much work the walk does.
    */
   it('prunes an excluded subtree without opening it, regardless of how many files it holds', async () => {
-    const root = await mkdtemp('generic-excl-scale-');
+    const root = await tempDir('generic-excl-scale-');
     const manyFiles = Array.from({ length: 300 }, (_, i) => `claimed/deep/nested/file_${i}.json`);
     await writeFiles(root, [...manyFiles, 'loose.txt']);
 
@@ -237,5 +253,28 @@ describe('GenericFileImporter — exclusion-aware walk', () => {
     expect(openedDirs).toEqual([root]);
 
     readdirSpy.mockRestore();
+  });
+});
+
+describe('GenericFileImporter — the run media store', () => {
+  /**
+   * The bytes an importer materialises during a run (MMS parts, retained DM
+   * media, iMessage downloads) live in `MEDIA_STORE_DIRNAME` under the scratch
+   * tree generic walks last. They are attachments of messages that importer
+   * already staged, and the attachment lane carries them; staged again here
+   * they became standalone photos whose EXIF GPS put the USER wherever the
+   * sender was. No exclusion is passed: the dot name alone must keep them out.
+   */
+  it('never stages what the specialised importers wrote into the media store', async () => {
+    const root = await tempDir('generic-media-store-');
+    await writeFiles(root, [
+      path.join(MEDIA_STORE_DIRNAME, 'mms-media-1763026415000-0-964bd285245f.jpeg'),
+      path.join(MEDIA_STORE_DIRNAME, 'bluebubbles-attachments', 'guid', 'IMG_0001.heic'),
+      'backup.xml',
+    ]);
+
+    const staged = await runGeneric(root);
+
+    expect(staged).toEqual(['backup.xml']);
   });
 });

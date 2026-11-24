@@ -15,7 +15,7 @@ from pydantic_ai.exceptions import ModelHTTPError, UnexpectedModelBehavior
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from .config import resolve_llm_model, settings
+from .config import resolve_llm_model, resolve_output_mode, settings
 from .summarizer import (
     ActionsResponse,
     DailySummaryResponse,
@@ -206,16 +206,19 @@ def create_llm_config() -> LLMConfig:
     This is a pure factory function that creates the configuration
     based on settings. It's called once when the worker starts.
     """
+    # Configured (Hub-injected) model, else discovered from the endpoint. First,
+    # because it raises until there is one and a client built before it would leak.
+    model_name = resolve_llm_model()
+
     # Create HTTP client with long timeout for LLM calls
     http_client = httpx.AsyncClient(timeout=180.0)
 
-    # Create model pointing to self-hosted endpoint. The model name is the
-    # configured (Hub-injected) one, else discovered from the endpoint.
+    # Create model pointing to self-hosted endpoint.
     # Qwen3.x thinks by default. A dossier/insights call with thinking on
     # occupies vLLM's tiny `--max-num-seqs` budget for minutes and starves
     # interactive chat. Accoutrements do not need a reasoning trace.
     model = OpenAIChatModel(
-        resolve_llm_model(),
+        model_name,
         provider=OpenAIProvider(
             base_url=settings.llm_api_base,
             api_key=settings.llm_api_key,
@@ -240,7 +243,7 @@ def create_llm_config() -> LLMConfig:
     # Prompted-mode fallbacks (see LLMConfig docstring). Skipped when prompted
     # is already the configured mode — there is nothing left to fall back to.
     prompted_agents = {}
-    if (settings.output_mode or "native").lower() != "prompted":
+    if resolve_output_mode() != "prompted":
         prompted_agents = {
             name: Agent(
                 model,
@@ -322,7 +325,7 @@ def run_agent_sync(
         logger.error(
             "structured_output_failed_falling_back_to_prompted",
             agent=agent_name,
-            output_mode=settings.output_mode,
+            output_mode=resolve_output_mode(),
             error=str(exc),
             error_type=type(exc).__name__,
         )

@@ -1,3 +1,9 @@
+import {
+  buildAuditMerkleProof,
+  computeAuditMerkleRoot,
+  computeAuditSaid,
+  verifyAuditMerkleProof,
+} from '../auditSaid';
 import { AskAuditEntity } from '../entities/AskAuditEntity';
 import type { AskQuery, RecordAskAuditDto } from '../types';
 
@@ -126,5 +132,153 @@ describe('AskAuditEntity.toEgressType', () => {
     } as AskAuditEntity;
 
     expect(AskAuditEntity.toEgressType(entity).disclosedCount).toBe(7);
+  });
+});
+
+describe('AskAuditService SAID anchoring', () => {
+  it('computes and verifies deterministic CESR I SAID for an audit record', () => {
+    const { service } = makeService();
+    const payload = dto({
+      askId: 'ask-1',
+      askerUserId: 'asker-1',
+      disclosedEntities: ['doc-1', 'doc-2'],
+      disclosedCount: 2,
+    });
+
+    const said = service.computeSaid(payload);
+    expect(said).toBeDefined();
+    expect(said).toMatch(/^I[A-Za-z0-9_-]{43}$/);
+
+    expect(service.verifySaid(payload, said)).toBe(true);
+
+    // Tampered payload fails verification
+    const tampered = { ...payload, disclosedCount: 99 };
+    expect(service.verifySaid(tampered, said)).toBe(false);
+  });
+
+  it('computes identical CESR I SHA2-256 SAIDs regardless of object key order and preserves Unicode', () => {
+    const a: RecordAskAuditDto = {
+      askId: 'ask-jcs-1',
+      askerUserId: 'asker-1',
+      responderUserId: 'responder-1',
+      query: { queryType: 'notes', prompt: 'café résumé 日本語' },
+      outcome: 'answered',
+      disclosedEntities: ['e1'],
+      disclosedCount: 1,
+    };
+    const b: RecordAskAuditDto = {
+      outcome: 'answered',
+      disclosedCount: 1,
+      disclosedEntities: ['e1'],
+      query: { prompt: 'café résumé 日本語', queryType: 'notes' },
+      responderUserId: 'responder-1',
+      askerUserId: 'asker-1',
+      askId: 'ask-jcs-1',
+    };
+
+    const saidA = computeAuditSaid(a);
+    const saidB = computeAuditSaid(b);
+    expect(saidA).toMatch(/^I[A-Za-z0-9_-]{43}$/);
+    expect(saidA).toBe(saidB);
+  });
+
+  it('computes and verifies Merkle batch anchoring proofs for odd/even batch sizes and rejects tampered proofs', () => {
+    const { service } = makeService();
+    expect(computeAuditMerkleRoot([])).toBeNull();
+
+    for (const batchSize of [1, 2, 3, 5, 7]) {
+      const saids = Array.from({ length: batchSize }, (_, idx) =>
+        service.computeSaid(
+          dto({ askId: `ask-${batchSize}-${idx}`, disclosedEntities: [`e-${idx}`], disclosedCount: 1 }),
+        ),
+      );
+      const root = computeAuditMerkleRoot(saids);
+      expect(root).toMatch(/^I[A-Za-z0-9_-]{43}$/);
+
+      for (let i = 0; i < saids.length; i += 1) {
+        const proof = buildAuditMerkleProof(saids, i);
+        expect(verifyAuditMerkleProof(saids[i]!, proof, root!)).toBe(true);
+        expect(verifyAuditMerkleProof('I0000000000000000000000000000000000000000000', proof, root!)).toBe(
+          false,
+        );
+        expect(verifyAuditMerkleProof('not-a-said', proof, root!)).toBe(false);
+        if (proof.length > 0) {
+          // Index 0 always pairs with a distinct sibling when batchSize >= 2
+          if (i === 0) {
+            const flipped = [
+              {
+                ...proof[0]!,
+                position: (proof[0]!.position === 'left' ? 'right' : 'left') as 'left' | 'right',
+              },
+              ...proof.slice(1),
+            ];
+            expect(verifyAuditMerkleProof(saids[i]!, flipped, root!)).toBe(false);
+          }
+
+          expect(
+            verifyAuditMerkleProof(
+              saids[i]!,
+              [{ position: 'middle' as 'left', digest: proof[0]!.digest }],
+              root!,
+            ),
+          ).toBe(false);
+        }
+      }
+    }
+
+    const three = ['a', 'b', 'c'].map((id) => service.computeSaid(dto({ askId: id })));
+    expect(() => buildAuditMerkleProof(three, -1)).toThrow(RangeError);
+    expect(() => buildAuditMerkleProof(three, 1.5)).toThrow(RangeError);
+    expect(() => buildAuditMerkleProof(three, 3)).toThrow(RangeError);
+    expect(() => buildAuditMerkleProof(three, Number.NaN)).toThrow(RangeError);
+  });
+
+  it('builds and verifies ISO/IEC TS 27560 + DPV v2 consent receipts', () => {
+    const { service } = makeService();
+    const payload = dto({
+      askId: 'ask-consent-1',
+      consentBasis: 'owner_approved',
+      peerHandle: 'alice@example.ts.net',
+      responderUserId: 'user-owner-1',
+      disclosedEntities: ['doc-1'],
+      disclosedCount: 1,
+    });
+
+    const receipt = service.buildConsentReceipt(payload, { issuedAt: '2026-11-11T23:00:00.000Z' });
+    expect(receipt.schemaVersion).toBe('iso-27560:2023+dpv:v2');
+    expect(receipt.legalBasis).toBe('dpv:ExplicitConsent');
+    expect(receipt.purposes).toContain('dpv:RequestedServiceProvision');
+    expect(receipt.d).toMatch(/^I[A-Za-z0-9_-]{43}$/);
+    expect(service.verifyConsentReceipt(receipt)).toBe(true);
+
+    expect(service.verifyConsentReceipt({ ...receipt, disclosedCount: 99 })).toBe(false);
+  });
+
+  it('scopes findByIdForResponder to both audit id and responder userId', async () => {
+    const entity = new AskAuditEntity();
+    entity.id = '11111111-1111-4111-8111-111111111111';
+    entity.askId = '22222222-2222-4222-8222-222222222222';
+    entity.askerUserId = 'asker-1';
+    entity.responderUserId = 'responder-1';
+    entity.peerLinkId = null;
+    entity.peerHandle = null;
+    entity.query = QUERY;
+    entity.disclosedEntities = [];
+    entity.disclosedCount = 2;
+    entity.consentBasis = 'owner_approved';
+    entity.outcome = 'answered';
+    entity.createdAt = new Date('2026-11-12T00:00:00Z');
+
+    const findOne = jest.fn().mockResolvedValue(entity);
+    const service = new AskAuditService({ findOne } as never, { setContext: jest.fn() } as never);
+
+    const found = await service.findByIdForResponder({ userId: 'responder-1' }, entity.id);
+    expect(findOne).toHaveBeenCalledWith({
+      where: { id: entity.id, responderUserId: 'responder-1' },
+    });
+    expect(found?.disclosedCount).toBe(2);
+
+    findOne.mockResolvedValueOnce(null);
+    expect(await service.findByIdForResponder({ userId: 'other-user' }, entity.id)).toBeNull();
   });
 });

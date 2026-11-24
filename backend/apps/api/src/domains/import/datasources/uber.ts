@@ -14,14 +14,16 @@
  * Trip column reads go through `pick()` which tries both name styles, so one code
  * path serves both trip schemas. */
 import fs from 'node:fs';
-import { open, readdir, stat as fsStat } from 'node:fs/promises';
+import { stat as fsStat } from 'node:fs/promises';
 import path from 'node:path';
 
-import { parseCSV } from './csv';
+import { listFiles } from './fsWalk';
+import { readCsvFile } from './readers';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
+import { readHead } from './sniff';
 import type { ImportParams, LineItemRecord, Relationship } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 // First non-empty value among the candidate column names (new + legacy styles).
 function pick(row: Record<string, string>, ...keys: string[]): string {
@@ -88,32 +90,7 @@ const EATS_FILE_RE = /^user_orders(-\d+)?\.csv$/i;
 // Recursively collect every CSV matching `re` under a directory (bounded depth;
 // Uber exports are small and nest files at Uber Data/<Rider|Eats>/<file>).
 async function findCsvFiles(root: string, re: RegExp, maxDepth = 6): Promise<string[]> {
-  const out: string[] = [];
-  const walk = async (dir: string, depth: number): Promise<void> => {
-    if (depth > maxDepth) {
-      return;
-    }
-
-    let entries: fs.Dirent[];
-    try {
-      entries = await readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-
-    for (const e of entries) {
-      const full = path.join(dir, e.name);
-      if (e.isDirectory()) {
-        await walk(full, depth + 1);
-      } else if (e.isFile() && re.test(e.name)) {
-        out.push(full);
-      }
-    }
-  };
-
-  await walk(root, 0);
-
-  return out.sort();
+  return (await listFiles(root, { maxDepth, match: (name) => re.test(name) })).sort();
 }
 
 export class UberFileImporter implements FileImporter {
@@ -166,19 +143,9 @@ export class UberFileImporter implements FileImporter {
   }
 
   private async headerMatches(fpath: string): Promise<boolean> {
-    try {
-      const fh = await open(fpath, 'r');
-      try {
-        const buf = Buffer.alloc(4096);
-        const { bytesRead } = await fh.read(buf, 0, 4096, 0);
+    const head = await readHead(fpath);
 
-        return headerHasTripCols(buf.toString('utf8', 0, bytesRead));
-      } finally {
-        await fh.close().catch(() => {});
-      }
-    } catch {
-      return false;
-    }
+    return head != null && headerHasTripCols(head);
   }
 
   async fileImport(_ctx: unknown, entry: DirEntry, params: ImportParams): Promise<void> {
@@ -222,21 +189,8 @@ export class UberFileImporter implements FileImporter {
 
   private async processTripsFile(fpath: string, params: ImportParams): Promise<void> {
     const base = path.basename(fpath);
-    let raw: string;
-    try {
-      raw = await fs.promises.readFile(fpath, 'utf8');
-    } catch (e) {
-      params.log?.('error', `Failed to read ${base}`, { error: (e as Error).message });
-
-      return;
-    }
-
-    let rows: Record<string, string>[];
-    try {
-      rows = parseCSV(raw);
-    } catch (e) {
-      params.log?.('error', `Failed to parse ${base}`, { error: (e as Error).message });
-
+    const rows = await readCsvFile(fpath, { log: params.log });
+    if (rows == null) {
       return;
     }
 
@@ -357,7 +311,7 @@ export class UberFileImporter implements FileImporter {
         // The event is anchored where the ride began, or — failing that — where
         // it was requested from, which is within a block of it.
         ...((pickup ?? request) ? { location: pickup ?? request } : {}),
-        content: { filename: 'trip.txt', mediaType: 'text/plain', data: async () => Buffer.from(summary) },
+        content: textContent('trip.txt', summary),
         metadata: {
           Title: title,
           City: city || undefined,
@@ -437,7 +391,7 @@ export class UberFileImporter implements FileImporter {
         classification: 'location',
         timestamp: ts,
         location: coords,
-        content: { filename: 'position.txt', mediaType: 'text/plain', data: async () => Buffer.from(body) },
+        content: textContent('position.txt', body),
         metadata: {
           // `Title` and `Name` are both read as the fix's PLACE NAME
           // (push/inputs.ts toPositionInput, via titleFor's location.fix arm), so
@@ -465,21 +419,8 @@ export class UberFileImporter implements FileImporter {
 
   private async processEatsFile(fpath: string, params: ImportParams): Promise<void> {
     const base = path.basename(fpath);
-    let raw: string;
-    try {
-      raw = await fs.promises.readFile(fpath, 'utf8');
-    } catch (e) {
-      params.log?.('error', `Failed to read ${base}`, { error: (e as Error).message });
-
-      return;
-    }
-
-    let rows: Record<string, string>[];
-    try {
-      rows = parseCSV(raw);
-    } catch (e) {
-      params.log?.('error', `Failed to parse ${base}`, { error: (e as Error).message });
-
+    const rows = await readCsvFile(fpath, { log: params.log });
+    if (rows == null) {
       return;
     }
 
@@ -588,7 +529,7 @@ export class UberFileImporter implements FileImporter {
         id: ['ubereats', tsRaw, restaurant].join('|'),
         classification: 'transaction', // commerce.transaction -> events (food delivery is spend, not a thing you keep)
         timestamp: ts,
-        content: { filename: 'order.txt', mediaType: 'text/plain', data: async () => Buffer.from(summary) },
+        content: textContent('order.txt', summary),
         metadata: {
           // The event's own title, phrased for a human timeline — what you did,
           // not just where from.

@@ -95,12 +95,36 @@ export class CloudFileIngestLedgerService {
       { conflictPaths: ['connectionId', 'externalFileId'] },
     );
 
-    this.logger.log('Recorded a successful Drive content download', {
+    this.logger.log('Recorded a successful cloud file download', {
       userId: ctx.userId,
       connectionId: input.connectionId,
       externalFileId: input.externalFileId,
       byteSize: input.byteSize,
     });
+  }
+
+  /**
+   * An archive's file listing was checked at this revision and no importer
+   * claimed it. Nothing was downloaded. A later revision of the file (it was
+   * replaced with something else) is checked afresh.
+   */
+  async recordNotExport(
+    ctx: UserServiceContext,
+    input: CloudFileIngestKey & { revision: string },
+  ): Promise<void> {
+    await this.repository.upsert(
+      {
+        userId: ctx.userId,
+        connectionId: input.connectionId,
+        provider: input.provider,
+        externalFileId: input.externalFileId,
+        revision: input.revision,
+        status: 'not_export',
+        attemptCount: 1,
+        lastError: null,
+      },
+      { conflictPaths: ['connectionId', 'externalFileId'] },
+    );
   }
 
   /**
@@ -125,7 +149,7 @@ export class CloudFileIngestLedgerService {
       { conflictPaths: ['connectionId', 'externalFileId'] },
     );
 
-    this.logger.warn('Recorded a failed Drive content download', {
+    this.logger.warn('Recorded a failed cloud file download', {
       userId: ctx.userId,
       connectionId: input.connectionId,
       externalFileId: input.externalFileId,

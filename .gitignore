@@ -46,6 +46,8 @@ coverage/
 
 # Per-worktree overmind sockets created by scripts/dev-stack.ts
 .overmind*.sock
+# Its one-supervisor-per-worktree lock (scripts/dev-stack/supervisor-lock.ts)
+.dev-stack.lock
 
 # Python (uv workspace). One virtual environment at the root, shared by
 # every member; uv.lock beside it is committed.
@@ -99,3 +101,6 @@ frontend/packages/*/android/build/
 
 # Playwright output for the desktop-appliance suite (playwright.desktop.config.ts)
 test-results-desktop/
+
+# Local HBPE model checkpoints pulled out of the container volume for offline eval
+backend/.cache/

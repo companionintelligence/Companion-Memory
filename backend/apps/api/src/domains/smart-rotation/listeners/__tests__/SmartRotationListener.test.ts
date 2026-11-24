@@ -1,13 +1,21 @@
 import type { LoggerService } from '@ci/common/logging';
+import config from '@ci/configuration';
 import type { EventService } from '@ci/domains/events';
 import { Events } from '@ci/domains/events';
-import type { QuestionService } from '@ci/domains/intelligence';
+import {
+  QUESTION_ROTATION_ORDER_SQL,
+  QUESTION_ROTATION_RANK_SQL,
+  type QuestionService,
+} from '@ci/domains/intelligence';
 import type { GraphEnrichmentService, MaintenanceOrchestratorService } from '@ci/domains/maintenance';
 import type { ContextPromptGenerateService, CrossTableHydrationService } from '@ci/domains/personalization';
 import type { PythonFunctionService } from '@ci/domains/python-functions';
 import type { SuggestionSyncService } from '@ci/domains/schedule';
 
-import { SmartRotationListener } from '../../listeners/SmartRotationListener';
+import {
+  INFERENCE_QUEUE_RETENTION_MINUTES,
+  SmartRotationListener,
+} from '../../listeners/SmartRotationListener';
 
 function buildListener(overrides: {
   questionService?: QuestionService;
@@ -22,7 +30,11 @@ function buildListener(overrides: {
   lifeContextService?: { buildForUser: jest.Mock };
   dataSource?: { query: jest.Mock };
 }) {
-  const questionService = (overrides.questionService ?? {}) as QuestionService;
+  // The dispatch gate defaults OPEN, so the answer_infer tests below reach the
+  // selection they assert on; the gate's own behaviour is tested explicitly.
+  const questionService = (overrides.questionService ?? {
+    isInferenceDispatchOpen: jest.fn().mockResolvedValue(true),
+  }) as QuestionService;
   const contextGapQuestionService = (overrides.contextGapQuestionService ??
     {}) as import('../../services/ContextGapQuestionService').ContextGapQuestionService;
   const eventService = (overrides.eventService ?? { send: jest.fn() }) as unknown as EventService;
@@ -86,6 +98,9 @@ describe('SmartRotationListener', () => {
       },
       {
         singletonKey: 'infer:user-1:q-1',
+        // A job that waits unstarted past this is dropped by pg-boss rather
+        // than replayed — see INFERENCE_QUEUE_RETENTION_MINUTES.
+        retentionMinutes: INFERENCE_QUEUE_RETENTION_MINUTES,
       },
     );
   });
@@ -157,6 +172,43 @@ describe('SmartRotationListener', () => {
   });
 
   describe('answer_infer', () => {
+    // ═══ THE DISPATCH GATE ═══
+    //
+    // The backlog cap and the per-owner cadence. Asked BEFORE the selection:
+    // a gated owner costs one cheap query, not the full rotation scan, and the
+    // skip is logged as what it is rather than as "nothing left to ask". The
+    // SQL itself is QuestionService's, shared with the cron path.
+    it('neither selects nor dispatches while the owner is gated', async () => {
+      const eventService = { send: jest.fn() } as unknown as EventService;
+      const dataSource = { query: jest.fn().mockResolvedValue([{ id: 'q-1' }]) };
+      const questionService = {
+        isInferenceDispatchOpen: jest.fn().mockResolvedValue(false),
+      } as unknown as QuestionService;
+
+      const listener = buildListener({ eventService, dataSource, questionService });
+
+      await listener.handleWork({ userId: 'user-1', workType: 'answer_infer' });
+
+      expect(dataSource.query).not.toHaveBeenCalled();
+      expect(eventService.send).not.toHaveBeenCalled();
+    });
+
+    it('asks the gate about the queue and event it dispatches on, at the configured interval', async () => {
+      const questionService = {
+        isInferenceDispatchOpen: jest.fn().mockResolvedValue(false),
+      } as unknown as QuestionService;
+
+      const listener = buildListener({ questionService });
+
+      await listener.handleWork({ userId: 'user-1', workType: 'answer_infer' });
+
+      expect(questionService.isInferenceDispatchOpen).toHaveBeenCalledWith('user-1', {
+        queue: 'llm-background',
+        eventName: Events.INFER_QUESTION_ANSWER,
+        intervalMinutes: config.llm.answerInferenceIntervalMinutes,
+      });
+    });
+
     it('skips dispatch when there are no unanswered questions', async () => {
       const eventService = { send: jest.fn() } as unknown as EventService;
       const dataSource = { query: jest.fn().mockResolvedValue([]) };
@@ -208,11 +260,40 @@ describe('SmartRotationListener', () => {
       const flattened = sql.replace(/\s+/g, ' ');
 
       expect(flattened).toContain(
-        'ORDER BY a.last_attempt_at ASC NULLS FIRST, q.created_at ASC, q.question_id ASC',
+        `ORDER BY a.last_attempt_at ASC NULLS FIRST, ${QUESTION_ROTATION_ORDER_SQL.replace(/\s+/g, ' ').trim()} LIMIT 1`,
       );
     });
 
-    it('reads the attempt history from both the live and the archived pg-boss job rows', async () => {
+    // The same rotation order as QuestionService.findUnansweredByUserId, taken
+    // from the one shared definition. This copy used to carry its own: no tier
+    // rank, and a question_id tiebreak that is a different shuffle on every
+    // appliance, because the seeded catalogue has random v4 ids and one
+    // created_at. The round-robin itself is proved against a real Postgres in
+    // SmartRotationListener.answerInfer.integration.spec.ts.
+    it('takes untried questions in the shared catalogue rotation order, joined from the shared ranks', async () => {
+      const eventService = { send: jest.fn() } as unknown as EventService;
+      const dataSource = { query: jest.fn().mockResolvedValue([{ id: 'q-1' }]) };
+
+      const listener = buildListener({ eventService, dataSource });
+
+      await listener.handleWork({ userId: 'user-1', workType: 'answer_infer' });
+
+      const [sql] = dataSource.query.mock.calls[0] as [string];
+      const flattened = sql.replace(/\s+/g, ' ');
+
+      expect(flattened).toContain(`rotation AS (${QUESTION_ROTATION_RANK_SQL.replace(/\s+/g, ' ')})`);
+      expect(flattened).toContain('LEFT JOIN rotation qr ON qr.question_id = q.question_id');
+
+      const order = flattened.slice(flattened.indexOf('ORDER BY a.last_attempt_at'));
+
+      expect(order).toMatch(/CASE q\.answer_tier/);
+      expect(order.search(/CASE q\.answer_tier/)).toBeLessThan(order.indexOf('q.created_at ASC'));
+      // The uuid may only settle rows that agree on every other term.
+      expect(order.indexOf('q.question_id ASC')).toBeGreaterThan(order.indexOf('qr.category_round ASC'));
+      expect(order).toMatch(/q\.question_id ASC LIMIT 1/);
+    });
+
+    it('reads the attempt history from the pg-boss job rows, which keep completed jobs', async () => {
       const eventService = { send: jest.fn() } as unknown as EventService;
       const dataSource = { query: jest.fn().mockResolvedValue([{ id: 'q-1' }]) };
 
@@ -223,10 +304,9 @@ describe('SmartRotationListener', () => {
       const [sql, params] = dataSource.query.mock.calls[0] as [string, unknown[]];
       const flattened = sql.replace(/\s+/g, ' ');
 
-      // Live rows alone would forget an attempt the moment its job completed,
-      // which is most of them.
+      // pg-boss 12 has no archive table: a completed job stays in pgboss.job.
       expect(flattened).toContain('FROM pgboss.job');
-      expect(flattened).toContain('FROM pgboss.archive');
+      expect(flattened).not.toContain('pgboss.archive');
       // Bound, not interpolated: the queue name is what prunes the partition
       // and the event name is what identifies an inference dispatch.
       // The owner is bound twice — Postgres deduces one type per parameter and

@@ -61,9 +61,7 @@ export function QuestionCard({ question, submitting, onSubmit, className }: Prop
     <form className={cn(containerClassName, className)} onSubmit={handleSubmit}>
       <div className="flex items-center justify-between gap-2">
         <h3 className={isMobile ? 'text-lg font-semibold' : 'text-2xl font-semibold'}>Reflection</h3>
-        {question.category && (
-          <span className="text-xs text-muted-foreground uppercase">{question.category}</span>
-        )}
+        {question.category && <span className="text-xs text-muted-foreground ">{question.category}</span>}
       </div>
 
       <p className={cn('leading-relaxed text-foreground', isMobile ? 'text-sm' : 'text-base')}>

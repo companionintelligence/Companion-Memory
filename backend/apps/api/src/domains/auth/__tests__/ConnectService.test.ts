@@ -30,7 +30,7 @@ import {
  * scoped/expiring key minting, and app-scoped revoke).
  */
 function makeDeps() {
-  const authService = { validateSessionToken: jest.fn() };
+  const authService = { resolveLiveSession: jest.fn() };
   const userService = { findById: jest.fn() };
   const apiKeyService = {
     createOrRotate: jest.fn(),
@@ -62,30 +62,33 @@ describe('ConnectService.resolveSessionUser', () => {
   beforeEach(() => jest.clearAllMocks());
 
   it('returns null when no session cookie is present', async () => {
-    const { service } = makeDeps();
+    const { service, authService } = makeDeps();
     expect(await service.resolveSessionUser(undefined)).toBeNull();
+    expect(authService.resolveLiveSession).not.toHaveBeenCalled();
   });
 
-  it('resolves the user when the session token is valid and the user exists', async () => {
+  it('resolves the user when the cookie names a live session and the user exists', async () => {
     const { service, authService, userService } = makeDeps();
-    authService.validateSessionToken.mockReturnValue({ sub: 'user-1' });
+    authService.resolveLiveSession.mockResolvedValue({ userId: 'user-1', sessionId: 'sess-1' });
     userService.findById.mockResolvedValue({ id: 'user-1', email: 'owner@example.com' });
 
     expect(await service.resolveSessionUser('tok')).toEqual({ userId: 'user-1', email: 'owner@example.com' });
+    expect(authService.resolveLiveSession).toHaveBeenCalledWith('tok');
+    expect(userService.findById).toHaveBeenCalledWith(expect.anything(), 'user-1');
   });
 
-  it('returns null when the session token fails verification', async () => {
-    const { service, authService } = makeDeps();
-    authService.validateSessionToken.mockImplementation(() => {
-      throw new Error('bad token');
-    });
+  it('returns null and looks nobody up when the cookie names no live session', async () => {
+    // A forged or expired cookie, a signup intent, or a session that was signed out.
+    const { service, authService, userService } = makeDeps();
+    authService.resolveLiveSession.mockResolvedValue(null);
 
     expect(await service.resolveSessionUser('tok')).toBeNull();
+    expect(userService.findById).not.toHaveBeenCalled();
   });
 
-  it('returns null when the token is valid but the user no longer exists', async () => {
+  it('returns null when the session is live but the user no longer exists', async () => {
     const { service, authService, userService } = makeDeps();
-    authService.validateSessionToken.mockReturnValue({ sub: 'ghost' });
+    authService.resolveLiveSession.mockResolvedValue({ userId: 'ghost', sessionId: 'sess-1' });
     userService.findById.mockResolvedValue(null);
 
     expect(await service.resolveSessionUser('tok')).toBeNull();
@@ -157,7 +160,7 @@ describe('ConnectService.exchange', () => {
     expect(ctx).toEqual({ userId: 'user-1' });
     expect(data.name).toBe('app:ci-openclaw:ci-marketplace');
     // Scopes come from scopesForApp (the same source the consent page reads).
-    expect(data.scopes).toEqual(['memory', 'intents', 'mcp']);
+    expect(data.scopes).toEqual(['memory', 'intents', 'mcp', 'agent-jobs']);
     // Capability is CHOSEN at mint time, not inherited from the api-key default.
     // `full` for the two paired harnesses, not because they are trusted with
     // deletion but because the managed-app rule in `resolveToolGate` turns their
@@ -272,7 +275,7 @@ describe('ConnectService.rotateByApp', () => {
     expect(ctx).toEqual({ userId: 'user-1' });
     // A rotate re-derives scopes AND capability, so it also heals a key minted
     // under an older policy (including one minted before capability was chosen).
-    expect(data.scopes).toEqual(['memory', 'intents', 'mcp']);
+    expect(data.scopes).toEqual(['memory', 'intents', 'mcp', 'agent-jobs']);
     expect(data.capability).toBe('full');
     expect(result?.key).toBe('rotated-key');
   });
@@ -363,9 +366,21 @@ describe('capabilityForApp (authority chosen per app, never inherited)', () => {
 });
 
 describe('scopesForApp (two-tier least-privilege)', () => {
-  it('confines the chat agents to the memory/intents/mcp tier', () => {
-    expect(scopesForApp('ci-openclaw:ci-marketplace')).toEqual(['memory', 'intents', 'mcp']);
-    expect(scopesForApp('ci-hermes:ci-marketplace')).toEqual(['memory', 'intents', 'mcp']);
+  it('confines the chat agents to the memory/intents/mcp/agent-jobs tier', () => {
+    expect(scopesForApp('ci-openclaw:ci-marketplace')).toEqual(['memory', 'intents', 'mcp', 'agent-jobs']);
+    expect(scopesForApp('ci-hermes:ci-marketplace')).toEqual(['memory', 'intents', 'mcp', 'agent-jobs']);
+  });
+
+  it('SECURITY: gives the agent-jobs plane to the chat agents only', () => {
+    // A job's ask is run by the harness with the harness's own key (intents, MCP, full). Under
+    // `memory`, every memory-only app could have the chat agent act for it and read the result.
+    for (const appName of ['ci-mentra', 'ci-ha-voice', 'ci-glasses-bridge', 'ci-capture', 'ci-web-xr-scan']) {
+      expect(scopesForApp(`${appName}:ci-marketplace`)).not.toContain('agent-jobs');
+    }
+
+    // Nor an app nobody reviewed, though it otherwise gets the chat-agent surface.
+    expect(scopesForApp('some-third-party-app:ci-marketplace')).not.toContain('agent-jobs');
+    expect(scopesForApp('hermes-agent:ci-marketplace')).not.toContain('agent-jobs');
   });
 
   it('confines the ci-mentra glasses bridge to the memory scope only', () => {
@@ -398,7 +413,7 @@ describe('scopesForApp (two-tier least-privilege)', () => {
   });
 
   it('keys on the app name segment, ignoring the store', () => {
-    expect(scopesForApp('ci-openclaw:some-other-store')).toEqual(['memory', 'intents', 'mcp']);
+    expect(scopesForApp('ci-openclaw:some-other-store')).toEqual(['memory', 'intents', 'mcp', 'agent-jobs']);
   });
 
   /**
@@ -411,16 +426,17 @@ describe('scopesForApp (two-tier least-privilege)', () => {
    * app to the marketplace with a memory integration means adding a row here.
    */
   const MARKETPLACE_MEMORY_CONSUMERS: Record<string, string[]> = {
-    // /memory/*, /v1/agent/jobs, /intents (+ execute), /mcp
-    'ci-openclaw': ['memory', 'intents', 'mcp'],
-    'ci-hermes': ['memory', 'intents', 'mcp'],
+    // /memory/*, /v1/agent/jobs (packet + checkpoint), /intents (+ execute), /mcp
+    'ci-openclaw': ['memory', 'intents', 'mcp', 'agent-jobs'],
+    // /memory/*, /intents (+ execute), /mcp; the same tier as ci-openclaw
+    'ci-hermes': ['memory', 'intents', 'mcp', 'agent-jobs'],
     // POST /files/upload + POST /v1/events (CI-Spatial server/memory_push.ts)
     'ci-web-xr-scan': ['capture'],
     // /files/upload, PATCH /files/:id, /v1/events
     'ci-capture': ['capture'],
     // POST /memory/recall + POST /memory/turn (CI-Even-Realities agent-hub)
     'ci-glasses-bridge': ['memory'],
-    // Nothing reads the token yet; the default (chat-agent) tier, as for ci-hermes.
+    // Nothing reads the token yet; the default tier (no agent-jobs).
     'hermes-agent': ['memory', 'intents', 'mcp'],
   };
 

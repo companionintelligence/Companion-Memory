@@ -7,6 +7,7 @@ import type {
 } from 'typeorm';
 import { Brackets } from 'typeorm';
 
+import { executeInsertWithRawConflict } from './insertWithRawConflict';
 import { appendRecordSources, type RecordSourceRow } from './recordSources';
 
 /**
@@ -108,7 +109,8 @@ interface BulkInsertOptions<Entity extends ObjectLiteral> {
    * The null guards are what let the two coexist: a plain `col = EXCLUDED.col`
    * on a same-producer re-sync would null out whatever the other producer had
    * filled in. Columns that cannot be null need their own rule, declared in
-   * {@link conflictMergeKinds}.
+   * {@link conflictMergeKinds}. A 'derived' column drops the same-producer
+   * guard on purpose and accepts that cost (see {@link ConflictMergeKind}).
    *
    * Idempotency is preserved either way (the arbiter still prevents duplicate
    * rows); the only difference is whether the conflicting row is left untouched
@@ -208,15 +210,16 @@ export async function chunkedConflictInsert<Entity extends ObjectLiteral>(
 ): Promise<void> {
   const chunkSize = computeChunkSize(repository.metadata.columns.length);
   for (let offset = 0; offset < rows.length; offset += chunkSize) {
-    await repository
-      .createQueryBuilder()
-      .insert()
-      // Route through `metadata.target` so TS picks the `ObjectLiteral`
-      // overload of `.values()`.
-      .into(repository.metadata.target)
-      .values(rows.slice(offset, offset + chunkSize))
-      .onConflict(onConflict)
-      .execute();
+    await executeInsertWithRawConflict(
+      repository
+        .createQueryBuilder()
+        .insert()
+        // Route through `metadata.target` so TS picks the `ObjectLiteral`
+        // overload of `.values()`.
+        .into(repository.metadata.target)
+        .values(rows.slice(offset, offset + chunkSize)),
+      onConflict,
+    );
   }
 }
 
@@ -329,8 +332,19 @@ async function executeBulkInsert<Entity extends ObjectLiteral>(
  *            drop every key the other producer contributed. Object-valued
  *            ONLY: jsonb `||` on arrays concatenates, so an array column
  *            declared 'json' would grow on every re-sync.
+ *   'derived' a column the producer works out from another one it sends (a
+ *            message's one-line preview of its text), where null means
+ *            "readers derive it", not "unknown". Same producer: its value as
+ *            sent, null included, so a re-send whose text changed cannot keep
+ *            a preview of the old text. Other producer: existing unless null,
+ *            as for 'value'. The row keeps its first writer's `source_type`
+ *            and does not record who wrote this column, so the first
+ *            writer's null also clears a value another producer filled in
+ *            after it (a Gmail snippet on a message a Takeout import
+ *            created). A more trusted producer (preference) takes the
+ *            same-producer side here too, null included.
  */
-export type ConflictMergeKind = 'value' | 'flag' | 'json';
+export type ConflictMergeKind = 'value' | 'flag' | 'json' | 'derived';
 
 /**
  * Which producer's value wins a refreshed column when two DIFFERENT producers
@@ -386,7 +400,8 @@ export function conflictUpdateSetClause(
       const producers = preference[col];
       // The extra arm between "same producer" and "other producer": the
       // arriving producer outranks the one that wrote the row, so it takes
-      // the same-producer treatment (its value wins, null-guarded).
+      // the same-producer treatment (its value wins, with the same null
+      // handling the column's kind gives the same producer).
       const outranks =
         producers && producers.length > 0
           ? ` WHEN ${producerRank('EXCLUDED', producers)} < ${producerRank(`"${tableName}"`, producers)}`
@@ -409,6 +424,15 @@ export function conflictUpdateSetClause(
             ` ELSE ${currentWins} END`
           );
         }
+
+        case 'derived':
+          // No null guard on the winning side: the arriving null is the
+          // producer saying "derive it from the text I just sent".
+          return (
+            `"${col}" = CASE WHEN ${same} THEN ${incoming}` +
+            (outranks ? `${outranks} THEN ${incoming}` : '') +
+            ` ELSE COALESCE(${current}, ${incoming}) END`
+          );
 
         default: {
           const incomingWins = `COALESCE(${incoming}, ${current})`;
@@ -628,15 +652,7 @@ async function executeChunk<Entity extends ObjectLiteral>(
       ? `${conflictTarget} DO UPDATE SET ${conflictUpdateSetClause(alias, conflictUpdateColumns!, conflictMergeKinds, conflictProducerPreference)}`
       : `${conflictTarget} DO NOTHING`;
 
-    const insertQb = repository
-      .createQueryBuilder()
-      .insert()
-      .into(meta.target)
-      .values(toInsert)
-      // Deprecated but the only API that emits an explicit ON CONFLICT target;
-      // `orIgnore()` would emit a bare untargeted DO NOTHING (which also swallows
-      // PK conflicts). We want to target exactly the provenance unique index.
-      .onConflict(conflictAction);
+    const insertQb = repository.createQueryBuilder().insert().into(meta.target).values(toInsert);
 
     // Under DO UPDATE every conflicting row is returned, so RETURNING must carry
     // the xmax-derived inserted flag to distinguish inserts from refreshes.
@@ -646,9 +662,11 @@ async function executeChunk<Entity extends ObjectLiteral>(
     // is resolved against entity property paths (see pkPropertyPath above).
     insertQb.returning(doUpdate ? `${pkDbName}, (xmax = 0) AS ${insertedFlagAlias}` : [pkPropertyPath]);
 
-    const insertResult = await insertQb.execute();
+    // The conflict clause (DO UPDATE SET merge, or DO NOTHING on the provenance
+    // unique index) is spliced in raw; see insertWithRawConflict.
+    const insertRows = await executeInsertWithRawConflict(insertQb, conflictAction);
 
-    for (const raw of (insertResult.raw as Record<string, unknown>[]) ?? []) {
+    for (const raw of insertRows) {
       // DO NOTHING: every returned row was inserted. DO UPDATE: only xmax = 0 was.
       if (!doUpdate || raw[insertedFlagAlias] === true) {
         insertedPks.add(raw[pkDbName]);

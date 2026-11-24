@@ -6,12 +6,14 @@ import { UserService } from '@ci/domains/user';
 import { GraphNodeEntity } from '../entities/GraphNodeEntity';
 import { RelationshipEntity } from '../entities/RelationshipEntity';
 
-import { GraphUtilityService } from './GraphUtilityService';
+import { GraphUtilityService, type LinkedKey } from './GraphUtilityService';
 
 export interface GraphNodeQueryOptions {
   entityType?: string;
   excludeEntityTypes?: string[];
   nameContains?: string;
+  /** The whole name, ignoring case and surrounding space. */
+  nameEquals?: string;
   propertyEquals?: Record<string, string | number | boolean>;
   limit?: number;
   offset?: number;
@@ -41,6 +43,7 @@ export class GraphQueryService {
         entityType: filters.entityType,
         excludeEntityTypes: filters.excludeEntityTypes,
         nameContains: filters.nameContains,
+        nameEquals: filters.nameEquals,
         propertyEquals: filters.propertyEquals,
       },
       { limit, offset },
@@ -124,6 +127,11 @@ export class GraphQueryService {
     return this.graphUtility.getNodeByLinkedRecord(ownerId, linkedTable, linkedId);
   }
 
+  /** The entity, active or not, a node write onto this linked key would collide with — {@link GraphUtilityService.findLinkedKeyHolder}. */
+  findLinkedKeyHolder(ownerId: string, key: LinkedKey): Promise<GraphNodeEntity | null> {
+    return this.graphUtility.findLinkedKeyHolder(ownerId, key);
+  }
+
   /**
    * Person↔communication ties carried by `ci.communications`' participant
    * columns rather than `ci.relationships` rows. See
@@ -164,6 +172,22 @@ export class GraphQueryService {
     } = {},
   ): Promise<RelationshipEntity[]> {
     return this.graphUtility.getRelationships(ownerId, options);
+  }
+
+  /** {@link GraphUtilityService.getRelationshipsPerEntity}: each entity's newest `limit` edges, one read for the page. */
+  getRelationshipsPerEntity(
+    ownerId: string,
+    options: { entityIds: string[]; direction: 'outbound' | 'inbound'; limit: number },
+  ): Promise<Map<string, RelationshipEntity[]>> {
+    return this.graphUtility.getRelationshipsPerEntity(ownerId, options);
+  }
+
+  /** The active edge a write of this relationship would land on — {@link GraphUtilityService.findActiveRelationship}. */
+  findActiveRelationship(
+    ownerId: string,
+    edge: { fromEntityId: string; toEntityId: string; relationshipType: string; isBidirectional?: boolean },
+  ): Promise<RelationshipEntity | null> {
+    return this.graphUtility.findActiveRelationship(ownerId, edge);
   }
 
   findConceptByName(ownerId: string, conceptName: string): Promise<GraphNodeEntity | null> {

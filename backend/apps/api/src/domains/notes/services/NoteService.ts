@@ -1,11 +1,21 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, Repository, type SelectQueryBuilder } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { SYSTEM_USER, UserServiceContext, type ServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { computeChunkSize, withoutUndefined } from '@ci/common/persistence';
+import {
+  type HourlyActivityOptions,
+  type KeysetByPage,
+  type KeysetPageArgs,
+  type SeekKey,
+  computeChunkSize,
+  keysetPaginateBy,
+  keysetSeek,
+  touchedHourlyBucketsSql,
+  withoutUndefined,
+} from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
 
@@ -23,6 +33,16 @@ export interface HourlyNoteCount {
   bucketStart: Date;
   count: number;
 }
+
+/**
+ * The notes list's order — what {@link NoteService.findAll} sorts by and
+ * {@link NoteService.findPage} seeks on: last edited first, the id breaking
+ * ties so the order is total and a page boundary falls in one place.
+ */
+const NOTE_LIST_ORDER: readonly SeekKey[] = [
+  { expr: 'note.updated_at', order: 'DESC', read: 'CAST(note.updated_at AS text)' },
+  { expr: 'note.id', order: 'DESC' },
+];
 
 @Injectable()
 export class NoteService {
@@ -48,13 +68,44 @@ export class NoteService {
   ): Promise<Note | null> {
     const { emitCreated = true } = options;
 
+    // Fields named one by one: GraphQL createNote passes `id: undefined` when the
+    // client sent no id. A spread of `data` after the minted id would wipe it.
     const record = this.noteRepository.create({
       id: data.id || uuidv7(),
-      ...data,
+      title: data.title ?? null,
+      content: data.content ?? null,
       userId: context.userId,
     });
 
-    const entity = await this.noteRepository.save(record);
+    // INSERT ... ON CONFLICT DO NOTHING rather than `save()`. With the id set,
+    // `save()` UPDATEs whatever row already holds it, unscoped by owner. A
+    // client-minted id (a phone replaying its offline create) can name a row
+    // that exists. The insert is one statement, so no other writer can slip a
+    // row in between a check and the write.
+    const inserted = await this.noteRepository
+      .createQueryBuilder()
+      .insert()
+      .into(this.noteRepository.metadata.target)
+      .values(record)
+      .orIgnore()
+      .execute();
+
+    let entity: NoteEntity | null = record;
+
+    if (!Array.isArray(inserted.raw) || inserted.raw.length === 0) {
+      // The id is taken. If the row is the caller's, this is a replay of a create
+      // that already landed: write nothing and return the note as stored, with
+      // any edits made since. If it is anyone else's, refuse it.
+      entity = await this.noteRepository.findOne({
+        where: { id: record.id, userId: context.userId },
+      });
+
+      if (entity == null) {
+        this.logger.warn('Refused a created note whose id belongs to another user.');
+
+        return null;
+      }
+    }
 
     if (emitCreated) {
       await this.eventService.send(NoteCreatedEvent, {
@@ -84,8 +135,8 @@ export class NoteService {
 
     const entities = data.map((item) =>
       this.noteRepository.create({
-        id: item.id || uuidv7(),
         ...item,
+        id: item.id || uuidv7(),
         userId: context.userId,
       }),
     );
@@ -128,13 +179,14 @@ export class NoteService {
    *    plain INSERT would raise a unique violation, which the client flusher
    *    reads as a 5xx-class transient failure and retries to exhaustion — a
    *    successfully-stored note parked in `needs_attention`. Hence ON CONFLICT.
-   * 2. **A client-supplied id must never reach another user's row.** The
-   *    interactive path is safe by construction (the server mints the id), but
-   *    once the client names it, `repository.save()` is not: with the primary
+   * 2. **A client-supplied id must never reach another user's row.** Once the
+   *    client names the id, `repository.save()` is unsafe: with the primary
    *    key set it UPDATEs whatever row it finds, unscoped by owner, so a
    *    colliding id would rewrite a stranger's note *and* reassign `user_id`.
    *    The `n.user_id = EXCLUDED.user_id` predicate is what makes that
-   *    impossible; conflicted ids are reported, never written.
+   *    impossible; conflicted ids are reported, never written. {@link create}
+   *    takes client ids too (GraphQL createNote) and avoids `save()` for the
+   *    same reason.
    * 3. **A stale snapshot must not clobber newer content.** A note edited on
    *    another client (or online, through `updateNote`) while an older snapshot
    *    sat in the queue is the ordinary case, not the exotic one. The
@@ -147,11 +199,11 @@ export class NoteService {
    *
    * Emits per row (`NoteCreatedEvent` / `NoteUpdatedEvent`), unlike the other
    * `/v1` bulk kinds. These are interactive captures replayed a few at a time,
-   * not an import, so live indexing costs nothing here — and it is the only way
-   * they get indexed at all: `note` is in INDEXABLE_ENTITIES but NOT in
-   * BACKFILLABLE_ENTITIES, so the deferred `search_index` sweep cannot reach
-   * them. A drained note therefore ends up in exactly the state it would have
-   * been in had the user been online.
+   * not an import, so live indexing costs nothing here — and it is the primary
+   * way they get indexed: `note` joined BACKFILLABLE_ENTITIES only on
+   * 2026-10-21, as a safety net for rows that have no device document, and the
+   * pipeline has no note stage. A drained note therefore ends up in exactly the
+   * state it would have been in had the user been online.
    */
   async captureMany(context: UserServiceContext, data: CaptureNoteDto[]): Promise<CaptureNoteResult> {
     const result: CaptureNoteResult = { created: [], updated: [], stale: [], conflicted: [] };
@@ -296,6 +348,10 @@ export class NoteService {
   }
 
   async findByIds(context: ServiceContext, ids: string[]): Promise<(Note | null)[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+
     const results = await this.noteRepository.find({
       where: {
         id: In(ids),
@@ -338,17 +394,18 @@ export class NoteService {
       query = query.andWhere('note.updated_at <= :endTime', { endTime: options.endTime });
     }
 
-    // Composite keyset: page strictly past (afterTime, afterId) in
-    // (updated_at DESC, id DESC) — see ContentService.getEntitiesForContents.
+    // Composite keyset: page strictly past (afterTime, afterId) in (updated_at, id), in
+    // `order` — see keysetSeek.
+    const order = options.order ?? 'DESC';
+
     if (options.afterTime && options.afterId) {
       query = query.andWhere(
-        '(note.updated_at < :afterTime OR (note.updated_at = :afterTime AND note.id < :afterId))',
-        { afterTime: options.afterTime, afterId: options.afterId },
+        ...keysetSeek('note.updated_at', 'note.id', order, options.afterTime, options.afterId),
       );
     }
 
-    // Deterministic tiebreak so same-timestamp rows page consistently.
-    query = query.orderBy('note.updated_at', options.order ?? 'DESC').addOrderBy('note.id', 'DESC');
+    // Deterministic tiebreak so same-timestamp rows page consistently: the id runs the way the time does.
+    query = query.orderBy('note.updated_at', order).addOrderBy('note.id', order);
 
     if (options.limit) {
       query = query.limit(options.limit);
@@ -383,19 +440,51 @@ export class NoteService {
     return query.getCount();
   }
 
+  /** Every note of the caller, last edited first ({@link NOTE_LIST_ORDER}); {@link findPage} reads the same list a page at a time. */
   async findAll(context: ServiceContext): Promise<Note[]> {
-    const results = await this.noteRepository.find({
-      where: {
-        ...(context.userId !== SYSTEM_USER && {
-          userId: context.userId,
-        }),
-      },
-      order: {
-        updatedAt: 'DESC',
-      },
+    let qb = this.listScope(this.noteRepository.createQueryBuilder('note'), context);
+
+    NOTE_LIST_ORDER.forEach((key, i) => {
+      qb = i === 0 ? qb.orderBy(key.expr, key.order) : qb.addOrderBy(key.expr, key.order);
     });
 
+    const results = await qb.getMany();
+
     return results.map((entity) => NoteEntity.toEgressType(entity));
+  }
+
+  /**
+   * One page of {@link findAll}'s list — last edited first — read with a
+   * `LIMIT` and a seek past the cursor row instead of every note the user has.
+   * The cursor is the row id; one that matches no row yields an empty page.
+   * The `COUNT(*)` behind `totalCount` runs only when `countTotal` is set.
+   */
+  async findPage(
+    context: ServiceContext,
+    args: KeysetPageArgs,
+    options: { countTotal?: boolean } = {},
+  ): Promise<KeysetByPage<Note>> {
+    const page = await keysetPaginateBy(this.noteRepository, args, {
+      alias: 'note',
+      keys: NOTE_LIST_ORDER,
+      idExpr: 'note.id',
+      countTotal: options.countTotal,
+      scope: (qb) => this.listScope(qb, context),
+    });
+
+    return { ...page, entities: page.entities.map((entity) => NoteEntity.toEgressType(entity)) };
+  }
+
+  /** The rows {@link findAll} and {@link findPage} list: the caller's notes, or everyone's for the system user. */
+  private listScope(
+    qb: SelectQueryBuilder<NoteEntity>,
+    context: ServiceContext,
+  ): SelectQueryBuilder<NoteEntity> {
+    if (context.userId === SYSTEM_USER) {
+      return qb;
+    }
+
+    return qb.where('note.user_id = :userId', { userId: context.userId });
   }
 
   async update(context: ServiceContext, id: string, data: UpdateNoteDto): Promise<Note | null> {
@@ -423,6 +512,86 @@ export class NoteService {
     return NoteEntity.toEgressType(updatedEntity);
   }
 
+  /**
+   * {@link update}, written only if the note still has the `updatedAt` the caller last
+   * saw. The web editor sends this when it tries a failed save again on its own: that
+   * save holds an edit typed before the outage, and if the note was changed somewhere
+   * else in the meantime, writing it would put the older edit over the newer one.
+   *
+   * The check and the write are one UPDATE, so nothing can land between them. The
+   * timestamps are compared to the millisecond, the precision `updatedAt` leaves the API
+   * at.
+   *
+   * @returns `written: false` and the note as stored when it had changed; null when the
+   *   caller has no such note.
+   */
+  async updateIfUnchanged(
+    context: ServiceContext,
+    id: string,
+    data: UpdateNoteDto,
+    expectedUpdatedAt: Date,
+  ): Promise<{ written: boolean; note: Note } | null> {
+    const owner = context.userId !== SYSTEM_USER ? { userId: context.userId } : {};
+    const changes = withoutUndefined(data);
+
+    if (Object.keys(changes).length > 0) {
+      const query = this.noteRepository
+        .createQueryBuilder()
+        .update(NoteEntity)
+        .set(changes)
+        .where('id = :id', { id })
+        .andWhere("date_trunc('milliseconds', updated_at) = :expectedUpdatedAt", { expectedUpdatedAt })
+        .returning('*');
+
+      if ('userId' in owner) {
+        query.andWhere('user_id = :userId', { userId: owner.userId });
+      }
+
+      const result = await query.execute();
+      const [row] = (Array.isArray(result.raw) ? result.raw : []) as Array<{
+        id: string;
+        title: string | null;
+        content: string | null;
+        user_id: string;
+        created_at: Date;
+        updated_at: Date;
+      }>;
+
+      if (row) {
+        await this.eventService.send(NoteUpdatedEvent, {
+          noteId: row.id,
+        });
+
+        return {
+          written: true,
+          note: NoteEntity.toEgressType(
+            this.noteRepository.create({
+              id: row.id,
+              title: row.title,
+              content: row.content,
+              userId: row.user_id,
+              createdAt: row.created_at,
+              updatedAt: row.updated_at,
+            }),
+          ),
+        };
+      }
+    }
+
+    const stored = await this.noteRepository.findOne({ where: { id, ...owner } });
+
+    if (stored == null) {
+      return null;
+    }
+
+    // Nothing to write, or the note moved on: hand back what is stored so the caller can
+    // tell its own late save from someone else's.
+    const unchanged =
+      Object.keys(changes).length === 0 && stored.updatedAt.getTime() === expectedUpdatedAt.getTime();
+
+    return { written: unchanged, note: NoteEntity.toEgressType(stored) };
+  }
+
   async remove(context: ServiceContext, id: string): Promise<boolean> {
     const result = await this.noteRepository.delete({
       id,
@@ -446,15 +615,26 @@ export class NoteService {
    * Hourly UTC activity buckets for the activity rollup: notes counted by
    * creation time, per user.
    */
-  async aggregateHourlyActivity(): Promise<HourlyNoteCount[]> {
-    const rows: Array<{ user_id: string; bucket_start: Date; count: number }> = await this.noteRepository
+  async aggregateHourlyActivity(options: HourlyActivityOptions = {}): Promise<HourlyNoteCount[]> {
+    const query = this.noteRepository
       .createQueryBuilder('note')
       .select('note.userId', 'user_id')
       .addSelect(`date_trunc('hour', note.createdAt, 'UTC')`, 'bucket_start')
       .addSelect('COUNT(*)::int', 'count')
       .groupBy('user_id')
-      .addGroupBy('bucket_start')
-      .getRawMany();
+      .addGroupBy('bucket_start');
+
+    if (options.changedSince) {
+      query.where(
+        touchedHourlyBucketsSql(
+          { user: 'note.userId', bucket: 'note.createdAt' },
+          { table: 'ci.notes', userColumn: 'user_id', bucketColumn: 'created_at', changed: 'src.updated_at' },
+        ),
+        { changedSince: options.changedSince },
+      );
+    }
+
+    const rows: Array<{ user_id: string; bucket_start: Date; count: number }> = await query.getRawMany();
 
     return rows.map((row) => ({ userId: row.user_id, bucketStart: row.bucket_start, count: row.count }));
   }

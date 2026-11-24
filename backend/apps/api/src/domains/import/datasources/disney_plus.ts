@@ -25,18 +25,17 @@
    customer-service history, the advertiser list, and the parks, cruise,
    store, D23, studio and network sheets, which on a streaming-only account
    say "No specific personal information." */
-import crypto from 'node:crypto';
 import type { Stats } from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { parseDisneyDate, parseDisneyReport, splitSeasonCell, type DisneyReport } from './_disney_report';
 import { pdfToLayoutText, pdfToTsvText, pdftotextKnownMissing, PdftotextMissingError } from './_pdftotext';
-import { composeWatchTitle, Occurrences } from './hulu';
+import { Occurrences, WATCH_MEDIA_TYPE, composeWatchTitle, normTitle, titleUri } from './_watch';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { Graph, ImportParams } from './timeline';
-import { timeframeContains } from './timeline';
+import { textContent, timeframeContains } from './timeline';
 
 /** `77VH23XCAN_Final.pdf`: the request's id, then Disney's suffix. */
 const FILENAME_RE = /^[A-Z0-9]{6,20}_Final\.pdf$/i;
@@ -63,31 +62,6 @@ export function serviceName(service: string): string {
   const key = service.trim().toLowerCase();
 
   return SERVICE_NAMES[key] ?? (key ? service.trim() : 'Disney+');
-}
-
-/**
- * Stable per-title identity for the content row: case/whitespace-insensitive
- * hash of the composed title, so every play of one episode (and every
- * re-export) lands on ONE content row while each play stays its own event.
- * sha256 like netflix.ts, so Postgres can recompute it by hand.
- */
-function titleUri(title: string): string {
-  return `disney_plus:title:${crypto.createHash('sha256').update(norm(title)).digest('hex').slice(0, 16)}`;
-}
-
-function norm(s: string): string {
-  return s.replace(/\s+/g, ' ').trim().toLowerCase();
-}
-
-/**
- * What the content row says it is. Disney+ streams over MPEG-DASH, so the
- * row carries the DASH manifest type rather than the `text/plain` of the
- * title placeholder the importer writes as its body (the hulu.ts habit).
- */
-const WATCH_MEDIA_TYPE = 'application/dash+xml';
-
-function textContent(filename: string, body: string) {
-  return { filename, mediaType: WATCH_MEDIA_TYPE, data: async () => Buffer.from(body) };
 }
 
 export class DisneyPlusFileImporter implements FileImporter {
@@ -275,7 +249,7 @@ export class DisneyPlusFileImporter implements FileImporter {
       // (embed/streamingTitle.ts) both want.
       const metadata = {
         Title: title,
-        URI: titleUri(title),
+        URI: titleUri('disney_plus', title),
         SeriesName: series || undefined,
         Season: season || undefined,
         EpisodeName: series ? program : undefined,
@@ -289,9 +263,9 @@ export class DisneyPlusFileImporter implements FileImporter {
         // import date (the hulu.ts rule).
         params.pipeline.push({
           item: {
-            id: occurrences.id(`disney_plus:watched:${norm(profile)}:${norm(title)}`),
+            id: occurrences.id(`disney_plus:watched:${normTitle(profile)}:${normTitle(title)}`),
             classification: 'saved_media',
-            content: textContent('watched.txt', title),
+            content: textContent('watched.txt', title, WATCH_MEDIA_TYPE),
             metadata: { ...metadata, Kind: 'watched' },
           },
         } satisfies Graph);
@@ -311,7 +285,7 @@ export class DisneyPlusFileImporter implements FileImporter {
           id: occurrences.id(`disney_plus:watch:${when}:${profile}:${title}`),
           classification: 'watch',
           timestamp: ts,
-          content: textContent('watch.txt', title),
+          content: textContent('watch.txt', title, WATCH_MEDIA_TYPE),
           metadata,
         },
       } satisfies Graph);

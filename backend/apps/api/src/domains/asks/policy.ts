@@ -1,5 +1,11 @@
 import { canonicalDataClass } from './canonical';
-import type { AnswerForm, DisclosedAnswer, DisclosureRung, TrustTier } from './types';
+import {
+  TRUST_TIERS,
+  type AnswerForm,
+  type DisclosedAnswer,
+  type DisclosureRung,
+  type TrustTier,
+} from './types';
 
 /**
  * The disclosure ladder, coarsest first. Every rung discloses strictly less than
@@ -85,8 +91,10 @@ const SENSITIVE_CLASSES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Default disclosure ceiling per trust tier, mirroring the tier table in
- * ARCHITECTURE.md §8.1. `'*'` is the fallback for any class not named.
+ * Default disclosure ceiling per trust tier, set here. CI-Engineering
+ * ARCHITECTURE.md §8.1 is the 2026-07 design table, and its tiers (Family,
+ * Trusted friend, Colleague, Stranger) differ. `'*'` is the fallback for any
+ * class not named.
  *
  * This is a CEILING, not a grant: it can only ever reduce what a grant allows.
  * A tier never authorizes disclosure on its own — an ask still needs a matching
@@ -108,6 +116,46 @@ const TIER_CEILINGS: Readonly<Record<TrustTier, Readonly<Record<string, Disclosu
 /** The narrowest rung this tier imposes on ANY class — its floor. */
 function strictestIn(table: Readonly<Record<string, DisclosureRung>>): DisclosureRung {
   return Object.values(table).reduce<DisclosureRung>(minRung, table['*'] ?? 'boolean');
+}
+
+const TIER_INDEX: Readonly<Record<TrustTier, number>> = TRUST_TIERS.reduce(
+  (acc, tier, index) => ({ ...acc, [tier]: index }),
+  {} as Record<TrustTier, number>,
+);
+
+/**
+ * The stricter (lower-trust) of two trust tiers (`household` > `family` >
+ * `trusted` > `peer` > `stranger`). Unknown values clamp to `'stranger'`.
+ */
+export function minTrustTier(a: TrustTier, b: TrustTier): TrustTier {
+  const indexA = TIER_INDEX[a] ?? TIER_INDEX.stranger;
+  const indexB = TIER_INDEX[b] ?? TIER_INDEX.stranger;
+
+  return indexA >= indexB ? (TRUST_TIERS[indexA] ?? 'stranger') : (TRUST_TIERS[indexB] ?? 'stranger');
+}
+
+/**
+ * Group-thread / multi-party trust-tier floor clamp (`open-instinct` pattern).
+ *
+ * When a question or agent turn occurs in a room or thread with multiple
+ * participants, the effective trust tier for any shared response is the
+ * STRICTEST (lowest-trust) tier among all participants. An empty or unknown
+ * participant list fails closed to `'stranger'`.
+ */
+export function resolveGroupTier(tiers: readonly TrustTier[]): TrustTier {
+  if (!tiers || tiers.length === 0) {
+    return 'stranger';
+  }
+
+  return tiers.reduce<TrustTier>((acc, tier) => minTrustTier(acc, tier), tiers[0] ?? 'stranger');
+}
+
+/**
+ * Disclosure ceiling for a multi-party / group thread context, clamping to the
+ * strictest participant's tier before evaluating the class ceiling.
+ */
+export function groupDisclosureCeiling(tiers: readonly TrustTier[], dataClass?: unknown): DisclosureRung {
+  return disclosureCeiling(resolveGroupTier(tiers), dataClass);
 }
 
 /**
@@ -164,6 +212,26 @@ export function disclosureCeiling(tier: TrustTier, dataClass?: unknown): Disclos
   const forClass = table[canonical];
 
   return forClass != null ? minRung(forClass, fallback) : fallback;
+}
+
+/**
+ * Whether a photo ask from this tier may match a photo by the place on its
+ * event.
+ *
+ * A photo's place is on its event (`location_name`, quoted again in its
+ * display title), and a photo ask searches those events beside files. Matching
+ * on the place there answers a location question ("Any photos from 14 Elm
+ * Street?") at the photos ceiling, which for every tier below household
+ * discloses more than the same question asked as `location` would. So the
+ * place may match only where the tier's location ceiling reaches the ceiling
+ * this ask gets. Decided from the tier alone, before any search: capping only
+ * the answers that happened to match an event would make "nothing was shared"
+ * itself say that a photo was taken there.
+ *
+ * Pure.
+ */
+export function photoAskMayMatchPlaces(tier: TrustTier, dataClass?: unknown): boolean {
+  return rungAtLeast(disclosureCeiling(tier, 'location'), disclosureCeiling(tier, dataClass));
 }
 
 /**

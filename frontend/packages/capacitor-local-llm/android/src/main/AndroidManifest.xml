@@ -1,19 +1,44 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- LocalLlmGenerationService and ModelDownloadWorker still call startForeground
-         with type dataSync. The permissions and foregroundServiceType are omitted
-         until the app has a screen that downloads or runs the on-device model.
-         Shipping them makes Play require a declaration and a demo of a feature
-         the user cannot open. Background location keeps FOREGROUND_SERVICE via
-         @capacitor-community/background-geolocation. When the UI ships, declare
-         FOREGROUND_SERVICE_DATA_SYNC again and set
-         android:foregroundServiceType="dataSync" on the service below. -->
+    <!-- Restored 2026-09-29 (removed in #2776 while nothing could start a download or a local reply).
+         Settings → On-device model and on-device chat now do, and both start a dataSync foreground
+         service: LocalLlmGenerationService for an in-flight reply, and WorkManager's
+         SystemForegroundService for the resumable model download. Without the permission below Android 14+
+         throws SecurityException from startForeground(), and without a matching foregroundServiceType on
+         each service Android 10+ throws IllegalArgumentException — either kills the app the moment the user
+         taps Download or sends a message. Play Console needs the dataSync declaration (a 0.3–3.6 GB
+         resumable model download) and a demo of that screen before this ships. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
     <application>
+        <!-- The GPU backend loads the vendor's OpenCL driver (libOpenCL.so). Since Android 12 an app
+             targeting API 31+ may only dlopen a vendor library it declares here, so without this the
+             GPU backend is expected to report "Can not find OpenCL library" on a real phone and every
+             GPU load to end in a CPU fallback. libvndksupport.so is declared alongside it, as in Google
+             AI Edge Gallery's manifest. required=false: a device without them simply runs on the CPU.
+             Not verifiable on an emulator (it has no OpenCL); confirm on a device with a GPU. -->
+        <uses-native-library
+            android:name="libOpenCL.so"
+            android:required="false" />
+        <uses-native-library
+            android:name="libvndksupport.so"
+            android:required="false" />
+
         <!-- Protects an in-flight generate()/generateStream() call from being killed if the
              app is briefly backgrounded mid-answer. See LocalLlmGenerationService's doc
              comment; started/stopped by LocalLlmPlugin around each call, never by itself. -->
         <service
             android:name=".LocalLlmGenerationService"
-            android:exported="false" />
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- WorkManager's own foreground service, which promotes ModelDownloadWorker (its ForegroundInfo
+             carries type dataSync). The type must be declared here or the promotion throws. -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
     </application>
 </manifest>

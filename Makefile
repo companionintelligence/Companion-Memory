@@ -43,9 +43,16 @@ export SETUP_SECRETS_REPO ?= ci/setup-secrets
 export SETUP_DATABASE_REPO ?= ci/setup-database
 export SUMMARY_REPO ?= ci/summary-service
 export HBPE_REPO ?= ci/hbpe-service
+export POWERSYNC_REPO ?= ci/powersync
 
-# Seed user UUID (John Smith) — must match backend/apps/api/scripts/seed-database/data/users.ts
-JOHN_SMITH_USER_ID := b3b8c7e2-1c2d-4e5f-8a6b-9c0d1e2f3a4b
+# The seed's target user — must match the SEED_USER_ID default in
+# backend/apps/api/scripts/seed-database/data/users.ts. Override it to point
+# `seed` and `predict` at an existing account instead of John Smith.
+SEED_USER_ID ?= b3b8c7e2-1c2d-4e5f-8a6b-9c0d1e2f3a4b
+# Exported so `make seed SEED_USER_ID=<uuid>` reaches the node process; a
+# variable set on make's command line is not otherwise passed to recipes.
+export SEED_USER_ID
+JOHN_SMITH_USER_ID := $(SEED_USER_ID)
 
 export TAG ?= $(shell git describe --tags --exact-match 2>/dev/null)
 
@@ -55,6 +62,7 @@ export TAG ?= $(shell git describe --tags --exact-match 2>/dev/null)
 LICENSE_DIRS := \
 	infrastructure/database \
 	infrastructure/object-store \
+	infrastructure/powersync \
 	infrastructure/setup-database \
 	infrastructure/setup-secrets
 
@@ -125,7 +133,7 @@ db_host_port = $(shell \
 # Point every local-DB target at that port. node-config reads DATABASE_PORT, and
 # dotenv won't override an already-set env var, so this wins over .env's 5432.
 # Evaluated lazily per target, so non-DB targets never pay the Docker lookup.
-seed migrate dbclear dbdestroy dbshell dburl chatreset filereset gentoken signup testuser userpw: export DATABASE_PORT = $(or $(strip $(db_host_port)),$(error No running 'database' container for project '$(COMPOSE_PROJECT_NAME)'. Start its stack first with 'make dev'.))
+seed migrate dbclear dbdestroy dbshell dburl chatreset filereset gentoken signup testuser userpw hub-account-link: export DATABASE_PORT = $(or $(strip $(db_host_port)),$(error No running 'database' container for project '$(COMPOSE_PROJECT_NAME)'. Start its stack first with 'make dev'.))
 
 define switch_env
 	@CURRENT="$(running_env)"; \
@@ -407,6 +415,10 @@ oauth-down: ## Release the canonical OAuth host claim
 
 .PHONY: tunnel
 tunnel: ## Expose this running stack at https://dev.companionintelligence.com via Cloudflare Tunnel (see infrastructure/cloudflare/README.md)
+	@# Refuse while .env holds the replace-me- placeholders from .env.default: a
+	@# stack signing tokens and running its object store with committed values is
+	@# open to anyone who has read the repo once it is on the internet.
+	@yarn tsx scripts/dev-stack/env-secrets-cli.ts check .env
 	@command -v cloudflared >/dev/null 2>&1 || { printf "$(RED)cloudflared not found — run: brew install cloudflared$(RESET)\n"; exit 1; }
 	@test -f infrastructure/cloudflare/config.yml || { printf "$(RED)Missing infrastructure/cloudflare/config.yml — copy infrastructure/cloudflare/config.example.yml and fill it in (see README.md)$(RESET)\n"; exit 1; }
 	@printf "$(YELLOW)Exposing https://dev.companionintelligence.com publicly — confirm Cloudflare Access is enabled. Ctrl-C to stop.$(RESET)\n"
@@ -499,10 +511,12 @@ health: ## Check the repository for prerequisites
 	@# the container and then fails every tile. Decode the repo's HEIC test
 	@# fixture the way VipsService does. `vips` exits 0 on that failure and
 	@# writes a black image, so the verdict is the tile warnings on stderr.
+	@# vips saves by suffix and BSD mktemp -t appends its own, hence DIR/out.jpg.
 	@HEIC=backend/apps/api/src/domains/files/services/__tests__/__fixtures__/64x40.heic; \
-	OUT=$$(mktemp -t ci-health-heic-XXXXXX.jpg); \
+	DIR=$$(mktemp -d) || exit 1; \
+	OUT=$$DIR/out.jpg; \
 	ERR=$$(vips thumbnail "$$HEIC[fail-on=error]" "$$OUT" 64 2>&1); STATUS=$$?; \
-	rm -f "$$OUT"; \
+	rm -rf "$$DIR"; \
 	if [ $$STATUS -ne 0 ] || printf '%s' "$$ERR" | grep -qE 'error in tile|Unsupported codec'; then \
 		printf "$(RED)✗$(RESET) vips cannot decode HEIC (no HEVC decoder in libheif). On Ubuntu 24.04 / Mint 22 install it with 'sudo apt install libheif-plugin-libde265'; on Debian and macOS it comes with libvips-tools / brew vips.\n\n"; \
 		exit 1; \
@@ -621,9 +635,18 @@ init: ## Initialize repository after checkout
 	@# that diff is the whole point.
 	@uv sync --all-packages --locked
 
+	@# A fresh .env gets its own random secrets, not the committed replace-me-
+	@# placeholders: anyone with the repo can read those, and a dev stack is not
+	@# always reachable from this machine alone (`make tunnel` publishes it).
+	@# Only placeholders are replaced, and only here, on a file this run has just
+	@# created, so an existing .env keeps the values its volumes were set up with.
+	@# The database passwords and the field-encryption key are not placeholders
+	@# and stay as committed (see scripts/dev-stack/env-secrets.ts). If a mint
+	@# fails, the half-made .env is removed so the next run tries again.
 	@if [ ! -f .env ]; then \
-		printf "Copying dotenv template file... "; \
-		cp -v .env.default .env; \
+		printf "Creating .env from the dotenv template, with generated secrets...\n"; \
+		cp .env.default .env && \
+		yarn tsx scripts/dev-stack/env-secrets-cli.ts mint .env || { rm -f .env; exit 1; }; \
 		printf "\n"; \
 	fi
 
@@ -675,8 +698,26 @@ lint: ## Check the source for lint and formatting errors, both stacks
 
 	@sh scripts/check-ci-namespace.sh
 	@node scripts/check-capacitor-native-sync.mjs
+	@node scripts/check-viewport-zoom.mjs
+	@node scripts/check-depcheck-ratchet.mjs
+	@node scripts/docs-check.mjs
 
 	@printf "\nNo lint errors found.\n\n"
+
+.PHONY: docs-check
+docs-check: ## Verify normative markdown links and CI workflow references
+	@printf "$(call task_icon,docs-check,📚) Checking documentation integrity...\n\n"
+	@node scripts/docs-check.mjs
+	@printf "$(GREEN)✓$(RESET) Documentation integrity verified.\n\n"
+
+.PHONY: pr-gate
+pr-gate: ## Run the fast local PR gate (docs-check, depcheck ratchet, typecheck, changed unit tests)
+	@printf "$(call task_icon,pr-gate,🚦) Running fast PR gate...\n\n"
+	@node scripts/docs-check.mjs
+	@yarn workspace @ci/be-api depcheck:ratchet
+	@yarn workspaces foreach --all run typecheck
+	@yarn workspace @ci/be-api test:unit --changedSince=origin/main --passWithNoTests
+	@printf "\n$(GREEN)✓$(RESET) Fast PR gate passed.\n\n"
 
 .PHONY: typecheck
 typecheck: ## Typecheck every JS/TS workspace that declares a typecheck script
@@ -696,7 +737,17 @@ typecheck: ## Typecheck every JS/TS workspace that declares a typecheck script
 
 .PHONY: test
 test: ## Run the unit tests, both stacks
-	@yarn tsx scripts/xtask/index.ts test
+	@# `node --import tsx`, NOT `yarn tsx`: the tsx CLI wrapper relays Ctrl-C and `kill` to its child and
+	@# SIGKILLs it if it has not answered within ~60 ms. This command spends its time blocked in a child
+	@# process, so it cannot answer, and the run would die with no summary (and, for test-db, with a
+	@# database container left running). scripts/xtask/makefile.test.ts fails if this goes back.
+	@yarn node --import tsx scripts/xtask/index.ts test
+
+.PHONY: test-db
+test-db: ## Run the database-backed jest suites against a throwaway Postgres (needs Docker)
+	@# `node --import tsx`, not `yarn tsx` -- see `test` above for why. Here the cost of the wrapper is a
+	@# running ci-testdb-* container and a leftover temp dir.
+	@yarn node --import tsx scripts/xtask/index.ts test-db $(if $(KEEP),--keep) $(if $(KEEP_FOR),--keep-for $(KEEP_FOR)) $(if $(WORKERS),--workers $(WORKERS)) $(if $(DB_IMAGE),--image $(DB_IMAGE)) $(if $(NO_RETRY),--no-retry) -- $(ARGS)
 
 .PHONY: test-android
 test-android: ## Run the Android native unit tests (JVM; no emulator needed)
@@ -835,17 +886,30 @@ smoke-api: ## Verify the API image can run `migrate` with production-only depend
 # migrate-database runs `yarn migrate`, so both halves of it must resolve inside
 # the image, which installs dependencies only: a devDependency in either exits
 # non-zero at startup and rolls back every app install. Neither half needs a
-# database here — check:migrations only reads migration filenames, and dbmate's
-# --help resolves bin/dbmate.js's imports without connecting. entrypoint.sh is
-# bypassed because it demands the eight runtime secrets. A missing image is an
-# error, not a pass: a gate that verified nothing must not report green.
+# database here — check:migrations only reads the migration files, and the dbmate
+# half runs `--no-wait` in a container with no network, so the wrapper's ownership
+# check finds nothing to connect to and steps aside. entrypoint.sh is bypassed
+# because it demands the eight runtime secrets. A missing image is an error, not
+# a pass: a gate that verified nothing must not report green.
+#
+# The dbmate half goes through yarn, the way migrate does, and asks the binary for
+# its `--version`:
+#   - bin/dbmate.js spawns a bare `dbmate`, and the only one in the image is the
+#     npm package's, which yarn puts first on the PATH of the scripts it runs. A
+#     bare `node bin/dbmate.js` skips yarn, so it would test a different
+#     resolution than production uses — it once reached a curl-installed 2.27.0
+#     that migrate never ran.
+#   - `--help` is answered by the wrapper's own argument parser, which exits before
+#     it spawns anything, so it passes with no dbmate in the image at all.
+#     `--version` is forwarded to the binary, so a missing or wrong-architecture
+#     one fails here rather than in migrate-database on an appliance.
 	@docker image inspect $(API_REPO):latest >/dev/null 2>&1 || { \
 		printf "  ✗ $(API_REPO):latest not found — run 'make build' first.\n\n"; \
 		exit 1; \
 	}
 
-	@docker run --rm --entrypoint sh $(API_REPO):latest -c \
-		'yarn check:migrations && node bin/dbmate.js --help >/dev/null'
+	@docker run --rm --network none --entrypoint sh $(API_REPO):latest -c \
+		'yarn check:migrations && yarn dbmate --no-wait --version'
 
 	@printf "\nAPI image can migrate. ✅\n\n"
 
@@ -916,16 +980,14 @@ smoke-stack: ## Boot the built production images and prove the gateway serves th
 		}; \
 	done
 
-# nginx resolves `upstream api { server api:3030; }` and the object-store
-# proxy_pass at CONFIG LOAD time, so a bare `nginx -t` outside the compose
-# network dies with "host not found in upstream" and tells you nothing about
-# the config itself. The two --add-host entries give those names something to
-# resolve to; what is under test is nginx.conf's syntax and directives, not
-# connectivity. Seconds of work, and it fails here instead of as a
-# crash-looping gateway on someone's appliance.
+# Every upstream server in nginx.conf is `resolve`, looked up while nginx
+# runs rather than at config load, so a bare `nginx -t` outside the compose
+# network passes with no --add-host. It used to die there with "host not
+# found in upstream"; it failing that way again means a name went back to
+# being resolved once at start. Seconds of work. It fails here instead of as
+# a crash-looping gateway on someone's appliance.
 	@printf "➤ Validating the gateway's nginx.conf...\n\n"
-	@docker run --rm --add-host api:127.0.0.1 --add-host object-store:127.0.0.1 \
-		--entrypoint nginx $(GATEWAY_REPO):latest -t
+	@docker run --rm --entrypoint nginx $(GATEWAY_REPO):latest -t
 
 # docker-compose.production.yml publishes the gateway on a FIXED host port, so
 # anything already holding 8642 (a running `make production`, the desktop app)
@@ -1063,7 +1125,19 @@ smoke-stack: ## Boot the built production images and prove the gateway serves th
 	@printf "\nProduction stack boots, serves the web app, and keeps a worker alive. ✅\n\n"
 
 .PHONY: publish
-publish: init ## Publish CI-Server images and metadata to the CI-Portal store
+publish: publish-build ## Publish CI-Server images and metadata to the CI-Portal store
+	@printf "$(call task_icon,publish,📦) Publishing to CI-Portal registry...\n\n"
+
+	@scripts/publish/publish.sh
+
+	@printf "\n"
+
+# Everything `publish` does before it pushes. publish.yml's build job runs this
+# on its own, with a read-only token, and hands the images to a separate push
+# job: `init` runs every allowed dependency install script and `uv sync`, and
+# none of that code should share a job with the registry write token.
+.PHONY: publish-build
+publish-build: init ## Build and smoke-test the production images without pushing them
 	@$(MAKE) build ENV=production GPU=$(GPU)
 
 	@$(MAKE) smoke-api
@@ -1076,19 +1150,13 @@ publish: init ## Publish CI-Server images and metadata to the CI-Portal store
 	@# at a user's first launch.
 	@$(MAKE) smoke-stack
 
-	@printf "$(call task_icon,publish,📦) Publishing to CI-Portal registry...\n\n"
-
-	@scripts/publish/publish.sh
-
-	@printf "\n"
-
 .PHONY: publish-quiet
 publish-quiet: ## Publish to CI-Portal store (quiet mode)
 	@scripts/publish/publish.sh -q
 
 .PHONY: seed
-seed: ## Seed database with John Smith user and demo data
-	@printf "$(call task_icon,seed,🌱) Seeding database...\n\n"
+seed: ## Seed database with demo data (SEED_USER_ID=<uuid> to target an existing user)
+	@printf "$(call task_icon,seed,🌱) Seeding database for user $(SEED_USER_ID)...\n\n"
 
 	@cd backend/apps/api && yarn run exec -- scripts/seed-database/main.ts
 
@@ -1190,6 +1258,14 @@ userpw: ## Change a user's password
 	@printf "$(call task_icon,userpw,🔑) Changing user password...\n\n"
 
 	@cd backend/apps/api && yarn run exec -- scripts/change-password.ts
+
+	@printf "\n"
+
+.PHONY: hub-account-link
+hub-account-link: ## Show or repair which Memory account each Hub person signs in as (ARGS="list" | "move --from A --to B [--apply]" | "unlink --email A [--apply]")
+	@printf "$(call task_icon,hub-account-link,🔗) Hub account links...\n\n"
+
+	@cd backend/apps/api && yarn hub-account-link $(or $(ARGS),list)
 
 	@printf "\n"
 

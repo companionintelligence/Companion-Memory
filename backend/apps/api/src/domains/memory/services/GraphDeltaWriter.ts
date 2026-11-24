@@ -4,6 +4,8 @@ import { v7 as uuidv7 } from 'uuid';
 
 import { LoggerService } from '@ci/common/logging';
 import { computeChunkSize } from '@ci/common/persistence';
+import { stableJson } from '@ci/common/stableJson';
+import { USER_EDITED_KEYS } from '@ci/common/userEditedProperties';
 
 export type GraphDeltaChangeType = 'created' | 'updated' | 'archived' | 'deleted' | 'merged';
 export type GraphDeltaNodeType = 'entity' | 'relationship';
@@ -30,6 +32,98 @@ export interface RecordGraphDeltaInput {
   changedByUserId?: string | null;
   /** Share the domain write's transaction when provided. */
   manager?: EntityManager;
+}
+
+/**
+ * The `changedFields` of an edit: each of `keys` whose value differs between
+ * `before` and `after`, as `{ old, new }`. Missing, null, '' and [] are all "empty",
+ * so a form that sends every field back unchanged records nothing.
+ */
+export function changedFieldsBetween(
+  before: Record<string, unknown>,
+  after: Record<string, unknown>,
+  keys: Iterable<string>,
+): Record<string, GraphDeltaChangedField> {
+  const isEmpty = (value: unknown) =>
+    value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0);
+  const changed: Record<string, GraphDeltaChangedField> = {};
+
+  for (const key of keys) {
+    const was = before[key];
+    const now = after[key];
+
+    if ((isEmpty(was) && isEmpty(now)) || stableJson(was) === stableJson(now)) {
+      continue;
+    }
+
+    changed[key] = { old: isEmpty(was) ? null : was, new: isEmpty(now) ? null : now };
+  }
+
+  return changed;
+}
+
+/**
+ * The rows a merge writes into Change History, which reads a side a delta
+ * leaves out as "empty". Each record's row sits on its own page, so both pages
+ * list the merge.
+ *
+ * The kept record's row is always written, even when the merge brought nothing
+ * new: `merged_from_entity_ids` names the records merged into it. Each field
+ * the merge moved follows with its real before and after values. Each
+ * merged-away record keeps its name; its row says where it now points and, when
+ * it was live, that it no longer is. The hand-set list is bookkeeping rather
+ * than a field anyone edited, so neither row records it.
+ */
+export function mergeDeltaInputs(merge: {
+  entityType: string;
+  ownerUserId: string;
+  changeSource: string;
+  targetId: string;
+  /** The kept record's columns before and after, keyed alike. */
+  columns: { before: Record<string, unknown>; after: Record<string, unknown> };
+  /** The kept record's properties bag before and after. */
+  properties: { before: Record<string, unknown>; after: Record<string, unknown> };
+  sources: Array<{ entityId: string; isActive: boolean | null | undefined }>;
+}): RecordGraphDeltaInput[] {
+  const propertyKeys = new Set([
+    ...Object.keys(merge.properties.before),
+    ...Object.keys(merge.properties.after),
+  ]);
+  propertyKeys.delete(USER_EDITED_KEYS);
+
+  const keptChanges = {
+    ...changedFieldsBetween(merge.columns.before, merge.columns.after, Object.keys(merge.columns.after)),
+    ...changedFieldsBetween(merge.properties.before, merge.properties.after, propertyKeys),
+  };
+  const row = {
+    nodeType: 'entity' as const,
+    entityType: merge.entityType,
+    ownerUserId: merge.ownerUserId,
+    changeSource: merge.changeSource,
+    changedByUserId: merge.ownerUserId,
+  };
+
+  return [
+    {
+      ...row,
+      changeType: 'merged' as const,
+      entityId: merge.targetId,
+      changedFields: {
+        ...keptChanges,
+        merged_from_entity_ids: { old: null, new: merge.sources.map((source) => source.entityId) },
+      },
+    },
+    ...merge.sources.map((source) => ({
+      ...row,
+      changeType: 'merged' as const,
+      entityId: source.entityId,
+      changedFields: changedFieldsBetween(
+        { merged_into_entity_id: null, is_active: source.isActive !== false },
+        { merged_into_entity_id: merge.targetId, is_active: false },
+        ['merged_into_entity_id', 'is_active'],
+      ),
+    })),
+  ];
 }
 
 /**
@@ -167,6 +261,11 @@ export class GraphDeltaWriter {
     });
   }
 
+  /**
+   * `changedFields` is stored as given. It used to gain a `name` entry with the
+   * current name on both sides when the caller sent none, which put an
+   * `old == new` pair in every edit's delta that the panel then had to hide.
+   */
   entityUpdated(args: {
     entityId: string;
     entityType: string;
@@ -178,11 +277,6 @@ export class GraphDeltaWriter {
     changedByUserId?: string | null;
     manager?: EntityManager;
   }): Promise<void> {
-    const fields = { ...args.changedFields };
-    if (fields.name === undefined) {
-      fields.name = { old: args.name ?? null, new: args.name ?? null };
-    }
-
     return this.record({
       nodeType: 'entity',
       changeType: 'updated',
@@ -193,7 +287,7 @@ export class GraphDeltaWriter {
       changeReason: args.changeReason,
       changedByUserId: args.changedByUserId,
       manager: args.manager,
-      changedFields: fields,
+      changedFields: args.changedFields,
     });
   }
 

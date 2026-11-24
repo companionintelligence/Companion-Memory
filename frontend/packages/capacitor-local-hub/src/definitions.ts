@@ -23,6 +23,43 @@ export interface LocalHubSecureGetResult {
   value: string | null;
 }
 
+/** Sanitized, content-limited summary rendered by the iOS and Android home widgets. */
+export interface CompanionWidgetSnapshot {
+  version: 1;
+  generatedAt: string;
+  plan: {
+    openCount: number;
+    tasks: Array<{ id: string; title: string; dueAt: string | null }>;
+    updatedAt: string | null;
+  };
+  insight: {
+    systemStatus: string;
+    stillLearning: boolean;
+    prediction: string | null;
+    confidence: number | null;
+    forecastGeneratedAt: string | null;
+    metricsUpdatedAt: string | null;
+    messages: number;
+    places: number;
+    kilometers: number;
+  };
+  jobs: {
+    pending: number;
+    active: number;
+    failed: number;
+    deadLettered: number;
+    completed: number;
+    updatedAt: string | null;
+  };
+}
+
+export interface CompanionWidgetAction {
+  id: string;
+  type: 'completeTask';
+  taskId: string;
+  createdAt: string;
+}
+
 /**
  * Capacitor plugin surface for the on-device "Local Hub" sidecar: a loopback-only HTTP
  * server embedded in the native app. This interface covers only the *lifecycle* --
@@ -89,8 +126,13 @@ export interface LocalHubPlugin {
    * Android presents Chrome Auth Tab and replays `companion://` into `appUrlOpen`.
    * Portal sign-in on Android lands here. iOS opens Safari; Portal sign-in there
    * uses {@link startAuthSession} instead.
+   *
+   * `external: true` is for links that are not a sign-in. Android then hands the URL to
+   * whichever app handles it (the browser, or the provider's own app) instead of the Auth
+   * Tab, which would report any `companion://` the page navigates to as a sign-in result.
+   * iOS ignores it: Safari is already outside the app.
    */
-  openUrl(options: { url: string }): Promise<void>;
+  openUrl(options: { url: string; external?: boolean }): Promise<void>;
 
   /**
    * iOS only. Presents an in-app Safari authentication sheet and resolves when it
@@ -118,15 +160,172 @@ export interface LocalHubPlugin {
   requestLocationAuthorization(options: {
     always: boolean;
   }): Promise<{ status: NativeLocationAuthorization }>;
+
+  /** Writes a small, sanitized widget snapshot; it must never contain credentials or notes. */
+  publishWidgetSnapshot(options: { snapshot: CompanionWidgetSnapshot }): Promise<void>;
+
+  /** Reads queued actions without deleting them; callers acknowledge only after success. */
+  readWidgetActions(): Promise<{ actions: CompanionWidgetAction[] }>;
+
+  /** Removes successfully handled action IDs from the native queue. */
+  acknowledgeWidgetActions(options: { ids: string[] }): Promise<void>;
+
+  /** Clears cached widget data and pending actions on sign-out. */
+  clearWidgetSnapshot(): Promise<void>;
+
+  /**
+   * Background samples for Always tracking, on both platforms, delivered as
+   * `significantLocation` events (`significantLocationError` with `code: 'NOT_AUTHORIZED'`
+   * when the OS refuses).
+   *
+   * iOS: significant-change monitoring plus one resume geofence around the last queued fix
+   * -- a callback when the phone moves a meaningful distance, including after the app leaves
+   * the foreground, without the solid blue background indicator. Armed state is persisted
+   * natively and the app delegate restarts the monitor on every launch, including the
+   * background relaunches iOS performs for a location or region event and after a reboot,
+   * so recording continues with the app swiped away. Every fix that clears the
+   * distance/interval gate is queued into the encrypted outbox from native code, and also
+   * emitted as an event when a WebView is alive. `options` is required, as on Android. If
+   * the Always grant lapses, a relaunch posts a notification asking for an app open, where
+   * the web side's re-arm runs the two-step prompt again.
+   *
+   * Android: motion-gated sampling, kept armed until `stopSignificantLocationUpdates` --
+   * across the app being swiped out of recents and across reboots. GPS runs only while the
+   * phone is moving: the fixes themselves (helped by the permission-free stationary-detect
+   * sensor) say when it has stopped, an exit geofence around the resting spot says when it
+   * starts again, and a location foreground service (with its notification) exists only in
+   * between. The geofence is what needs `ACCESS_BACKGROUND_LOCATION`, which the plugin
+   * prompts for after fine location; like iOS, nothing beyond the location grants is asked
+   * for, and the activity-recognition API is not used. The cost of that choice: the first
+   * stretch of each trip (the fence radius plus Play Services' latency) is not sampled, and
+   * a trip shorter than the radius is not sampled at all. Every fix that clears the
+   * distance/interval gate is queued straight into the encrypted outbox from native code,
+   * so nothing depends on the WebView being alive; it is also emitted as an event, and the
+   * web side's own enqueue of it collapses on the shared `source_id`. `options` is required
+   * there -- see {@link SignificantLocationOptions}. A reboot or an app update wipes the
+   * fence; a boot receiver puts it back. Should the background grant lapse later, the
+   * plugin posts one notification asking for an app open, where the web side re-prompts.
+   */
+  startSignificantLocationUpdates(options?: SignificantLocationOptions): Promise<void>;
+
+  stopSignificantLocationUpdates(): Promise<void>;
+
+  /**
+   * Whether location fixes queued by the background tracker upload while the app is closed.
+   *
+   * On unless the person turned it off in Settings -> Location. Android: a WorkManager job sends
+   * them once the phone has a network. iOS: sent in background time right after each fix is
+   * queued, and again on each background refresh (uncompiled as of 2026-10-30). Web:
+   * `supported: false`; there is no native queue.
+   */
+  getBackgroundUpload(): Promise<BackgroundUploadState>;
+
+  /** Turn background upload on (uploading anything already waiting) or off. */
+  setBackgroundUpload(options: { enabled: boolean }): Promise<BackgroundUploadState>;
+
+  /**
+   * Hand the background replica sync what the app's PowerSync client uses and schedule it, only
+   * ever running while the app does not hold the replica. Android: every 30 minutes, network and
+   * battery permitting. iOS: a background refresh task iOS runs when it chooses, no sooner than
+   * 30 minutes apart, also with the phone locked once it has been unlocked since boot
+   * (uncompiled as of 2026-10-30). Call each time that client connects. Web: no-op.
+   */
+  configureBackgroundSync(options: ReplicaSyncOptions): Promise<void>;
+
+  /**
+   * Phone apps: the app's sync client is about to connect. Stops a background run in progress and
+   * keeps new ones off until `releaseReplica`. `free` is false only if a run did not stop in time.
+   */
+  claimReplica(): Promise<{ free: boolean }>;
+
+  /** Phone apps: the app's sync client has disconnected; background runs may go ahead. */
+  releaseReplica(): Promise<void>;
+
+  /** Phone apps: sign-out, or a Memory without sync. Cancels background runs and forgets the config. */
+  clearBackgroundSync(): Promise<void>;
+
+  /**
+   * Discovers Companion Memory appliances advertising over mDNS / Bonjour on the local network
+   * (default service type `_companion-memory._tcp.`) so air-gapped or offline LAN users can pair
+   * without Portal cloud sign-in or manual IP entry.
+   *
+   * On web, resolves `{ appliances: [], supported: false }` because browser tabs cannot issue
+   * multicast DNS queries.
+   */
+  discoverLanAppliances(options?: DiscoverLanAppliancesOptions): Promise<DiscoverLanAppliancesResult>;
+}
+
+export interface DiscoverLanAppliancesOptions {
+  /** mDNS / Bonjour service type to browse; defaults to `_companion-memory._tcp.`. */
+  serviceType?: string;
+  /** Discovery window in milliseconds (clamped 500..10000; default 2500). */
+  timeoutMs?: number;
+}
+
+export interface DiscoveredLanAppliance {
+  /** Instance name advertised by mDNS / Bonjour (e.g. `Companion Home Hub`). */
+  name: string;
+  /** Resolved hostname or IPv4/IPv6 literal (e.g. `companion-hub.local` or `192.168.1.42`). */
+  host: string;
+  /** Advertised HTTP(S) port. */
+  port: number;
+  /** Canonical base URL (`http(s)://<host>:<port>`) ready for `setApiBaseUrl`. */
+  baseUrl: string;
+  /** Optional TXT record metadata (e.g. `version`, `applianceId`, `tls`). */
+  txt?: Record<string, string>;
+}
+
+export interface DiscoverLanAppliancesResult {
+  appliances: DiscoveredLanAppliance[];
+  supported: boolean;
+}
+
+/**
+ * What Android needs to build, from a process that may have no JavaScript, exactly the
+ * record the web side's `buildPositionRecord` would have built for the same fix. Every
+ * value is one the web side owns (its storage, its constants, its copy); nothing is
+ * invented natively.
+ */
+export interface ReplicaSyncOptions {
+  /** The Memory origin (`getApiBaseUrl()`) the token is fetched from. */
+  apiBaseUrl: string;
+  /** The replica's file name on disk (`<name>SQLite.db`). */
+  databaseFile: string;
+  /** The working-set window, for the token request's `cutoff`. */
+  lookbackDays: number;
+  /** JSON of the options the app's client passes `powersync_control('start')`, schema included. */
+  startOptions: string;
+}
+
+export interface BackgroundUploadState {
+  enabled: boolean;
+  /** False where the platform has no background uploader; hide the setting there. */
+  supported: boolean;
+}
+
+export interface SignificantLocationOptions {
+  /** Stable per-install id that prefixes `source_id` (`deviceSourceKey()`). Required on Android. */
+  deviceKey: string;
+  /** Free-text producer stored on the row; defaults to `companion-mobile`. */
+  provider?: string;
+  /** The outbox owner stamp (`outboxOwnerStamp()`), or null when nobody is signed in. */
+  owner?: string | null;
+  /** Persist gate: record on moving this far OR waiting this long. */
+  minDistanceMeters?: number;
+  minIntervalMs?: number;
+  /** Fixes looser than this are dropped, not queued. */
+  maxAccuracyMeters?: number;
+  /** Radius of the exit geofence Android sets where the phone came to rest. iOS ignores it. */
+  geofenceRadiusMeters?: number;
+  /** The foreground-service notification shown while moving (Android requires one). */
+  notificationTitle?: string;
+  notificationText?: string;
+  /** The appliance origin (`getApiBaseUrl()`) the Android background uploader sends to. */
+  apiBaseUrl?: string;
 }
 
 export type NativeLocationAuthorization =
-  | 'notDetermined'
-  | 'denied'
-  | 'restricted'
-  | 'whenInUse'
-  | 'always'
-  | 'unsupported';
+  'notDetermined' | 'denied' | 'restricted' | 'whenInUse' | 'always' | 'unsupported';
 
 export interface NativeCurrentLocation {
   latitude: number;

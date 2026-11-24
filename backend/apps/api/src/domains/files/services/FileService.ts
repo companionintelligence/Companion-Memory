@@ -10,16 +10,23 @@ import {
   DeleteObjectsCommand,
   GetObjectCommand,
   PutObjectCommand,
+  CreateMultipartUploadCommand,
+  UploadPartCommand,
+  CompleteMultipartUploadCommand,
+  AbortMultipartUploadCommand,
+  type CompletedPart,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In, type FindOptionsWhere } from 'typeorm';
+import { Repository, In, IsNull, type FindOptionsWhere, type SelectQueryBuilder } from 'typeorm';
 import { v4 as uuidv4, v7 as uuidv7 } from 'uuid';
 
 import { isUniqueViolation } from '@ci/common/constants';
 import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import { type HourlyActivityOptions, touchedHourlyBucketsSql } from '@ci/common/persistence';
+import { keysetSeek } from '@ci/common/persistence';
 import { serves } from '@ci/common/roles';
 import config from '@ci/configuration';
 import { EventService } from '@ci/domains/events';
@@ -27,7 +34,13 @@ import { FileUpdatedEvent, FileUploadedEvent } from '@ci/domains/files/events';
 import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
 
 import { SignedFile, FileEntity } from '../entities/FileEntity';
+import { type FileKind, fileKindsPredicate } from '../fileKinds';
 import { FileVariant, type CreateFileDto, type UpdateFileDto, type UploadFileDto } from '../types';
+
+import { downloadResponseOverrides } from './downloadResponse';
+
+/** A uuid's shape, any version: what `ci.events.event_id` holds. */
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const BUCKET_REGION = config.staticfiles.bucket ?? 'us-east-1';
 const SIGNATURE_URL = config.staticfiles.auth.signatureUrl ?? config.staticfiles.storageUrl;
@@ -43,8 +56,218 @@ export interface HourlyFileCount {
   count: number;
 }
 
+/** The smallest part of a multipart upload the S3 API takes, for every part but the last. */
+const MIN_PART_BYTES = 5 * 1024 * 1024;
+/** The most parts one multipart upload may have. */
+const MAX_PARTS = 10_000;
+/**
+ * The largest part size this writer picks, whatever size the caller expects:
+ * the expected size comes from the caller's input (an archive's chunk count),
+ * and a part is held in memory until it goes out. A part goes out once it
+ * reaches this size, so it can run over by the last piece written. 10,000 of
+ * these is 625 GiB.
+ */
+const MAX_PART_BYTES = 64 * 1024 * 1024;
+
+/**
+ * One object written a piece at a time, from {@link FileService.openObjectWriter}.
+ * Nothing shows under the key until {@link ObjectWriter.finish}.
+ */
+export interface ObjectWriter {
+  /** Add the object's next bytes. */
+  write(piece: Buffer): Promise<void>;
+  /** Store the object. */
+  finish(): Promise<void>;
+  /** Give the object up. An upload in progress is aborted, so none of its parts stay in the store. */
+  abort(): Promise<void>;
+}
+
+/**
+ * Writes an object as a multipart upload, a part at a time, holding at most
+ * one part. An object that never fills a part (most files and an empty one)
+ * is stored with one PutObject at the end instead, so it costs no more than
+ * `putObject` did.
+ */
+class MultipartObjectWriter implements ObjectWriter {
+  private pending: Buffer[] = [];
+
+  private pendingBytes = 0;
+
+  private uploadId: string | null = null;
+
+  private readonly parts: CompletedPart[] = [];
+
+  /**
+   * Set by finish, by abort and by a part that failed to go out. A second
+   * finish would store an empty object over the first. After a failed part
+   * its bytes are gone, so a finish would store the object without them.
+   */
+  private closed = false;
+
+  constructor(
+    private readonly s3: S3Client,
+    private readonly bucket: string,
+    private readonly key: string,
+    private readonly partBytes: number,
+  ) {}
+
+  async write(piece: Buffer): Promise<void> {
+    this.assertOpen();
+    this.pending.push(piece);
+    this.pendingBytes += piece.length;
+
+    if (this.pendingBytes >= this.partBytes) {
+      try {
+        await this.uploadPart();
+      } catch (error) {
+        this.closed = true;
+        throw error;
+      }
+    }
+  }
+
+  async finish(): Promise<void> {
+    this.assertOpen();
+    // Closed before the first request. A finish that fails is followed by
+    // abort (which still works) but never by another write or finish.
+    this.closed = true;
+
+    if (this.uploadId === null) {
+      await this.s3.send(
+        new PutObjectCommand({
+          Bucket: this.bucket,
+          Key: this.key,
+          Body: this.takePending(),
+        }),
+      );
+
+      return;
+    }
+
+    // The last part may be smaller than the minimum.
+    if (this.pendingBytes > 0) {
+      await this.uploadPart();
+    }
+
+    await this.s3.send(
+      new CompleteMultipartUploadCommand({
+        Bucket: this.bucket,
+        Key: this.key,
+        UploadId: this.uploadId,
+        MultipartUpload: { Parts: this.parts },
+      }),
+    );
+    this.uploadId = null;
+  }
+
+  async abort(): Promise<void> {
+    this.closed = true;
+    this.pending = [];
+    this.pendingBytes = 0;
+
+    if (this.uploadId === null) {
+      return;
+    }
+
+    const uploadId = this.uploadId;
+
+    this.uploadId = null;
+    await this.s3.send(
+      new AbortMultipartUploadCommand({ Bucket: this.bucket, Key: this.key, UploadId: uploadId }),
+    );
+  }
+
+  private assertOpen(): void {
+    if (this.closed) {
+      throw new Error(`The object writer for key ${this.key} is closed: it finished, failed or was aborted`);
+    }
+  }
+
+  private async uploadPart(): Promise<void> {
+    if (this.uploadId === null) {
+      const created = await this.s3.send(
+        new CreateMultipartUploadCommand({ Bucket: this.bucket, Key: this.key }),
+      );
+
+      if (!created.UploadId) {
+        throw new Error(`The object store started no upload for key: ${this.key}`);
+      }
+
+      this.uploadId = created.UploadId;
+    }
+
+    const body = this.takePending();
+    const partNumber = this.parts.length + 1;
+    const uploaded = await this.s3.send(
+      new UploadPartCommand({
+        Bucket: this.bucket,
+        Key: this.key,
+        UploadId: this.uploadId,
+        PartNumber: partNumber,
+        Body: body,
+      }),
+    );
+
+    this.parts.push({ ETag: uploaded.ETag, PartNumber: partNumber });
+  }
+
+  /** The pending pieces as one buffer, emptying them. A lone piece goes as it is, not copied. */
+  private takePending(): Buffer {
+    const body = this.pending.length === 1 ? this.pending[0] : Buffer.concat(this.pending, this.pendingBytes);
+
+    this.pending = [];
+    this.pendingBytes = 0;
+
+    return body;
+  }
+}
+
 /** Shape of every `ci.files.key` — the column is `uuid`, minted by `uuidv4()` on upload. */
 const UUID_KEY = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The bucket and key a signed object-store link points at, from any of the forms the app holds
+ * it in: absolute (`https://memory.example/static/...`), app-relative (`/static/...`) or as
+ * signed (`/<bucket>/<key>?...`). Null for anything else, including a key that is not a UUID --
+ * no row could match it.
+ */
+export function parseSignedLink(link: string): { bucket: string; key: string } | null {
+  try {
+    const path = new URL(link, 'http://placeholder.invalid').pathname;
+    const segments = path
+      .replace(/^\/static(?=\/)/, '')
+      .split('/')
+      .filter(Boolean)
+      .map(decodeURIComponent);
+
+    if (segments.length !== 2 || !UUID_KEY.test(segments[1])) {
+      return null;
+    }
+
+    return { bucket: segments[0], key: segments[1] };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Leaves out the files an event already shows: those stamped with an `event_id`,
+ * and those wrapped by a content row that links to an event (the link from
+ * content to file is `content.external_id`; see ContentService.findIdsByFileIds).
+ * An imported photo is both a file and an event at its taken date, so a browse
+ * that merges events would otherwise list it twice, once at its row write time.
+ */
+function excludeEventLinkedFiles(query: SelectQueryBuilder<FileEntity>): SelectQueryBuilder<FileEntity> {
+  return query.andWhere('file.event_id IS NULL').andWhere(
+    `NOT EXISTS (
+      SELECT 1 FROM ci.content linked
+      WHERE linked.user_id = file.user_id
+        AND linked.external_id = file.id::text
+        AND (linked.external_id_kind = 'file' OR linked.external_id_kind IS NULL)
+        AND linked.event_id IS NOT NULL
+    )`,
+  );
+}
 
 @Injectable()
 export class FileService implements OnModuleInit {
@@ -112,7 +335,34 @@ export class FileService implements OnModuleInit {
     }
   }
 
+  /**
+   * Refuses an upload's direct `eventId` unless it is one of the caller's own events.
+   *
+   * It used to be stored as given. The column is a uuid with a foreign key to `ci.events`, so any
+   * existing event id passed, another account's included, and pinned this file to it; anything else
+   * failed in the database as a 500. Read straight from `ci.events` (`event_id`, `user_id`) so the
+   * files domain still imports nothing from the memory domain.
+   */
+  private async assertOwnEvent(context: UserServiceContext, eventId: string): Promise<void> {
+    if (!UUID_SHAPE.test(eventId)) {
+      throw new BadRequestException('eventId must be an event id');
+    }
+
+    const rows: unknown[] = await this.fileRepository.manager.query(
+      'SELECT 1 FROM ci.events WHERE event_id = $1 AND user_id = $2 LIMIT 1',
+      [eventId, context.userId],
+    );
+
+    if (rows.length === 0) {
+      throw new BadRequestException('eventId names no event of yours');
+    }
+  }
+
   async create(context: UserServiceContext, file: CreateFileDto): Promise<SignedFile> {
+    if (file.eventId) {
+      await this.assertOwnEvent(context, file.eventId);
+    }
+
     if (file.externalId) {
       const existing = await this.findByExternalId(context, file.externalId);
 
@@ -120,6 +370,16 @@ export class FileService implements OnModuleInit {
         this.logger.debug('File with same external ID already exists', {
           existingFileId: existing.id,
         });
+
+        // A pointer row written before rows recorded their connection (or by a
+        // connection since removed) is adopted by the one syncing it now, so
+        // a later disconnect can find it.
+        if (file.connectionId) {
+          await this.fileRepository.update(
+            { id: existing.id, userId: context.userId, connectionId: IsNull() },
+            { connectionId: file.connectionId },
+          );
+        }
 
         return existing;
       }
@@ -162,6 +422,7 @@ export class FileService implements OnModuleInit {
       title: file.title ?? null,
       description: file.description ?? null,
       externalId: file.externalId ?? null,
+      connectionId: file.connectionId ?? null,
       bucket,
       key,
       hash,
@@ -169,10 +430,9 @@ export class FileService implements OnModuleInit {
       userId: context.userId,
       externalCreatedAt: file.externalCreatedAt,
       externalUpdatedAt: file.externalUpdatedAt,
-      // A direct eventId is stored as-is (trusting the caller — this domain
-      // cannot itself validate it belongs to the caller's user without
-      // importing the memory domain, which it must never do; see the note on
-      // `event_id`/`linkEvent` above). captureTickId's resolution to an
+      // A direct eventId was checked to be one of the caller's own events
+      // (`assertOwnEvent`, a read of `ci.events` that imports nothing from the
+      // memory domain). captureTickId's resolution to an
       // eventId, when no direct id is given, happens asynchronously from the
       // memory domain instead — see `linkEvent` below.
       eventId: file.eventId ?? null,
@@ -298,6 +558,22 @@ export class FileService implements OnModuleInit {
    * the planner was free to change between pages, repeating or dropping rows
    * at page seams. An unknown `afterId` reads as "from the start", matching
    * what the in-memory paginator did with a stale cursor.
+   *
+   * The anchor's `created_at` is read as TEXT, never through the entity. The
+   * column is `timestamptz(6)`: microseconds, `DEFAULT now()`, and a bulk
+   * upload stamps a whole batch with one. The driver hands an entity's
+   * `Date` back at MILLISECONDS (`.123456` reads as `.123`), so a seek bound
+   * to it sorted the anchor BEFORE ITSELF: `(created_at, id) < (.123, :id)`
+   * is false for every file of the anchor's instant, and the rest of the
+   * batch at a page boundary was never served, while `totalCount` counted
+   * it. The text is Postgres' own spelling with the microseconds intact, and
+   * bound back it is parsed as the column's own type, so the anchor is the
+   * file's exact `(created_at, id)`.
+   *
+   * The seek stays a row-value comparison, not the bounded OR of
+   * `keysetSeekExact`: there is no index on `created_at` here today, so both
+   * plan as a scan, a filter and a top-N sort, and if one is added this form
+   * is the exact index range (see `ItemService.findPage`, which has one).
    */
   async findPage(
     context: ServiceContext,
@@ -312,25 +588,37 @@ export class FileService implements OnModuleInit {
 
     const totalCount = await this.fileRepository.count({ where: scope });
 
-    const query = this.fileRepository
-      .createQueryBuilder('file')
-      .where('file.variant = :variant', { variant: scope.variant })
+    // The originals this call may see, for the page and for the anchor alike: a file the page could
+    // not return (another user's, a variant, a soft-deleted one) is not an anchor either.
+    const visible = () => {
+      const originals = this.fileRepository
+        .createQueryBuilder('file')
+        .where('file.variant = :variant', { variant: scope.variant });
+
+      if (scope.userId != null) {
+        originals.andWhere('file.user_id = :userId', { userId: scope.userId });
+      }
+
+      return originals;
+    };
+
+    const query = visible()
       .orderBy('file.created_at', 'DESC')
       .addOrderBy('file.id', 'DESC')
       // One extra row answers hasNextPage without a second count.
       .take(page.limit + 1);
 
-    if (scope.userId != null) {
-      query.andWhere('file.user_id = :userId', { userId: scope.userId });
-    }
-
     if (page.afterId) {
-      const anchor = await this.fileRepository.findOne({ where: { ...scope, id: page.afterId } });
+      const anchor = await visible()
+        .select('file.id', 'anchor_id')
+        .addSelect('CAST(file.created_at AS text)', 'anchor_created_at')
+        .andWhere('file.id = :anchorId', { anchorId: page.afterId })
+        .getRawOne<{ anchor_id: string; anchor_created_at: string | null }>();
 
-      if (anchor?.createdAt != null) {
+      if (anchor?.anchor_created_at != null) {
         query.andWhere('(file.created_at, file.id) < (:anchorCreatedAt, :anchorId)', {
-          anchorCreatedAt: anchor.createdAt,
-          anchorId: anchor.id,
+          anchorCreatedAt: anchor.anchor_created_at,
+          anchorId: anchor.anchor_id,
         });
       }
     }
@@ -356,6 +644,43 @@ export class FileService implements OnModuleInit {
     });
 
     return result ? this.signFile(result) : null;
+  }
+
+  /**
+   * Fresh signed links for links this service signed earlier, in the order given; null for a
+   * link that names no file the caller owns (or is not one of ours at all).
+   *
+   * Signed links expire (`staticfiles.auth.signatureTTL`), and the web app keeps them in its
+   * query cache for as long as it is open, so a photo shown again after that fails. The app
+   * sends the failed link back here rather than re-running whatever query first produced it.
+   * A link is `[<origin>][/static]/<bucket>/<key>?<signature>`; the bucket and key name the
+   * `ci.files` row, which must belong to the caller -- the key alone is not a secret, it rides
+   * in every link -- and the row is re-signed exactly as it was first signed. One query for
+   * the whole batch, by (bucket, key) within the caller's own rows.
+   */
+  async resignLinks(context: ServiceContext, links: string[]): Promise<(string | null)[]> {
+    const wanted = links.map((link) => parseSignedLink(link));
+    const keys = [...new Set(wanted.flatMap((target) => (target ? [target.key] : [])))];
+
+    if (keys.length === 0) {
+      return links.map(() => null);
+    }
+
+    const rows = await this.fileRepository.find({
+      where: {
+        key: In(keys),
+        ...(context.userId !== SYSTEM_USER && { userId: context.userId }),
+      },
+    });
+    const signed = new Map<string, string>();
+
+    for (const file of await this.signFiles(rows)) {
+      if (file.bucket != null && file.key != null && file.url) {
+        signed.set(`${file.bucket}/${file.key}`, file.url);
+      }
+    }
+
+    return wanted.map((target) => (target ? (signed.get(`${target.bucket}/${target.key}`) ?? null) : null));
   }
 
   async findByIds(context: ServiceContext, ids: string[]): Promise<(SignedFile | null)[]> {
@@ -393,6 +718,10 @@ export class FileService implements OnModuleInit {
       afterTime?: Date;
       afterId?: string;
       order?: 'ASC' | 'DESC';
+      /** Only these kinds of file (see `fileKinds.ts`); absent means every kind. */
+      kinds?: readonly FileKind[];
+      /** Drop files an event already shows (see {@link excludeEventLinkedFiles}). */
+      excludeEventLinked?: boolean;
     } = {},
   ): Promise<EntityIdentifier<IndexableEntity>[]> {
     let query = this.fileRepository
@@ -400,6 +729,15 @@ export class FileService implements OnModuleInit {
       .select('file.id', 'id')
       .where('file.user_id = :userId', { userId: context.userId })
       .andWhere('file.variant = :variant', { variant: FileVariant.ORIGINAL });
+
+    if (options.excludeEventLinked) {
+      query = excludeEventLinkedFiles(query);
+    }
+
+    if (options.kinds && options.kinds.length > 0) {
+      const kinds = fileKindsPredicate('file.content_type', options.kinds);
+      query = query.andWhere(kinds.sql, kinds.params);
+    }
 
     if (options.startTime) {
       query = query.andWhere('file.updated_at >= :startTime', { startTime: options.startTime });
@@ -409,16 +747,17 @@ export class FileService implements OnModuleInit {
       query = query.andWhere('file.updated_at <= :endTime', { endTime: options.endTime });
     }
 
-    // Composite keyset: page strictly past (afterTime, afterId) in (updated_at DESC, id DESC).
+    // Composite keyset: page strictly past (afterTime, afterId) in (updated_at, id), in `order`.
+    const order = options.order ?? 'DESC';
+
     if (options.afterTime && options.afterId) {
       query = query.andWhere(
-        '(file.updated_at < :afterTime OR (file.updated_at = :afterTime AND file.id < :afterId))',
-        { afterTime: options.afterTime, afterId: options.afterId },
+        ...keysetSeek('file.updated_at', 'file.id', order, options.afterTime, options.afterId),
       );
     }
 
-    // Deterministic tiebreak so same-timestamp rows page consistently.
-    query = query.orderBy('file.updated_at', options.order ?? 'DESC').addOrderBy('file.id', 'DESC');
+    // Deterministic tiebreak so same-timestamp rows page consistently: the id runs the way the time does.
+    query = query.orderBy('file.updated_at', order).addOrderBy('file.id', order);
 
     if (options.limit) {
       query = query.limit(options.limit);
@@ -436,12 +775,21 @@ export class FileService implements OnModuleInit {
    */
   async countEntitiesForFiles(
     context: ServiceContext,
-    options: { startTime?: Date; endTime?: Date },
+    options: { startTime?: Date; endTime?: Date; kinds?: readonly FileKind[]; excludeEventLinked?: boolean },
   ): Promise<number> {
     let query = this.fileRepository
       .createQueryBuilder('file')
       .where('file.user_id = :userId', { userId: context.userId })
       .andWhere('file.variant = :variant', { variant: FileVariant.ORIGINAL });
+
+    if (options.excludeEventLinked) {
+      query = excludeEventLinkedFiles(query);
+    }
+
+    if (options.kinds && options.kinds.length > 0) {
+      const kinds = fileKindsPredicate('file.content_type', options.kinds);
+      query = query.andWhere(kinds.sql, kinds.params);
+    }
 
     if (options.startTime) {
       query = query.andWhere('file.updated_at >= :startTime', { startTime: options.startTime });
@@ -452,6 +800,34 @@ export class FileService implements OnModuleInit {
     }
 
     return query.getCount();
+  }
+
+  /**
+   * Of `ids`, the files that are one of `kinds`. For the search paths whose
+   * candidates come from the index (a query, a tag) rather than from the
+   * timed browse above, so the kinds filter holds there too.
+   */
+  async filterIdsByKind(
+    context: ServiceContext,
+    ids: readonly string[],
+    kinds: readonly FileKind[],
+  ): Promise<Set<string>> {
+    if (ids.length === 0 || kinds.length === 0) {
+      return new Set(ids);
+    }
+
+    const predicate = fileKindsPredicate('file.content_type', kinds);
+    const rows = await this.fileRepository
+      .createQueryBuilder('file')
+      .select('file.id', 'id')
+      .where('file.id IN (:...ids)', { ids: [...ids] })
+      .andWhere(context.userId === SYSTEM_USER ? '1 = 1' : 'file.user_id = :userId', {
+        userId: context.userId,
+      })
+      .andWhere(predicate.sql, predicate.params)
+      .getRawMany<{ id: string }>();
+
+    return new Set(rows.map((row) => row.id));
   }
 
   async findByHash(context: UserServiceContext, fileHash: string): Promise<SignedFile | null> {
@@ -467,6 +843,29 @@ export class FileService implements OnModuleInit {
     }
 
     return this.signFile(result);
+  }
+
+  /**
+   * Delete POINTER rows (no stored bytes) by their external ids. For a cloud
+   * folder that turned out to be a data export: its files were first recorded
+   * as ordinary pointers, and once the export is imported for real those rows
+   * describe nothing a person would look for. Rows holding bytes are never
+   * touched, whatever their external id.
+   */
+  async removePointersByExternalIds(context: UserServiceContext, externalIds: string[]): Promise<number> {
+    let removed = 0;
+
+    for (let i = 0; i < externalIds.length; i += 1000) {
+      const result = await this.fileRepository.delete({
+        userId: context.userId,
+        externalId: In(externalIds.slice(i, i + 1000)),
+        bucket: IsNull(),
+      });
+
+      removed += result.affected ?? 0;
+    }
+
+    return removed;
   }
 
   async findByExternalId(context: UserServiceContext, externalId: string): Promise<SignedFile | null> {
@@ -579,8 +978,19 @@ export class FileService implements OnModuleInit {
     context: UserServiceContext,
     file: UploadFileDto,
   ): Promise<{ file: SignedFile; deduped: boolean }> {
-    const { thingCapture = false, skipDescription = false, model, ...uploadData } = file;
+    const {
+      thingCapture = false,
+      skipDescription = false,
+      model,
+      memoryCapture = false,
+      capturedAt,
+      ...uploadData
+    } = file;
     const hash = await this.getFileHash(uploadData);
+    // Carried only when set, so the payload of an ordinary upload is unchanged.
+    const captureFlags = memoryCapture
+      ? { memoryCapture: true, ...(capturedAt ? { capturedAt: capturedAt.toISOString() } : {}) }
+      : {};
 
     if (hash) {
       const existing = await this.findByHash(context, hash);
@@ -590,13 +1000,18 @@ export class FileService implements OnModuleInit {
           existingFileId: existing.id,
         });
 
-        if (thingCapture) {
+        // A dedup hit is silent for a plain upload (the pipeline has seen the
+        // bytes once already), but a thing capture still wants its vision
+        // pass and a memory capture still wants its content row — both
+        // listeners are idempotent on the existing file.
+        if (thingCapture || memoryCapture) {
           await this.eventService.send(FileUploadedEvent, {
             fileId: existing.id,
             userId: context.userId,
-            thingCapture: true,
+            thingCapture,
             skipDescription,
             model,
+            ...captureFlags,
           });
         }
 
@@ -615,6 +1030,7 @@ export class FileService implements OnModuleInit {
       thingCapture,
       skipDescription,
       model,
+      ...captureFlags,
     });
 
     return { file: created, deduped: false };
@@ -627,6 +1043,21 @@ export class FileService implements OnModuleInit {
         Key: key,
         Body: body,
       }),
+    );
+  }
+
+  /**
+   * Write an object a piece at a time, for a writer that gets its bytes in
+   * pieces and must not hold them all (the account import restores a file
+   * chunk by chunk). `expectedBytes`, when known, sizes the parts so a large
+   * object stays under the store's part count, up to {@link MAX_PART_BYTES}.
+   */
+  openObjectWriter(_context: ServiceContext, bucket: string, key: string, expectedBytes = 0): ObjectWriter {
+    return new MultipartObjectWriter(
+      this.s3,
+      bucket,
+      key,
+      Math.min(MAX_PART_BYTES, Math.max(MIN_PART_BYTES, Math.ceil(expectedBytes / MAX_PARTS))),
     );
   }
 
@@ -699,7 +1130,7 @@ export class FileService implements OnModuleInit {
 
     const owned = await this.fileRepository.findOne({
       where: { key, userId: context.userId },
-      select: ['id'],
+      select: { id: true },
       withDeleted: true,
     });
 
@@ -726,6 +1157,18 @@ export class FileService implements OnModuleInit {
   }
 
   async getFileStream(context: ServiceContext, key: string): Promise<Readable> {
+    return (await this.getFileStreamWithLength(context, key)).stream;
+  }
+
+  /**
+   * The object as a stream, with the length in bytes the object store gave for
+   * it: for a reader that has to say how much is coming before it has read it
+   * (the account export numbers a file's chunks up front).
+   */
+  async getFileStreamWithLength(
+    context: ServiceContext,
+    key: string,
+  ): Promise<{ stream: Readable; contentLength: number | undefined }> {
     await this.assertOwnsKey(context, key);
 
     const response = await this.s3.send(
@@ -741,7 +1184,10 @@ export class FileService implements OnModuleInit {
 
     // AWS SDK v3 SdkStream implements Symbol.asyncIterator, so we can
     // wrap it in a Node Readable without unsafe casts or web-stream mismatches.
-    return Readable.from(response.Body as AsyncIterable<Uint8Array>);
+    return {
+      stream: Readable.from(response.Body as AsyncIterable<Uint8Array>),
+      contentLength: response.ContentLength,
+    };
   }
 
   async update(context: ServiceContext, id: string, data: UpdateFileDto): Promise<SignedFile | null> {
@@ -829,10 +1275,12 @@ export class FileService implements OnModuleInit {
       };
     }
 
+    // Never the stored type verbatim: an uploader picks it, and these links open
+    // on the app's own origin. See downloadResponse.ts.
     const command = new GetObjectCommand({
       Bucket: bucket,
       Key: key,
-      ResponseContentType: file.contentType,
+      ...downloadResponseOverrides(file.contentType, file.filename),
     });
 
     const url = await getSignedUrl(this.signatureS3, command, {
@@ -853,16 +1301,39 @@ export class FileService implements OnModuleInit {
    * the query builder (FileEntity has a @DeleteDateColumn); ownerless rows are
    * skipped.
    */
-  async aggregateHourlyActivity(): Promise<HourlyFileCount[]> {
-    const rows: Array<{ user_id: string; bucket_start: Date; count: number }> = await this.fileRepository
+  async aggregateHourlyActivity(options: HourlyActivityOptions = {}): Promise<HourlyFileCount[]> {
+    const query = this.fileRepository
       .createQueryBuilder('file')
       .select('file.userId', 'user_id')
       .addSelect(`date_trunc('hour', file.createdAt, 'UTC')`, 'bucket_start')
-      .addSelect('COUNT(*)::int', 'count')
+      // Incrementally the builder's soft-delete filter is lifted and the count
+      // made over live rows only, so a bucket whose files were all deleted comes
+      // back as 0 and is pruned; in full the builder leaves deleted files out itself.
+      .addSelect(
+        options.changedSince ? 'COUNT(*) FILTER (WHERE file.deletedAt IS NULL)::int' : 'COUNT(*)::int',
+        'count',
+      )
       .where('file.userId IS NOT NULL')
       .groupBy('user_id')
-      .addGroupBy('bucket_start')
-      .getRawMany();
+      .addGroupBy('bucket_start');
+
+    if (options.changedSince) {
+      query.withDeleted().andWhere(
+        touchedHourlyBucketsSql(
+          { user: 'file.userId', bucket: 'file.createdAt' },
+          // A soft delete stamps deleted_at; whether it moves updated_at is the ORM's business.
+          {
+            table: 'ci.files',
+            userColumn: 'user_id',
+            bucketColumn: 'created_at',
+            changed: 'GREATEST(src.updated_at, src.deleted_at)',
+          },
+        ),
+        { changedSince: options.changedSince },
+      );
+    }
+
+    const rows: Array<{ user_id: string; bucket_start: Date; count: number }> = await query.getRawMany();
 
     return rows.map((row) => ({ userId: row.user_id, bucketStart: row.bucket_start, count: row.count }));
   }

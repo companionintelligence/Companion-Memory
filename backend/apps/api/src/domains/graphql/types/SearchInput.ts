@@ -22,18 +22,25 @@ export class SearchInput {
   includeTypes?: IndexableEntity[];
 
   /**
-   * Opt standalone files *out* of the timed browse. Files are part of the
-   * default timeline like every other indexed type; pass `false` to drop them
-   * without also dropping whatever `excludeTypes` is already carrying.
+   * Force standalone files into (`true`) or out of (`false`) the timed browse,
+   * whatever the type filter says. Absent, files follow the type filter and,
+   * like people and places, are left out of the UNFILTERED browse: a file has
+   * no date of its own, so it would sort by when its row was last written.
    *
-   * This used to default the other way — files were excluded unless a caller
-   * asked for them — which made the explorer's File type picker a no-op on
-   * every surface that didn't set the flag, and made the same URL mean
-   * different things in the gallery (which set it) and the list (which didn't).
-   * Callers that want a document-free feed should say so explicitly.
+   * History: files were opt-in behind this flag, then (#2110) part of the
+   * default browse with this as an opt-out, because the explorer's File type
+   * picker did nothing on surfaces that didn't set the flag. The picker now
+   * reaches files through the type filter itself, so the default could go back
+   * to opt-in (2026-10-30) without breaking it.
    */
   @Field(() => Boolean, { nullable: true })
   includeFiles?: boolean;
+
+  // "Which kind of file" — narrows file results to these kinds (`image`,
+  // `video`, `audio`, `document`), read off the file's content type. Only
+  // affects entities of type `file`; a kind nobody recognises is ignored.
+  @Field(() => [String], { nullable: true })
+  fileKinds?: string[];
 
   @Field(() => [String], { nullable: true })
   tags?: string[];
@@ -106,9 +113,23 @@ export class SearchInput {
   @Field(() => [Float], { nullable: true })
   bbox?: number[];
 
+  /**
+   * "Where" (drawn areas) — several bounding boxes, each [minLon, minLat, maxLon, maxLat],
+   * ORed: an event matches inside any of them. `bbox` is read as one more area.
+   */
+  @Field(() => [[Float]], { nullable: true })
+  areas?: number[][];
+
   /** Force conceptual (embedding) ranking for the free-text query instead of the auto heuristic. */
   @Field(() => Boolean, { nullable: true })
   semantic?: boolean;
+
+  /**
+   * Search as you type: also match the last word of `query` as the start of a
+   * word, so "Jor" finds Jordan. Runs keyword search; ignored with `semantic`.
+   */
+  @Field(() => Boolean, { nullable: true })
+  prefix?: boolean;
 
   /**
    * Shared-search capability token. When set, the search is resolved from the

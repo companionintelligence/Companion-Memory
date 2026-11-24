@@ -1,7 +1,5 @@
 # Sources system audit
 
-> Private & Confidential — Property of Lifescope Inc. Do not distribute.
-
 **Scope.** How CI-Server discovers, authenticates, ingests, parses, dedupes and maps external
 data into the `ci.*` schema: `domains/import/`, `domains/etl/`, `domains/ingest/`,
 `domains/connections/`, `domains/parsing/`, `domains/files/`, `domains/browser-activity/`,

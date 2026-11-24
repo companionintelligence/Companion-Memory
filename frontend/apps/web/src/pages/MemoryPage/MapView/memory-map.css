@@ -42,12 +42,12 @@
 }
 
 .custom-map-marker .custom-map-marker-pin {
-  box-shadow: var(--shadow-glow-ci), 0 2px 8px rgb(0 0 0 / 20%);
+  box-shadow: var(--ci-button-shadow), 0 2px 8px rgb(0 0 0 / 20%);
   transition: box-shadow 0.2s ease-out;
 }
 
 .custom-map-marker:hover .custom-map-marker-pin {
-  box-shadow: var(--shadow-glow-ci), 0 4px 16px rgb(0 0 0 / 30%);
+  box-shadow: var(--ci-button-shadow), 0 4px 16px rgb(0 0 0 / 30%);
 }
 
 .memory-map-cluster > div {
@@ -91,11 +91,14 @@
   color: var(--accent-foreground) !important;
 }
 
-/* Map container */
+/* Map container. The background shows wherever a tile has not loaded yet —
+   the moment after a pan or zoom. The basemap is satellite imagery, so a
+   dark sea tone reads as "more map" there; the page background read as a
+   white flash. */
 .leaflet-container {
   font-family: inherit;
   z-index: 1 !important;
-  background-color: var(--background);
+  background-color: #0f1a24;
 }
 
 /* Ensure all Leaflet elements have lower z-index */
@@ -116,4 +119,25 @@
 /* Leaflet controls should also have lower z-index */
 .leaflet-control-container {
   z-index: 1 !important;
+}
+
+/* The remove handle on an editable searched area (AreaLayer): a small round
+   button at the rectangle's top-right corner, above geoman's corner handle. */
+.memory-map-area-remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  border: 1px solid var(--border);
+  background-color: var(--card);
+  color: var(--card-foreground);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 25%);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.memory-map-area-remove:hover {
+  background-color: var(--accent);
+  color: var(--accent-foreground);
 }

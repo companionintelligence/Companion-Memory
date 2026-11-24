@@ -13,6 +13,7 @@ import {
 } from '@ci/domains/memory';
 import { UserEntity } from '@ci/domains/user';
 
+import { databaseAvailability, dataSourceConnection } from '../../../__tests__/support/databaseConnection';
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
 import { PLANNING_PREFS_DEFAULTS } from '../../entities/PlanningPrefsEntity';
 import { TASK_STATUSES, TaskEntity } from '../../entities/TaskEntity';
@@ -29,9 +30,11 @@ import { TaskService } from '../TaskService';
  * unit test catches a dropped `.where()` at review time, this one catches a
  * predicate that is present but wrong.
  *
- * Opt-in: set `PLANNING_TEST_DATABASE_URL` to a database with the migrations
- * applied. The rest of the suite mocks its repositories, so this must not be a
- * hard dependency of `yarn test`.
+ * Needs a database with the migrations applied: `PLANNING_TEST_DATABASE_URL`,
+ * else `DATABASE_URL`, else `.env`'s `DATABASE_*` values. `databaseAvailability()`
+ * decides whether that means run, skip or fail. The rest of the suite mocks its
+ * repositories, so with no database configured this skips (and says why) rather
+ * than failing `yarn test`.
  *
  *   docker run -d --name ci-test-db -e PASSWORD=pw -p 55433:5432 ci/database
  *   # create the companion role/db, enable extensions, then:
@@ -40,8 +43,16 @@ import { TaskService } from '../TaskService';
  *   PLANNING_TEST_DATABASE_URL=postgres://companion:pw@localhost:55433/companion \
  *     yarn test TaskService.tenancy
  */
-const DATABASE_URL = process.env.PLANNING_TEST_DATABASE_URL;
-const describeWithDb = DATABASE_URL ? describe : describe.skip;
+const DATABASE_ENV = {
+  urlEnvVar: 'PLANNING_TEST_DATABASE_URL',
+  probeTimeoutEnvVar: 'PLANNING_TEST_PROBE_TIMEOUT_MS',
+};
+const availability = databaseAvailability(DATABASE_ENV);
+const describeWithDb = availability.available ? describe : describe.skip;
+
+if (!availability.available) {
+  console.warn(`[planning/TaskService.tenancy] SKIPPED — ${availability.reason}`);
+}
 
 describeWithDb('TaskService — tenant isolation (integration)', () => {
   let dataSource: DataSource;
@@ -61,8 +72,10 @@ describeWithDb('TaskService — tenant isolation (integration)', () => {
   beforeAll(async () => {
     dataSource = new DataSource({
       type: 'postgres',
-      url: DATABASE_URL,
-      entities: [TaskEntity],
+      ...dataSourceConnection(DATABASE_ENV),
+      // TaskPendingChangeEntity too: closing a task now declines its pending
+      // suggestions (#3046), so `update` to a closed status writes that table.
+      entities: [TaskEntity, TaskPendingChangeEntity],
       synchronize: false,
       extra: { options: '-c search_path=ci,public' },
     });
@@ -86,8 +99,8 @@ describeWithDb('TaskService — tenant isolation (integration)', () => {
       );
     }
 
-    // `ci.events` is stubbed out here: this DataSource maps TaskEntity alone,
-    // and the suite is about the `user_id` predicate. The block cleanup
+    // `ci.events` is stubbed out here: this DataSource maps only the task
+    // tables, and the suite is about the `user_id` predicate. The block cleanup
     // `remove` now does is proved against real rows in the second suite below.
     service = new TaskService(
       dataSource.getRepository(TaskEntity),
@@ -243,7 +256,7 @@ describeWithDb('TaskService — tenant isolation (integration)', () => {
  * block, accepts a real pending change, and reads `ci.events.status` back with
  * SQL, so a rejected status value or a broken aggregate update fails the suite.
  *
- * Same opt-in as the suite above (`PLANNING_TEST_DATABASE_URL`).
+ * Same database, and the same run-or-skip decision, as the suite above.
  */
 describeWithDb('PlannedBlockService — accepted event_revise (integration)', () => {
   let dataSource: DataSource;
@@ -292,7 +305,7 @@ describeWithDb('PlannedBlockService — accepted event_revise (integration)', ()
   beforeAll(async () => {
     dataSource = new DataSource({
       type: 'postgres',
-      url: DATABASE_URL,
+      ...dataSourceConnection(DATABASE_ENV),
       // EventBaseEntity is a @ChildEntity of the ci.entities STI tree, so its
       // root has to be mapped alongside it; UserEntity because EventEntity.user
       // and PlanningTimeService both resolve against it.
@@ -316,12 +329,22 @@ describeWithDb('PlannedBlockService — accepted event_revise (integration)', ()
       );
     }
 
+    // Taking a block off the calendar (event_revise) cancels it, which settles
+    // what the pipeline decided about it; this suite is about tenancy, so
+    // PipelineModule's binding is a no-op here.
+    const pipelineReopeners = {
+      reopenTimeDecisions: async (): Promise<number> => 0,
+      reopenStatusDecisions: async (): Promise<number> => 0,
+    };
+
     const eventService = new CalendarEventService(
       dataSource.getRepository(EventEntity),
       dataSource.getRepository(EventBaseEntity),
       noopSignalling as never,
       dataSource,
       new GraphDeltaWriter(dataSource, noopLogger),
+      undefined,
+      { get: () => pipelineReopeners } as never,
     );
 
     taskService = new TaskService(

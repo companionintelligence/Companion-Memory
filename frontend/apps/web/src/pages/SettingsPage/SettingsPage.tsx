@@ -1,6 +1,6 @@
 import { useCallback, useEffect } from 'react';
 
-import { Portal, useDeviceLayout, usePageTitle } from '@ci/common';
+import { Portal, buildApiUrl, useDeviceLayout, usePageTitle } from '@ci/common';
 import { IconButton, ScrollArea } from '@ci/shadcn';
 import { Braces, ExternalLink, X } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
@@ -11,6 +11,11 @@ import { appHomePath } from '@/lib/appHome';
 
 import { settingsPathToProfile, visibleSettingsSections } from './settingsNav';
 import { SettingsSectionBody } from './SettingsSections';
+
+/** An open Radix popover, dialog, alert dialog, menu or select list. */
+const OPEN_LAYER = ['dialog', 'alertdialog', 'menu', 'listbox']
+  .map((role) => `[role="${role}"][data-state="open"]`)
+  .join(', ');
 
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>
   [
@@ -38,14 +43,19 @@ export function SettingsPage() {
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
+      // A popover, menu, dropdown or dialog open inside Settings takes this Escape and closes
+      // itself; only an Escape with none of them open closes Settings. Tooltips are not in the
+      // list: Radix marks an Escape handled when it closes one too, and the close button's own
+      // tooltip says "Close settings (Esc)". Checked on window in the capture phase, before Radix
+      // sees the key, because by the bubble phase the layer may already be gone from the page.
+      if (e.key === 'Escape' && !document.querySelector(OPEN_LAYER)) {
         handleClose();
       }
     };
 
-    document.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keydown', onKeyDown, true);
 
-    return () => document.removeEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
   }, [handleClose]);
 
   if (isMobile == null) {
@@ -59,7 +69,7 @@ export function SettingsPage() {
   return (
     <Portal.Slot id="overlay-modal">
       <div
-        className="flex h-full bg-black/70 backdrop-blur-[2px] items-center justify-center"
+        className="pointer-events-auto flex h-full bg-black/70 backdrop-blur-[2px] items-center justify-center"
         onClick={handleClose}
       >
         <div
@@ -78,9 +88,7 @@ export function SettingsPage() {
 
           <ScrollArea className="w-60 flex-shrink-0 border-r border-border">
             <aside className="flex flex-col gap-1 p-4">
-              <p className="mb-2 px-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Settings
-              </p>
+              <p className="mb-2 px-3 text-xs font-semibold text-muted-foreground">Settings</p>
 
               {visibleSettingsSections().map((section) => {
                 const Icon = section.icon;
@@ -100,12 +108,12 @@ export function SettingsPage() {
 
               {/* GraphiQL is a full-page IDE served by the API, so it opens in a
                   new tab rather than inside the settings modal. Authenticate it
-                  with a key from the API Keys section above. The API serves it
+                  with a key from the API keys section above. The API serves it
                   only when `graphql.ide` is on (off in production by default),
                   so the link follows the flag rather than pointing at a 404. */}
               {isFeatureEnabled('graphql.ide') ? (
                 <a
-                  href="/api/graphiql"
+                  href={buildApiUrl('/api/graphiql')}
                   target="_blank"
                   rel="noopener noreferrer"
                   className={navLinkClass({ isActive: false })}
@@ -120,7 +128,11 @@ export function SettingsPage() {
 
           <ScrollArea className="flex-1">
             <main>
-              <div className="mx-auto max-w-2xl p-6">
+              {/* Left-aligned beside the nav, not centred in the pane: centred, a narrow page
+                  left a wide empty strip between the nav and the cards. The wider right
+                  padding keeps a section's header buttons clear of the dialog's close button
+                  in a narrow window. */}
+              <div className="max-w-[calc(48rem+5.5rem)] pt-7 pr-14 pb-10 pl-8">
                 <SettingsSectionBody
                   section={location.pathname.split('/').pop() || 'appearance'}
                   fallbackTo="/settings/appearance"

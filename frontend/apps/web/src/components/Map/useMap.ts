@@ -4,6 +4,8 @@ import { createHookContext } from '@ci/common';
 import L, { type LatLngExpression } from 'leaflet';
 import { useMap as useLeafletMap } from 'react-leaflet';
 
+import { centerBesidePanel, fitPadding } from './framing';
+
 type ReturnType = [
   {
     locations: LatLngExpression[];
@@ -13,11 +15,17 @@ type ReturnType = [
     toggleRoutes: () => void;
     zoomIn: () => void;
     zoomOut: () => void;
-    centerVisibleMarkers: () => void;
+    /** `panelInset`: px of the map's left edge a panel covers; the pins are framed right of it. */
+    centerVisibleMarkers: (panelInset?: number) => void;
   },
 ];
 
-function useMap(): ReturnType {
+interface MapOptions {
+  /** Let the generic map choose a marker centroid before a specialized view applies its own camera. */
+  autoCenterMarkers?: boolean;
+}
+
+function useMap({ autoCenterMarkers = true }: MapOptions = {}): ReturnType {
   const map = useLeafletMap();
 
   const [markers, setMarkers] = useState<L.Marker[]>([]);
@@ -36,26 +44,27 @@ function useMap(): ReturnType {
     setDisplayRoutes((prev) => !prev);
   }, []);
 
-  const centerVisibleMarkers = useCallback(() => {
-    const mapBounds = map.getBounds();
-    const visibleMarkers = markers.filter((marker) => mapBounds.contains(marker.getLatLng()));
+  const centerVisibleMarkers = useCallback(
+    (panelInset = 0) => {
+      const mapBounds = map.getBounds();
+      const visibleMarkers = markers.filter((marker) => mapBounds.contains(marker.getLatLng()));
 
-    if (visibleMarkers.length === 0) {
-      return;
-    }
+      if (visibleMarkers.length === 0) {
+        return;
+      }
 
-    if (visibleMarkers.length === 1) {
-      map.panTo(visibleMarkers[0].getLatLng());
+      if (visibleMarkers.length === 1) {
+        map.panTo(centerBesidePanel(map, visibleMarkers[0].getLatLng(), map.getZoom(), panelInset));
 
-      return;
-    }
+        return;
+      }
 
-    const bounds = L.latLngBounds(visibleMarkers.map((marker) => marker.getLatLng()));
+      const bounds = L.latLngBounds(visibleMarkers.map((marker) => marker.getLatLng()));
 
-    map.fitBounds(bounds, {
-      padding: [50, 50],
-    });
-  }, [map, markers]);
+      map.fitBounds(bounds, fitPadding(panelInset, 50));
+    },
+    [map, markers],
+  );
 
   useEffect(() => {
     if (!map) {
@@ -140,7 +149,7 @@ function useMap(): ReturnType {
 
   // Center map on marker centroid when map is ready and markers are available
   useEffect(() => {
-    if (!map || !weightedMarkerCentroid || hasInitialCentered) {
+    if (!autoCenterMarkers || !map || !weightedMarkerCentroid || hasInitialCentered) {
       return;
     }
 
@@ -150,7 +159,7 @@ function useMap(): ReturnType {
         setHasInitialCentered(true);
       }
     });
-  }, [map, weightedMarkerCentroid, hasInitialCentered]);
+  }, [autoCenterMarkers, map, weightedMarkerCentroid, hasInitialCentered]);
 
   return [
     {

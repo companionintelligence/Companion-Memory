@@ -167,6 +167,12 @@ export function ReflectionCatalogue() {
   };
 
   const range = page ? rangeLabel(page) : null;
+  // The answered / unanswered counts come from the facets, which ignore the category,
+  // answer-type and answered filters on purpose (those menus count the whole catalogue
+  // too). Once one of them narrows the list the two numbers no longer add up to the
+  // reflections listed, so they are labelled as totals rather than left to read as
+  // the filtered split.
+  const narrowed = filters.category !== null || filters.answerTier !== null || filters.answered !== 'all';
   const hasPrevious = filters.offset > 0;
   const hasNext = page ? filters.offset + page.data.length < page.totalCount : false;
 
@@ -273,7 +279,7 @@ export function ReflectionCatalogue() {
           {range ? `${range} reflections` : 'No reflections match these filters'}
           {' · '}
           {page.facets.answeredCount.toLocaleString()} answered,{' '}
-          {page.facets.unansweredCount.toLocaleString()} unanswered
+          {page.facets.unansweredCount.toLocaleString()} unanswered{narrowed ? ' in total' : ''}
         </p>
       ) : null}
 

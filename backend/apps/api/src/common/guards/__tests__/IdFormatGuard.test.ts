@@ -33,8 +33,7 @@ function graphqlContext(): ExecutionContext {
 
 const VALID_UUID_V4 = '123e4567-e89b-42d3-a456-426614174000';
 // The appliance's own ids are uuid v7 (see the bulkUpsert RETURNING-clause
-// comment) — the pattern's `[47]` version nibble accepts both, so a v7 id must
-// pass too, not just v4.
+// comment), so a v7 id must pass too, not just v4.
 const VALID_UUID_V7 = '018f4c2e-7b1a-7c3d-8a2f-1234567890ab';
 
 describe('IdFormatGuard — non-HTTP contexts', () => {
@@ -82,10 +81,21 @@ describe('IdFormatGuard — UUID enforcement on *id-suffixed params', () => {
     expect(() => guard.canActivate(httpContext({ id: '' }))).toThrow(NotFoundException);
   });
 
-  it('rejects a syntactically UUID-shaped value with a bad version/variant nibble', () => {
-    // Version nibble '1' is neither 4 nor 7.
-    const badVersion = '123e4567-e89b-12d3-a456-426614174000';
-    expect(() => guard.canActivate(httpContext({ id: badVersion }))).toThrow(NotFoundException);
+  it('allows any UUID shape, whatever its version and variant nibbles', () => {
+    // Version 1, and the two seeded provider ids that used to 404: Slack's
+    // variant nibble is 'c', Signal's version nibble is '8'.
+    expect(guard.canActivate(httpContext({ id: '123e4567-e89b-12d3-a456-426614174000' }))).toBe(true);
+    expect(guard.canActivate(httpContext({ id: '019e3c66-b5d2-7f03-c9e5-1a4f6b9d0c08' }))).toBe(true);
+    expect(guard.canActivate(httpContext({ id: '019e3d77-c6e3-8f14-da06-2b5f7c0e1d19' }))).toBe(true);
+  });
+
+  it('rejects a value that is UUID-length but not hex, or has the dashes in the wrong place', () => {
+    expect(() => guard.canActivate(httpContext({ id: '123e4567-e89b-12d3-a456-42661417400g' }))).toThrow(
+      NotFoundException,
+    );
+    expect(() => guard.canActivate(httpContext({ id: '123e4567e-89b-12d3-a456-426614174000' }))).toThrow(
+      NotFoundException,
+    );
   });
 
   it('ignores params whose name does NOT end in "id"', () => {

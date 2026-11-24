@@ -1,4 +1,5 @@
 import type { ApiKeyScopedRequest } from '@ci/common/guards';
+import config from '@ci/configuration';
 import type { IntentCatalogService, IntentManifest, ToolRegistry, ToolResult } from '@ci/domains/tools';
 
 import { IntentsController } from '../IntentsController';
@@ -41,11 +42,11 @@ function stubCatalog(manifest: IntentManifest = MANIFEST): IntentCatalogService 
 }
 
 function stubRegistry(
-  overrides: Partial<Pick<ToolRegistry, 'hasTool' | 'executeTool'>> = {},
+  overrides: Partial<Pick<ToolRegistry, 'isToolVisibleTo' | 'executeTool'>> = {},
 ): ToolRegistry & { executeTool: jest.Mock } {
   const executeTool = jest.fn().mockResolvedValue(OK_RESULT);
   const registry = {
-    hasTool: (name: string) => name === 'people_find',
+    isToolVisibleTo: (name: string) => name === 'people_find',
     executeTool,
     ...overrides,
   } as unknown as ToolRegistry & { executeTool: jest.Mock };
@@ -115,6 +116,28 @@ describe('IntentsController', () => {
       expect(result).toEqual(OK_RESULT);
     });
 
+    it("hands back hit links absolute on the app's public origin, not relative to the caller's", async () => {
+      const original = config.auth.oidc.publicBaseUrl;
+      config.auth.oidc.publicBaseUrl = 'https://ci-memory-box.example';
+
+      try {
+        const registry = stubRegistry({
+          executeTool: jest.fn().mockResolvedValue({
+            success: true,
+            data: { summary: 'Found 1', items: [{ id: 'f1', type: 'file', link: '/content/c1' }] },
+          }),
+        });
+        const result = await controllerWith(MANIFEST, registry).execute('people_find', {}, CONTEXT, REQ);
+
+        expect(result.data).toEqual({
+          summary: 'Found 1',
+          items: [{ id: 'f1', type: 'file', link: 'https://ci-memory-box.example/content/c1' }],
+        });
+      } finally {
+        config.auth.oidc.publicBaseUrl = original;
+      }
+    });
+
     it('runs an underscored Hermes-shaped name through the registry', async () => {
       const registry = stubRegistry();
       await controllerWith(MANIFEST, registry).execute('people_find', {}, CONTEXT, REQ);
@@ -131,6 +154,17 @@ describe('IntentsController', () => {
       await expect(
         controllerWith(MANIFEST, registry).execute('insights.explain', {}, CONTEXT, REQ),
       ).rejects.toThrow('Unknown intent: insights.explain');
+      expect(registry.executeTool).not.toHaveBeenCalled();
+    });
+
+    it('404s an intent another account owns, asking the registry about this caller', async () => {
+      const isToolVisibleTo = jest.fn(() => false);
+      const registry = stubRegistry({ isToolVisibleTo });
+
+      await expect(
+        controllerWith(MANIFEST, registry).execute('messaging.send', {}, CONTEXT, REQ),
+      ).rejects.toThrow('Unknown intent: messaging.send');
+      expect(isToolVisibleTo).toHaveBeenCalledWith('messaging_send', 'user-1');
       expect(registry.executeTool).not.toHaveBeenCalled();
     });
 
@@ -172,6 +206,19 @@ describe('IntentsController', () => {
       // far worse, run everything.
       expect(() => controllerWith().getManifest('locale')).toThrow('Unknown dispatch tier: locale');
       expect(() => controllerWith().getManifest('LOCAL')).toThrow('Unknown dispatch tier: LOCAL');
+    });
+
+    it('names the caller, so an intent owned by one account is listed to that account only', () => {
+      // The `messaging.*` intents belong to whoever the BlueBubbles connector was set up for.
+      const { controller, calls } = controllerSpy();
+
+      controller.getManifest(undefined, { userId: 'user-1' });
+      controller.getIntent('people.find', undefined, { userId: 'user-2' });
+
+      expect(calls).toEqual([
+        { tier: undefined, userId: 'user-1' },
+        { tier: undefined, userId: 'user-2' },
+      ]);
     });
 
     it('honours the tier on the single-intent route too', () => {

@@ -23,15 +23,63 @@
  * Every other value is offered on sight, because a value no deleted event
  * touches cannot be hidden by one.
  *
+ * Notes' Content mirrors ({@link noteMirrorSql}) are suspects the same way:
+ * the library leaves them out, so a type only they carry (`note`) would filter
+ * to nothing. That arm walks `entities_linked_idx` for the `notes` link, so it
+ * reads mirrors and nothing else.
+ *
  * `$1` is always the owning user's id.
  */
+
+/**
+ * True for a content row that is a note's Content mirror: the row
+ * `NoteContentFoldService` writes with the note's own id and its stored HTML as
+ * text. Read from the row's own base entity (CTI, same id), which the fold
+ * links to `notes`, so a mirror stays one after its note is deleted (nothing
+ * removes it) and no other user's note id can make a row look like one.
+ */
+export function noteMirrorSql(alias: string): string {
+  return `EXISTS (SELECT 1 FROM ci.entities note_mirror WHERE note_mirror.entity_id = ${alias}.id AND note_mirror.linked_table = 'notes')`;
+}
+
+/**
+ * Predicate matching content rows whose EFFECTIVE source system passes
+ * `membership` — the same value {@link PLATFORMS_SQL} offers, so every place
+ * the How filter narrows content agrees with the picker that fed it.
+ *
+ * A row's effective systems are the platforms the `ci.record_sources` ledger
+ * recorded for it, and only when the ledger recorded none, its own
+ * `source_system`. The two arms are exclusive on purpose: a Google Photos
+ * photo is `file` in the column and `google_photos` in the ledger, and picking
+ * "file" must not sweep it in — "file" is the honest bucket only for a row no
+ * platform claims. Both EXISTS probes hit `record_sources_record_idx`
+ * `(user_id, record_table, record_id)`.
+ *
+ * `membership` turns a column expression into the caller's own "is one of the
+ * selected sources" test, so the query builder (named parameters) and raw SQL
+ * (positional ones) share the one rule.
+ */
+export function effectiveSourceSystemPredicate(
+  alias: string,
+  membership: (expression: string) => string,
+): string {
+  const ledger = `SELECT 1 FROM ci.record_sources rs WHERE rs.user_id = ${alias}.user_id AND rs.record_table = 'content' AND rs.record_id = ${alias}.id`;
+
+  return (
+    `(EXISTS (${ledger} AND ${membership('rs.platform')})` +
+    ` OR (${membership(`${alias}.source_system`)} AND NOT EXISTS (${ledger} AND rs.platform IS NOT NULL)))`
+  );
+}
 
 /** The two columns a picker can walk; anything else is a caller bug, not a query. */
 export type ContentFacetColumn = 'type' | 'mimetype';
 
 const FACET_COLUMNS: ReadonlySet<ContentFacetColumn> = new Set(['type', 'mimetype']);
 
-/** A user's distinct, non-null values of `column`, sorted, minus those found only on deleted-event media. */
+/**
+ * A user's distinct, non-null values of `column`, sorted, minus those found
+ * only on deleted-event media or on notes' Content mirrors.
+ */
 export function distinctColumnSql(column: ContentFacetColumn): string {
   if (!FACET_COLUMNS.has(column)) {
     throw new Error(`Not a content facet column: ${String(column)}`);
@@ -48,10 +96,16 @@ export function distinctColumnSql(column: ContentFacetColumn): string {
                ORDER BY c.${column} LIMIT 1)
         FROM vals WHERE vals.v IS NOT NULL
     ), suspect AS (
-      SELECT DISTINCT c.${column} AS v
+      SELECT c.${column} AS v
         FROM ci.events e
         JOIN ci.content c ON c.event_id = e.event_id
        WHERE e.user_id = $1 AND e.is_deleted
+         AND c.user_id = $1 AND c.${column} IS NOT NULL
+      UNION
+      SELECT c.${column}
+        FROM ci.entities m
+        JOIN ci.content c ON c.id = m.entity_id
+       WHERE m.linked_table = 'notes' AND m.owner_user_id = $1
          AND c.user_id = $1 AND c.${column} IS NOT NULL
     )
     SELECT v FROM vals
@@ -60,7 +114,8 @@ export function distinctColumnSql(column: ContentFacetColumn): string {
             OR EXISTS (SELECT 1 FROM ci.content c
                          LEFT JOIN ci.events e ON e.event_id = c.event_id
                         WHERE c.user_id = $1 AND c.${column} = vals.v
-                          AND (c.event_id IS NULL OR e.is_deleted = false)))
+                          AND (c.event_id IS NULL OR e.is_deleted = false)
+                          AND NOT ${noteMirrorSql('c')}))
      ORDER BY v`;
 }
 

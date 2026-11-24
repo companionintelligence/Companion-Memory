@@ -12,6 +12,7 @@ import {
 } from '@ci/domains/memory';
 import { UserEntity } from '@ci/domains/user';
 
+import { databaseAvailability, dataSourceConnection } from '../../../__tests__/support/databaseConnection';
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
 import { EventCandidateEntity } from '../../entities/EventCandidateEntity';
 import { CandidateService } from '../CandidateService';
@@ -23,11 +24,20 @@ import { CandidateService } from '../CandidateService';
  * bug and the promotion-consistency ordering both shipped green. This locks the
  * full lifecycle against the actual constraints.
  *
- * Opt-in: set `SCHEDULE_TEST_DATABASE_URL` (or `PLANNING_TEST_DATABASE_URL`) to
- * a database with migrations applied.
+ * Needs a database with migrations applied: `SCHEDULE_TEST_DATABASE_URL`, else
+ * `PLANNING_TEST_DATABASE_URL`, else `DATABASE_URL`, else `.env`'s `DATABASE_*`
+ * values. `databaseAvailability()` decides whether that means run, skip or fail.
  */
-const DATABASE_URL = process.env.SCHEDULE_TEST_DATABASE_URL ?? process.env.PLANNING_TEST_DATABASE_URL;
-const describeWithDb = DATABASE_URL ? describe : describe.skip;
+const DATABASE_ENV = {
+  urlEnvVar: ['SCHEDULE_TEST_DATABASE_URL', 'PLANNING_TEST_DATABASE_URL'],
+  probeTimeoutEnvVar: 'SCHEDULE_TEST_PROBE_TIMEOUT_MS',
+};
+const availability = databaseAvailability(DATABASE_ENV);
+const describeWithDb = availability.available ? describe : describe.skip;
+
+if (!availability.available) {
+  console.warn(`[schedule/CandidateService.lifecycle] SKIPPED — ${availability.reason}`);
+}
 
 describeWithDb('CandidateService — accept / returnToSlate lifecycle (integration)', () => {
   let dataSource: DataSource;
@@ -49,7 +59,7 @@ describeWithDb('CandidateService — accept / returnToSlate lifecycle (integrati
   beforeAll(async () => {
     dataSource = new DataSource({
       type: 'postgres',
-      url: DATABASE_URL,
+      ...dataSourceConnection(DATABASE_ENV),
       // EventBaseEntity is a @ChildEntity of the ci.entities STI tree, so its
       // root has to be mapped alongside it for metadata to build. UserEntity is
       // needed too: EventEntity.user is a @ManyToOne(() => UserEntity), and

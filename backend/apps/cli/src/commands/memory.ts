@@ -13,6 +13,8 @@ export interface MemoryCheckOptions {
 export interface MemoryConfigureOptions {
   backend?: string;
   port?: string;
+  /** OpenAI-compatible only: the server's API root, `/v1` unless it mounts it elsewhere (Lemonade: `/api/v1`). */
+  basePath?: string;
   backendApiKey?: string;
   clearApiKey?: boolean;
   json?: boolean;
@@ -46,7 +48,9 @@ export async function memoryCheckCommand(ctx: CliContext, options: MemoryCheckOp
   }
 
   if (!result.ok) {
-    throw new CliError(result.message ?? 'Memory could not reach its inference server.', 2);
+    const message = result.message ?? 'Memory could not reach its inference server.';
+
+    throw new CliError(result.fixCommand ? `${message} ${result.fixCommand}` : message, 2);
   }
 }
 
@@ -66,7 +70,7 @@ export async function memoryConfigureCommand(
 
   ctx.term.out('Memory inference endpoint updated.');
   renderEndpoint(ctx, endpoint);
-  ctx.term.out('Run `ci-import memory check` before choosing a model.');
+  ctx.term.out('Run `ci memory check` before choosing a model.');
 }
 
 function parseSettings(options: MemoryConfigureOptions): LlmEndpointUpdate {
@@ -75,7 +79,9 @@ function parseSettings(options: MemoryConfigureOptions): LlmEndpointUpdate {
   }
 
   const backend = parseBackend(options.backend);
-  const port = Number.parseInt(options.port ?? '', 10);
+  // `Number`, not `parseInt`: parseInt reads the digits it can and drops the
+  // rest, so `--port 80abc` or `--port 11434.5` saved a port nobody typed.
+  const port = /^\s*\d+\s*$/.test(options.port ?? '') ? Number(options.port) : Number.NaN;
 
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
     throw new CliError('--port must be an integer between 1 and 65535.');
@@ -87,9 +93,22 @@ function parseSettings(options: MemoryConfigureOptions): LlmEndpointUpdate {
     throw new CliError('--backend-api-key and --clear-api-key cannot be used together.');
   }
 
+  const basePath = options.basePath?.trim();
+
+  if (basePath && backend !== 'openai_compatible') {
+    throw new CliError(
+      '--base-path applies to the openai-compatible backend only; Ollama serves its routes at fixed paths.',
+    );
+  }
+
+  if (basePath && !/^\/?[A-Za-z0-9._~-]+(\/[A-Za-z0-9._~-]+)*\/?$/.test(basePath)) {
+    throw new CliError('--base-path must be a plain URL path such as /v1 or /api/v1.');
+  }
+
   return {
     backend,
     port,
+    ...(basePath ? { basePath } : {}),
     ...(apiKey ? { apiKey } : {}),
     ...(options.clearApiKey ? { clearApiKey: true } : {}),
   };
@@ -110,6 +129,10 @@ function parseBackend(value: string): LlmEndpointUpdate['backend'] {
 function renderEndpoint(ctx: CliContext, endpoint: LlmEndpointConfig): void {
   ctx.term.out(`backend     ${displayBackend(endpoint.backend)}`);
   ctx.term.out(`endpoint    ${endpoint.endpoint}`);
+  if (endpoint.basePath) {
+    ctx.term.out(`api root    ${endpoint.basePath}`);
+  }
+
   ctx.term.out(`credential  ${endpoint.apiKeyConfigured ? 'configured (write-only)' : 'none'}`);
   ctx.term.out(
     `managed     ${endpoint.locked ? 'by Companion Hub / host environment' : 'by this appliance'}`,
@@ -119,6 +142,10 @@ function renderEndpoint(ctx: CliContext, endpoint: LlmEndpointConfig): void {
 function renderPreflight(ctx: CliContext, result: LlmEndpointPreflight): void {
   ctx.term.out(`${result.ok ? 'Connected' : 'Not connected'}  ${result.endpoint}`);
   ctx.term.out(result.message ?? (result.ok ? 'The backend answered.' : 'The backend did not answer.'));
+
+  if (result.fixCommand) {
+    ctx.term.out(`  ${result.fixCommand}`);
+  }
 
   if (result.models.length > 0) {
     ctx.term.out(`models      ${result.models.join(', ')}`);

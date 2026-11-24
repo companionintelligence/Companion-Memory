@@ -24,4 +24,17 @@ export class EventBaseEntity extends BaseEntity {
   /** The shared uuid again, so linked-record lookups resolve the detail row. */
   @Column({ type: 'text', name: 'linked_id', nullable: true })
   linkedId!: string | null;
+
+  /**
+   * `ci.entities.is_active` — the graph half of the event's tombstone.
+   *
+   * Every graph reader (GraphUtilityService's node reads, node counts, the
+   * deterministic edge matrix's endpoint join) sees only this row and decides
+   * liveness from this flag; every event reader decides it from
+   * `ci.events.is_deleted`. {@link CalendarEventService.remove} and
+   * {@link CalendarEventService.restore} therefore flip both together, so the
+   * two families never disagree about whether an event exists.
+   */
+  @Column({ type: 'boolean', name: 'is_active', default: true })
+  isActive!: boolean;
 }

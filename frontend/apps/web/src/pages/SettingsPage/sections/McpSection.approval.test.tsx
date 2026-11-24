@@ -149,6 +149,69 @@ describe('McpSection tool approval', () => {
 });
 
 /**
+ * A server can keep a tool's schema and change its description, which is the text the assistant
+ * reads. The backend pins that prose too and reports `description_changed`; the tool is withheld
+ * from chat until someone approves it again, so the row has to say so and offer the approval.
+ */
+describe('McpSection description drift', () => {
+  const drifted = {
+    ...server,
+    discoveredTools: [
+      { name: 'read_file', description: 'Read a file' },
+      { name: 'exfiltrate', description: 'Now says something else' },
+    ],
+    toolApprovals: [
+      server.toolApprovals[0],
+      {
+        name: 'exfiltrate',
+        schemaDigest: 'digest-exfil',
+        descriptionDigest: 'prose-now',
+        state: 'description_changed' as const,
+        approvedAt: '2026-08-26T00:00:00.000Z',
+        approvedDigest: 'digest-exfil',
+      },
+    ],
+  };
+
+  beforeEach(() => {
+    h.isAdmin = true;
+    h.fetchJson.mockReset();
+    h.fetchJson.mockImplementation((url: string) => {
+      if (url === '/api/mcp/servers') {
+        return Promise.resolve([drifted]);
+      }
+
+      if (url === '/api/mcp/catalog') {
+        return Promise.resolve({ normal: [], highRisk: [] });
+      }
+
+      return Promise.resolve({ ...drifted, toolApprovals: [] });
+    });
+  });
+
+  it('badges the tool and counts it as awaiting approval', async () => {
+    render(<McpSection />);
+
+    expect(await screen.findByText(/1 awaiting approval/i)).toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole('button', { name: /2 tools/i }));
+
+    expect(await screen.findByText('Description changed')).toBeInTheDocument();
+  });
+
+  it('sends back the description digest the row was rendered from', async () => {
+    await renderAndExpand();
+
+    fireEvent.click((await screen.findAllByRole('button', { name: /^approve$/i }))[0]!);
+
+    await waitFor(() => expect(approveBody()).toBeDefined());
+    expect(approveBody()).toStrictEqual({
+      tools: [{ name: 'exfiltrate', schemaDigest: 'digest-exfil', descriptionDigest: 'prose-now' }],
+    });
+  });
+});
+
+/**
  * ═══ WHY THE UI GATES AT ALL ═══
  *
  * Every route that CHANGES an MCP server config carries `AdminOnlyGuard` server-side — create,

@@ -5,6 +5,9 @@ import Foundation
 // Shortcuts app. Each runs outside the webview and talks to CI-Server directly via
 // `CompanionAPI` (Keychain API key). Gated to iOS 16+ (the framework's minimum); the
 // app itself still supports iOS 15, where these simply aren't offered.
+//
+// Every intent that reads or changes memory needs an unlocked phone, and Face ID (or the passcode)
+// as well while Companion's app lock is on: `authenticationPolicy`, from CompanionAppLock.
 
 @available(iOS 16.0, *)
 struct AskCompanionIntent: AppIntent {
@@ -15,6 +18,8 @@ struct AskCompanionIntent: AppIntent {
     )
     // Runs in the background and replies with a dialog rather than opening the app.
     static var openAppWhenRun = false
+    // Never from a locked phone, and behind Face ID while the app lock is on (CompanionAppLock).
+    static var authenticationPolicy: IntentAuthenticationPolicy { CompanionAppLock.intentPolicy }
 
     @Parameter(title: "Question", requestValueDialog: "What would you like to ask?")
     var question: String
@@ -39,6 +44,8 @@ struct SearchMemoryIntent: AppIntent {
         categoryName: "Companion"
     )
     static var openAppWhenRun = false
+    // Never from a locked phone, and behind Face ID while the app lock is on (CompanionAppLock).
+    static var authenticationPolicy: IntentAuthenticationPolicy { CompanionAppLock.intentPolicy }
 
     @Parameter(title: "Search", requestValueDialog: "What should I search for?")
     var query: String
@@ -72,6 +79,8 @@ struct RememberIntent: AppIntent {
         categoryName: "Companion"
     )
     static var openAppWhenRun = false
+    // Never from a locked phone, and behind Face ID while the app lock is on (CompanionAppLock).
+    static var authenticationPolicy: IntentAuthenticationPolicy { CompanionAppLock.intentPolicy }
 
     @Parameter(title: "Note", requestValueDialog: "What should I remember?")
     var content: String
@@ -185,6 +194,8 @@ struct ListOverduePlanTasksIntent: AppIntent {
         categoryName: "Plan"
     )
     static var openAppWhenRun = false
+    // Never from a locked phone, and behind Face ID while the app lock is on (CompanionAppLock).
+    static var authenticationPolicy: IntentAuthenticationPolicy { CompanionAppLock.intentPolicy }
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let api = try CompanionAPI.make()
@@ -213,6 +224,8 @@ struct ReschedulePlanTaskIntent: AppIntent {
         categoryName: "Plan"
     )
     static var openAppWhenRun = false
+    // Never from a locked phone, and behind Face ID while the app lock is on (CompanionAppLock).
+    static var authenticationPolicy: IntentAuthenticationPolicy { CompanionAppLock.intentPolicy }
 
     @Parameter(title: "Task", requestValueDialog: "Which plan item should I move?")
     var task: PlanTaskEntity
@@ -247,6 +260,8 @@ struct ReschedulePlanTaskOnDateIntent: AppIntent {
         categoryName: "Plan"
     )
     static var openAppWhenRun = false
+    // Never from a locked phone, and behind Face ID while the app lock is on (CompanionAppLock).
+    static var authenticationPolicy: IntentAuthenticationPolicy { CompanionAppLock.intentPolicy }
 
     @Parameter(title: "Task", requestValueDialog: "Which plan item should I move?")
     var task: PlanTaskEntity

@@ -1,8 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { SchedulerType } from '@nestjs/schedule/dist/enums/scheduler-type.enum';
-import { SCHEDULE_CRON_OPTIONS, SCHEDULER_TYPE } from '@nestjs/schedule/dist/schedule.constants';
+import { SCHEDULE_CRON_OPTIONS } from '@ci/common/schedule/metadataKeys';
+
+// `SCHEDULER_TYPE` is the metadata key @nestjs/schedule writes the scheduler kind under, and
+// `SchedulerType.CRON` the value it writes for a `@Cron`; like SCHEDULE_CRON_OPTIONS, neither is
+// exported from the package's public entry in v12.
+const SCHEDULER_TYPE = 'SCHEDULER_TYPE';
+const SCHEDULER_TYPE_CRON = 1;
 
 /**
  * The key every `@Cron` on this appliance will register under.
@@ -91,7 +96,7 @@ async function cronRegistrations(): Promise<CronRegistration[]> {
             continue;
           }
 
-          if (Reflect.getMetadata(SCHEDULER_TYPE, target) !== SchedulerType.CRON) {
+          if (Reflect.getMetadata(SCHEDULER_TYPE, target) !== SCHEDULER_TYPE_CRON) {
             continue;
           }
 

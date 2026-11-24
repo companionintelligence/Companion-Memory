@@ -25,6 +25,7 @@ import {
   SOURCE_TYPE,
   wantsAttachmentContentFrom,
 } from '../push/canonical';
+import { FACEBOOK_MESSENGER_SOURCE_SYSTEM, isFacebookMessengerRow } from '../push/inputs';
 import { dropReasonFor } from '../telemetry/dropReasons';
 import { buildStageSummary, SUMMARY_KEY, type StageSummary } from '../telemetry/stageSummary';
 import type { ImportStageRunner, StageOutcome, StageRunContext } from '../types';
@@ -57,6 +58,8 @@ interface MediaRow {
 interface AttachmentRow {
   id: string;
   dataSource: string;
+  classification?: string | null;
+  mediaType?: string | null;
   contentHash: string;
   metadata: Record<string, unknown> | null;
 }
@@ -221,12 +224,22 @@ export class MediaStage implements ImportStageRunner {
     let deduped = 0;
     let failed = 0;
 
+    // Keyset over `id`: every row this pass touches is stamped (FileId or
+    // FileMediaError) and so leaves the predicate, but a page that always
+    // started from the top of the run still had to read and JSONB-filter every
+    // row the earlier pages had stamped before it found its 200 — O(n²/200)
+    // over a 100k-photo library. Carrying the last id forward makes each page
+    // read only what is left. `remaining` still bounds the loop.
+    let after: string | null = null;
+
     while (remaining > 0) {
-      const batch = await this.nextBatch(context.runId);
+      const batch = await this.nextBatch(context.runId, after);
 
       if (batch.length === 0) {
         break;
       }
+
+      after = batch[batch.length - 1].id;
 
       // Concurrent, because this stage is LATENCY-bound, not throughput-bound.
       // Each file is a stat, a read, an object-store PUT, a thumbnail and an
@@ -414,12 +427,19 @@ export class MediaStage implements ImportStageRunner {
     let contents = 0;
     let declined = 0;
 
+    // Same keyset as the media pass, for the same reason — and here it is also
+    // what guarantees the loop ends: a row `settleAttachments` left unstamped
+    // used to be re-selected forever.
+    let after: string | null = null;
+
     for (;;) {
-      const batch = await this.nextAttachmentBatch(context.runId);
+      const batch = await this.nextAttachmentBatch(context.runId, after);
 
       if (batch.length === 0) {
         break;
       }
+
+      after = batch[batch.length - 1].id;
 
       // Concurrency is bounded at the ROW here, and a row's own descriptors are
       // uploaded one after another inside it. Nesting `limit()` again per
@@ -512,6 +532,8 @@ export class MediaStage implements ImportStageRunner {
     // third reason — its attachments ALSO reach staging as standalone media
     // items, which already catalogue themselves.
     if (wantsAttachmentContentFrom(metadata) && stored.length > 0) {
+      await this.adoptPreviousKeys(context, row, stored);
+
       try {
         const created = await this.contents.createManyDetailed(
           { userId: context.userId },
@@ -530,6 +552,71 @@ export class MediaStage implements ImportStageRunner {
     await this.markAttachments(row.id, outcome);
 
     return outcome;
+  }
+
+  /**
+   * Move this row's attachments' content rows from the key this pass used
+   * before #2912 onto the one it uses now, so the insert that follows finds
+   * them instead of writing a twin beside each.
+   *
+   * Before #2912 every attachment that is not mail hung off its staged row's
+   * data source. A Messenger message is keyed under `facebook_messenger`, so its
+   * attachments now are too, with the same source_id: the old key is the same
+   * identity with the data source as the parent's system. Migration
+   * 20261002005332 moved the rows present when it ran. A row can still come
+   * back under the old key, from a portability archive exported before it or a
+   * writer still on the old code, and without this a re-import would insert a
+   * second row over the same file, one the message's `attachments` never names.
+   *
+   * Best effort: if the move fails, the insert runs exactly as it would have
+   * without it.
+   */
+  private async adoptPreviousKeys(
+    context: StageRunContext,
+    row: AttachmentRow,
+    stored: readonly StoredAttachment[],
+  ): Promise<void> {
+    const moves = new Map<string, { from: string; to: string; sourceIds: string[] }>();
+
+    for (const plan of stored) {
+      const now = attachmentContentIdentity(row, plan);
+      const before = attachmentContentIdentity(row, plan, row.dataSource);
+
+      if (before.system === now.system) {
+        continue;
+      }
+
+      const key = `${before.system}\u0000${now.system}`;
+      const move = moves.get(key) ?? { from: before.system, to: now.system, sourceIds: [] };
+
+      move.sourceIds.push(now.id);
+      moves.set(key, move);
+    }
+
+    for (const move of moves.values()) {
+      try {
+        const moved = await this.contents.rekeySourceSystem({ userId: context.userId }, move);
+
+        if (moved.length > 0) {
+          this.logger.log('Moved attachment content onto the source system of its message', {
+            runId: context.runId,
+            from: move.from,
+            to: move.to,
+            rows: moved.length,
+          });
+        }
+      } catch (err) {
+        this.logger.warn(
+          'Could not move attachment content onto the source system of its message; inserting as before',
+          {
+            runId: context.runId,
+            from: move.from,
+            to: move.to,
+            error: (err as Error).message,
+          },
+        );
+      }
+    }
   }
 
   /**
@@ -604,14 +691,17 @@ export class MediaStage implements ImportStageRunner {
         AND metadata->'AttachmentFileIds' IS NULL`;
   }
 
-  private async nextAttachmentBatch(runId: string): Promise<AttachmentRow[]> {
+  /** @param after the last id of the previous page, or null for the first. */
+  private async nextAttachmentBatch(runId: string, after: string | null): Promise<AttachmentRow[]> {
     return this.dataSource.query<AttachmentRow[]>(
-      `SELECT id, data_source AS "dataSource", content_hash AS "contentHash", metadata
+      `SELECT id, data_source AS "dataSource", classification, media_type AS "mediaType",
+              content_hash AS "contentHash", metadata
          FROM ci_import.staged_items
         WHERE ${this.attachmentPredicate()}
+          AND ($2::uuid IS NULL OR id > $2::uuid)
         ORDER BY id
         LIMIT ${ATTACHMENT_BATCH}`,
-      [runId],
+      [runId, after],
     );
   }
 
@@ -1021,15 +1111,17 @@ export class MediaStage implements ImportStageRunner {
     return [...FILE_CLASSIFICATIONS];
   }
 
-  private async nextBatch(runId: string): Promise<MediaRow[]> {
+  /** @param after the last id of the previous page, or null for the first. */
+  private async nextBatch(runId: string, after: string | null): Promise<MediaRow[]> {
     return this.dataSource.query<MediaRow[]>(
       `SELECT id, filename, media_type AS "mediaType", size_bytes AS "sizeBytes",
               COALESCE(intermediate_location, original_location) AS "localPath"
          FROM ci_import.staged_items
         WHERE ${this.mediaPredicate()}
+          AND ($3::uuid IS NULL OR id > $3::uuid)
         ORDER BY id
         LIMIT ${MEDIA_BATCH}`,
-      [runId, this.classifications],
+      [runId, this.classifications, after],
     );
   }
 
@@ -1166,15 +1258,45 @@ interface StoredAttachment {
  * push will key the communication on, so the attachment's id is a suffix of
  * its parent's. Mail keys on the federated `(email, <Message-ID>)` pair
  * (`toCommunicationInput` does the identical mapping from `metadata.MessageID`);
- * everything else on the staged row's platform triple.
+ * a Messenger message under `facebook_messenger`
+ * (`toFacebookMessengerCommunicationInput`); everything else on the staged
+ * row's platform triple.
+ *
+ * The Messenger case was missing, so every Messenger attachment was catalogued
+ * as `facebook` while its message was `facebook_messenger` — and the explorer's
+ * Facebook source filter returned thousands of chat attachments.
+ *
+ * `system` is the platform half; it defaults to the one the push uses. Passing
+ * the row's data source instead gives the identity this pass used before #2912
+ * (see {@link MediaStage.adoptPreviousKeys}).
  */
-function attachmentParentIdentity(row: AttachmentRow): SourceIdentity {
+function attachmentParentIdentity(row: AttachmentRow, system = parentSourceSystem(row)): SourceIdentity {
   const messageId = row.metadata?.MessageID;
 
   return (
     emailIdentity(typeof messageId === 'string' ? messageId : undefined) ??
-    platformIdentity(row.dataSource, row.contentHash)
+    platformIdentity(system, row.contentHash)
   );
+}
+
+/** The system the push keys this row's message on, when it is not the mail pair. */
+function parentSourceSystem(row: AttachmentRow): string {
+  return isFacebookMessengerRow(row) ? FACEBOOK_MESSENGER_SOURCE_SYSTEM : row.dataSource;
+}
+
+/**
+ * The identity of the `ci.content` row over one stored attachment: its parent's
+ * identity plus the bytes' SHA-256, or the index lane when the store returned
+ * no hash. `system` as for {@link attachmentParentIdentity}.
+ */
+function attachmentContentIdentity(
+  row: AttachmentRow,
+  plan: StoredAttachment,
+  system = parentSourceSystem(row),
+): SourceIdentity {
+  return plan.sha256
+    ? attachmentIdentity(attachmentParentIdentity(row, system), plan.sha256)
+    : platformIdentity(system, row.contentHash, 'attachment', String(plan.index));
 }
 
 /**
@@ -1204,9 +1326,7 @@ function attachmentContentInput(row: AttachmentRow, plan: StoredAttachment): Cre
     external_id_kind: 'file',
     source_type: SOURCE_TYPE,
     ...(() => {
-      const identity = plan.sha256
-        ? attachmentIdentity(attachmentParentIdentity(row), plan.sha256)
-        : platformIdentity(row.dataSource, row.contentHash, 'attachment', String(plan.index));
+      const identity = attachmentContentIdentity(row, plan);
 
       return { source_system: identity.system, source_id: identity.id };
     })(),
