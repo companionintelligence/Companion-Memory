@@ -28,18 +28,21 @@ import { UserModule } from '@ci/domains/user';
 
 import { AccountController } from './controllers/AccountController';
 import { AccountDataController } from './controllers/AccountDataController';
+import { AccountRecoveryController } from './controllers/AccountRecoveryController';
 import { ApiKeyController } from './controllers/ApiKeyController';
 import { ConnectController } from './controllers/ConnectController';
 import { OidcController } from './controllers/OidcController';
 import { SessionController } from './controllers/SessionController';
 import { SignupCodeController } from './controllers/SignupCodeController';
 import { SignupController } from './controllers/SignupController';
+import { AccountRecoveryCodeEntity } from './entities/AccountRecoveryCodeEntity';
 import { ApiKeyEntity } from './entities/ApiKeyEntity';
 import { ConnectCodeEntity } from './entities/ConnectCodeEntity';
 import { SessionEntity } from './entities/SessionEntity';
 import { SignupCodeEntity } from './entities/SignupCodeEntity';
 import { ConnectRequestAuthGuard } from './guards/ConnectRequestAuthGuard';
 import { CookieCsrfGuard, CsrfGuard } from './guards/CsrfGuard';
+import { AccountRecoveryService } from './services/AccountRecoveryService';
 import { ApiKeyService } from './services/ApiKeyService';
 import { ApiKeyStrategy } from './services/ApiKeyStrategy';
 import { AuthService } from './services/AuthService';
@@ -57,7 +60,13 @@ import { SignupCodeService } from './services/SignupCodeService';
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([SessionEntity, SignupCodeEntity, ApiKeyEntity, ConnectCodeEntity]),
+    TypeOrmModule.forFeature([
+      SessionEntity,
+      SignupCodeEntity,
+      ApiKeyEntity,
+      ConnectCodeEntity,
+      AccountRecoveryCodeEntity,
+    ]),
     UserModule,
     PortabilityModule,
     PassportModule,
@@ -70,6 +79,7 @@ import { SignupCodeService } from './services/SignupCodeService';
   ],
   providers: [
     AuthService,
+    AccountRecoveryService,
     HubForwardAuthBridgeService,
     JwtStrategy,
     SignupCodeService,
@@ -89,6 +99,7 @@ import { SignupCodeService } from './services/SignupCodeService';
     SignupController,
     SignupCodeController,
     AccountController,
+    AccountRecoveryController,
     AccountDataController,
     ApiKeyController,
     OidcController,

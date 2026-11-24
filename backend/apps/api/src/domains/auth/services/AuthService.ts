@@ -108,7 +108,36 @@ export class AuthService {
    * request's CSRF token be checked against the session that minted it, without
    * a database read.
    */
-  async issueSessionToken(userId: string, meta: SessionMetadata): Promise<IssuedSession> {
+  async issueSessionToken(
+    userId: string,
+    meta: SessionMetadata,
+    expectedCredentialsResetAt?: Date | null,
+  ): Promise<IssuedSession> {
+    if (expectedCredentialsResetAt !== undefined) {
+      // Local password validation happens before this call. A recovery that
+      // won the owner lock in between must not admit that old password now.
+      return this.sessionRepository.manager.transaction(async (manager) => {
+        const rows = await manager.query(
+          'SELECT credentials_reset_at FROM ci.users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE',
+          [userId],
+        );
+        const actual = rows[0]?.credentials_reset_at?.getTime() ?? null;
+        if (!rows.length || actual !== (expectedCredentialsResetAt?.getTime() ?? null)) {
+          throw new UnauthorizedException('Credentials changed. Sign in again.');
+        }
+
+        return this.persistSession(userId, meta, manager.getRepository(SessionEntity));
+      });
+    }
+
+    return this.persistSession(userId, meta, this.sessionRepository);
+  }
+
+  private async persistSession(
+    userId: string,
+    meta: SessionMetadata,
+    repository: Repository<SessionEntity>,
+  ): Promise<IssuedSession> {
     const now = new Date().getTime();
 
     const sessionId = uuidv7();
@@ -120,7 +149,7 @@ export class AuthService {
     const hashedIp = this.digest(meta.ip) ?? null;
     const hashedUserAgent = this.digest(meta.userAgent) ?? null;
 
-    const session = this.sessionRepository.create({
+    const session = repository.create({
       id: sessionId,
       token: hashedToken,
       ip: hashedIp,
@@ -131,7 +160,7 @@ export class AuthService {
       },
     });
 
-    await this.sessionRepository.save(session);
+    await repository.save(session);
 
     return { sessionToken: token, sessionId };
   }
@@ -385,10 +414,15 @@ export class AuthService {
    * live-update stream and chat (generate, re-attach and the turn it queues)
    * read it, to refuse or end when that session is signed out; every other
    * request takes the token as it is until it expires.
+   *
+   * `issuedAtMs` is when the caller authenticated the request that mints the
+   * token. JwtStrategy rejects a token whose `issuedAtMs` is not later than the
+   * account's `credentials_reset_at`, so every token must carry it.
    */
-  issueAccessToken(userId: string, sessionId?: string): string {
+  issueAccessToken(userId: string, sessionId?: string, issuedAtMs = Date.now()): string {
     const payload = {
       sub: userId,
+      issuedAtMs,
       ...(sessionId ? { sid: sessionId } : {}),
     } satisfies JwtPayload;
 

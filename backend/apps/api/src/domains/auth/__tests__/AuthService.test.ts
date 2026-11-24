@@ -57,7 +57,65 @@ describe('AuthService — session id binding', () => {
     findOneResults = [];
   });
 
+  it('signs access tokens with millisecond issuance for recovery revocation', () => {
+    const sign = jest.fn().mockReturnValue('signed-access-token');
+    const auth = new AuthService({ sign } as never, sessionRepository as never);
+    const now = jest.spyOn(Date, 'now').mockReturnValue(1_000_001);
+    try {
+      expect(auth.issueAccessToken('user-1')).toBe('signed-access-token');
+      expect(sign).toHaveBeenCalledWith({ sub: 'user-1', issuedAtMs: 1_000_001 });
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('carries the session id and the caller-supplied issuance together', () => {
+    const sign = jest.fn().mockReturnValue('signed-access-token');
+    const auth = new AuthService({ sign } as never, sessionRepository as never);
+
+    auth.issueAccessToken('user-1', 'sess-1', 42);
+
+    expect(sign).toHaveBeenCalledWith({ sub: 'user-1', issuedAtMs: 42, sid: 'sess-1' });
+  });
+
   describe('issueSessionToken', () => {
+    /** A repository whose transaction reads `credentials_reset_at` as `stored`. */
+    function lockingRepository(stored: Date | null | undefined) {
+      const inner = { create: sessionRepository.create, save: sessionRepository.save };
+      const query = jest.fn(async () => (stored === undefined ? [] : [{ credentials_reset_at: stored }]));
+      const repository = {
+        ...sessionRepository,
+        manager: {
+          transaction: jest.fn(async (work: (manager: unknown) => unknown) =>
+            work({ query, getRepository: () => inner }),
+          ),
+        },
+      };
+
+      return { auth: new AuthService(jwtService, repository as never), query };
+    }
+
+    it('issues under the owner lock when the reset stamp is the one sign-in read', async () => {
+      const resetAt = new Date(1_000);
+      const { auth, query } = lockingRepository(new Date(1_000));
+
+      const { sessionId } = await auth.issueSessionToken('user-1', meta, resetAt);
+
+      expect(query).toHaveBeenCalledWith(expect.stringContaining('FOR UPDATE'), ['user-1']);
+      expect(saved.map((row) => row.id)).toEqual([sessionId]);
+    });
+
+    it.each([
+      ['a recovery that landed after the password check', null, new Date(2_000)],
+      ['a second recovery', new Date(1_000), new Date(2_000)],
+      ['an account deleted meanwhile', null, undefined],
+    ])('refuses a sign-in raced by %s', async (_label, expected, stored) => {
+      const { auth } = lockingRepository(stored);
+
+      await expect(auth.issueSessionToken('user-1', meta, expected)).rejects.toThrow(UnauthorizedException);
+      expect(saved).toHaveLength(0);
+    });
+
     it('signs the JWT with a sid matching the persisted session row id', async () => {
       const { sessionToken, sessionId } = await service.issueSessionToken('user-1', meta);
 

@@ -61,7 +61,14 @@ export class PythonFunctionTokenService {
 
   issueRunToken(claims: PythonRunClaims): string {
     return this.jwtService.sign(
-      { purpose: PYTHON_RUN_TOKEN_PURPOSE, jobId: claims.jobId, queue: claims.queue },
+      // `issuedAtMs` as on every access token: JwtStrategy refuses a token without it once the
+      // account has been recovered, which would end the sidecars' reads for that user for good.
+      {
+        purpose: PYTHON_RUN_TOKEN_PURPOSE,
+        jobId: claims.jobId,
+        queue: claims.queue,
+        issuedAtMs: Date.now(),
+      },
       {
         secret: config.auth.jwt.authTokenSecret,
         subject: claims.userId,

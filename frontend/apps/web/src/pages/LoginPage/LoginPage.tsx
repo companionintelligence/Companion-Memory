@@ -6,6 +6,7 @@ import { AlertCircleIcon } from '@ci/shadcn/icons';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 
 import { OidcButton } from '@/components/OidcButton';
+import { RecoveryForm } from '@/components/RecoveryForm';
 import { useAuth } from '@/hooks';
 import { hasPendingPortalOidc } from '@/pages/DeviceConnectPage/oidc';
 
@@ -98,6 +99,7 @@ export function LoginPage() {
               </div>
 
               <LoginForm onSubmit={handleSubmit} />
+              <RecoveryForm />
             </>
           ) : (
             <Button

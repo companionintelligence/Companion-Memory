@@ -113,6 +113,7 @@ export class SessionController {
     @Res({ passthrough: true }) res: Response,
     @Body(new ValidationPipe(localStrategySchema)) input: LoginDto,
   ) {
+    const authenticatedAt = Date.now();
     // Same metadata the session row is bound to, so the throttle keys on the
     // proxy-trust-resolved client IP rather than on a header an attacker can
     // vary per request to buy themselves a fresh budget every guess.
@@ -154,9 +155,13 @@ export class SessionController {
     // out by the attempts that preceded it.
     this.loginThrottle.recordSuccess(metadata.ip, input.username);
 
-    const { sessionToken, sessionId } = await this.authService.issueSessionToken(user.id, metadata);
+    const { sessionToken, sessionId } = await this.authService.issueSessionToken(
+      user.id,
+      metadata,
+      user.credentialsResetAt ?? null,
+    );
 
-    const accessToken = await this.authService.issueAccessToken(user.id, sessionId);
+    const accessToken = await this.authService.issueAccessToken(user.id, sessionId, authenticatedAt);
 
     setSessionCookie(req, res, sessionToken);
 
@@ -175,6 +180,9 @@ export class SessionController {
   @HttpCode(200)
   @UseGuards(CsrfGuard)
   async refresh(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    // A reset after this request's session lookup must also revoke the access
+    // token it is about to mint, even if rotation completed before the reset.
+    const authenticatedAt = Date.now();
     const token = this.getSessionToken(req);
     const payload = this.validateSessionToken(token);
     const userId = payload.sub;
@@ -190,7 +198,7 @@ export class SessionController {
       this.authService.getSessionMetadata(req),
     );
 
-    const accessToken = await this.authService.issueAccessToken(userId, sessionId);
+    const accessToken = await this.authService.issueAccessToken(userId, sessionId, authenticatedAt);
 
     // A rotation answers with the new token. A grace match (the token the last
     // rotation replaced: a refresh sent alongside it, or one whose answer never

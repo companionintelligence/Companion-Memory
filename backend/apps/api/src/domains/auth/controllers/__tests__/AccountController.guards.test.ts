@@ -9,6 +9,7 @@ import { PORTAL_TOKEN_VERIFIER } from '@ci/common/guards/PortalTokenVerifier';
 import config from '@ci/configuration';
 import { UserService } from '@ci/domains/user';
 
+import { AccountRecoveryService } from '../../services/AccountRecoveryService';
 import { ApiKeyService } from '../../services/ApiKeyService';
 import { ApiKeyStrategy } from '../../services/ApiKeyStrategy';
 import { AuthService } from '../../services/AuthService';
@@ -146,6 +147,7 @@ const mockPortalTokenVerifier = {
         recordSuccess: () => undefined,
       },
     },
+    { provide: AccountRecoveryService, useValue: { generate: jest.fn() } },
     { provide: PORTAL_TOKEN_VERIFIER, useValue: mockPortalTokenVerifier },
     // Instantiating these registers the real 'jwt' and 'api-key' passport strategies
     // the guards delegate to, so what is under test is the production authentication
@@ -251,6 +253,7 @@ describe('AccountController (real guards + real JwtStrategy and ApiKeyStrategy)'
       { method: 'get', path: '/account' },
       // A key must not be able to revoke every other credential, its owner's sessions included.
       { method: 'post', path: '/account/sign-out-everywhere' },
+      { method: 'post', path: '/account/recovery-codes', body: { currentPassword: 'x' } },
       {
         method: 'patch',
         path: '/account/email',

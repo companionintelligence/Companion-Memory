@@ -96,6 +96,7 @@ function makeController(
     debug: jest.fn(),
     error: jest.fn(),
   } as never);
+  const recovery = { generate: jest.fn().mockResolvedValue(['CMR-test-code']) };
 
   const controller = new AccountController(
     userService as never,
@@ -104,6 +105,7 @@ function makeController(
     hubBridge as never,
     apiKeyService as never,
     loginThrottle,
+    recovery as never,
   );
 
   return {
@@ -114,6 +116,7 @@ function makeController(
     hubBridge,
     apiKeyService,
     loginThrottle,
+    recovery,
   };
 }
 
@@ -141,6 +144,40 @@ const requestContext = () => ({ userId: 'u1' });
 function mockRequest(sessionToken = 'current-session-token'): Request {
   return { cookies: { [config.auth.cookies.sessionTokenName]: sessionToken } } as unknown as Request;
 }
+
+describe('AccountController — recovery-code rotation', () => {
+  it('requires the current password before replacing codes', async () => {
+    const { controller, recovery, userService } = makeController();
+    await expect(controller.generateRecoveryCodes(requestContext(), mockRequest(), {})).rejects.toThrow(
+      'Current password is required',
+    );
+    expect(recovery.generate).not.toHaveBeenCalled();
+    expect(
+      await controller.generateRecoveryCodes(requestContext(), mockRequest(), { currentPassword: 'correct' }),
+    ).toEqual({ codes: ['CMR-test-code'] });
+    expect(userService.validatePassword).toHaveBeenCalledWith('jsmith@example.com', 'correct');
+    expect(recovery.generate).toHaveBeenCalledWith('u1', null);
+  });
+
+  it('rejects an incorrect password without rotating codes', async () => {
+    const { controller, recovery } = makeController(undefined, { validPassword: false });
+    await expect(
+      controller.generateRecoveryCodes(requestContext(), mockRequest(), { currentPassword: 'wrong' }),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(recovery.generate).not.toHaveBeenCalled();
+  });
+
+  it('requires a recent live session for an account that has never set a local password', async () => {
+    const { controller, recovery } = makeController(federatedUser(), { sessionAgeMs: 11 * 60_000 });
+    await expect(
+      controller.generateRecoveryCodes(requestContext(), mockRequest(), {}),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(recovery.generate).not.toHaveBeenCalled();
+    const fresh = makeController(federatedUser(), { sessionAgeMs: 0 });
+    await fresh.controller.generateRecoveryCodes(requestContext(), mockRequest(), {});
+    expect(fresh.recovery.generate).toHaveBeenCalledWith('u1', null);
+  });
+});
 
 describe('AccountController — delete account', () => {
   it('requests deletion when the confirmation email matches the account', async () => {
