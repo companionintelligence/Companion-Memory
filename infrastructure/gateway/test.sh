@@ -13,7 +13,7 @@ trap 'rm -rf "$work"' EXIT
 conf="$work/trusted-proxies.conf"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
-run() { TRUSTED_PROXIES_CONF="$conf" TRUSTED_PROXY_CIDRS="${1-}" sh "$here/entrypoint.sh" true 2>"$work/stderr"; }
+run() { TRUSTED_PROXIES_CONF="$conf" ALLOWED_HOSTS_CONF="$work/allowed-hosts.conf" TRUSTED_PROXY_CIDRS="${1-}" sh "$here/entrypoint.sh" true 2>"$work/stderr"; }
 
 # ── unset: an empty block, so nginx trusts nothing
 run ""
@@ -175,5 +175,43 @@ own_log=$(printf '%s\n' "$blocks" | grep -E 'access_log ' | grep -vE 'access_log
 printf '%s\n' "$blocks" | grep -F '    location /api/ {' | tr -s ' ' \
   | grep -Fq ' location ~* ^/api/authenticate/oidc(?:/|$) { error_log /var/log/nginx/error.log crit; proxy_pass http://api; rewrite ^/api/(.*)$ /$1 break; }' \
   || fail "the sign-in routes' request lines reach the error log"
+
+# ── GATEWAY_ALLOWED_HOSTS: the DNS-rebinding guard (entrypoint.sh)
+hosts="$work/allowed-hosts.conf"
+run_hosts() { ALLOWED_HOSTS_CONF="$hosts" TRUSTED_PROXIES_CONF="$conf" GATEWAY_ALLOWED_HOSTS="${1-}" sh "$here/entrypoint.sh" true 2>"$work/stderr"; }
+
+# unset: every Host passes, as before
+run_hosts ""
+grep -q '^map \$host \$gateway_host_allowed {$' "$hosts" || fail "no map when unset"
+grep -q '^  default 1;$' "$hosts" || fail "unset list does not pass every Host"
+grep -q ' 0;$' "$hosts" && fail "unset list refuses something"
+
+# set: only the names, IP literals and localhost pass; everything else is refused
+run_hosts "Memory.Example.org, box.tail1.ts.net"
+grep -q '^  default 0;$' "$hosts" || fail "a set list still passes unknown Hosts"
+grep -q '^  memory.example.org 1;$' "$hosts" || fail "listed name missing or not lowercased"
+grep -q '^  box.tail1.ts.net 1;$' "$hosts" || fail "second listed name missing"
+grep -q '^  localhost 1;$' "$hosts" || fail "localhost refused"
+grep -Fq '"~^[0-9]{1,3}(\.[0-9]{1,3}){3}$" 1;' "$hosts" || fail "IPv4 literals refused"
+
+# a name the built-in lines pass already, or one given twice, is written once at most:
+# nginx refuses a map that names a key twice
+run_hosts "localhost,box.localhost,dup.example,DUP.example"
+[ "$(grep -c '^  localhost 1;$' "$hosts")" -eq 1 ] || fail "localhost written twice"
+grep -q '^  box.localhost 1;$' "$hosts" && fail "a .localhost name written beside its pattern"
+[ "$(grep -c '^  dup.example 1;$' "$hosts")" -eq 1 ] || fail "a repeated name written twice"
+
+# junk never becomes a directive
+run_hosts "ok.example,evil.example;include /etc/passwd,{}"
+grep -q '^  ok.example 1;$' "$hosts" || fail "valid name dropped alongside junk"
+grep -q "include" "$hosts" && fail "junk token reached the map"
+grep -q "evil" "$hosts" && fail "a name with a semicolon reached the map"
+
+# nginx.conf reads the map and refuses before any location
+grep -q '^  include /etc/nginx/allowed-hosts.conf;$' "$here/nginx.conf" || fail "nginx.conf does not include the host map"
+awk '/^    listen 8642;/{s=1} s&&/gateway_host_allowed = 0/{print NR; exit}' "$here/nginx.conf" > "$work/guard"
+awk '/^    listen 8642;/{s=1} s&&/^    location /{print NR; exit}' "$here/nginx.conf" > "$work/first"
+[ -s "$work/guard" ] || fail "no Host guard in the server block"
+[ "$(cat "$work/guard")" -lt "$(cat "$work/first")" ] || fail "the Host guard comes after a location"
 
 echo "gateway: ok"
