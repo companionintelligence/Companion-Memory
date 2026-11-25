@@ -178,12 +178,19 @@ class LocalHubPlugin : Plugin() {
      * blob no longer decrypts, so the two cases stay distinguishable at the bridge. The JS
      * `secureStorageGet` chooses to collapse both into "signed out"; that leniency belongs at
      * the call site, not here.
+     *
+     * Only the keys in [WRITABLE_SECURE_KEYS] are read back, the same list [secureSet] takes:
+     * the page holds those already, and nothing else in this namespace is the page's to read.
      */
     @PluginMethod
     fun secureGet(call: PluginCall) {
         val key = call.getString("key")
         if (key.isNullOrEmpty()) {
             call.reject("A non-empty 'key' is required")
+            return
+        }
+        if (key !in WRITABLE_SECURE_KEYS) {
+            call.reject("'$key' is not a key this store gives out")
             return
         }
         pluginScope.launch {

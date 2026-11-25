@@ -658,6 +658,18 @@ describe('LocalHub secureSet — only the keys the app itself writes', () => {
     expect(ios.indexOf('writableSecureKeys.contains(key)')).toBeGreaterThan(-1);
     expect(ios.indexOf('writableSecureKeys.contains(key)')).toBeLessThan(ios.indexOf('secureStore.set('));
   });
+
+  // secureGet once read any name back, so a script in the page could ask for whatever the
+  // namespace held, not only the credentials the app itself puts there.
+  it('both plugins refuse to read a key off the list before anything is read', () => {
+    const android = between(kotlin, 'fun secureGet(', 'fun secureSet(');
+    const ios = between(swift, 'func secureGet(', 'func secureSet(');
+
+    expect(android.indexOf('!in WRITABLE_SECURE_KEYS')).toBeGreaterThan(-1);
+    expect(android.indexOf('!in WRITABLE_SECURE_KEYS')).toBeLessThan(android.indexOf('credentialStore.get('));
+    expect(ios.indexOf('writableSecureKeys.contains(key)')).toBeGreaterThan(-1);
+    expect(ios.indexOf('writableSecureKeys.contains(key)')).toBeLessThan(ios.indexOf('secureStore.get('));
+  });
 });
 
 /**

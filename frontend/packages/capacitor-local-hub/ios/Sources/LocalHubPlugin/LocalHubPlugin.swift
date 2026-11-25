@@ -142,9 +142,15 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
     /// Rejects -- rather than resolving null -- when the Keychain itself refuses, so the two
     /// cases stay distinguishable at the bridge. The JS `secureStorageGet` chooses to collapse
     /// both into "signed out"; that leniency belongs at the call site, not here.
+    /// Only the keys in `writableSecureKeys` are read back, the same list `secureSet` takes,
+    /// as on Android: the page holds those already, and nothing else here is the page's to read.
     @objc func secureGet(_ call: CAPPluginCall) {
         guard let key = call.getString("key"), !key.isEmpty else {
             call.reject("A non-empty 'key' is required")
+            return
+        }
+        guard Self.writableSecureKeys.contains(key) else {
+            call.reject("'\(key)' is not a key this store gives out")
             return
         }
         do {
