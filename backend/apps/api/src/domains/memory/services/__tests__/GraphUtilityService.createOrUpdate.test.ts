@@ -426,6 +426,39 @@ describe('GraphUtilityService.createOrUpdateRelationship', () => {
   // GraphUtilityService.createOrUpdateRelationship.integration.test.ts.
 });
 
+describe("GraphUtilityService.createOrUpdateRelationship — an end on another owner's entity", () => {
+  // `entity.create` with another user's `entityId` and nested relationships used to write edges from
+  // that entity; graph expansion then read its name and description into this owner's recall.
+  it.each([
+    ['from', { fromEntityId: 'foreign-1', toEntityId: NODE }],
+    ['to', { fromEntityId: NODE, toEntityId: 'foreign-1' }],
+  ])("refuses an edge whose %s end is another owner's entity, and writes nothing", async (_end, ends) => {
+    const { service, edges } = setup({
+      nodes: [storedNode(), storedNode({ entity_id: 'foreign-1', owner_user_id: 'owner-2' })],
+    });
+
+    await expect(
+      service.createOrUpdateRelationship(OWNER, { ...ends, relationshipType: 'KNOWS' }),
+    ).rejects.toThrow('Graph node foreign-1 is not owned by owner-1; refusing to link it');
+    expect(edges.all()).toEqual([]);
+  });
+
+  // No foreign key, and a create can still be queued behind its edge.
+  it('still writes an edge whose end has no row yet', async () => {
+    const { service, edges } = setup({ nodes: [storedNode()] });
+
+    await service.createOrUpdateRelationship(OWNER, {
+      fromEntityId: NODE,
+      toEntityId: 'queued-1',
+      relationshipType: 'KNOWS',
+    });
+
+    expect(edges.all()).toEqual([
+      expect.objectContaining({ from_entity_id: NODE, to_entity_id: 'queued-1' }),
+    ]);
+  });
+});
+
 describe('GraphUtilityService.createOrUpdateRelationship — an edge already on the coordinate', () => {
   // relationships_unique_directed_idx allows one active edge per (from, to,
   // type). A write that names no row by id used to INSERT beside it and die on
