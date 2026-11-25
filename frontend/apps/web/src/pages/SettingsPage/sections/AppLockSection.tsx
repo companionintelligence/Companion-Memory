@@ -18,7 +18,8 @@ import { SettingsFooter, SettingsGroup, SettingsRow, SettingsSection, SettingsSt
  * Settings → App lock: require your face, fingerprint or device passcode to open the
  * app. The settings live natively (so a cold start locks before the page loads); this
  * section reads and writes them through the plugin. Turning the lock on runs the prompt
- * once first — nobody enables a lock they cannot pass.
+ * once first — nobody enables a lock they cannot pass — and so does loosening it (off, a
+ * longer grace, no screen protection), so a page script cannot quietly turn it off.
  */
 export function AppLockSection() {
   const [status, { configure, lock }] = useAppLock();
@@ -59,6 +60,19 @@ export function AppLockSection() {
             ? 'The lock stays off: the unlock check was cancelled. Try again when you are ready.'
             : (next.reason ?? 'The lock could not be turned on.'),
         );
+      } else if (!enabled && next?.enabled) {
+        // Turning it off asks for the same check as unlocking.
+        setNotice('The lock stays on: the unlock check was cancelled. Try again when you are ready.');
+      }
+    });
+
+  /** A longer grace or no screen protection asks for the unlock check too; cancelled, nothing changes. */
+  const change = (settings: { grace?: AppLockGrace; secureScreen?: boolean }) =>
+    run(async () => {
+      const next = await configure(settings);
+
+      if (next?.reason === 'authentication-cancelled') {
+        setNotice('Nothing changed: the unlock check was cancelled.');
       }
     });
 
@@ -104,7 +118,7 @@ export function AppLockSection() {
           <Select
             value={status.grace}
             disabled={busy || !status.enabled}
-            onValueChange={(value) => void run(() => configure({ grace: value as AppLockGrace }))}
+            onValueChange={(value) => void change({ grace: value as AppLockGrace })}
           >
             <Select.Trigger id="app-lock-grace" className="w-full">
               <Select.Value />
@@ -132,7 +146,7 @@ export function AppLockSection() {
                 id="app-lock-secure"
                 checked={status.secureScreen}
                 disabled={busy || !status.enabled}
-                onCheckedChange={(checked) => void run(() => configure({ secureScreen: checked }))}
+                onCheckedChange={(checked) => void change({ secureScreen: checked })}
               />
             }
           />

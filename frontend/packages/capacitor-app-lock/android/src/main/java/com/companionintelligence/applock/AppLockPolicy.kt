@@ -58,4 +58,15 @@ object AppLockPolicy {
      */
     fun locksOnPause(settings: AppLockSettings): Boolean =
         settings.enabled && settings.grace == Grace.IMMEDIATELY
+
+    /**
+     * Whether going from [current] to [next] loosens a lock that is on: turning it off,
+     * a longer grace ([Grace] is declared shortest first, "never" last), or no longer
+     * securing the screen. Such a change needs the same prompt as unlocking. `configure`
+     * is callable from the web view, and before this a page script could turn the lock
+     * off, and lift a lock that was showing, without anyone proving who they were.
+     */
+    fun loosens(current: AppLockSettings, next: AppLockSettings): Boolean =
+        current.enabled &&
+            (!next.enabled || next.grace.ordinal > current.grace.ordinal || (current.secureScreen && !next.secureScreen))
 }

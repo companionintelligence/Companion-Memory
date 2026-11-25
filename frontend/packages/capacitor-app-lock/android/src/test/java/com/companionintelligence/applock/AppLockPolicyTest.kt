@@ -83,6 +83,30 @@ class AppLockPolicyTest {
 
         assertEquals(members, Grace.entries.map { it.wire }.toSet())
     }
+
+    // configure() is callable from the web view; loosening once applied with no prompt at all.
+    @Test
+    fun turning_the_lock_off_or_loosening_it_needs_the_unlock_prompt() {
+        val strict = on.copy(grace = Grace.THIRTY_SECONDS, secureScreen = true)
+
+        assertTrue(AppLockPolicy.loosens(strict, strict.copy(enabled = false)))
+        assertTrue(AppLockPolicy.loosens(strict, strict.copy(grace = Grace.FIVE_MINUTES)))
+        assertTrue(AppLockPolicy.loosens(strict, strict.copy(grace = Grace.NEVER)))
+        assertTrue(AppLockPolicy.loosens(strict, strict.copy(secureScreen = false)))
+    }
+
+    @Test
+    fun tightening_a_lock_or_changing_one_that_is_off_needs_no_prompt() {
+        val strict = on.copy(grace = Grace.THIRTY_SECONDS, secureScreen = false)
+
+        assertFalse(AppLockPolicy.loosens(strict, strict))
+        assertFalse(AppLockPolicy.loosens(strict, strict.copy(grace = Grace.IMMEDIATELY)))
+        assertFalse(AppLockPolicy.loosens(strict, strict.copy(secureScreen = true)))
+        // Off: nothing is guarded yet. Turning it on has its own prompt in configure().
+        val off = AppLockSettings(enabled = false)
+        assertFalse(AppLockPolicy.loosens(off, off.copy(grace = Grace.NEVER, secureScreen = false)))
+        assertFalse(AppLockPolicy.loosens(off, off.copy(enabled = true)))
+    }
 }
 
 /** Finds the plugin package root from wherever Gradle runs the test, like the speech plugin's helper. */

@@ -144,13 +144,35 @@ class AppLockPlugin : Plugin() {
             return
         }
 
+        // Loosening a lock that is on asks for the unlock prompt first. A device with no screen
+        // lock or biometric left cannot show one, and could never unlock either, so that change
+        // goes through rather than leaving the user locked out of their own memory.
+        if (AppLockPolicy.loosens(settings, next) && isAvailable()) {
+            authenticate(
+                title = if (next.enabled) "Change the app lock" else "Turn off the app lock",
+                subtitle = "Confirm it is you",
+                onResult = { ok ->
+                    if (ok) {
+                        applyConfigured(next)
+                    }
+
+                    call.resolve(statusJson(reason = if (ok) null else "authentication-cancelled"))
+                },
+            )
+
+            return
+        }
+
+        applyConfigured(next)
+        call.resolve(statusJson())
+    }
+
+    private fun applyConfigured(next: AppLockSettings) {
         apply(next)
 
         if (!next.enabled && locked) {
             setLocked(false)
         }
-
-        call.resolve(statusJson())
     }
 
     @PluginMethod

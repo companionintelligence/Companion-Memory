@@ -71,6 +71,23 @@ describe('AppLockSection', () => {
     expect(screen.getByRole('switch', { name: 'Require unlock' })).not.toBeChecked();
   });
 
+  // Turning it off once needed no check at all, so a page script could switch it off.
+  it('turning the lock off whose check is cancelled leaves it on and says so', async () => {
+    mocks.plugin.getStatus.mockResolvedValue({ ...base, enabled: true });
+    mocks.plugin.configure.mockResolvedValue({ ...base, enabled: true, reason: 'authentication-cancelled' });
+    render(<AppLockSection />);
+
+    const toggle = await screen.findByRole('switch', { name: 'Require unlock' });
+    await waitFor(() => expect(toggle).toBeChecked());
+    fireEvent.click(toggle);
+
+    expect(mocks.plugin.configure).toHaveBeenCalledWith({ enabled: false });
+    await waitFor(() =>
+      expect(screen.getByText(/The lock stays on: the unlock check was cancelled/)).toBeInTheDocument(),
+    );
+    expect(screen.getByRole('switch', { name: 'Require unlock' })).toBeChecked();
+  });
+
   it('a device with nothing to unlock with cannot turn the lock on, and is told why', async () => {
     mocks.plugin.getStatus.mockResolvedValue({
       ...base,
