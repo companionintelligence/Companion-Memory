@@ -2,13 +2,13 @@ import { useMemo } from 'react';
 
 import { Card, Tooltip, cn } from '@ci/shadcn';
 import { Clock, User, Mail, Send, Inbox } from '@ci/shadcn/icons';
-import DOMPurify from 'dompurify';
-import parse from 'html-react-parser';
 
 import { gql, useFragment, type FragmentType } from '@/graphql';
 import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 
 import { useEntityService } from '../../useEntityService';
+
+import { renderMessageHtml } from './messageHtml';
 
 // No `hour12`: the hour cycle is the person's time-format preference, applied by the formatter.
 // en-US already writes 12-hour, so under 'auto' this reads exactly as the forced version did.
@@ -163,13 +163,10 @@ export function CommunicationCard({ entity }: Props) {
       </div>
 
       {data.communicationContent &&
-        parse(
-          DOMPurify.sanitize(
-            data.communicationContent.length > 1000
-              ? `${data.communicationContent.substring(0, 1000)}...`
-              : data.communicationContent,
-            { USE_PROFILES: { html: true } },
-          ),
+        renderMessageHtml(
+          data.communicationContent.length > 1000
+            ? `${data.communicationContent.substring(0, 1000)}...`
+            : data.communicationContent,
         )}
 
       {/*{data.tags.length > 0 && (*/}

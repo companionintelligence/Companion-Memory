@@ -20,6 +20,12 @@ function makeRepo() {
     count: jest.fn(),
     create: jest.fn((row: Record<string, unknown>) => row),
     save: jest.fn(async (row: Record<string, unknown>) => row),
+    insert: jest.fn(async (_row: Record<string, unknown>) => ({ identifiers: [] })),
+    findOneOrFail: jest.fn(async ({ where }: { where: Record<string, unknown> }) => ({
+      ...where,
+      entityTypes: [],
+      tags: [],
+    })),
   };
 }
 
@@ -44,8 +50,8 @@ describe('SavedSearchService.create', () => {
 
     await service.create(ownerCtx, { name: 'trip', query: 'paris', entityTypes: ['event'], filters });
 
-    expect(repo.create).toHaveBeenCalledTimes(1);
-    const row = repo.create.mock.calls[0][0];
+    expect(repo.insert).toHaveBeenCalledTimes(1);
+    const row = repo.insert.mock.calls[0][0];
     expect(row.filters).toEqual(filters);
     expect(row.userId).toBe('owner-1');
   });
@@ -56,7 +62,69 @@ describe('SavedSearchService.create', () => {
 
     await service.create(ownerCtx, { name: 'plain', query: 'q' });
 
-    expect(repo.create.mock.calls[0][0].filters).toBeNull();
+    expect(repo.insert.mock.calls[0][0].filters).toBeNull();
+  });
+
+  it('never saves: save() would update whichever row already holds the id', async () => {
+    const repo = makeRepo();
+    const { service } = makeService(repo);
+    repo.update.mockResolvedValue({ affected: 0 });
+
+    await service.create(ownerCtx, { id: 'client-id', name: 'n', query: 'q' });
+
+    expect(repo.save).not.toHaveBeenCalled();
+  });
+
+  it("replaces the caller's own row when a replica replays its create, scoped to the caller", async () => {
+    const repo = makeRepo();
+    const { service, eventService } = makeService(repo);
+    repo.update.mockResolvedValue({ affected: 1 });
+
+    const result = await service.create(ownerCtx, { id: 'client-id', name: 'again', query: 'q' });
+
+    expect(repo.update).toHaveBeenCalledWith(
+      { id: 'client-id', userId: 'owner-1' },
+      expect.objectContaining({ name: 'again' }),
+    );
+    expect(repo.insert).not.toHaveBeenCalled();
+    expect(result.id).toBe('client-id');
+    expect(eventService.send).toHaveBeenCalledWith('savedSearch.updated', { savedSearchId: 'client-id' });
+  });
+
+  it('inserts a new row under a client id nobody holds yet', async () => {
+    const repo = makeRepo();
+    const { service, eventService } = makeService(repo);
+    repo.update.mockResolvedValue({ affected: 0 });
+
+    await service.create(ownerCtx, { id: 'client-id', name: 'n', query: 'q' });
+
+    expect(repo.insert).toHaveBeenCalledWith(expect.objectContaining({ id: 'client-id', userId: 'owner-1' }));
+    expect(eventService.send).toHaveBeenCalledWith('savedSearch.created', { savedSearchId: 'client-id' });
+  });
+
+  it("refuses an id another account holds instead of taking over that account's row", async () => {
+    const repo = makeRepo();
+    const { service, eventService } = makeService(repo);
+    // The update is scoped to the caller, so another account's row does not match it...
+    repo.update.mockResolvedValue({ affected: 0 });
+    // ...and the insert then hits that row's primary key.
+    repo.insert.mockRejectedValue(
+      Object.assign(new Error('duplicate key value violates unique constraint'), { code: '23505' }),
+    );
+
+    await expect(
+      service.create(ownerCtx, { id: 'victims-id', name: 'mine now', query: 'q' }),
+    ).rejects.toThrow('That saved search id is already in use');
+    expect(repo.findOneOrFail).not.toHaveBeenCalled();
+    expect(eventService.send).not.toHaveBeenCalled();
+  });
+
+  it('passes any other database error through', async () => {
+    const repo = makeRepo();
+    const { service } = makeService(repo);
+    repo.insert.mockRejectedValue(new Error('connection lost'));
+
+    await expect(service.create(ownerCtx, { name: 'n', query: 'q' })).rejects.toThrow('connection lost');
   });
 });
 
@@ -333,7 +401,7 @@ describe('SavedSearchService.ensureDefaults', () => {
 
     await service.create(ownerCtx, { name: 'Branded meat', query: '#NotBeyondMeat #PossibleBurger' });
 
-    const row = repo.create.mock.calls[0][0] as { tags: string[] };
+    const row = repo.insert.mock.calls[0][0] as { tags: string[] };
     expect(row.tags).toEqual(expect.arrayContaining(['NotBeyondMeat', 'PossibleBurger']));
   });
 

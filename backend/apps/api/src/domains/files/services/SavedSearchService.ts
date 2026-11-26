@@ -1,10 +1,11 @@
 import * as crypto from 'node:crypto';
 
-import { Injectable } from '@nestjs/common';
+import { ConflictException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, MoreThan, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
+import { isUniqueViolation } from '@ci/common/constants';
 import { type ServiceContext, SYSTEM_USER, UserServiceContext } from '@ci/common/context';
 import { EventService } from '@ci/domains/events';
 
@@ -40,21 +41,62 @@ export class SavedSearchService {
     private readonly eventService: EventService,
   ) {}
 
+  /**
+   * Create a saved search, under the caller's id for it when they have one: a
+   * phone's offline replica mints its row's id and replays the create later.
+   *
+   * ⚠ A client's id is never written over another account's row. This used to
+   * `save()` it, which updates whatever row holds that id, so anyone who knew
+   * the id of someone else's saved search could replace it and take it over.
+   * Now a replay of the caller's own row replaces only that row (the update is
+   * scoped to their user id), and anything else is a plain insert, which the
+   * database refuses for an id already taken, whoever took it and however the
+   * two requests race.
+   */
   async create(context: UserServiceContext, data: CreateSavedSearchDto): Promise<SavedSearch> {
-    const id = data.id ?? uuidv7();
-
-    const instance = await this.savedSearchRepository.create({
-      id,
+    const fields = {
       name: data.name,
       description: data.description,
       query: data.query,
       entityTypes: data.entityTypes,
       tags: this.assembleTags(data),
       filters: data.filters ?? null,
-      userId: context.userId,
-    });
+    };
 
-    const entity = await this.savedSearchRepository.save(instance);
+    if (data.id) {
+      // A replica's create replayed after the row is already in, as when the
+      // first answer never reached the phone: the same row, written again.
+      const replaced = await this.savedSearchRepository.update(
+        { id: data.id, userId: context.userId },
+        fields,
+      );
+
+      if (replaced.affected) {
+        const entity = await this.savedSearchRepository.findOneOrFail({
+          where: { id: data.id, userId: context.userId },
+        });
+
+        await this.eventService.send(SavedSearchUpdatedEvent, { savedSearchId: data.id });
+
+        return SavedSearchEntity.toEgressType(entity);
+      }
+    }
+
+    const id = data.id ?? uuidv7();
+
+    try {
+      await this.savedSearchRepository.insert({ id, ...fields, userId: context.userId });
+    } catch (err) {
+      if (isUniqueViolation(err)) {
+        // Taken by another account: their row is not this caller's to replace,
+        // and the message does not say whose it is.
+        throw new ConflictException('That saved search id is already in use');
+      }
+
+      throw err;
+    }
+
+    const entity = await this.savedSearchRepository.findOneOrFail({ where: { id, userId: context.userId } });
 
     await this.eventService.send(SavedSearchCreatedEvent, {
       savedSearchId: id,
