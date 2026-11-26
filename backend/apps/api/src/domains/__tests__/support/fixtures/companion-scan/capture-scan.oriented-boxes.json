@@ -1,0 +1,502 @@
+{
+  "recorded_from": {
+    "repository": "companionintelligence/Companion-Scan",
+    "commit": "11b9220008137d7912850785311489cca2a918d8",
+    "producer": "server/memory_push.ts pushScanToMemory",
+    "recorded_on": "2026-11-26"
+  },
+  "request": {
+    "method": "POST",
+    "path": "/v1/events",
+    "body": {
+      "events": [
+        {
+          "source_system": "companion-scan",
+          "source_id": "scan-fixture-oriented-boxes",
+          "kind": "capture.scan",
+          "occurred_at": "2026-04-02T14:30:00.000Z",
+          "title": "Scanned Living Room — 10 Example Street",
+          "description": "Location: 10 Example Street. 481,233 points. Detected: chair, desk lamp. Gaussian splat: 812,345 gaussians. Metric scale solved (RMS 0.018 m).",
+          "payload": {
+            "scan_id": "scan-fixture-oriented-boxes",
+            "session_id": "session-fixture-1",
+            "glb_filename": "room.glb",
+            "glb_file_id": "00000000-0000-4000-8000-0000000000f1",
+            "file_ids": [
+              "00000000-0000-4000-8000-0000000000f1",
+              "00000000-0000-4000-8000-0000000000f2"
+            ],
+            "point_count": 481233,
+            "detection_count": 2,
+            "detected_labels": [
+              "chair",
+              "desk lamp"
+            ],
+            "objects": [
+              {
+                "label": "chair",
+                "position": {
+                  "x": 2.5,
+                  "y": 0,
+                  "z": -5
+                },
+                "rotation": {
+                  "x": 0,
+                  "y": 0.3827,
+                  "z": 0,
+                  "w": 0.9239
+                },
+                "extent_m": {
+                  "x": 1.1,
+                  "y": 1.9,
+                  "z": 1.2
+                },
+                "extent_mm": {
+                  "x": 1100,
+                  "y": 1900,
+                  "z": 1200
+                },
+                "extent_metric_m": {
+                  "x": 0.55,
+                  "y": 0.95,
+                  "z": 0.6
+                },
+                "position_project": {
+                  "x": -0.5,
+                  "y": 0,
+                  "z": -2.75
+                },
+                "rotation_project": {
+                  "x": 0,
+                  "y": 0.9238823925624398,
+                  "z": 0,
+                  "w": 0.3826765275178269
+                },
+                "confidence": 0.58,
+                "frame_votes": 3
+              },
+              {
+                "label": "desk lamp",
+                "position": {
+                  "x": 1,
+                  "y": 2.2,
+                  "z": -3.5
+                },
+                "rotation": {
+                  "x": 0,
+                  "y": 0,
+                  "z": 0,
+                  "w": 1
+                },
+                "extent_m": {
+                  "x": 0.5,
+                  "y": 1.2,
+                  "z": 0.5
+                },
+                "extent_mm": {
+                  "x": 500,
+                  "y": 1200,
+                  "z": 500
+                },
+                "extent_metric_m": {
+                  "x": 0.25,
+                  "y": 0.6,
+                  "z": 0.25
+                },
+                "position_project": {
+                  "x": 0.25,
+                  "y": 1.1,
+                  "z": -2
+                },
+                "rotation_project": {
+                  "x": 0,
+                  "y": 0.7071067811865475,
+                  "z": 0,
+                  "w": 0.7071067811865476
+                },
+                "confidence": 0.27
+              }
+            ],
+            "object_extents": {
+              "source": "splat-analyzer interactions.json (oriented 3D bounding boxes)",
+              "frame": "splat_local",
+              "units": "m",
+              "convention": "position = box centre; rotation = xyzw quaternion; extent_m = full side lengths along the box's own axes, so x/y/z carry no length/width/height meaning. extent_mm is extent_m × 1000 rounded to whole millimetres — the same measurement in SI units, not a second one. confidence is the peak per-view detector score (what min_peak_score gates on); frame_votes is how many rendered views the object appeared in (what min_votes gates on). extent_metric_m, position_project and rotation_project are this same box carried into the Place project frame by spatial_frame — size, centre and orientation, all three in that frame — and are present only when spatial_frame.metric is true. rotation_project additionally requires the box to have carried a rotation at all; position and rotation without the suffix are always the splat-frame originals.",
+              "world_frame_aligned": false,
+              "calibrated": false,
+              "project_frame_aligned": true,
+              "metric": {
+                "source": "splat-align (Umeyama fit; see the event payload spatial_frame block)",
+                "scale": 0.5,
+                "residual_m": 0.018,
+                "applied_to": [
+                  "extent_metric_m",
+                  "position_project",
+                  "rotation_project"
+                ]
+              },
+              "caveat": "Detector output under the parameters below, not measured dimensions. The splat frame's alignment to the world/ENU frame this event's `location` uses is unvalidated, and splat-detect has never been validated on a furnished room (docs/pipelines/SPLAT_DETECT_ROADMAP.md, phases 1 and 3). An extent is a bounding volume, not the object's own volume.",
+              "detector": {
+                "tool": "splat-analyzer",
+                "prompt": "chair, desk lamp, sofa, table, plant",
+                "run_at": "2026-04-02T15:20:00.000Z",
+                "object_count": 2,
+                "quality": "medium",
+                "renderer": "point",
+                "point_splat_size": "6",
+                "score_threshold": null,
+                "min_votes": null,
+                "min_peak_score": null
+              }
+            },
+            "splat": {
+              "artifacts": [
+                {
+                  "kind": "sog",
+                  "filename": "room.sog",
+                  "bytes": 9437184,
+                  "file_id": "00000000-0000-4000-8000-0000000000f2"
+                },
+                {
+                  "kind": "compressed_ply",
+                  "filename": "room.compressed.ply",
+                  "bytes": 25165824,
+                  "file_id": null
+                },
+                {
+                  "kind": "splat_ply",
+                  "filename": "room.splat.ply",
+                  "bytes": 201326592,
+                  "file_id": null
+                }
+              ],
+              "gaussian_count": 812345,
+              "frame_count": 96,
+              "train_tool": "brush",
+              "train_status": "ok",
+              "trained_at": "2026-04-02T15:00:00.000Z",
+              "finish_tool": "splat-transform",
+              "finish_status": "ok",
+              "finished_at": "2026-04-02T15:05:00.000Z"
+            },
+            "spatial_frame": {
+              "units": "m",
+              "frame": "project",
+              "metric": true,
+              "scale": 0.5,
+              "residual_m": 0.018,
+              "max_residual_m": 0.05,
+              "correspondence_count": 42,
+              "min_correspondences": 8,
+              "project_transform": [
+                0,
+                0,
+                0.5,
+                2,
+                0,
+                0.5,
+                0,
+                0,
+                -0.5,
+                0,
+                0,
+                -1.5,
+                0,
+                0,
+                0,
+                1
+              ],
+              "transform_convention": "row-major 4x4 mapping the splat/SfM frame into the Place project frame, scale already folded in",
+              "calibration_method": "two-point-ground",
+              "scan_calibration_method": "two-point-ground",
+              "scan_calibration_status": "provisional",
+              "fit_tool": "umeyama",
+              "fit_status": "ok",
+              "fit_at": "2026-04-02T15:10:00.000Z",
+              "splat_path": "room.splat.ply",
+              "georeference": null,
+              "caveat": "The project frame is the Place metric frame, not the ENU frame `location` uses — this fit does not place the splat on Earth. `georeference`, when present and not null, relates the Place metric frame to the Earth (its origin and the true bearing of its +Z axis, approximate to the accuracy it states); null means the Place has none. When `metric` is false nothing in this event converts a splat-space length to metres, and `scale` must not be used to try."
+            },
+            "mesh_objects": [
+              {
+                "label": "chair",
+                "world_pos": {
+                  "x": 1.3,
+                  "y": 0.45,
+                  "z": -2.4
+                },
+                "confidence": 0.71
+              },
+              {
+                "label": "lamp",
+                "world_pos": {
+                  "x": 0.55,
+                  "y": 1.2,
+                  "z": -1.8
+                },
+                "confidence": 0.64
+              }
+            ],
+            "mesh_object_frame": {
+              "source": "capture sidecar <base>.json (VLM detections resolved to world space during the walkthrough)",
+              "frame": "scan_world",
+              "units": "m",
+              "convention": "world_pos is the detection centroid in the scan world frame — the same frame localToWorld places on Earth. These are points, not volumes: the sidecar carries no extent. The GLB draws its detection boxes as flagged placeholders sized from a 2D bounding-box fraction, so they are not forwarded here. confidence is the detector score.",
+              "has_extents": false,
+              "calibration_method": "two-point-ground",
+              "calibration_status": "provisional"
+            },
+            "location": {
+              "lat": 51.5072,
+              "lon": -0.1276,
+              "address": "10 Example Street",
+              "display_address": "Example Street, London",
+              "device_heading_at_export": 45,
+              "northReference": "magnetic",
+              "bearing": 45,
+              "deprecated_keys": {
+                "bearing": "device_heading_at_export"
+              },
+              "accuracy_m": 12
+            }
+          }
+        }
+      ]
+    }
+  },
+  "inputs": {
+    "scan": {
+      "scanId": "scan-fixture-oriented-boxes",
+      "sessionId": "session-fixture-1",
+      "filename": "room.glb",
+      "name": "Living Room",
+      "geoPose": {
+        "lat": 51.5072,
+        "lng": -0.1276,
+        "altitudeM": null,
+        "bearing": 45,
+        "accuracyM": 12,
+        "fixedAt": "2026-04-02T14:29:41.000Z",
+        "address": "10 Example Street",
+        "displayAddress": "Example Street, London"
+      },
+      "capturedAt": "2026-04-02T14:30:00.000Z",
+      "pointCount": 481233,
+      "detectionCount": 0,
+      "calibrationMethod": "two-point-ground",
+      "calibrationStatus": "provisional"
+    },
+    "place": {
+      "georeference": null,
+      "georefVersion": 0
+    },
+    "sidecars": {
+      "room.interactions.json": {
+        "objects": [
+          {
+            "label": "chair",
+            "position": {
+              "x": 2.5,
+              "y": 0,
+              "z": -5
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0.3827,
+              "z": 0,
+              "w": 0.9239
+            },
+            "scale": {
+              "x": 1.1,
+              "y": 1.9,
+              "z": 1.2
+            },
+            "frames": [
+              {
+                "frame_idx": 4,
+                "box": [
+                  112,
+                  240,
+                  388,
+                  610
+                ],
+                "score": 0.41
+              },
+              {
+                "frame_idx": 7,
+                "box": [
+                  96,
+                  228,
+                  402,
+                  596
+                ],
+                "score": 0.58
+              },
+              {
+                "frame_idx": 11,
+                "box": [
+                  130,
+                  251,
+                  371,
+                  622
+                ],
+                "score": 0.36
+              }
+            ]
+          },
+          {
+            "label": "desk lamp",
+            "position": {
+              "x": 1,
+              "y": 2.2,
+              "z": -3.5
+            },
+            "rotation": {
+              "x": 0,
+              "y": 0,
+              "z": 0,
+              "w": 1
+            },
+            "scale": {
+              "x": 0.5,
+              "y": 1.2,
+              "z": 0.5
+            },
+            "score": 0.27
+          }
+        ],
+        "frame_annotations": {}
+      },
+      "room.splat-detect.manifest.json": {
+        "schemaVersion": 1,
+        "tool": "splat-analyzer",
+        "status": "ok",
+        "createdAt": "2026-04-02T15:20:00.000Z",
+        "interactionsPath": "room.interactions.json",
+        "objectCount": 2,
+        "prompt": "chair, desk lamp, sofa, table, plant",
+        "params": {
+          "python": "python3",
+          "detectDir": "splat_analyzer",
+          "hipVisibleDevices": "0",
+          "pointSplatSize": "6",
+          "quality": "medium",
+          "renderer": "point"
+        }
+      },
+      "room.splat-align.manifest.json": {
+        "schemaVersion": 1,
+        "tool": "umeyama",
+        "status": "ok",
+        "createdAt": "2026-04-02T15:10:00.000Z",
+        "plyPath": "room.splat.ply",
+        "projectTransform": [
+          0,
+          0,
+          0.5,
+          2,
+          0,
+          0.5,
+          0,
+          0,
+          -0.5,
+          0,
+          0,
+          -1.5,
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": 0.5,
+        "residualM": 0.018,
+        "residualSource": "camera-path",
+        "correspondenceCount": 42,
+        "determined": {
+          "scale": true,
+          "up": true,
+          "heading": true,
+          "origin": true
+        },
+        "calibrationMethod": "two-point-ground",
+        "params": {
+          "minCorrespondences": 8,
+          "maxResidualM": 0.05
+        }
+      },
+      "room.splat-train.manifest.json": {
+        "schemaVersion": 1,
+        "tool": "brush",
+        "status": "ok",
+        "createdAt": "2026-04-02T15:00:00.000Z",
+        "sessionDir": "session-fixture-1",
+        "plyPath": "room.splat.ply",
+        "gaussianCount": 812345,
+        "frameCount": 96,
+        "params": {
+          "brushBin": "brush",
+          "device": "cuda",
+          "trainIters": 30000,
+          "shDegree": 3,
+          "maxResolution": 1600,
+          "evalEvery": 1000
+        }
+      },
+      "room.splat-finish.manifest.json": {
+        "schemaVersion": 1,
+        "tool": "splat-transform",
+        "status": "ok",
+        "createdAt": "2026-04-02T15:05:00.000Z",
+        "sogPath": "room.sog",
+        "compressedPlyPath": "room.compressed.ply",
+        "gaussianCount": 812345,
+        "params": {
+          "nodeBin": "node",
+          "cliPath": "splat-transform",
+          "gpu": "auto",
+          "iterations": 10
+        }
+      },
+      "room.json": {
+        "detections": [
+          {
+            "label": "chair",
+            "confidence": 0.71,
+            "worldPos": {
+              "x": 1.3,
+              "y": 0.45,
+              "z": -2.4
+            }
+          },
+          {
+            "label": "lamp",
+            "confidence": 0.64,
+            "worldPos": {
+              "x": 0.55,
+              "y": 1.2,
+              "z": -1.8
+            }
+          }
+        ]
+      }
+    },
+    "files": {
+      "room.glb": {
+        "bytes": 8
+      },
+      "room.sog": {
+        "bytes": 9437184
+      },
+      "room.compressed.ply": {
+        "bytes": 25165824
+      },
+      "room.splat.ply": {
+        "bytes": 201326592
+      }
+    },
+    "upload_ids": [
+      "00000000-0000-4000-8000-0000000000f1",
+      "00000000-0000-4000-8000-0000000000f2"
+    ]
+  }
+}

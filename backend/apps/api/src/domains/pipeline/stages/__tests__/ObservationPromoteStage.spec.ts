@@ -1,6 +1,11 @@
 import type { DataSource } from 'typeorm';
 
 import {
+  companionScanCaptureEvent,
+  storedCaptureEvent,
+  type CompanionScanCaptureName,
+} from '../../../__tests__/support/companionScanCapture';
+import {
   ObservationPromoteStage,
   PROMOTE_OBSERVATION_SOURCE,
   PROMOTE_OBSERVATION_STAGE_ID,
@@ -14,8 +19,8 @@ import {
 /**
  * `promote.observation` — Companion Scan room captures become SIGHTINGS.
  *
- * CI-Spatial has been pushing one `capture.scan` event per room scan to
- * `POST /v1/events` since the scan pipeline shipped, carrying
+ * Companion Scan (then CI-Spatial) has been pushing one `capture.scan` event per
+ * room scan to `POST /v1/events` since the scan pipeline shipped, carrying
  * `payload.objects`, `detected_labels`, a point count and a geo block. NOTHING
  * IN THIS REPO READ IT — `promote.object` handles `purchase` and `order` and
  * stops there, and the string `capture.scan` appeared nowhere in the backend.
@@ -24,14 +29,21 @@ import {
  *
  * What this suite is mostly about:
  *
- *  1. **It reads the wire that exists, not the one anyone wants.**
- *     `memory_push.ts` narrows every detection to `{label, position}` before
- *     sending; the fixtures below are that shape verbatim. Extents, rotations
- *     and 3-D boxes are dropped AT THE PUSH, so a reader for them could not be
- *     tested against real data and would only ever manufacture confidence.
+ *  1. **It reads the wire that exists, not the one anyone wants.** Companion
+ *     Scan's `memory_push.ts` now sends every detected object as an oriented
+ *     box: its centre, an xyzw rotation, its extents and, when the scan has a
+ *     metric fit, the same box in the Place's frame, beside an
+ *     `object_extents` block that names the frame. Extents are no longer
+ *     dropped at the push, so the stage keeps every box key the push sends
+ *     (`attributes.scan_box`) and reads none it does not. The recorded pushes
+ *     in `src/domains/__tests__/support/fixtures/companion-scan/` are that
+ *     wire, built by the producer's own code. `scanRow()` below is the older
+ *     `{label, position}` shape: every scan pushed before the boxes has it, and
+ *     the push still sends it for a detector sidecar that has no boxes.
  *  2. **A scan-local position is never mistaken for a location.** `position` is
- *     metres in the capture's own frame. It goes to `attributes` under an
- *     explicit frame tag and never near `location_coordinates`.
+ *     a point in the splat's own frame and units. It goes to `attributes` under
+ *     an explicit frame tag and never near `location_coordinates`, and the box
+ *     goes beside it.
  *  3. **Selection never anti-joins the sightings table.** Same ratchet argument
  *     `promote.object` makes: a scan would leave the candidate set the moment
  *     it had observations, so a better extractor could never revisit it.
@@ -44,13 +56,17 @@ const EVENT = '00000000-0000-4000-8000-000000000001';
 const PLACE = '00000000-0000-4000-8000-00000000p1ac'.replace(/[^0-9a-f-]/g, '0');
 
 /* ===================================================================== *
- * Fixtures — the shape memory_push.ts actually sends
+ * Fixtures — an older push by hand, and the current one as recorded
  * ===================================================================== */
 
 /**
  * A `capture.scan` row as `/v1/events` writes it: `kind` became `event_type`
  * and `payload` was folded into `metadata` (`BulkIngestController`), so the
  * payload keys sit directly on metadata alongside `kind`.
+ *
+ * Shaped like a push from before the boxes: every object is `{label, position}`
+ * and there is no `object_extents` block. Scans already in a database look like
+ * this, so this shape has to keep promoting exactly as it did.
  */
 function scanRow(overrides: Partial<ScanRow> = {}): ScanRow {
   return {
@@ -84,6 +100,33 @@ function scanRow(overrides: Partial<ScanRow> = {}): ScanRow {
     },
     ...overrides,
   };
+}
+
+/**
+ * A `capture.scan` row from one of Companion Scan's recorded pushes, stored the
+ * way `/v1/events` stores it (`storedCaptureEvent`, which the ingest routes
+ * suite checks against the real controller). `/v1/events` writes no geo
+ * columns and resolves no place, so those arrive NULL and the fix travels in
+ * `metadata.location`.
+ */
+function recordedScanRow(name: CompanionScanCaptureName, overrides: Partial<ScanRow> = {}): ScanRow {
+  const stored = storedCaptureEvent(companionScanCaptureEvent(name));
+
+  return {
+    id: EVENT,
+    start_time: stored.start_time,
+    metadata: stored.metadata,
+    source_system: stored.source_system,
+    location_entity_id: null,
+    lat: null,
+    lng: null,
+    ...overrides,
+  };
+}
+
+/** The objects exactly as a recorded push sent them. */
+function recordedObjects(name: CompanionScanCaptureName): Array<Record<string, unknown>> {
+  return companionScanCaptureEvent(name).payload.objects as Array<Record<string, unknown>>;
 }
 
 interface Harness {
@@ -149,6 +192,8 @@ describe('promote.observation — declaration', () => {
 
   it('agrees with the central version declaration', () => {
     expect(promoteObservationStageVersion()).toBe(PROMOTE_OBSERVATION_VERSION);
+    // 2 = each sighting keeps its object's oriented box.
+    expect(PROMOTE_OBSERVATION_VERSION).toBe(2);
   });
 
   it('reports its id, version and queue', () => {
@@ -165,12 +210,13 @@ describe('promote.observation — declaration', () => {
  * extractScanObjects — built for what arrives
  * ===================================================================== */
 
-describe('extractScanObjects — the wire is {label, position} and nothing else', () => {
-  it('reads both detections out of a real scan payload', () => {
+describe('extractScanObjects — an older push, {label, position} per object', () => {
+  it('reads both detections out of a scan pushed before the boxes', () => {
     const objects = extractScanObjects(scanRow());
 
     expect(objects.map((object) => object.label)).toEqual(['chair', 'desk lamp']);
     expect(objects[0].position).toEqual({ x: 1.25, y: 0, z: -2.5 });
+    expect(objects.map((object) => object.box)).toEqual([null, null]);
   });
 
   it('gives each object an ORDER-INDEPENDENT id', () => {
@@ -241,10 +287,12 @@ describe('extractScanObjects — the wire is {label, position} and nothing else'
     expect(objects[0].objectKey).toBe('ordinal:0');
   });
 
-  it('IGNORES 3-D fields that the push does not send', () => {
-    // CI-Spatial narrows to {label, position}; extents and rotations are
-    // dropped at the push. Reading them here would be reading a wire that does
-    // not exist — the road to a fabricated `dimensions` believed downstream.
+  it('IGNORES 3-D keys that no push sends', () => {
+    // The push's box keys are `rotation` (an xyzw quaternion), `extent_m`,
+    // `extent_mm` and the three project-frame ones. `extent`, `dimensions` and
+    // `bbox3d` are none of them, and a rotation with no `w` is not a
+    // quaternion. Reading them would be reading a wire that does not exist —
+    // the road to a fabricated `dimensions` believed downstream.
     const objects = extractScanObjects(
       scanRow({
         metadata: {
@@ -254,6 +302,8 @@ describe('extractScanObjects — the wire is {label, position} and nothing else'
               position: { x: 1, y: 0, z: 0 },
               extent: { x: 0.6, y: 0.9, z: 0.6 },
               rotation: { x: 0, y: 1.57, z: 0 },
+              dimensions: '60 x 90 x 60 cm',
+              bbox3d: [0, 0, 0, 0.6, 0.9, 0.6],
             },
           ],
         },
@@ -264,6 +314,7 @@ describe('extractScanObjects — the wire is {label, position} and nothing else'
       label: 'chair',
       position: { x: 1, y: 0, z: 0 },
       objectKey: expect.any(String),
+      box: null,
     });
   });
 
@@ -279,11 +330,171 @@ describe('extractScanObjects — the wire is {label, position} and nothing else'
 });
 
 /* ===================================================================== *
+ * extractScanObjects — the oriented box, as the push sends it now
+ * ===================================================================== */
+
+/** The keys `memory_push.ts` writes for a box: four in the splat's frame, three in the Place's. */
+const BOX_KEYS = [
+  'position',
+  'rotation',
+  'extent_m',
+  'extent_mm',
+  'extent_metric_m',
+  'position_project',
+  'rotation_project',
+];
+
+describe('extractScanObjects — the oriented box in the recorded push', () => {
+  it('reads every object of the recorded push with its box', () => {
+    const objects = extractScanObjects(recordedScanRow('oriented-boxes'));
+
+    expect(objects.map((object) => object.label)).toEqual(['chair', 'desk lamp']);
+    // The chair as memory_push.ts built it: the box in the splat's frame, under
+    // the frame facts of the scan's `object_extents` block, and the same box in
+    // the Place's metric frame, because the scan's fit passed.
+    expect(objects[0].box).toEqual({
+      frame: 'splat_local',
+      calibrated: false,
+      world_frame_aligned: false,
+      position: { x: 2.5, y: 0, z: -5 },
+      rotation: { x: 0, y: 0.3827, z: 0, w: 0.9239 },
+      extent_m: { x: 1.1, y: 1.9, z: 1.2 },
+      extent_mm: { x: 1100, y: 1900, z: 1200 },
+      extent_metric_m: { x: 0.55, y: 0.95, z: 0.6 },
+      position_project: { x: -0.5, y: 0, z: -2.75 },
+      rotation_project: { x: 0, y: 0.9238823925624398, z: 0, w: 0.3826765275178269 },
+    });
+  });
+
+  it('copies every box key the push sent, verbatim, and no other key of the object', () => {
+    const objects = extractScanObjects(recordedScanRow('oriented-boxes'));
+
+    recordedObjects('oriented-boxes').forEach((sent, index) => {
+      const geometry = Object.fromEntries(Object.entries(sent).filter(([key]) => BOX_KEYS.includes(key)));
+
+      expect(objects[index].box).toEqual({
+        frame: 'splat_local',
+        calibrated: false,
+        world_frame_aligned: false,
+        ...geometry,
+      });
+    });
+  });
+
+  it('has a decision for every key the recorded push puts on an object', () => {
+    // Each key is the label, is read into the box, or is knowingly not read
+    // yet. A key outside all three means the push has widened again: decide
+    // what it means here, and bump the version with that change.
+    const notReadYet = ['confidence', 'frame_votes'];
+
+    for (const sent of recordedObjects('oriented-boxes')) {
+      for (const key of Object.keys(sent)) {
+        expect(['label', ...BOX_KEYS, ...notReadYet]).toContain(key);
+      }
+    }
+  });
+
+  it('keys every object exactly as it was keyed before the box arrived', () => {
+    // Version 2 re-promotes every scan. The box's centre is `position`, so the
+    // per-object id is unchanged and the re-run updates the sightings version 1
+    // wrote instead of adding a second set.
+    const withBoxes = extractScanObjects(recordedScanRow('oriented-boxes'));
+    const withoutBoxes = extractScanObjects(recordedScanRow('label-position'));
+
+    expect(withBoxes.map((object) => object.objectKey)).toEqual(
+      withoutBoxes.map((object) => object.objectKey),
+    );
+  });
+
+  it('has no box for an object the push sent without one', () => {
+    const objects = extractScanObjects(recordedScanRow('label-position'));
+
+    expect(objects.map((object) => object.position)).toEqual([
+      { x: 2.5, y: 0, z: -5 },
+      { x: 1, y: 2.2, z: -3.5 },
+    ]);
+    expect(objects.map((object) => object.box)).toEqual([null, null]);
+  });
+
+  it('keeps the well-formed keys of a box and drops a malformed one on its own', () => {
+    const objects = extractScanObjects(
+      scanRow({
+        metadata: {
+          object_extents: { frame: 'splat_local', calibrated: false, world_frame_aligned: false },
+          objects: [
+            {
+              label: 'chair',
+              position: { x: 1, y: 0, z: 0 },
+              // No `w`: not a quaternion.
+              rotation: { x: 0, y: 0.7071, z: 0 },
+              extent_m: { x: 0.6, y: 0.9, z: 0.6 },
+              // A string axis: not a size.
+              extent_mm: { x: 600, y: 900, z: '600' },
+              // Half a point.
+              position_project: { x: 2, y: 0, z: null },
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(objects[0].box).toEqual({
+      frame: 'splat_local',
+      calibrated: false,
+      world_frame_aligned: false,
+      position: { x: 1, y: 0, z: 0 },
+      extent_m: { x: 0.6, y: 0.9, z: 0.6 },
+    });
+  });
+
+  it('refuses a size with a zero axis, as the push does', () => {
+    const objects = extractScanObjects(
+      scanRow({
+        metadata: {
+          objects: [{ label: 'chair', position: { x: 1, y: 0, z: 0 }, extent_m: { x: 0.6, y: 0, z: 0.6 } }],
+        },
+      }),
+    );
+
+    expect(objects[0].box).toBeNull();
+  });
+
+  it('keeps an orientation that arrives without a size, and invents no frame', () => {
+    // The push refuses an extent with a zero axis and still sends the rotation,
+    // which is real. It sends `object_extents` only when some object has an
+    // extent, so this scan has no block, and the frame facts stay unknown.
+    const objects = extractScanObjects(
+      scanRow({
+        metadata: {
+          objects: [{ label: 'rug', position: { x: 0, y: 0, z: 1 }, rotation: { x: 0, y: 0, z: 0, w: 1 } }],
+        },
+      }),
+    );
+
+    expect(objects[0].box).toEqual({
+      frame: null,
+      calibrated: null,
+      world_frame_aligned: null,
+      position: { x: 0, y: 0, z: 1 },
+      rotation: { x: 0, y: 0, z: 0, w: 1 },
+    });
+  });
+
+  it('has no box without a centre', () => {
+    const objects = extractScanObjects(
+      scanRow({ metadata: { objects: [{ label: 'chair', rotation: { x: 0, y: 0, z: 0, w: 1 } }] } }),
+    );
+
+    expect(objects[0].box).toBeNull();
+  });
+});
+
+/* ===================================================================== *
  * extractScanLocation
  * ===================================================================== */
 
 describe('extractScanLocation — the fix travels in the payload', () => {
-  it('reads lon from the payload, which is the spelling CI-Spatial sends', () => {
+  it('reads lon from the payload, which is the spelling Companion Scan sends', () => {
     expect(extractScanLocation(scanRow())).toEqual({ lat: 51.5072, lng: -0.1276 });
   });
 
@@ -354,13 +565,80 @@ describe('ObservationPromoteStage.run — one sighting per detected object', () 
 
     const [, dtos] = createMany.mock.calls[0];
 
-    // Metres in the capture's own coordinate system — not lat/lon, and not
+    // A point in the capture's own coordinate system — not lat/lon, and not
     // comparable between two scans of the same room. The tag is what stops
     // someone downstream reading it as geography.
     expect(dtos[0].attributes).toEqual({
       scan_position: { x: 1.25, y: 0, z: -2.5 },
       scan_frame: 'scan_local',
     });
+  });
+
+  it('PUTS THE BOX IN ATTRIBUTES BESIDE THE POSITION, for every object of the recorded push', async () => {
+    const { stage, createMany } = makeStage([recordedScanRow('oriented-boxes')]);
+
+    const results = await stage.run(ctx(), [EVENT]);
+
+    expect(results.get(EVENT)).toEqual(
+      expect.objectContaining({
+        outcome: 'done',
+        detail: expect.objectContaining({ detected: 2, recorded: 2 }),
+      }),
+    );
+
+    const dtos = createMany.mock.calls[0][1] as Array<Record<string, unknown>>;
+    const objects = extractScanObjects(recordedScanRow('oriented-boxes'));
+
+    expect(dtos.map((dto) => dto.attributes)).toEqual(
+      objects.map((object) => ({
+        scan_position: object.position,
+        scan_frame: 'scan_local',
+        scan_box: object.box,
+      })),
+    );
+    expect(objects.every((object) => object.box != null)).toBe(true);
+    // `bbox` is a 2-D rectangle in 0..1 of an image; a 3-D box there would be
+    // read as one.
+    expect(dtos[0]).not.toHaveProperty('bbox');
+  });
+
+  it('reads the rest of the recorded push as it always has', async () => {
+    const { stage, createMany } = makeStage([recordedScanRow('oriented-boxes')]);
+
+    await stage.run(ctx(), [EVENT]);
+
+    const [, dtos] = createMany.mock.calls[0];
+
+    expect(dtos[0]).toEqual(
+      expect.objectContaining({
+        observedAt: new Date('2026-04-02T14:30:00.000Z'),
+        coordinates: { lat: 51.5072, lon: -0.1276 },
+        fileId: '00000000-0000-4000-8000-0000000000f1',
+        detector: 'companion-scan',
+        sourceSystem: 'companion-scan',
+        metadata: {
+          scan_id: 'scan-fixture-oriented-boxes',
+          session_id: 'session-fixture-1',
+          point_count: 481_233,
+          promoted_by: 'promote.observation',
+        },
+      }),
+    );
+  });
+
+  it('writes a recorded push without boxes exactly as version 1 wrote one', async () => {
+    const { stage, createMany } = makeStage([recordedScanRow('label-position')]);
+
+    await stage.run(ctx(), [EVENT]);
+
+    const dtos = createMany.mock.calls[0][1] as Array<Record<string, unknown>>;
+
+    // No `scan_box` key at all rather than a null one, so a box-less
+    // sighting's attributes are what they always were.
+    expect(dtos.map((dto) => dto.attributes)).toEqual([
+      { scan_position: { x: 2.5, y: 0, z: -5 }, scan_frame: 'scan_local' },
+      { scan_position: { x: 1, y: 2.2, z: -3.5 }, scan_frame: 'scan_local' },
+    ]);
   });
 
   it('keeps the geographic fix in coordinates, separate from the scan position', async () => {

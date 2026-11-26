@@ -1,0 +1,125 @@
+{
+  "recorded_from": {
+    "repository": "companionintelligence/Companion-Scan",
+    "commit": "11b9220008137d7912850785311489cca2a918d8",
+    "producer": "server/memory_push.ts pushScanToMemory",
+    "recorded_on": "2026-11-26"
+  },
+  "request": {
+    "method": "POST",
+    "path": "/v1/events",
+    "body": {
+      "events": [
+        {
+          "source_system": "companion-scan",
+          "source_id": "scan-fixture-label-position",
+          "kind": "capture.scan",
+          "occurred_at": "2026-04-02T14:30:00.000Z",
+          "title": "Scanned Living Room — 10 Example Street",
+          "description": "Location: 10 Example Street. 481,233 points. Detected: chair, desk lamp.",
+          "payload": {
+            "scan_id": "scan-fixture-label-position",
+            "session_id": "session-fixture-2",
+            "glb_filename": "room.glb",
+            "glb_file_id": "00000000-0000-4000-8000-0000000000f3",
+            "file_ids": [
+              "00000000-0000-4000-8000-0000000000f3"
+            ],
+            "point_count": 481233,
+            "detection_count": 2,
+            "detected_labels": [
+              "chair",
+              "desk lamp"
+            ],
+            "objects": [
+              {
+                "label": "chair",
+                "position": {
+                  "x": 2.5,
+                  "y": 0,
+                  "z": -5
+                }
+              },
+              {
+                "label": "desk lamp",
+                "position": {
+                  "x": 1,
+                  "y": 2.2,
+                  "z": -3.5
+                }
+              }
+            ],
+            "location": {
+              "lat": 51.5072,
+              "lon": -0.1276,
+              "address": "10 Example Street",
+              "display_address": "Example Street, London",
+              "device_heading_at_export": 45,
+              "northReference": "magnetic",
+              "bearing": 45,
+              "deprecated_keys": {
+                "bearing": "device_heading_at_export"
+              },
+              "accuracy_m": 12
+            }
+          }
+        }
+      ]
+    }
+  },
+  "inputs": {
+    "scan": {
+      "scanId": "scan-fixture-label-position",
+      "sessionId": "session-fixture-2",
+      "filename": "room.glb",
+      "name": "Living Room",
+      "geoPose": {
+        "lat": 51.5072,
+        "lng": -0.1276,
+        "altitudeM": null,
+        "bearing": 45,
+        "accuracyM": 12,
+        "fixedAt": "2026-04-02T14:29:41.000Z",
+        "address": "10 Example Street",
+        "displayAddress": "Example Street, London"
+      },
+      "capturedAt": "2026-04-02T14:30:00.000Z",
+      "pointCount": 481233,
+      "detectionCount": 0
+    },
+    "place": {
+      "georeference": null,
+      "georefVersion": 0
+    },
+    "sidecars": {
+      "room.interactions.json": {
+        "objects": [
+          {
+            "label": "chair",
+            "position": {
+              "x": 2.5,
+              "y": 0,
+              "z": -5
+            }
+          },
+          {
+            "label": "desk lamp",
+            "position": {
+              "x": 1,
+              "y": 2.2,
+              "z": -3.5
+            }
+          }
+        ]
+      }
+    },
+    "files": {
+      "room.glb": {
+        "bytes": 8
+      }
+    },
+    "upload_ids": [
+      "00000000-0000-4000-8000-0000000000f3"
+    ]
+  }
+}
