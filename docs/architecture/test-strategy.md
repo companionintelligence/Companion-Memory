@@ -126,7 +126,8 @@ Each domain has a variable of its own (each `…_TEST_DATABASE_URL`): `ACTIVITY_
 `AGENT_`, `ASKS_`, `AUTH_`, `BROWSER_ACTIVITY_`, `CONNECTIONS_`,
 `CONVERSATIONS_`, `EVENTS_`, `GEOCODE_`, `IMPORT_`, `MAINTENANCE_`, `MEMORY_`,
 `NOTES_`, `ONBOARDING_`, `PEERS_`, `PERSISTENCE_`, `PERSONALIZATION_`,
-`PIPELINE_`, `PLANNING_`, `PORTABILITY_`, `SCHEDULE_`, `SEARCH_INGRESS_` and
+`PIPELINE_`, `PLANNING_`, `PORTABILITY_`, `SAVED_SEARCH_`, `SCHEDULE_`,
+`SEARCH_INGRESS_` and
 `SEARCH_NEXT_`, plus `MACOS_`, which only the Python summary suite reads and
 which must name an *empty* database. Naming one per suite is what lets you point a single domain at
 a scratch database without moving the whole app. `UserService.applianceClaim.integration.spec.ts` reads none of them: the claim it tests is appliance-wide, so like the other suites built on `scratchDatabase.ts` it always creates a freshly migrated database of its own. Without an admin credential it skips, or fails under `CI_REQUIRE_DB=1`. The list is checked against the
