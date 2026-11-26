@@ -6,18 +6,23 @@
  * It fails, with a message, when any of these is true:
  *
  * - Dafny 4.11.0 is not on PATH (or at $DAFNY), or lsc is not the pinned 0.6.14;
+ * - lemmascript.json is not exactly EXPECTED_CONFIG;
  * - LemmaScript-files.txt is empty, names a missing file, or carries a timeout or flags column;
  * - a listed file uses a `//@` keyword outside ALLOWED_KEYWORDS (no assume, havoc, extern,
- *   type overrides and the rest), or a `case 'none':` / `case 'some':` label (see CTOR_CLASH);
+ *   requires, type overrides and the rest), or a `case 'none':` / `case 'some':` label (see
+ *   CTOR_CLASH);
+ * - a file that a listed file imports by a relative path, directly or through other files, carries
+ *   a `//@` annotation and is not listed itself (lsc reads type overrides from such files);
  * - `lsc check` fails, or does not report a non-empty proof with no errors for every listed file;
+ * - a proof `.dfy` is not byte for byte the `.dfy.gen` lsc generated, or includes another file;
  * - `dafny audit` reports anything for a proof file;
  * - a generated `.dfy.gen` or `.dfy` differs from what is staged or committed, or is untracked.
  *
  * Dependency-free on purpose, like the repo's other gate scripts: only node built-ins and git.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { delimiter, dirname, join, relative, resolve } from 'node:path';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { basename, delimiter, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -27,13 +32,25 @@ const CONFIG = join(HERE, 'lemmascript.json');
 const LSC = join(HERE, 'node_modules', '.bin', 'lsc');
 const LSC_VERSION = '0.6.14';
 const DAFNY_VERSION = '4.11.0';
+const INSTALL = 'run `npm ci --ignore-scripts` in spec/lemmascript';
 
 /**
  * The `//@` keywords a listed file may use. Everything else either tells lsc to trust rather than
- * prove (assume, havoc, autohavoc, extern, impure) or changes what it models without a check
- * (type, declare-type, skip, option, pure), and needs a reviewed change to this list first.
+ * prove (assume, havoc, autohavoc, extern, impure, requires) or changes what it models without a
+ * check (type, declare-type, skip, option, pure, backend), and needs a reviewed change to this
+ * list first.
+ *
+ * `requires` is out because the proved functions are called from unverified code, so nothing
+ * checks a precondition at a call site. One that no input meets makes every `ensures` vacuous.
  */
-const ALLOWED_KEYWORDS = new Set(['verify', 'requires', 'ensures', 'invariant', 'decreases', 'contract']);
+const ALLOWED_KEYWORDS = new Set(['verify', 'ensures', 'invariant', 'decreases', 'contract']);
+
+/**
+ * lemmascript.json, exactly. `proof-dir` would move the generated files away from the paths this
+ * script checks, `unread-annotations` below `error` lets a misspelt annotation prove nothing, and
+ * `string-semantics` changes what every string contract means.
+ */
+const EXPECTED_CONFIG = { 'unread-annotations': 'error', 'dafny-library': 'local', 'run-log': false };
 
 /**
  * lsc 0.6.14 writes a string-union member named `none` or `some` as Option's `None` / `Some`. As a
@@ -42,6 +59,12 @@ const ALLOWED_KEYWORDS = new Set(['verify', 'requires', 'ensures', 'invariant', 
  */
 const CTOR_CLASH = /\bcase\s+(['"])(none|some)\1\s*:/;
 
+/** A `//@` annotation's keyword. `//@ts-...` is TypeScript's, and lsc does not read it either. */
+const ANNOTATION = /\/\/@(?!ts-)\s*([A-Za-z_-]+)/g;
+
+/** A relative module specifier: `from '...'`, `import '...'` or `import('...')`. */
+const RELATIVE_IMPORT = /\b(?:from|import)\s*\(?\s*(['"])(\.\.?\/[^'"]*)\1/g;
+
 function fail(message) {
   console.error(`spec:lemmascript: ${message}`);
   process.exit(1);
@@ -49,6 +72,32 @@ function fail(message) {
 
 function run(command, args, options = {}) {
   return spawnSync(command, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, ...options });
+}
+
+function isFile(path) {
+  return existsSync(path) && statSync(path).isFile();
+}
+
+function checkConfig() {
+  let config;
+  try {
+    config = JSON.parse(readFileSync(CONFIG, 'utf8'));
+  } catch (error) {
+    fail(`${relative(REPO, CONFIG)} is missing or is not JSON: ${error.message}`);
+  }
+
+  const keys =
+    config !== null && typeof config === 'object' && !Array.isArray(config) ? Object.keys(config) : [];
+  const exact =
+    keys.length > 0 &&
+    keys.length === Object.keys(EXPECTED_CONFIG).length &&
+    keys.every((key) => Object.hasOwn(EXPECTED_CONFIG, key) && config[key] === EXPECTED_CONFIG[key]);
+  if (!exact) {
+    fail(
+      `${relative(REPO, CONFIG)} must be exactly ${JSON.stringify(EXPECTED_CONFIG)}; ` +
+        'a change to it needs a reviewed change to EXPECTED_CONFIG in check.mjs first',
+    );
+  }
 }
 
 function readManifest() {
@@ -85,13 +134,12 @@ function checkAnnotations(source) {
 
   lines.forEach((line, index) => {
     const where = `${relative(REPO, source)}:${index + 1}`;
-    const annotation = /\/\/@\s*([A-Za-z_-]+)/.exec(line);
-    if (annotation) {
-      if (!ALLOWED_KEYWORDS.has(annotation[1])) {
-        fail(`${where}: \`//@ ${annotation[1]}\` is not allowed in a proved file (see ALLOWED_KEYWORDS)`);
+    for (const [, keyword] of line.matchAll(ANNOTATION)) {
+      if (!ALLOWED_KEYWORDS.has(keyword)) {
+        fail(`${where}: \`//@ ${keyword}\` is not allowed in a proved file (see ALLOWED_KEYWORDS)`);
       }
 
-      if (annotation[1] === 'verify') {
+      if (keyword === 'verify') {
         verified += 1;
       }
     }
@@ -107,6 +155,61 @@ function checkAnnotations(source) {
 
   if (verified === 0) {
     fail(`${relative(REPO, source)} has no \`//@ verify\`, so lsc would prove nothing in it`);
+  }
+}
+
+/** The TypeScript file a relative specifier names, as TypeScript would find it, if there is one. */
+function resolveImport(importer, specifier) {
+  const target = resolve(dirname(importer), specifier);
+  const stem = target.replace(/\.[cm]?js$/, '');
+  const candidates = [
+    target,
+    ...['.ts', '.tsx', '.mts', '.cts'].map((extension) => `${stem}${extension}`),
+    join(target, 'index.ts'),
+    join(target, 'index.tsx'),
+  ];
+
+  // lsc skips declaration files when it reads types, so they are not followed either.
+  return candidates.find((path) => /\.[cm]?tsx?$/.test(path) && !/\.d\.[cm]?ts$/.test(path) && isFile(path));
+}
+
+/**
+ * lsc reads the types a proved function uses from whichever file declares them, including a
+ * leading `//@ type` override on an alias and a trailing one on an interface field. So every file a
+ * selected file reaches through relative imports is checked too: a listed one against the
+ * allowlist, any other for having no annotation at all.
+ */
+function checkImportedFiles(sources, listed) {
+  const seen = new Set(sources);
+  const pending = [...sources];
+
+  while (pending.length > 0) {
+    const importer = pending.pop();
+    for (const match of readFileSync(importer, 'utf8').matchAll(RELATIVE_IMPORT)) {
+      const file = resolveImport(importer, match[2]);
+      if (file === undefined || seen.has(file) || relative(REPO, file).startsWith('..')) {
+        continue;
+      }
+
+      seen.add(file);
+      pending.push(file);
+
+      if (listed.includes(file)) {
+        checkAnnotations(file);
+        continue;
+      }
+
+      readFileSync(file, 'utf8')
+        .split('\n')
+        .forEach((line, index) => {
+          for (const [, keyword] of line.matchAll(ANNOTATION)) {
+            fail(
+              `${relative(REPO, file)}:${index + 1}: \`//@ ${keyword}\` in a file that a proved file imports. ` +
+                'lsc reads annotations there without this check: remove it, or list the file and prove it.',
+            );
+          }
+        });
+    }
   }
 }
 
@@ -131,21 +234,19 @@ function probeDafny() {
 
 function probeLsc() {
   if (!existsSync(LSC)) {
-    fail('lsc is not installed: run `npm ci` in spec/lemmascript');
+    fail(`lsc is not installed: ${INSTALL}`);
   }
 
   const version = run(LSC, ['version']).stdout?.trim();
   if (version !== LSC_VERSION) {
-    fail(`expected lemmascript ${LSC_VERSION}, found ${version || 'nothing'}; run \`npm ci\``);
+    fail(`expected lemmascript ${LSC_VERSION}, found ${version || 'nothing'}; ${INSTALL}`);
   }
 }
 
-function generatedFiles(sources) {
-  return sources.flatMap((source) => {
-    const stem = source.replace(/\.ts$/, '');
+function generatedFiles(source) {
+  const stem = source.replace(/\.ts$/, '');
 
-    return [`${stem}.dfy.gen`, `${stem}.dfy`];
-  });
+  return { gen: `${stem}.dfy.gen`, dfy: `${stem}.dfy` };
 }
 
 function selectSources(listed) {
@@ -154,18 +255,25 @@ function selectSources(listed) {
     return listed;
   }
 
-  return wanted.map((path) => {
-    const source = resolve(REPO, path);
-    if (!listed.includes(source)) {
-      fail(`"${path}" is not listed in ${relative(REPO, MANIFEST)}`);
-    }
+  return [
+    ...new Set(
+      wanted.map((path) => {
+        const source = resolve(REPO, path);
+        if (!listed.includes(source)) {
+          fail(`"${path}" is not listed in ${relative(REPO, MANIFEST)}`);
+        }
 
-    return source;
-  });
+        return source;
+      }),
+    ),
+  ];
 }
 
-const sources = selectSources(readManifest());
+checkConfig();
+const listed = readManifest();
+const sources = selectSources(listed);
 sources.forEach(checkAnnotations);
+checkImportedFiles(sources, listed);
 
 const dafny = probeDafny();
 probeLsc();
@@ -176,33 +284,59 @@ if (process.env.DAFNY) {
   env.PATH = `${dirname(resolve(process.env.DAFNY))}${delimiter}${process.env.PATH ?? ''}`;
 }
 
-// With no file argument lsc batches over LemmaScript-files.txt; with some, it proves just those.
-const only = process.argv.length > 2 ? sources : [];
-const proof = run(LSC, ['check', '--backend=dafny', `--config=${CONFIG}`, ...only], { cwd: HERE, env });
-process.stdout.write(proof.stdout ?? '');
-process.stderr.write(proof.stderr ?? '');
-if (proof.error || proof.status !== 0) {
-  fail(`lsc check failed (exit ${proof.status ?? proof.error?.message})`);
+// With no file argument lsc batches over LemmaScript-files.txt. It reads only one file argument,
+// so a selection runs it once per file.
+const runs = process.argv.length > 2 ? sources.map((source) => [source]) : [[]];
+let reported = '';
+for (const only of runs) {
+  const proof = run(LSC, ['check', '--backend=dafny', `--config=${CONFIG}`, ...only], { cwd: HERE, env });
+  process.stdout.write(proof.stdout ?? '');
+  process.stderr.write(proof.stderr ?? '');
+  if (proof.error || proof.status !== 0) {
+    fail(
+      `lsc check failed (exit ${proof.status ?? proof.error?.message}). If you changed a proved ` +
+        'function, regenerate its proof first: see "Changing a proved function" in README.md.',
+    );
+  }
+
+  reported += proof.stdout ?? '';
 }
 
 // A green run can be vacuous. Every listed file must report a proof with something in it.
-const finished = [...(proof.stdout ?? '').matchAll(/finished with (\d+) verified, (\d+) errors?/g)];
+const finished = [...reported.matchAll(/finished with (\d+) verified, (\d+) errors?/g)];
 const sound = finished.filter((match) => Number(match[1]) > 0 && Number(match[2]) === 0);
 if (finished.length !== sources.length || sound.length !== sources.length) {
   fail(`expected ${sources.length} non-empty proofs with no errors, lsc reported ${finished.length}`);
 }
 
-const generated = generatedFiles(sources);
-for (const file of generated.filter((path) => path.endsWith('.dfy'))) {
-  const audit = run(dafny, ['audit', file], { env });
+// lsc's own check lets a proof add lines to what it generated, an `include` among them, and then
+// verifies the proof with whatever those lines bring in. No proof here adds anything, so each one
+// must be exactly what lsc generated from its .ts.
+for (const source of sources) {
+  const { gen, dfy } = generatedFiles(source);
+  const generated = readFileSync(gen);
+  if (!readFileSync(dfy).equals(generated)) {
+    fail(
+      `${relative(REPO, dfy)} is not byte for byte the ${basename(gen)} lsc generated. Hand-written ` +
+        'proof additions need a reviewed change to check.mjs first.',
+    );
+  }
+
+  if (/^\s*include\b/m.test(generated.toString('utf8'))) {
+    fail(`${relative(REPO, gen)} includes another Dafny file, which this check does not verify`);
+  }
+
+  const audit = run(dafny, ['audit', dfy], { env });
   if (audit.status !== 0 || !/completed with 0 findings/.test(audit.stdout ?? '')) {
     process.stdout.write(audit.stdout ?? '');
     process.stderr.write(audit.stderr ?? '');
-    fail(`dafny audit found something in ${relative(REPO, file)}`);
+    fail(`dafny audit found something in ${relative(REPO, dfy)}`);
   }
 }
 
-const paths = generated.map((path) => relative(REPO, path));
+const paths = sources
+  .flatMap((source) => Object.values(generatedFiles(source)))
+  .map((path) => relative(REPO, path));
 const untracked = run('git', ['ls-files', '--others', '--exclude-standard', '--', ...paths], { cwd: REPO });
 if (untracked.status !== 0) {
   fail(`git ls-files failed: ${untracked.stderr}`);
