@@ -9,7 +9,8 @@ import { LoggerService } from '@ci/common/logging';
 import { defaultAskExpiry } from '../askDeadline';
 import { type AskBroadcast, AskBroadcastEntity } from '../entities/AskBroadcastEntity';
 import { type Ask, AskEntity } from '../entities/AskEntity';
-import type { AskQuery, GrantDecision } from '../types';
+import type { GrantDecision } from '../grantMatch';
+import type { AskQuery } from '../types';
 
 import { AskService } from './AskService';
 

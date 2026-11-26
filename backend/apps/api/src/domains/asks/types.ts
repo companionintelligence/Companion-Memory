@@ -27,9 +27,6 @@ export type GrantMode = 'auto' | 'review' | 'block';
  */
 export type AskGrantResourceType = 'saved_search';
 
-/** Outcome of evaluating an ask against the owner's standing grants. */
-export type GrantDecision = 'auto' | 'review' | 'deny';
-
 /**
  * Why a grant stopped being in force. Only ever set alongside `revokedAt`; a
  * grant that merely lapsed carries `expiresAt` and no reason, because lapsing is
@@ -169,19 +166,6 @@ export interface AskGrantScope {
    */
   delegation?: AskDelegation;
   [key: string]: unknown;
-}
-
-/** Result of {@link evaluateGrant}. */
-export interface GrantEvaluation {
-  decision: GrantDecision;
-  /** The grant that decided the outcome, when one matched. */
-  grantId?: string;
-  /**
-   * Ceiling the deciding grant imposes on any answer (its `scope.maxDisclosure`).
-   * The caller combines this with the asker's tier ceiling by taking the LESSER
-   * of the two, so neither can loosen the other.
-   */
-  maxDisclosure?: DisclosureRung;
 }
 
 /**

@@ -14,7 +14,13 @@ committed `package-lock.json` pins everything under it.
 | File | Functions | Rules |
 |---|---|---|
 | `backend/apps/api/src/domains/asks/policy.ts` | `rungIndex`, `rungAtLeast`, `minRung`, `narrowestRung`, `narrowerForm`, `rungForForm`, `applyDisclosureCeiling`, `countOnlySummary` | The ladder is a total order. `minRung` and `narrowestRung` are meets: a source that names a ceiling always leaves one at or below it, so a revoked or absent source never widens the result. `narrowerForm` never takes the wider form. `applyDisclosureCeiling` lets through only what each rung allows, never more than the answer it was given, and the same or less at every lower rung. |
+| `backend/apps/api/src/domains/asks/grantMatch.ts` | `decideGrant`, `strictestOf`, `grantMatchesQuery`, `classMatchesQuery`, `scopeCoversQuery`, `blockCoversQuery`, `autoGrantNamesQueryClass`, `actorSatisfiesDelegation` | A covering active block always decides `deny`. An `auto` decision names an active auto grant that covers the ask on every field, names the ask's class, and is the strictest such grant. A null data class is a wildcard for a block and never for auto. Anything else is review. |
 | `backend/packages/tool-core/src/policy/capabilityPolicy.ts` | `removesData`, `capabilityAllows`, `capabilityRequiredFor` | `capabilityAllows` is monotone over read, write and full, and anything that removes data needs full. `capabilityRequiredFor` names the lowest level that is allowed. |
+
+`evaluateGrant` is a shell around `decideGrant`: it canonicalizes the strings, decides each
+grant's liveness against the clock, resolves each ceiling and fixes the id order, none of which
+the prover can model (regex, `Date`, `localeCompare`). The property suites test that shell and
+the proved functions against the real JavaScript (see below).
 
 No proved function calls a function in another file, so the generated Dafny has no axioms.
 Types come from `types.ts` and `core/types.ts` as datatypes. `LemmaScript-files.txt` lists the
@@ -53,9 +59,9 @@ function, run the check, review the regenerated files and commit them with the c
 - A string-union type has only its listed members. At runtime a jsonb column can hold anything;
   the code's own fallbacks for that case are not covered.
 
-The property suites (`policy.properties.spec.ts` and `tool-core`'s
-`capabilityPolicy.properties.test.ts`) check the same contracts against the real code with
-seeded inputs, including the values the model leaves out.
+The property suites (`policy.properties.spec.ts`, `grantMatch.properties.spec.ts` and
+`tool-core`'s `capabilityPolicy.properties.test.ts`) check the same contracts against the real
+code with seeded inputs, including the values the model leaves out.
 
 ## lsc 0.6.14 limits the code works around
 
@@ -63,9 +69,10 @@ seeded inputs, including the values the model leaves out.
   value that fails to resolve; as a `case` label it becomes a pattern that matches everything.
   The proved files compare with `=== 'none'` and never use the label; `check.mjs` refuses one.
 - lsc does not translate a table built at load time (`reduce`), an object constant used as a
-  table, an indexed access type such as `(typeof X)[number]`, or a constant imported from
-  another file. So `rungIndex` spells out the ladder, `capability.ts` spells out the
-  `ToolCapability` union, and `capabilityPolicy.ts` compares with literals.
+  table, an indexed access type such as `(typeof X)[number]`, a constant imported from another
+  file, or a type from another file that a proved function only returns. So `rungIndex` spells
+  out the ladder, `capability.ts` spells out the `ToolCapability` union, `capabilityPolicy.ts`
+  compares with literals, and `GrantDecision` and `GrantEvaluation` live beside `evaluateGrant`.
 
 For the same reasons `disclosureCeiling` (the tier table), `applySearchCeiling` (the share table)
 and `clampAvailability` (dates) are tested but not proved.

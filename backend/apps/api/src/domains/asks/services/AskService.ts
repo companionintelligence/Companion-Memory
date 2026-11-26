@@ -11,8 +11,9 @@ import { defaultAskExpiry } from '../askDeadline';
 import { assertAskTransition } from '../askStatus';
 import { type AskAnswer } from '../entities/AskAnswerEntity';
 import { type Ask, AskEntity } from '../entities/AskEntity';
+import type { GrantDecision } from '../grantMatch';
 import { narrowestRung } from '../policy';
-import type { AskStatus, CreateAskDto, DisclosedAnswer, DisclosureRung, GrantDecision } from '../types';
+import type { AskStatus, CreateAskDto, DisclosedAnswer, DisclosureRung } from '../types';
 
 import { AskAnswerService } from './AskAnswerService';
 import { AskAuditService } from './AskAuditService';
