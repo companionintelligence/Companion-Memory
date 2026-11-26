@@ -1,6 +1,6 @@
 import type { RequestContext } from '@ci/common/context';
 import type { ApiKeyCapability } from '@ci/common/decorators';
-import type { ToolCapability, ToolRequestContext } from '@ci/tool-core';
+import type { TOOL_CAPABILITIES, ToolCapability, ToolRequestContext } from '@ci/tool-core';
 
 /**
  * The types `@ci/tool-core` restates rather than imports, checked at compile time.
@@ -35,6 +35,14 @@ export type Identical<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false)
  * appliance cannot grant.
  */
 export type CapabilityVocabularyIsShared = Assert<Identical<ApiKeyCapability, ToolCapability>>;
+
+/**
+ * The package's level list against its own union. The union is written out for the LemmaScript
+ * proof of `capabilityPolicy.ts` rather than derived from the list, and `satisfies` only keeps the
+ * list inside it. This holds the other direction too, so a level added to the union alone fails
+ * here instead of being skipped by everything that walks `TOOL_CAPABILITIES`.
+ */
+export type CapabilityListIsComplete = Assert<Identical<(typeof TOOL_CAPABILITIES)[number], ToolCapability>>;
 
 /** The request facts the ledger row is built from. A widened or renamed field silently loses one. */
 export type RequestContextIsShared = Assert<

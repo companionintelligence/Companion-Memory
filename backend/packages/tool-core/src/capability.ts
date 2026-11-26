@@ -15,8 +15,9 @@ export const TOOL_CAPABILITIES = ['read', 'write', 'full'] as const satisfies re
 /**
  * Written out rather than read off {@link TOOL_CAPABILITIES} with `(typeof ...)[number]`: the
  * LemmaScript proofs of `policy/capabilityPolicy.ts` take the union from this line, and lsc does
- * not evaluate an indexed access type. The `satisfies` above keeps the list inside the union; the
- * API's `toolCoreContract.ts` keeps the union identical to `ApiKeyCapability`.
+ * not evaluate an indexed access type. The `satisfies` above keeps the list inside the union. The
+ * API's `toolCoreContract.ts` holds the list equal to the union, and the union identical to
+ * `ApiKeyCapability`.
  */
 export type ToolCapability = 'read' | 'write' | 'full';
 
