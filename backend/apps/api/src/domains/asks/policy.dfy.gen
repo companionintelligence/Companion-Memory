@@ -153,6 +153,10 @@ function rungForForm(form: AnswerForm): DisclosureRung
 
 lemma rungForForm_ensures(form: AnswerForm)
   ensures ((!form.retrieval?) ==> !(rungAtLeast(rungForForm(form), DisclosureRung.redacted)))
+  ensures (form.boolean? ==> rungForForm(form).boolean?)
+  ensures (form.identity? ==> rungForForm(form).boolean?)
+  ensures (form.existence? ==> rungForForm(form).count?)
+  ensures (form.attribute? ==> rungForForm(form).summary?)
   ensures (form.retrieval? ==> rungForForm(form).full?)
 {
 }
@@ -189,7 +193,11 @@ lemma applyDisclosureCeiling_ensures(answer: DisclosedAnswer, ceiling: Disclosur
   ensures (!(rungAtLeast(ceiling, DisclosureRung.redacted)) ==> (|applyDisclosureCeiling(answer, ceiling).items| == 0))
   ensures (!(rungAtLeast(rungForForm(answer.form), DisclosureRung.redacted)) ==> (|applyDisclosureCeiling(answer, ceiling).items| == 0))
   ensures (!(rungAtLeast(ceiling, DisclosureRung.count)) ==> ((applyDisclosureCeiling(answer, ceiling).disclosedCount == 0) || (applyDisclosureCeiling(answer, ceiling).disclosedCount == 1)))
+  ensures (!(rungAtLeast(rungForForm(answer.form), DisclosureRung.count)) ==> ((applyDisclosureCeiling(answer, ceiling).disclosedCount == 0) || (applyDisclosureCeiling(answer, ceiling).disclosedCount == 1)))
   ensures (ceiling.none? ==> ((applyDisclosureCeiling(answer, ceiling).disclosedCount == 0) && (applyDisclosureCeiling(answer, ceiling).summary == "Nothing was shared.")))
+  ensures (minRung(rungForForm(answer.form), ceiling).count? ==> (applyDisclosureCeiling(answer, ceiling).summary == countOnlySummary(answer.disclosedCount)))
+  ensures (minRung(rungForForm(answer.form), ceiling).boolean? ==> (answer.disclosedCount > 0) ==> ((applyDisclosureCeiling(answer, ceiling).disclosedCount == 1) && (applyDisclosureCeiling(answer, ceiling).summary == "Yes.")))
+  ensures (minRung(rungForForm(answer.form), ceiling).boolean? ==> !((answer.disclosedCount > 0)) ==> ((applyDisclosureCeiling(answer, ceiling).disclosedCount == 0) && (applyDisclosureCeiling(answer, ceiling).summary == "No.")))
   ensures ((|applyDisclosureCeiling(answer, ceiling).items| == 0) || (applyDisclosureCeiling(answer, ceiling).items == answer.items))
   ensures ((applyDisclosureCeiling(answer, ceiling).withheldCount == 0) || (applyDisclosureCeiling(answer, ceiling).withheldCount == answer.withheldCount))
   ensures (((applyDisclosureCeiling(answer, ceiling).disclosedCount == 0) || (applyDisclosureCeiling(answer, ceiling).disclosedCount == answer.disclosedCount)) || ((applyDisclosureCeiling(answer, ceiling).disclosedCount == 1) && (answer.disclosedCount > 0)))

@@ -218,16 +218,19 @@ function idOrder(grants: readonly AskGrant[]): number[] {
  *
  * In words: a covering active `block` always decides, and decides `deny`; an
  * `auto` decision names an active `auto` grant that covers the ask on every
- * field and names the ask's class, and no other such grant is stricter; an ask
- * that names no data class is never auto-answered; and anything else is owner
- * review.
+ * field and names the ask's class, and no other such grant is stricter, or as
+ * strict and earlier in id order; an ask that names no data class is never
+ * auto-answered; and anything else is owner review. A review that names a
+ * grant names the strictest matching `review` grant, or, when no `review`
+ * grant matches, the strictest matching `auto` grant, with the same
+ * tie-break.
  */
 export function decideGrant(query: QueryFacts, grants: readonly GrantFacts[]): GrantEvaluation {
   //@ verify
   //@ ensures forall(g: GrantFacts, grants.includes(g) && g.active && g.mode === 'block' && blockCoversQuery(g, query) ==> \result.decision === 'deny')
   //@ ensures \result.decision === 'deny' ==> exists(g: GrantFacts, grants.includes(g) && g.active && g.mode === 'block' && blockCoversQuery(g, query) && \result.grantId === g.id)
-  //@ ensures \result.decision === 'auto' ==> exists(g: GrantFacts, grants.includes(g) && g.active && g.mode === 'auto' && grantMatchesQuery(g, query) && autoGrantNamesQueryClass(g, query) && \result.grantId === g.id && \result.maxDisclosure === g.ceiling && forall(o: GrantFacts, grants.includes(o) && o.active && o.mode === 'auto' && grantMatchesQuery(o, query) && autoGrantNamesQueryClass(o, query) ==> g.ceilingRank <= o.ceilingRank))
-  //@ ensures \result.decision === 'review' && \result.grantId !== undefined ==> exists(g: GrantFacts, grants.includes(g) && g.active && g.mode !== 'block' && grantMatchesQuery(g, query) && \result.grantId === g.id && \result.maxDisclosure === g.ceiling)
+  //@ ensures \result.decision === 'auto' ==> exists(g: GrantFacts, grants.includes(g) && g.active && g.mode === 'auto' && grantMatchesQuery(g, query) && autoGrantNamesQueryClass(g, query) && \result.grantId === g.id && \result.maxDisclosure === g.ceiling && forall(o: GrantFacts, grants.includes(o) && o.active && o.mode === 'auto' && grantMatchesQuery(o, query) && autoGrantNamesQueryClass(o, query) ==> g.ceilingRank < o.ceilingRank || (g.ceilingRank === o.ceilingRank && g.tieBreak <= o.tieBreak)))
+  //@ ensures \result.decision === 'review' && \result.grantId !== undefined ==> exists(g: GrantFacts, grants.includes(g) && g.active && (g.mode === 'review' || g.mode === 'auto') && grantMatchesQuery(g, query) && \result.grantId === g.id && \result.maxDisclosure === g.ceiling && forall(o: GrantFacts, grants.includes(o) && o.active && o.mode === g.mode && grantMatchesQuery(o, query) ==> g.ceilingRank < o.ceilingRank || (g.ceilingRank === o.ceilingRank && g.tieBreak <= o.tieBreak)) && (g.mode === 'auto' ==> forall(o: GrantFacts, grants.includes(o) && o.active && o.mode === 'review' ==> !grantMatchesQuery(o, query))))
   //@ ensures query.dataClass === null ==> \result.decision !== 'auto'
   //@ ensures \result.grantId === undefined ==> \result.decision === 'review'
   const active = grants.filter((grant) => grant.active);

@@ -368,6 +368,11 @@ const scopeFits = (g: GrantFacts, q: QueryFacts) =>
 const fits = (g: GrantFacts, q: QueryFacts) => classFits(g, q) && scopeFits(g, q);
 const namesClass = (g: GrantFacts, q: QueryFacts) =>
   q.dataClass !== null && (g.dataClass !== null || g.dataClasses !== undefined);
+/** Whether `g` is the strictest of `others`, and first in id order among the equally strict. */
+const strictestAmong = (g: GrantFacts, others: readonly GrantFacts[]) =>
+  others.every(
+    (o) => g.ceilingRank < o.ceilingRank || (g.ceilingRank === o.ceilingRank && g.tieBreak <= o.tieBreak),
+  );
 
 describe('decideGrant: the proved contract, run on the real function', () => {
   it('holds every clause, seed 21', () => {
@@ -394,21 +399,28 @@ describe('decideGrant: the proved contract, run on the real function', () => {
         const candidates = grants.filter(
           (g) => g.active && g.mode === 'auto' && fits(g, query) && namesClass(g, query),
         );
-        const chosen = candidates.find((g) => named(g) && g.ceiling === result.maxDisclosure);
 
-        expect(chosen).toBeDefined();
-        expect(candidates.every((g) => chosen!.ceilingRank <= g.ceilingRank)).toBe(true);
+        expect(
+          candidates.some(
+            (g) => named(g) && g.ceiling === result.maxDisclosure && strictestAmong(g, candidates),
+          ),
+        ).toBe(true);
       }
 
       if (result.decision === 'review' && result.grantId !== undefined) {
+        const matching = (mode: GrantMode) =>
+          grants.filter((g) => g.active && g.mode === mode && fits(g, query));
+
         expect(
           grants.some(
             (g) =>
               g.active &&
-              g.mode !== 'block' &&
+              (g.mode === 'review' || g.mode === 'auto') &&
               fits(g, query) &&
               named(g) &&
-              g.ceiling === result.maxDisclosure,
+              g.ceiling === result.maxDisclosure &&
+              strictestAmong(g, matching(g.mode)) &&
+              (g.mode === 'review' || matching('review').length === 0),
           ),
         ).toBe(true);
       }

@@ -332,6 +332,10 @@ export function narrowerForm(chosen: AnswerForm, inferred: AnswerForm): AnswerFo
 export function rungForForm(form: AnswerForm): DisclosureRung {
   //@ verify
   //@ ensures form !== 'retrieval' ==> !rungAtLeast(\result, 'redacted')
+  //@ ensures form === 'boolean' ==> \result === 'boolean'
+  //@ ensures form === 'identity' ==> \result === 'boolean'
+  //@ ensures form === 'existence' ==> \result === 'count'
+  //@ ensures form === 'attribute' ==> \result === 'summary'
   //@ ensures form === 'retrieval' ==> \result === 'full'
   switch (form) {
     case 'boolean':
@@ -358,10 +362,17 @@ export function rungForForm(form: AnswerForm): DisclosureRung {
  * how much the responder holds — at `count` and below the asker learns only what
  * the rung names.
  *
- * The `//@` lines are the contract LemmaScript proves (spec/lemmascript): what
- * each ceiling lets through, that the result never discloses more than the
- * answer it was given, and that a lower ceiling never discloses more than a
- * higher one on any axis.
+ * The `//@` lines are the contract LemmaScript proves (spec/lemmascript):
+ *
+ * - what each rung lets through, the summary text included. Below `summary`
+ *   the text is the count sentence at `count`, "Yes." or "No." at `boolean`
+ *   and "Nothing was shared." at `none`.
+ * - that nothing crosses that the answer did not carry: the items are the
+ *   answer's or none, the count is the answer's, 0, or 1 when the answer's is
+ *   positive, and the withheld count is the answer's or 0.
+ * - that the same holds between ceilings: at a lower ceiling the items, the
+ *   count and the withheld count are each what a higher ceiling gives, or
+ *   less in the same way.
  *
  * Pure.
  */
@@ -374,7 +385,11 @@ export function applyDisclosureCeiling(answer: DisclosedAnswer, ceiling: Disclos
   //@ ensures !rungAtLeast(ceiling, 'redacted') ==> \result.items.length === 0
   //@ ensures !rungAtLeast(rungForForm(answer.form), 'redacted') ==> \result.items.length === 0
   //@ ensures !rungAtLeast(ceiling, 'count') ==> \result.disclosedCount === 0 || \result.disclosedCount === 1
+  //@ ensures !rungAtLeast(rungForForm(answer.form), 'count') ==> \result.disclosedCount === 0 || \result.disclosedCount === 1
   //@ ensures ceiling === 'none' ==> \result.disclosedCount === 0 && \result.summary === 'Nothing was shared.'
+  //@ ensures minRung(rungForForm(answer.form), ceiling) === 'count' ==> \result.summary === countOnlySummary(answer.disclosedCount)
+  //@ ensures minRung(rungForForm(answer.form), ceiling) === 'boolean' && answer.disclosedCount > 0 ==> \result.disclosedCount === 1 && \result.summary === 'Yes.'
+  //@ ensures minRung(rungForForm(answer.form), ceiling) === 'boolean' && !(answer.disclosedCount > 0) ==> \result.disclosedCount === 0 && \result.summary === 'No.'
   //@ ensures \result.items.length === 0 || \result.items === answer.items
   //@ ensures \result.withheldCount === 0 || \result.withheldCount === answer.withheldCount
   //@ ensures \result.disclosedCount === 0 || \result.disclosedCount === answer.disclosedCount || (\result.disclosedCount === 1 && answer.disclosedCount > 0)

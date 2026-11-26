@@ -197,6 +197,16 @@ describe('rungForForm and narrowerForm', () => {
     expect(rungForForm('retrieval')).toBe('full');
   });
 
+  it('puts each form on the rung its contract names', () => {
+    expect(Object.fromEntries(FORMS.map((form) => [form, rungForForm(form)]))).toEqual({
+      boolean: 'boolean',
+      identity: 'boolean',
+      existence: 'count',
+      attribute: 'summary',
+      retrieval: 'full',
+    });
+  });
+
   it('never takes the wider form, and gives a tie to the owner', () => {
     for (const chosen of FORMS) {
       for (const inferred of FORMS) {
@@ -223,6 +233,10 @@ describe('applyDisclosureCeiling: the ask clamp', () => {
    */
   const same = (x: number, y: number): boolean => Object.is(x, y);
 
+  /** `countOnlySummary`, restated: the sentence the count rung writes. */
+  const countSentence = (count: number): string =>
+    count === 1 ? '1 matching item.' : `${count} matching items.`;
+
   it('holds every contract clause, seed 1', () => {
     const random = prng(1);
 
@@ -231,6 +245,7 @@ describe('applyDisclosureCeiling: the ask clamp', () => {
       const ceiling = pick(random, RUNGS);
       const result = applyDisclosureCeiling(answer, ceiling);
       const natural = rungForForm(answer.form);
+      const effective = minRung(natural, ceiling);
 
       expect(result.form).toBe(answer.form);
       expect(result.consentBasis).toBe(answer.consentBasis);
@@ -247,13 +262,22 @@ describe('applyDisclosureCeiling: the ask clamp', () => {
         expect(result.items).toEqual([]);
       }
 
-      if (!rungAtLeast(ceiling, 'count')) {
+      if (!rungAtLeast(ceiling, 'count') || !rungAtLeast(natural, 'count')) {
         expect([0, 1]).toContain(result.disclosedCount);
       }
 
       if (ceiling === 'none') {
         expect(result.disclosedCount).toBe(0);
         expect(result.summary).toBe('Nothing was shared.');
+      }
+
+      if (effective === 'count') {
+        expect(result.summary).toBe(countSentence(answer.disclosedCount));
+      }
+
+      if (effective === 'boolean') {
+        expect(result.disclosedCount).toBe(answer.disclosedCount > 0 ? 1 : 0);
+        expect(result.summary).toBe(answer.disclosedCount > 0 ? 'Yes.' : 'No.');
       }
 
       expect(result.items.length === 0 || result.items === answer.items).toBe(true);
