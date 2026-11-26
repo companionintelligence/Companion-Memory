@@ -13,10 +13,11 @@ committed `package-lock.json` pins everything under it.
 
 | File | Functions | Rules |
 |---|---|---|
+| `backend/apps/api/src/domains/asks/policy.ts` | `rungIndex`, `rungAtLeast`, `minRung`, `narrowestRung`, `narrowerForm`, `rungForForm`, `applyDisclosureCeiling`, `countOnlySummary` | The ladder is a total order. `minRung` and `narrowestRung` are meets: a source that names a ceiling always leaves one at or below it, so a revoked or absent source never widens the result. `narrowerForm` never takes the wider form. `applyDisclosureCeiling` lets through only what each rung allows, never more than the answer it was given, and the same or less at every lower rung. |
 | `backend/packages/tool-core/src/policy/capabilityPolicy.ts` | `removesData`, `capabilityAllows`, `capabilityRequiredFor` | `capabilityAllows` is monotone over read, write and full, and anything that removes data needs full. `capabilityRequiredFor` names the lowest level that is allowed. |
 
 No proved function calls a function in another file, so the generated Dafny has no axioms.
-Types come from `core/types.ts` and `capability.ts` as datatypes. `LemmaScript-files.txt` lists the
+Types come from `types.ts` and `core/types.ts` as datatypes. `LemmaScript-files.txt` lists the
 proved files. If a proved function starts calling into another file, list that file too and
 prove it; otherwise the call becomes an unproved axiom and `dafny audit` fails the check.
 
@@ -34,8 +35,8 @@ point `DAFNY` at the binary).
 ```bash
 cd spec/lemmascript
 npm ci --ignore-scripts
-npm run check                                              # every listed file
-npm run check -- backend/packages/tool-core/src/policy/capabilityPolicy.ts   # one file
+npm run check                                              # every listed file, about 20 s
+npm run check -- backend/apps/api/src/domains/asks/policy.ts   # one file, repo-relative
 ```
 
 `check.mjs` fails if Dafny or lsc is missing or the wrong version, if a proved file uses a
@@ -49,20 +50,25 @@ function, run the check, review the regenerated files and commit them with the c
 - Numbers are mathematical integers. There is no NaN, no Infinity, no -0 and no 2^53 limit.
 - Strings are sequences of Unicode scalar values, and `<` on strings compares scalars. JavaScript
   compares UTF-16 code units, which orders an astral character below U+E000 to U+FFFF.
-- A string-union type has only its listed members. At runtime a caller can pass any string;
+- A string-union type has only its listed members. At runtime a jsonb column can hold anything;
   the code's own fallbacks for that case are not covered.
 
-The property suite (`tool-core`'s `capabilityPolicy.properties.test.ts`) checks the same
-contracts against the real code, including values the model leaves out.
+The property suites (`policy.properties.spec.ts` and `tool-core`'s
+`capabilityPolicy.properties.test.ts`) check the same contracts against the real code with
+seeded inputs, including the values the model leaves out.
 
 ## lsc 0.6.14 limits the code works around
 
 - A string-union member named `none` (or `some`) is written as Option's `None` / `Some`. As a
   value that fails to resolve; as a `case` label it becomes a pattern that matches everything.
-  Proved files compare with `=== 'none'` and never use the label; `check.mjs` refuses one.
-- lsc does not translate an indexed access type such as `(typeof X)[number]` or a constant
-  imported from another file. So `capability.ts` spells out the `ToolCapability` union and
-  `capabilityPolicy.ts` compares with literals.
+  The proved files compare with `=== 'none'` and never use the label; `check.mjs` refuses one.
+- lsc does not translate a table built at load time (`reduce`), an object constant used as a
+  table, an indexed access type such as `(typeof X)[number]`, or a constant imported from
+  another file. So `rungIndex` spells out the ladder, `capability.ts` spells out the
+  `ToolCapability` union, and `capabilityPolicy.ts` compares with literals.
+
+For the same reasons `disclosureCeiling` (the tier table), `applySearchCeiling` (the share table)
+and `clampAvailability` (dates) are tested but not proved.
 
 ## Changing a proof
 

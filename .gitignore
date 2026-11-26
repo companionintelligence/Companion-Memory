@@ -104,3 +104,8 @@ test-results-desktop/
 
 # Local HBPE model checkpoints pulled out of the container volume for offline eval
 backend/.cache/
+
+# LemmaScript regen state (spec/lemmascript). lsc writes these beside a proved
+# file while a regeneration is in progress and removes them once it lands.
+*.dfy.base
+*.dfy.merged

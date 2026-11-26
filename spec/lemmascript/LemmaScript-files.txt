@@ -1,1 +1,2 @@
+../../backend/apps/api/src/domains/asks/policy.ts
 ../../backend/packages/tool-core/src/policy/capabilityPolicy.ts

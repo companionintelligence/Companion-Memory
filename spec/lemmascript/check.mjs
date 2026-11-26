@@ -96,7 +96,9 @@ function checkAnnotations(source) {
       }
     }
 
-    if (CTOR_CLASH.test(line)) {
+    // Comments may name the label (to explain its absence); only code is checked.
+    const code = /^\s*(\*|\/\*)/.test(line) ? '' : line.replace(/\/\/.*$/, '');
+    if (CTOR_CLASH.test(code)) {
       fail(
         `${where}: a \`case 'none':\` or \`case 'some':\` label reaches Dafny as a catch-all (see CTOR_CLASH)`,
       );
