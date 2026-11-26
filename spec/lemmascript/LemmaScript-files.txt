@@ -1,0 +1,1 @@
+../../backend/packages/tool-core/src/policy/capabilityPolicy.ts

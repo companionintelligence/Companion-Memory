@@ -1,4 +1,4 @@
-import { FULL_CAPABILITY, READ_CAPABILITY, WRITE_CAPABILITY, type ToolCapability } from '../capability';
+import type { ToolCapability } from '../capability';
 import type { IntentPrivacy } from '../core/types';
 
 /**
@@ -19,6 +19,8 @@ export type GatedPrivacy = Pick<IntentPrivacy, 'access' | 'destructive'>;
  * that allowed one while refusing the other would be a distinction no user could act on.
  */
 export function removesData(privacy: GatedPrivacy): boolean {
+  //@ verify
+  //@ ensures \result <==> (privacy.access === 'delete' || privacy.destructive)
   return privacy.access === 'delete' || privacy.destructive;
 }
 
@@ -39,7 +41,17 @@ export function removesData(privacy: GatedPrivacy): boolean {
  * hand it back.
  */
 export function capabilityAllows(privacy: GatedPrivacy, capability: ToolCapability): boolean {
-  if (capability === FULL_CAPABILITY) {
+  //@ verify
+  //@ ensures capability === 'full' ==> \result
+  //@ ensures removesData(privacy) && \result ==> capability === 'full'
+  //@ ensures capability === 'write' ==> (\result <==> !removesData(privacy))
+  //@ ensures capability === 'read' ==> (\result <==> (privacy.access === 'read' && !privacy.destructive))
+  //@ ensures capability === 'read' && \result ==> capabilityAllows(privacy, 'write')
+  //@ ensures capability === 'write' && \result ==> capabilityAllows(privacy, 'full')
+  //
+  // Literals rather than the `*_CAPABILITY` constants: lsc reads a constant only from the file it
+  // verifies, and `ToolCapability` makes a misspelt level a compile error here all the same.
+  if (capability === 'full') {
     return true;
   }
 
@@ -47,7 +59,7 @@ export function capabilityAllows(privacy: GatedPrivacy, capability: ToolCapabili
     return false;
   }
 
-  if (capability === WRITE_CAPABILITY) {
+  if (capability === 'write') {
     return true;
   }
 
@@ -103,9 +115,14 @@ export function stricterPrivacy(declared: IntentPrivacy, perCall: IntentPrivacy 
  * level to grant, rather than being left to guess between 'write' and 'full'.
  */
 export function capabilityRequiredFor(privacy: GatedPrivacy): ToolCapability {
+  //@ verify
+  //@ ensures capabilityAllows(privacy, \result)
+  //@ ensures \result === 'write' ==> !capabilityAllows(privacy, 'read')
+  //@ ensures \result === 'full' ==> !capabilityAllows(privacy, 'write')
+  //@ ensures removesData(privacy) <==> \result === 'full'
   if (removesData(privacy)) {
-    return FULL_CAPABILITY;
+    return 'full';
   }
 
-  return privacy.access === 'read' ? READ_CAPABILITY : WRITE_CAPABILITY;
+  return privacy.access === 'read' ? 'read' : 'write';
 }

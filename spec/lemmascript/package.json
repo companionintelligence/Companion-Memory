@@ -1,0 +1,13 @@
+{
+  "name": "@ci/spec-lemmascript",
+  "version": "0.0.0",
+  "private": true,
+  "description": "LemmaScript proofs of pure policy code in this repo. A standalone npm project, NOT a yarn workspace, so the root Yarn PnP install stays as it is.",
+  "license": "SEE LICENSE IN ../../LICENSE.md",
+  "scripts": {
+    "check": "node check.mjs"
+  },
+  "devDependencies": {
+    "lemmascript": "0.6.14"
+  }
+}
