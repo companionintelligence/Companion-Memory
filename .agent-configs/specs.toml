@@ -17,8 +17,14 @@ artefacts = [
   "backend/apps/api/src/domains/asks/policy.properties.spec.ts",
   "spec/lemmascript/lemmascript.json",
   "spec/lemmascript/LemmaScript-files.txt",
+  "spec/lemmascript/check.mjs",
+  "spec/lemmascript/package.json",
+  "spec/lemmascript/package-lock.json",
 ]
-covers = ["backend/apps/api/src/domains/asks/policy.ts"]
+covers = [
+  "backend/apps/api/src/domains/asks/policy.ts",
+  "backend/apps/api/src/domains/asks/types.ts",
+]
 docs = [
   "docs/asks-system-guide.md#23-the-disclosure-ladder",
   "docs/asks-system-guide.md#24-four-ceilings-combined-by-taking-the-narrowest",
@@ -36,8 +42,8 @@ properties = [
   "applyDisclosureCeiling_ensures",
 ]
 conformance = "The proved functions are the ones the app runs. policy.properties.spec.ts runs the same contracts on them over every rung and form, and over seeded answers that include NaN, -0, doubles past 2^53, astral characters and lone surrogates."
-target = "MEM-3"
-notes = "Proved with lemmascript 0.6.14 and Dafny 4.11.0 under the unicode-scalar string model: numbers are mathematical integers and a string union holds only its members. Of the three clamps only applyDisclosureCeiling is proved; applySearchCeiling (a constant table) and clampAvailability (dates) are covered by their own spec files. disclosureCeiling (the tier table) is tested, not proved. See spec/lemmascript/README.md for the two lsc limits behind that."
+target = "W01"
+notes = "The ceiling half of W01, which merges MEM-2, MEM-3, W03 and B04; of MEM-3 this proves the ask-answer clamp only. Proved with lemmascript 0.6.14 and Dafny 4.11.0 under the unicode-scalar string model: numbers are mathematical integers and a string union holds only its members. Of the three clamps only applyDisclosureCeiling is proved; applySearchCeiling (a constant table) and clampAvailability (dates) are covered by their own spec files. disclosureCeiling (the tier table) is tested, not proved. See spec/lemmascript/README.md for the two lsc limits behind that."
 
 [[spec]]
 id = "asks-grant-match"
@@ -53,8 +59,14 @@ artefacts = [
   "backend/apps/api/src/domains/asks/grantMatch.properties.spec.ts",
   "spec/lemmascript/lemmascript.json",
   "spec/lemmascript/LemmaScript-files.txt",
+  "spec/lemmascript/check.mjs",
+  "spec/lemmascript/package.json",
+  "spec/lemmascript/package-lock.json",
 ]
-covers = ["backend/apps/api/src/domains/asks/grantMatch.ts"]
+covers = [
+  "backend/apps/api/src/domains/asks/grantMatch.ts",
+  "backend/apps/api/src/domains/asks/types.ts",
+]
 docs = ["docs/asks-system-guide.md#22-modes-and-why-review-is-the-floor"]
 requires = ["node", "lemmascript", "dafny"]
 check = ["npm", "run", "--silent", "check", "--", "backend/apps/api/src/domains/asks/grantMatch.ts"]
@@ -70,8 +82,8 @@ properties = [
   "actorSatisfiesDelegation_ensures",
 ]
 conformance = "decideGrant is the decision evaluateGrant returns. grantMatch.properties.spec.ts checks its contract on the real function, and checks evaluateGrant against a brute-force reading of the rules on raw rows with seeded respellings, astral and lone-surrogate strings, and ids that collate as equal."
-target = "MEM-2"
-notes = "evaluateGrant canonicalizes strings, decides liveness against the clock, resolves each ceiling and fixes the id order (localeCompare) before calling decideGrant; that shell is tested, not proved. In the model string < compares Unicode scalars; JavaScript compares UTF-16 code units, and the property suite pins the runtime reading of a validity window."
+target = "W01"
+notes = "The matching half of W01, which merges MEM-2, MEM-3, W03 and B04; W03 is the null data class rule. evaluateGrant canonicalizes strings, decides liveness against the clock, resolves each ceiling and fixes the id order (localeCompare) before calling decideGrant; that shell is tested, not proved. In the model string < compares Unicode scalars; JavaScript compares UTF-16 code units, and the property suite pins the runtime reading of a validity window."
 
 [[spec]]
 id = "tool-capability-policy"
@@ -87,10 +99,14 @@ artefacts = [
   "backend/packages/tool-core/src/policy/__tests__/capabilityPolicy.properties.test.ts",
   "spec/lemmascript/lemmascript.json",
   "spec/lemmascript/LemmaScript-files.txt",
+  "spec/lemmascript/check.mjs",
+  "spec/lemmascript/package.json",
+  "spec/lemmascript/package-lock.json",
 ]
 covers = [
   "backend/packages/tool-core/src/policy/capabilityPolicy.ts",
   "backend/packages/tool-core/src/capability.ts",
+  "backend/packages/tool-core/src/core/types.ts",
 ]
 docs = ["backend/packages/tool-core/README.md"]
 requires = ["node", "lemmascript", "dafny"]
