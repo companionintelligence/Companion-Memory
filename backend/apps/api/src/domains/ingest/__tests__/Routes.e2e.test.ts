@@ -21,6 +21,7 @@ import {
 import { NoteService } from '@ci/domains/notes';
 import { PositionService } from '@ci/domains/position';
 
+import { readCompanionScanCapture, storedCaptureEvent } from '../../__tests__/support/companionScanCapture';
 import { BulkIngestController } from '../controllers/BulkIngestController';
 import { IngestCoalesceService } from '../services/IngestCoalesceService';
 import { bulkThingRecordSchema } from '../types';
@@ -286,6 +287,24 @@ describe('Bulk ingest routes (/v1/*)', () => {
       // Raw-log INSERT + event_id back-link UPDATE.
       expect(dataSourceQuery).toHaveBeenCalledTimes(2);
     });
+
+    it.each(['oriented-boxes', 'label-position'] as const)(
+      "POST /v1/events stores Companion Scan's recorded %s push whole",
+      async (name) => {
+        const { request: recorded } = readCompanionScanCapture(name);
+
+        const res = await request(app.getHttpServer()).post(recorded.path).send(recorded.body).expect(201);
+
+        expect(res.body).toEqual({ ingested: 1, duplicate: 0, rejected: [] });
+        // The payload lands in `metadata` with nothing dropped or renamed, boxes
+        // included. `storedCaptureEvent` restates this fold for the suites that
+        // read a stored scan (promote.observation), so this is where it is held
+        // to the real controller.
+        expect(eventService.create.mock.calls[0][1]).toEqual([
+          expect.objectContaining(storedCaptureEvent(recorded.body.events[0])),
+        ]);
+      },
+    );
 
     it('POST /v1/notes ingests a client-minted note through the real pipeline', async () => {
       const res = await request(app.getHttpServer())
