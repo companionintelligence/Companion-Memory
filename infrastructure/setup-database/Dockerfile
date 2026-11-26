@@ -1,4 +1,4 @@
-FROM postgres:18-alpine
+FROM postgres:19-alpine
 
 COPY LICENSE.md /LICENSE.md
 COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
