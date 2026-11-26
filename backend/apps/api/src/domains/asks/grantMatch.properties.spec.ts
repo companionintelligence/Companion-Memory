@@ -341,6 +341,22 @@ function randomFacts(random: () => number, index: number, query: QueryFacts): Gr
   };
 }
 
+/**
+ * Gives the grants a seeded permutation of id-order positions. `idOrder` sorts by id, which need
+ * not match the order the rows arrive in, so a tie-break by row order has to fail here.
+ */
+function withTieBreaks(random: () => number, grants: GrantFacts[]): GrantFacts[] {
+  const positions = grants.map((_, index) => index);
+  for (let i = positions.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1));
+    const swap = positions[i] ?? i;
+    positions[i] = positions[j] ?? j;
+    positions[j] = swap;
+  }
+
+  return grants.map((grant, index) => ({ ...grant, tieBreak: positions[index] ?? index }));
+}
+
 function randomQueryFacts(random: () => number): QueryFacts {
   return {
     queryType: random() < 0.15 ? null : pick(random, ['photos', 'calendar']),
@@ -380,8 +396,9 @@ describe('decideGrant: the proved contract, run on the real function', () => {
 
     for (let i = 0; i < CASES; i++) {
       const query = randomQueryFacts(random);
-      const grants = Array.from({ length: Math.floor(random() * 7) }, (_, index) =>
-        randomFacts(random, index, query),
+      const grants = withTieBreaks(
+        random,
+        Array.from({ length: Math.floor(random() * 7) }, (_, index) => randomFacts(random, index, query)),
       );
       const result = decideGrant(query, grants);
       const named = (g: GrantFacts) => g.id === result.grantId;
