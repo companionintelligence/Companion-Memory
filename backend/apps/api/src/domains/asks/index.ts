@@ -130,6 +130,7 @@ export type { ShareAuthorization } from './services/SharedSearchConsentService';
 export { SHARE_DISCLOSURE, applySearchCeiling, ceilingForShare } from './searchCeiling';
 export type { ClampableConnection, ShareDisclosure } from './searchCeiling';
 export { evaluateGrant, canonicalDataClass, canonicalQueryType, isGrantActive } from './grantMatch';
+export type { GrantDecision, GrantEvaluation } from './grantMatch';
 export { normalizeText } from './canonical';
 export { TRUST_TIERS } from './types';
 export {
@@ -208,11 +209,9 @@ export type {
   AskStatus,
   AskAuditOutcome,
   GrantMode,
-  GrantDecision,
   GrantRevocationReason,
   AskQuery,
   AskGrantScope,
-  GrantEvaluation,
   CreateAskDto,
   AskChannelProvenance,
   CreateAskGrantDto,

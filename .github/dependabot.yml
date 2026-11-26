@@ -29,6 +29,10 @@
 #     Bump that with `./gradlew wrapper --gradle-version <x>`.
 #   - frontend/packages/capacitor-*/android/build.gradle — plugin scaffolds that
 #     are consumed through the app project, not built or shipped on their own.
+#   - spec/lemmascript/package-lock.json — dev-only proof tooling (npm), never
+#     built into an image or shipped. lemmascript is pinned exactly, and an
+#     upgrade can change every generated proof, so it is bumped by hand with a
+#     regeneration of each proof (spec/lemmascript/README.md).
 #
 # This config opens version updates as PRs; they are remediated separately with
 # care (do not auto-merge dependency bumps here). Expect the PR volume to rise:

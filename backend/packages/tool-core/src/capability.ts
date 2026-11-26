@@ -10,9 +10,16 @@
  * (`domains/tools/toolCoreContract.ts`), so a level added or renamed in either place is a type
  * error rather than a silent hole in the gate.
  */
-export const TOOL_CAPABILITIES = ['read', 'write', 'full'] as const;
+export const TOOL_CAPABILITIES = ['read', 'write', 'full'] as const satisfies readonly ToolCapability[];
 
-export type ToolCapability = (typeof TOOL_CAPABILITIES)[number];
+/**
+ * Written out rather than read off {@link TOOL_CAPABILITIES} with `(typeof ...)[number]`: the
+ * LemmaScript proofs of `policy/capabilityPolicy.ts` take the union from this line, and lsc does
+ * not evaluate an indexed access type. The `satisfies` above keeps the list inside the union. The
+ * API's `toolCoreContract.ts` holds the list equal to the union, and the union identical to
+ * `ApiKeyCapability`.
+ */
+export type ToolCapability = 'read' | 'write' | 'full';
 
 /** May read the user's data. The floor. */
 export const READ_CAPABILITY: ToolCapability = 'read';

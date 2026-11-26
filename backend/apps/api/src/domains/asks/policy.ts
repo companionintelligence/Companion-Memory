@@ -27,19 +27,77 @@ export const DISCLOSURE_RUNGS: readonly DisclosureRung[] = [
   'full',
 ] as const;
 
-const RUNG_INDEX: Readonly<Record<DisclosureRung, number>> = DISCLOSURE_RUNGS.reduce(
-  (acc, rung, index) => ({ ...acc, [rung]: index }),
-  {} as Record<DisclosureRung, number>,
-);
+/**
+ * A rung's position on {@link DISCLOSURE_RUNGS}, or `undefined` for a string
+ * that names no rung.
+ *
+ * Spelled out rather than built from the list at load time, because the
+ * LemmaScript proofs in this file are checked against this body and lsc cannot
+ * translate a table built with `reduce`. `policy.properties.spec.ts` walks
+ * every pair of rungs to hold the two in the same order.
+ *
+ * A string that names no rung gets `undefined`, so comparing it is `false`
+ * both ways. That is what indexing the old table gave for a key it did not
+ * have.
+ *
+ * Pure.
+ */
+function rungIndex(rung: DisclosureRung): number | undefined {
+  //@ verify
+  //@ ensures rung === 'none' ==> \result === 0
+  //@ ensures rung === 'boolean' ==> \result === 1
+  //@ ensures rung === 'count' ==> \result === 2
+  //@ ensures rung === 'summary' ==> \result === 3
+  //@ ensures rung === 'redacted' ==> \result === 4
+  //@ ensures rung === 'full' ==> \result === 5
+  if (rung === 'none') {
+    return 0;
+  }
+
+  if (rung === 'boolean') {
+    return 1;
+  }
+
+  if (rung === 'count') {
+    return 2;
+  }
+
+  if (rung === 'summary') {
+    return 3;
+  }
+
+  if (rung === 'redacted') {
+    return 4;
+  }
+
+  if (rung === 'full') {
+    return 5;
+  }
+
+  return undefined;
+}
 
 /** Whether `a` discloses at least as much as `b`. */
 export function rungAtLeast(a: DisclosureRung, b: DisclosureRung): boolean {
-  return RUNG_INDEX[a] >= RUNG_INDEX[b];
+  //@ verify
+  //@ ensures a === b ==> \result
+  //@ ensures \result || rungAtLeast(b, a)
+  //@ ensures \result && rungAtLeast(b, a) ==> a === b
+  //@ ensures forall(c: DisclosureRung, \result && rungAtLeast(b, c) ==> rungAtLeast(a, c))
+  const indexA = rungIndex(a);
+  const indexB = rungIndex(b);
+
+  return indexA !== undefined && indexB !== undefined && indexA >= indexB;
 }
 
 /** The lesser (safer) of two rungs. */
 export function minRung(a: DisclosureRung, b: DisclosureRung): DisclosureRung {
-  return RUNG_INDEX[a] <= RUNG_INDEX[b] ? a : b;
+  //@ verify
+  //@ ensures \result === a || \result === b
+  //@ ensures rungAtLeast(a, \result) && rungAtLeast(b, \result)
+  //@ ensures forall(c: DisclosureRung, rungAtLeast(a, c) && rungAtLeast(b, c) ==> rungAtLeast(\result, c))
+  //@ ensures \result === minRung(b, a)
+  return rungAtLeast(b, a) ? a : b;
 }
 
 /**
@@ -58,12 +116,24 @@ export function minRung(a: DisclosureRung, b: DisclosureRung): DisclosureRung {
  * grew when the owner withdrew consent. `undefined ?? live` is the shape of
  * that bug; this function is the shape of the fix.
  *
+ * The `//@` lines are proved with LemmaScript (spec/lemmascript): a source that
+ * names a ceiling always leaves one at or below it, and the result is the
+ * greatest rung under every ceiling that was named.
+ *
  * Pure.
  */
 export function narrowestRung(
   a: DisclosureRung | null | undefined,
   b: DisclosureRung | null | undefined,
 ): DisclosureRung | undefined {
+  //@ verify
+  //@ ensures a == null && b == null ==> \result === undefined
+  //@ ensures a != null ==> \result !== undefined
+  //@ ensures b != null ==> \result !== undefined
+  //@ ensures a != null && \result !== undefined ==> rungAtLeast(a, \result)
+  //@ ensures b != null && \result !== undefined ==> rungAtLeast(b, \result)
+  //@ ensures \result !== undefined ==> (a != null && \result === a) || (b != null && \result === b)
+  //@ ensures forall(c: DisclosureRung, (a == null || rungAtLeast(a, c)) && (b == null || rungAtLeast(b, c)) && \result !== undefined ==> rungAtLeast(\result, c))
   if (a == null) {
     return b ?? undefined;
   }
@@ -250,11 +320,23 @@ export function photoAskMayMatchPlaces(tier: TrustTier, dataClass?: unknown): bo
  * Pure.
  */
 export function narrowerForm(chosen: AnswerForm, inferred: AnswerForm): AnswerForm {
+  //@ verify
+  //@ ensures \result === chosen || \result === inferred
+  //@ ensures rungAtLeast(rungForForm(chosen), rungForForm(\result))
+  //@ ensures rungAtLeast(rungForForm(inferred), rungForForm(\result))
+  //@ ensures rungAtLeast(rungForForm(inferred), rungForForm(chosen)) ==> \result === chosen
   return rungAtLeast(rungForForm(inferred), rungForForm(chosen)) ? chosen : inferred;
 }
 
 /** The rung an answer of this form naturally occupies when nothing is withheld. */
 export function rungForForm(form: AnswerForm): DisclosureRung {
+  //@ verify
+  //@ ensures form !== 'retrieval' ==> !rungAtLeast(\result, 'redacted')
+  //@ ensures form === 'boolean' ==> \result === 'boolean'
+  //@ ensures form === 'identity' ==> \result === 'boolean'
+  //@ ensures form === 'existence' ==> \result === 'count'
+  //@ ensures form === 'attribute' ==> \result === 'summary'
+  //@ ensures form === 'retrieval' ==> \result === 'full'
   switch (form) {
     case 'boolean':
     case 'identity':
@@ -263,8 +345,10 @@ export function rungForForm(form: AnswerForm): DisclosureRung {
       return 'count';
     case 'attribute':
       return 'summary';
-    case 'retrieval':
     default:
+      // `retrieval`, and a form this build does not know. A `case 'retrieval':`
+      // label here would reach the proof as a second arm beside `_` for the same
+      // branch, which Dafny rejects as redundant.
       return 'full';
   }
 }
@@ -278,9 +362,41 @@ export function rungForForm(form: AnswerForm): DisclosureRung {
  * how much the responder holds — at `count` and below the asker learns only what
  * the rung names.
  *
+ * The `//@` lines are the contract LemmaScript proves (spec/lemmascript):
+ *
+ * - what each rung lets through, the summary text included. Below `summary`
+ *   the text is the count sentence at `count`, "Yes." or "No." at `boolean`
+ *   and "Nothing was shared." at `none`.
+ * - that nothing crosses that the answer did not carry: the items are the
+ *   answer's or none, the count is the answer's, 0, or 1 when the answer's is
+ *   positive, and the withheld count is the answer's or 0.
+ * - that the same holds between ceilings: at a lower ceiling the items, the
+ *   count and the withheld count are each what a higher ceiling gives, or
+ *   less in the same way.
+ *
  * Pure.
  */
 export function applyDisclosureCeiling(answer: DisclosedAnswer, ceiling: DisclosureRung): DisclosedAnswer {
+  //@ verify
+  //@ ensures \result.form === answer.form && \result.consentBasis === answer.consentBasis
+  //@ ensures rungAtLeast(rungForForm(answer.form), 'full') && rungAtLeast(ceiling, 'full') ==> \result === answer
+  //@ ensures !rungAtLeast(ceiling, 'full') ==> \result.withheldCount === 0
+  //@ ensures !rungAtLeast(rungForForm(answer.form), 'full') ==> \result.withheldCount === 0
+  //@ ensures !rungAtLeast(ceiling, 'redacted') ==> \result.items.length === 0
+  //@ ensures !rungAtLeast(rungForForm(answer.form), 'redacted') ==> \result.items.length === 0
+  //@ ensures !rungAtLeast(ceiling, 'count') ==> \result.disclosedCount === 0 || \result.disclosedCount === 1
+  //@ ensures !rungAtLeast(rungForForm(answer.form), 'count') ==> \result.disclosedCount === 0 || \result.disclosedCount === 1
+  //@ ensures ceiling === 'none' ==> \result.disclosedCount === 0 && \result.summary === 'Nothing was shared.'
+  //@ ensures minRung(rungForForm(answer.form), ceiling) === 'count' ==> \result.summary === countOnlySummary(answer.disclosedCount)
+  //@ ensures minRung(rungForForm(answer.form), ceiling) === 'boolean' && answer.disclosedCount > 0 ==> \result.disclosedCount === 1 && \result.summary === 'Yes.'
+  //@ ensures minRung(rungForForm(answer.form), ceiling) === 'boolean' && !(answer.disclosedCount > 0) ==> \result.disclosedCount === 0 && \result.summary === 'No.'
+  //@ ensures \result.items.length === 0 || \result.items === answer.items
+  //@ ensures \result.withheldCount === 0 || \result.withheldCount === answer.withheldCount
+  //@ ensures \result.disclosedCount === 0 || \result.disclosedCount === answer.disclosedCount || (\result.disclosedCount === 1 && answer.disclosedCount > 0)
+  //@ ensures rungAtLeast(ceiling, 'summary') && rungAtLeast(rungForForm(answer.form), 'summary') ==> \result.summary === answer.summary
+  //@ ensures forall(c: DisclosureRung, rungAtLeast(ceiling, c) ==> applyDisclosureCeiling(answer, c).items.length === 0 || applyDisclosureCeiling(answer, c).items === \result.items)
+  //@ ensures forall(c: DisclosureRung, rungAtLeast(ceiling, c) ==> applyDisclosureCeiling(answer, c).withheldCount === 0 || applyDisclosureCeiling(answer, c).withheldCount === \result.withheldCount)
+  //@ ensures forall(c: DisclosureRung, rungAtLeast(ceiling, c) ==> applyDisclosureCeiling(answer, c).disclosedCount === 0 || applyDisclosureCeiling(answer, c).disclosedCount === \result.disclosedCount || (applyDisclosureCeiling(answer, c).disclosedCount === 1 && \result.disclosedCount > 0))
   const natural = rungForForm(answer.form);
   const effective = minRung(natural, ceiling);
 
@@ -324,8 +440,10 @@ export function applyDisclosureCeiling(answer: DisclosedAnswer, ceiling: Disclos
         withheldCount: 0,
         summary: answer.disclosedCount > 0 ? 'Yes.' : 'No.',
       };
-    case 'none':
     default:
+      // `none`, the floor, and a rung this build does not know. Not labelled
+      // `case 'none':` for the reason given in `rungForForm`; lsc 0.6.14 also
+      // writes that label as Option's `None`.
       return {
         ...base,
         disclosedCount: 0,
@@ -336,5 +454,6 @@ export function applyDisclosureCeiling(answer: DisclosedAnswer, ceiling: Disclos
 }
 
 function countOnlySummary(count: number): string {
+  //@ verify
   return count === 1 ? '1 matching item.' : `${count} matching items.`;
 }

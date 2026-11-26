@@ -1,9 +1,32 @@
 import { canonicalDataClass, canonicalPurpose, canonicalQueryType } from './canonical';
 import type { AskGrant } from './entities/AskGrantEntity';
 import { DISCLOSURE_RUNGS } from './policy';
-import type { AskActor, AskGrantScope, AskQuery, DisclosureRung, GrantEvaluation } from './types';
+import type { AskActor, AskDelegation, AskQuery, DisclosureRung, GrantMode } from './types';
 
 export { canonicalDataClass, canonicalPurpose, canonicalQueryType };
+
+/**
+ * Outcome of evaluating an ask against the owner's standing grants.
+ *
+ * This and {@link GrantEvaluation} are declared here, beside the function that
+ * produces them, rather than in types.ts: lsc reads a type from another file
+ * only when a verified function takes it as a parameter, and these are only
+ * ever returned.
+ */
+export type GrantDecision = 'auto' | 'review' | 'deny';
+
+/** Result of {@link evaluateGrant}. */
+export interface GrantEvaluation {
+  decision: GrantDecision;
+  /** The grant that decided the outcome, when one matched. */
+  grantId?: string;
+  /**
+   * Ceiling the deciding grant imposes on any answer (its `scope.maxDisclosure`).
+   * The caller combines this with the asker's tier ceiling by taking the LESSER
+   * of the two, so neither can loosen the other.
+   */
+  maxDisclosure?: DisclosureRung;
+}
 
 /**
  * Pure, per-query consent evaluation — the heart of the ask gate.
@@ -26,6 +49,12 @@ export { canonicalDataClass, canonicalPurpose, canonicalQueryType };
  * `auto`, because both readings must resolve toward denial. See
  * {@link autoGrantNamesQueryClass}.
  *
+ * The decision itself is {@link decideGrant}, which this function feeds: it
+ * puts every string the gate compares through its canonicalizer, decides each
+ * grant's liveness against `now`, and resolves each ceiling, once and up front.
+ * What is left is pure enough for LemmaScript, and `decideGrant` is proved
+ * against the rules above (spec/lemmascript/README.md).
+ *
  * @param grants MUST already be scoped to (owner = responder, grantee = asker);
  *   this function does not re-check ownership.
  */
@@ -34,7 +63,177 @@ export function evaluateGrant(
   grants: readonly AskGrant[],
   now: Date = new Date(),
 ): GrantEvaluation {
-  const active = grants.filter((grant) => isGrantActive(grant, now));
+  const tieBreaks = idOrder(grants);
+
+  return decideGrant(
+    factsOfQuery(query),
+    grants.map((grant, index) => factsOfGrant(grant, now, tieBreaks[index])),
+  );
+}
+
+/**
+ * The ask as {@link decideGrant} reads it.
+ *
+ * `queryType`, `dataClass` and `purpose` are canonical: `canonicalQueryType`,
+ * `canonicalDataClass` and `canonicalPurpose` of what the asker sent, `null`
+ * where that names nothing. `from`, `to` and the purpose are read from
+ * `filters` only when they are strings.
+ */
+export interface QueryFacts {
+  queryType: string | null;
+  dataClass: string | null;
+  from: string | undefined;
+  to: string | undefined;
+  purpose: string | null;
+  actor: AskActor | undefined;
+}
+
+/**
+ * One standing grant as {@link decideGrant} reads it.
+ *
+ * - `active` is {@link isGrantActive} at the evaluation instant.
+ * - `queryType` and `dataClass` are canonical, `null` where they name nothing.
+ * - `dataClasses` and `archetypes` are the scope's lists, canonicalized with
+ *   the entries that name nothing dropped. `undefined` means the scope has no
+ *   such list, which is different from an empty one.
+ * - `notBefore`, `notAfter` and `delegation` are the scope's values, or
+ *   `undefined` where the scope leaves them out.
+ * - `purpose` is `undefined` when the scope states no purpose, and otherwise
+ *   `canonicalPurpose` of the one it states.
+ * - `ceiling` is {@link ceilingOf} and `ceilingRank` its {@link ceilingRank}.
+ * - `tieBreak` is the grant's position in id order (see {@link idOrder}).
+ */
+export interface GrantFacts {
+  id: string;
+  mode: GrantMode;
+  active: boolean;
+  queryType: string | null;
+  dataClass: string | null;
+  dataClasses: string[] | undefined;
+  archetypes: string[] | undefined;
+  notBefore: string | undefined;
+  notAfter: string | undefined;
+  delegation: AskDelegation | undefined;
+  purpose: string | null | undefined;
+  ceiling: DisclosureRung | undefined;
+  ceilingRank: number;
+  tieBreak: number;
+}
+
+/**
+ * The ask's side of matching, canonicalized.
+ *
+ * BOTH SIDES, THROUGH THE SAME NORMALIZER. `grantMatch` once compared the two
+ * `queryType` strings RAW while `dataClass` beside them went through
+ * `canonicalDataClass` — so a block pinned to `photos` denied `photos` and let
+ * `Photos`, `PHOTOS` and `'photos '` past, into review, where a broad `auto`
+ * grant or a tired tap answers them. canonical.ts already carried the warning
+ * that any normalization here must be mirrored by every consumer; it was never
+ * applied to the field beside the one it was written for. Building both sides
+ * here, with the same three canonicalizers, is what keeps them mirrored.
+ */
+function factsOfQuery(query: AskQuery): QueryFacts {
+  // `canonicalPurpose`, not `canonicalDataClass`. Same normalizer today,
+  // different contract — a data class is a token from a closed vocabulary and
+  // may one day be aliased or singularized; a purpose is a human phrase and
+  // must not be.
+  const asked = typeof query.filters?.purpose === 'string' ? query.filters.purpose : undefined;
+
+  return {
+    queryType: canonicalQueryType(query.queryType),
+    dataClass: canonicalDataClass(query.dataClass),
+    from: typeof query.filters?.from === 'string' ? query.filters.from : undefined,
+    to: typeof query.filters?.to === 'string' ? query.filters.to : undefined,
+    purpose: canonicalPurpose(asked),
+    actor: query.actor ?? undefined,
+  };
+}
+
+/** The grant's side of matching. See {@link GrantFacts} for what each field holds. */
+function factsOfGrant(grant: AskGrant, now: Date, tieBreak: number): GrantFacts {
+  const scope = grant.scope;
+  const ceiling = ceilingOf(grant);
+
+  return {
+    id: grant.id,
+    mode: grant.mode,
+    active: isGrantActive(grant, now),
+    queryType: canonicalQueryType(grant.queryType),
+    dataClass: canonicalDataClass(grant.dataClass),
+    // The two lists are getters, so each is canonicalized only when the matcher
+    // reads it, at the point it always was. A jsonb value there that is not an
+    // array still throws where it did, and no sooner.
+    //
+    // An empty list means "no classes permitted" and matches nothing; an
+    // unscoped grant omits the key and leaves this `undefined`.
+    get dataClasses() {
+      const scopedClasses = scope?.dataClasses;
+
+      return scopedClasses == null
+        ? undefined
+        : scopedClasses.map(canonicalDataClass).filter((c): c is string => c != null);
+    },
+    // The ask's queryType IS its archetype, so the archetype scope goes through
+    // the queryType normalizer rather than a hand-rolled `trim().toLowerCase()`
+    // — a third spelling of "canonical" in this file is a third place for the
+    // two sides to drift apart.
+    get archetypes() {
+      return scope?.archetypes == null
+        ? undefined
+        : scope.archetypes.map((a) => canonicalQueryType(a)).filter((a): a is string => a != null);
+    },
+    notBefore: scope?.notBefore ?? undefined,
+    notAfter: scope?.notAfter ?? undefined,
+    delegation: scope?.delegation ?? undefined,
+    purpose: scope?.purpose == null ? undefined : canonicalPurpose(scope.purpose),
+    ceiling,
+    ceilingRank: ceilingRank(ceiling),
+    tieBreak,
+  };
+}
+
+/**
+ * Each grant's position when the grants are sorted by id, for the tie-break in
+ * {@link strictestOf}.
+ *
+ * `localeCompare` is out of reach of the proof, so the order is fixed here and
+ * handed to {@link decideGrant} as a number. The sort is stable, so two ids
+ * that compare equal keep the order they arrived in. That is the outcome
+ * `[...grants].sort(...)` gave when the comparison lived in `strictestOf`.
+ */
+function idOrder(grants: readonly AskGrant[]): number[] {
+  const order = grants.map((_, index) => index).sort((a, b) => grants[a].id.localeCompare(grants[b].id));
+  const positions: number[] = [];
+  order.forEach((index, position) => {
+    positions[index] = position;
+  });
+
+  return positions;
+}
+
+/**
+ * The decision {@link evaluateGrant} returns, from facts it has already
+ * canonicalized. Pure, and proved with LemmaScript: the `//@` lines below are
+ * the contract, `grantMatch.dfy` is the proof.
+ *
+ * In words: a covering active `block` always decides, and decides `deny`; an
+ * `auto` decision names an active `auto` grant that covers the ask on every
+ * field and names the ask's class, and no other such grant is stricter, or as
+ * strict and earlier in id order; an ask that names no data class is never
+ * auto-answered; and anything else is owner review. A review that names a
+ * grant names the strictest matching `review` grant, or, when no `review`
+ * grant matches, the strictest matching `auto` grant, with the same
+ * tie-break.
+ */
+export function decideGrant(query: QueryFacts, grants: readonly GrantFacts[]): GrantEvaluation {
+  //@ verify
+  //@ ensures forall(g: GrantFacts, grants.includes(g) && g.active && g.mode === 'block' && blockCoversQuery(g, query) ==> \result.decision === 'deny')
+  //@ ensures \result.decision === 'deny' ==> exists(g: GrantFacts, grants.includes(g) && g.active && g.mode === 'block' && blockCoversQuery(g, query) && \result.grantId === g.id)
+  //@ ensures \result.decision === 'auto' ==> exists(g: GrantFacts, grants.includes(g) && g.active && g.mode === 'auto' && grantMatchesQuery(g, query) && autoGrantNamesQueryClass(g, query) && \result.grantId === g.id && \result.maxDisclosure === g.ceiling && forall(o: GrantFacts, grants.includes(o) && o.active && o.mode === 'auto' && grantMatchesQuery(o, query) && autoGrantNamesQueryClass(o, query) ==> g.ceilingRank < o.ceilingRank || (g.ceilingRank === o.ceilingRank && g.tieBreak <= o.tieBreak)))
+  //@ ensures \result.decision === 'review' && \result.grantId !== undefined ==> exists(g: GrantFacts, grants.includes(g) && g.active && (g.mode === 'review' || g.mode === 'auto') && grantMatchesQuery(g, query) && \result.grantId === g.id && \result.maxDisclosure === g.ceiling && forall(o: GrantFacts, grants.includes(o) && o.active && o.mode === g.mode && grantMatchesQuery(o, query) ==> g.ceilingRank < o.ceilingRank || (g.ceilingRank === o.ceilingRank && g.tieBreak <= o.tieBreak)) && (g.mode === 'auto' ==> forall(o: GrantFacts, grants.includes(o) && o.active && o.mode === 'review' ==> !grantMatchesQuery(o, query))))
+  //@ ensures query.dataClass === null ==> \result.decision !== 'auto'
+  //@ ensures \result.grantId === undefined ==> \result.decision === 'review'
+  const active = grants.filter((grant) => grant.active);
 
   // Blocks are evaluated CONSERVATIVELY (see blockCoversQuery): an ask that
   // omits its data class cannot be proven to fall outside a class-scoped block,
@@ -55,7 +254,7 @@ export function evaluateGrant(
     matches.filter((grant) => grant.mode === 'auto' && autoGrantNamesQueryClass(grant, query)),
   );
   if (auto) {
-    return { decision: 'auto', grantId: auto.id, maxDisclosure: ceilingOf(auto) };
+    return { decision: 'auto', grantId: auto.id, maxDisclosure: auto.ceiling };
   }
 
   // An explicit `review` grant is preferred as the basis; failing that, an
@@ -67,7 +266,7 @@ export function evaluateGrant(
     strictestOf(matches.filter((grant) => grant.mode === 'review')) ??
     strictestOf(matches.filter((grant) => grant.mode === 'auto'));
   if (review) {
-    return { decision: 'review', grantId: review.id, maxDisclosure: ceilingOf(review) };
+    return { decision: 'review', grantId: review.id, maxDisclosure: review.ceiling };
   }
 
   return { decision: 'review' };
@@ -97,22 +296,35 @@ export function evaluateGrant(
  * 2. TIE-BROKEN BY ID, so the outcome is a function of the grants alone. Grant
  *    ids are uuidv7, so this resolves to the OLDEST matching grant at equal
  *    strictness — stable across re-evaluations of the same ask, which is what
- *    makes `consentBasis` reproducible in the audit.
+ *    makes `consentBasis` reproducible in the audit. The id order arrives as
+ *    `tieBreak`, fixed by {@link idOrder} before the facts are built.
  *
- * Note that the returned grant's own `ceilingOf` IS the narrowest across the
- * whole set, precisely because that is what it was sorted on — the caller does
+ * Note that the returned grant's own `ceiling` IS the narrowest across the
+ * whole set, precisely because that is what it was chosen on — the caller does
  * not need to fold the ceilings separately.
  */
-function strictestOf(grants: readonly AskGrant[]): AskGrant | undefined {
-  if (grants.length <= 1) {
-    return grants[0];
+function strictestOf(grants: readonly GrantFacts[]): GrantFacts | undefined {
+  //@ verify
+  //@ ensures grants.length === 0 <==> \result === undefined
+  //@ ensures \result !== undefined ==> grants.includes(\result)
+  //@ ensures \result !== undefined ==> forall(g: GrantFacts, grants.includes(g) ==> \result.ceilingRank <= g.ceilingRank)
+  //@ ensures \result !== undefined ==> forall(g: GrantFacts, grants.includes(g) && g.ceilingRank === \result.ceilingRank ==> \result.tieBreak <= g.tieBreak)
+  let strictest: GrantFacts | undefined = undefined;
+  for (const grant of grants) {
+    //@ invariant (strictest === undefined) === (_grant_idx === 0)
+    //@ invariant strictest !== undefined ==> exists(k: nat, k < _grant_idx && grants[k] === strictest)
+    //@ invariant strictest !== undefined ==> forall(k: nat, k < _grant_idx ==> strictest.ceilingRank <= grants[k].ceilingRank)
+    //@ invariant strictest !== undefined ==> forall(k: nat, k < _grant_idx && grants[k].ceilingRank === strictest.ceilingRank ==> strictest.tieBreak <= grants[k].tieBreak)
+    if (
+      strictest === undefined ||
+      grant.ceilingRank < strictest.ceilingRank ||
+      (grant.ceilingRank === strictest.ceilingRank && grant.tieBreak < strictest.tieBreak)
+    ) {
+      strictest = grant;
+    }
   }
 
-  return [...grants].sort((a, b) => {
-    const byCeiling = ceilingRank(ceilingOf(a)) - ceilingRank(ceilingOf(b));
-
-    return byCeiling !== 0 ? byCeiling : a.id.localeCompare(b.id);
-  })[0];
+  return strictest;
 }
 
 /**
@@ -199,7 +411,9 @@ export function isGrantActive(grant: AskGrant, now: Date = new Date()): boolean 
  * grant pinned to (or scoped to a set of) data classes only covers asks whose
  * declared class is that class / in that set.
  */
-function grantMatchesQuery(grant: AskGrant, query: AskQuery): boolean {
+function grantMatchesQuery(grant: GrantFacts, query: QueryFacts): boolean {
+  //@ verify
+  //@ ensures \result <==> classMatchesQuery(grant, query) && scopeCoversQuery(grant, query)
   return classMatchesQuery(grant, query) && scopeCoversQuery(grant, query);
 }
 
@@ -265,12 +479,16 @@ function grantMatchesQuery(grant: AskGrant, query: AskQuery): boolean {
  * been narrowed to that class by {@link classMatchesQuery} and needs nothing
  * further here.
  */
-function autoGrantNamesQueryClass(grant: AskGrant, query: AskQuery): boolean {
-  if (canonicalDataClass(query.dataClass) == null) {
+function autoGrantNamesQueryClass(grant: GrantFacts, query: QueryFacts): boolean {
+  //@ verify
+  //@ ensures query.dataClass === null ==> !\result
+  //@ ensures grant.dataClass === null && grant.dataClasses === undefined ==> !\result
+  //@ ensures query.dataClass !== null && (grant.dataClass !== null || grant.dataClasses !== undefined) ==> \result
+  if (query.dataClass == null) {
     return false;
   }
 
-  return canonicalDataClass(grant.dataClass) != null || grant.scope?.dataClasses != null;
+  return grant.dataClass != null || grant.dataClasses !== undefined;
 }
 
 /**
@@ -280,33 +498,28 @@ function autoGrantNamesQueryClass(grant: AskGrant, query: AskQuery): boolean {
  * Deliberately excludes the narrowing dimensions in {@link scopeCoversQuery}:
  * a block must stay broad (see {@link blockCoversQuery}).
  */
-function classMatchesQuery(grant: AskGrant, query: AskQuery): boolean {
-  // BOTH SIDES, THROUGH THE SAME NORMALIZER. This compared the two `queryType`
-  // strings RAW while `dataClass` two lines down went through
-  // `canonicalDataClass` — so a block pinned to `photos` denied `photos` and
-  // let `Photos`, `PHOTOS` and `'photos '` past, into review, where a broad
-  // `auto` grant or a tired tap answers them. canonical.ts already carried the
-  // warning that any normalization here must be mirrored by every consumer; it
-  // was never applied to the field beside the one it was written for.
-  if (canonicalQueryType(grant.queryType) !== canonicalQueryType(query.queryType)) {
+function classMatchesQuery(grant: GrantFacts, query: QueryFacts): boolean {
+  //@ verify
+  //@ ensures \result ==> grant.queryType === query.queryType
+  //@ ensures \result && grant.dataClass !== null ==> grant.dataClass === query.dataClass
+  //@ ensures \result && grant.dataClasses !== undefined ==> query.dataClass !== null && grant.dataClasses.includes(query.dataClass)
+  //@ ensures grant.queryType === query.queryType && (grant.dataClass === null || grant.dataClass === query.dataClass) && (grant.dataClasses === undefined || (query.dataClass !== null && grant.dataClasses.includes(query.dataClass))) ==> \result
+  //
+  // Both sides arrive canonicalized; see `factsOfQuery` for why that matters.
+  if (grant.queryType !== query.queryType) {
     return false;
   }
 
-  const queryClass = canonicalDataClass(query.dataClass);
-  const grantClass = canonicalDataClass(grant.dataClass);
-
   // A grant that pins a specific data_class only covers asks in that class.
-  if (grantClass != null && grantClass !== queryClass) {
+  if (grant.dataClass != null && grant.dataClass !== query.dataClass) {
     return false;
   }
 
   // A grant whose scope enumerates data classes requires membership. An empty
   // list means "no classes permitted" — it matches nothing (an unscoped grant
-  // omits the `dataClasses` key entirely, leaving `scopedClasses` undefined).
-  const scopedClasses = grant.scope?.dataClasses;
-  if (scopedClasses != null) {
-    const allowed = scopedClasses.map(canonicalDataClass).filter((c): c is string => c != null);
-    if (queryClass == null || !allowed.includes(queryClass)) {
+  // omits the `dataClasses` key entirely, leaving `dataClasses` undefined).
+  if (grant.dataClasses !== undefined) {
+    if (query.dataClass == null || !grant.dataClasses.includes(query.dataClass)) {
       return false;
     }
   }
@@ -323,19 +536,20 @@ function classMatchesQuery(grant: AskGrant, query: AskQuery): boolean {
  * by its own scope, or an asker could evade it by falling just outside the
  * window (see {@link blockCoversQuery}).
  */
-function scopeCoversQuery(grant: AskGrant, query: AskQuery): boolean {
-  const scope = grant.scope;
-  if (scope == null) {
-    return true;
-  }
-
-  // Archetype restriction: the ask's queryType IS its archetype, so it is
-  // canonicalized by the queryType normalizer rather than by a hand-rolled
-  // `trim().toLowerCase()` — a third spelling of "canonical" in this file is a
-  // third place for the two sides to drift apart.
-  if (scope.archetypes != null) {
-    const allowed = scope.archetypes.map((a) => canonicalQueryType(a)).filter((a): a is string => a != null);
-    if (!allowed.includes(canonicalQueryType(query.queryType) ?? '')) {
+function scopeCoversQuery(grant: GrantFacts, query: QueryFacts): boolean {
+  //@ verify
+  //@ ensures \result && grant.archetypes !== undefined && query.queryType !== null ==> grant.archetypes.includes(query.queryType)
+  //@ ensures \result && grant.archetypes !== undefined && query.queryType === null ==> grant.archetypes.includes('')
+  //@ ensures \result && grant.notBefore !== undefined ==> query.from !== undefined && !(query.from < grant.notBefore)
+  //@ ensures \result && grant.notAfter !== undefined ==> query.to !== undefined && !(query.to > grant.notAfter)
+  //@ ensures \result && grant.delegation !== undefined ==> actorSatisfiesDelegation(query.actor, grant.delegation)
+  //@ ensures \result && grant.purpose !== undefined ==> query.purpose === grant.purpose
+  //@ ensures grant.archetypes === undefined && grant.notBefore === undefined && grant.notAfter === undefined && grant.delegation === undefined && grant.purpose === undefined ==> \result
+  //
+  // Archetype restriction: the ask's queryType IS its archetype, and both
+  // arrive through the queryType normalizer (see `factsOfGrant`).
+  if (grant.archetypes !== undefined) {
+    if (!grant.archetypes.includes(query.queryType ?? '')) {
       return false;
     }
   }
@@ -343,17 +557,14 @@ function scopeCoversQuery(grant: AskGrant, query: AskQuery): boolean {
   // Validity window, evaluated against the ask's own window when it declares
   // one. An ask with no window can't be proven inside a bounded grant, so a
   // windowed grant does not cover it.
-  const askFrom = typeof query.filters?.from === 'string' ? query.filters.from : undefined;
-  const askTo = typeof query.filters?.to === 'string' ? query.filters.to : undefined;
-
-  if (scope.notBefore != null) {
-    if (askFrom == null || askFrom < scope.notBefore) {
+  if (grant.notBefore !== undefined) {
+    if (query.from === undefined || query.from < grant.notBefore) {
       return false;
     }
   }
 
-  if (scope.notAfter != null) {
-    if (askTo == null || askTo > scope.notAfter) {
+  if (grant.notAfter !== undefined) {
+    if (query.to === undefined || query.to > grant.notAfter) {
       return false;
     }
   }
@@ -370,26 +581,21 @@ function scopeCoversQuery(grant: AskGrant, query: AskQuery): boolean {
   // undeclared actor drops the grant out of consideration, which DOWNGRADES the
   // ask to owner review rather than denying it (see the caller). The owner then
   // sees it, with the grant named, and answers in one tap.
-  if (scope.delegation != null) {
-    if (!actorSatisfiesDelegation(query.actor, scope.delegation)) {
+  if (grant.delegation !== undefined) {
+    if (!actorSatisfiesDelegation(query.actor, grant.delegation)) {
       return false;
     }
   }
 
   // Purpose binding: a purpose-limited grant requires the ask to state that
   // same purpose.
-  if (scope.purpose != null) {
-    const asked = typeof query.filters?.purpose === 'string' ? query.filters.purpose : undefined;
-    // `canonicalPurpose`, not `canonicalDataClass`. Same normalizer today,
-    // different contract — a data class is a token from a closed vocabulary and
-    // may one day be aliased or singularized; a purpose is a human phrase and
-    // must not be.
-    //
-    // A grant that names a purpose and an ask that states none does NOT match:
-    // `canonicalPurpose(undefined)` is null and the grant's is not, so this
-    // fails and the ask is downgraded to review. Same shape as every other
-    // "the ask must name it too" rule in this file.
-    if (canonicalPurpose(asked) !== canonicalPurpose(scope.purpose)) {
+  //
+  // A grant that names a purpose and an ask that states none does NOT match:
+  // the ask's canonical purpose is null and the grant's is not, so this fails
+  // and the ask is downgraded to review. Same shape as every other "the ask
+  // must name it too" rule in this file.
+  if (grant.purpose !== undefined) {
+    if (query.purpose !== grant.purpose) {
       return false;
     }
   }
@@ -403,14 +609,20 @@ function scopeCoversQuery(grant: AskGrant, query: AskQuery): boolean {
  * queryType covers an ask that omits its data class, so a scoped block cannot be
  * evaded by omission.
  */
-function blockCoversQuery(grant: AskGrant, query: AskQuery): boolean {
-  // Same normalizer as `classMatchesQuery` — this is the OTHER raw comparison,
-  // and the one that actually decided a `deny`.
-  if (canonicalQueryType(grant.queryType) !== canonicalQueryType(query.queryType)) {
+function blockCoversQuery(grant: GrantFacts, query: QueryFacts): boolean {
+  //@ verify
+  //@ ensures \result ==> grant.queryType === query.queryType
+  //@ ensures grant.queryType === query.queryType && query.dataClass === null ==> \result
+  //@ ensures grant.queryType === query.queryType && grant.dataClass === null && grant.dataClasses === undefined ==> \result
+  //@ ensures \result <==> grant.queryType === query.queryType && (query.dataClass === null || classMatchesQuery(grant, query))
+  //
+  // Canonical on both sides, as in `classMatchesQuery`. This is the other
+  // queryType comparison, and the one that actually decides a `deny`.
+  if (grant.queryType !== query.queryType) {
     return false;
   }
 
-  if (canonicalDataClass(query.dataClass) == null) {
+  if (query.dataClass == null) {
     return true;
   }
 
@@ -430,28 +642,35 @@ function blockCoversQuery(grant: AskGrant, query: AskQuery): boolean {
  *
  * An UNDECLARED actor satisfies nothing. Pure.
  */
-function actorSatisfiesDelegation(
-  actor: AskActor | undefined,
-  delegation: NonNullable<AskGrantScope['delegation']>,
-): boolean {
+function actorSatisfiesDelegation(actor: AskActor | undefined, delegation: AskDelegation): boolean {
+  //@ verify
+  //@ ensures actor === undefined ==> !\result
+  //@ ensures \result && delegation === 'none' ==> actor !== undefined && actor.kind === 'person'
+  //@ ensures \result && delegation === 'first-party-only' ==> actor !== undefined && actor.kind !== 'third-party-agent'
+  //
+  // An `if` chain, not a `switch`: lsc 0.6.14 writes a `case 'none':` label as
+  // the Option constructor `None`, which Dafny then reads as a catch-all.
   if (actor == null) {
     return false;
   }
 
-  switch (delegation) {
-    case 'none':
-      return actor.kind === 'person';
-    case 'first-party-only':
-      return actor.kind === 'person' || actor.kind === 'first-party-agent';
-    case 'any-agent':
-      // Every kind, including one this build does not recognize — `any-agent`
-      // is the owner declining to restrict on this dimension at all, and a
-      // future kind must not be narrower than the setting that admits all.
-      return true;
-    default:
-      // An unreadable delegation setting is the STRICTEST reading, not the
-      // absence of one — `ceilingOf`'s rule. `scope` is jsonb and can hold
-      // anything a client or a migration ever wrote there.
-      return false;
+  if (delegation === 'none') {
+    return actor.kind === 'person';
   }
+
+  if (delegation === 'first-party-only') {
+    return actor.kind === 'person' || actor.kind === 'first-party-agent';
+  }
+
+  if (delegation === 'any-agent') {
+    // Every kind, including one this build does not recognize — `any-agent`
+    // is the owner declining to restrict on this dimension at all, and a
+    // future kind must not be narrower than the setting that admits all.
+    return true;
+  }
+
+  // An unreadable delegation setting is the STRICTEST reading, not the
+  // absence of one — `ceilingOf`'s rule. `scope` is jsonb and can hold
+  // anything a client or a migration ever wrote there.
+  return false;
 }

@@ -193,6 +193,10 @@ produce. Each therefore carries its **own** `yarn.lock`. Install and run from in
 own directory — a root install will not materialize them, and "fixing" the exclusion breaks the
 native builds.
 
+The one npm project is `spec/lemmascript`, the dev-only LemmaScript proof tooling. It sits outside
+the workspaces with its own `package-lock.json` (`npm ci --ignore-scripts` inside it), because
+CI-Agent-Sync's recipe for lsc installs it with npm. Its README says how to run the proofs.
+
 ## Cross-repo connections
 
 - Consumed by: all clients via REST/GraphQL at ci-server.localhost

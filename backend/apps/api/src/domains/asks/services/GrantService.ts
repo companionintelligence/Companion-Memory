@@ -8,9 +8,9 @@ import { LoggerService } from '@ci/common/logging';
 
 import { type Ask, AskEntity } from '../entities/AskEntity';
 import { type AskGrant, AskGrantEntity } from '../entities/AskGrantEntity';
-import { evaluateGrant, isGrantActive } from '../grantMatch';
+import { evaluateGrant, isGrantActive, type GrantEvaluation } from '../grantMatch';
 import { DISCLOSURE_RUNGS } from '../policy';
-import type { AskGrantScope, CreateAskGrantDto, GrantEvaluation, UpdateAskGrantDto } from '../types';
+import type { AskGrantScope, CreateAskGrantDto, UpdateAskGrantDto } from '../types';
 
 /**
  * Owns standing consent grants and evaluates an incoming ask against them. The

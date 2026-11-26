@@ -1,0 +1,3 @@
+../../backend/apps/api/src/domains/asks/policy.ts
+../../backend/apps/api/src/domains/asks/grantMatch.ts
+../../backend/packages/tool-core/src/policy/capabilityPolicy.ts
