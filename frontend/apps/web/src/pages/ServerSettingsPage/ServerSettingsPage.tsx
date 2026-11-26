@@ -4,6 +4,7 @@ import { getApiBaseUrl, isIosPlatform, isLocalApplianceOrigin } from '@ci/common
 import { Button, Card, EmailInput, Input, Label, LoadingButton, PasswordInput } from '@ci/shadcn';
 import { useNavigate } from 'react-router-dom';
 
+import { RecoveryForm } from '@/components/RecoveryForm';
 import { useAuth } from '@/hooks';
 import {
   persistPortalUrl,
@@ -149,6 +150,8 @@ export function ServerSettingsPage() {
               </LoadingButton>
             </form>
           ) : null}
+
+          {canOfflineUnlock && <RecoveryForm />}
 
           <Button
             type="button"

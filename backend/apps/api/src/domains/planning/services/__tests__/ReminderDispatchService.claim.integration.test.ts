@@ -20,7 +20,7 @@ import { TaskEntity } from '../../entities/TaskEntity';
 import { TaskPendingChangeEntity } from '../../entities/TaskPendingChangeEntity';
 import { PlannedBlockService } from '../PlannedBlockService';
 import { PlanningTimeService } from '../PlanningTimeService';
-import { claimDueReminders } from '../ReminderDispatchService';
+import { claimDueReminders, listUsersWithDueReminders } from '../ReminderDispatchService';
 import { TaskService } from '../TaskService';
 
 /**
@@ -99,6 +99,36 @@ describeWithDb('claimDueReminders (integration)', () => {
     );
 
     return id;
+  }
+
+  /** Moves a reminder into a delivery state the claim and fan-out must honour. */
+  async function setDeliveryState(
+    id: string,
+    state: {
+      status: string;
+      attempts?: number;
+      claimedAt?: Date | null;
+      nextAttemptAt?: Date | null;
+      deliveryMode?: 'push' | 'device';
+    },
+  ): Promise<void> {
+    await dataSource.query(
+      `UPDATE ci.reminders
+          SET status = $2, attempts = $3, claimed_at = $4, next_attempt_at = $5, delivery_mode = $6
+        WHERE id = $1`,
+      [
+        id,
+        state.status,
+        state.attempts ?? 0,
+        state.claimedAt ?? null,
+        state.nextAttemptAt ?? null,
+        state.deliveryMode ?? 'push',
+      ],
+    );
+  }
+
+  async function fannedOut(): Promise<boolean> {
+    return (await listUsersWithDueReminders(dataSource, new Date())).includes(userId);
   }
 
   async function reminderStatus(id: string): Promise<string> {
@@ -196,7 +226,7 @@ describeWithDb('claimDueReminders (integration)', () => {
       const claimedIds = [...first, ...second].map((row) => row.id);
 
       expect(claimedIds).toEqual([reminderId]);
-      expect(await reminderStatus(reminderId)).toBe('fired');
+      expect(await reminderStatus(reminderId)).toBe('delivering');
     });
 
     it('claims a batch of contested reminders exactly once each under five overlapping claim attempts', async () => {
@@ -361,6 +391,115 @@ describeWithDb('claimDueReminders (integration)', () => {
       const claimed = await claimDueReminders(dataSource, userId, new Date());
 
       expect(claimed.map((row) => row.id)).not.toContain(reminderId);
+    });
+  });
+
+  /**
+   * Retries and lease reclaim only happen if the cron fans the user out, so
+   * each case checks the audience query and the claim together. Every case
+   * first settles any other due rows for this user so the audience answer is
+   * about the one row under test.
+   */
+  describe('lease, retry and the cron audience', () => {
+    async function settleOthers(keep: string): Promise<void> {
+      await dataSource.query(`UPDATE ci.reminders SET status = 'cancelled' WHERE user_id = $1 AND id <> $2`, [
+        userId,
+        keep,
+      ]);
+    }
+
+    async function dueReminder(): Promise<string> {
+      const taskId = await insertTask('open');
+      const id = await insertReminder({ taskId }, new Date(Date.now() - 60_000));
+
+      await settleOthers(id);
+
+      return id;
+    }
+
+    it('fans out and reclaims a failed reminder whose retry is due', async () => {
+      const id = await dueReminder();
+
+      await setDeliveryState(id, {
+        status: 'failed',
+        attempts: 1,
+        nextAttemptAt: new Date(Date.now() - 1_000),
+      });
+
+      expect(await fannedOut()).toBe(true);
+      expect((await claimDueReminders(dataSource, userId, new Date())).map((row) => row.id)).toEqual([id]);
+      expect(await reminderStatus(id)).toBe('delivering');
+    });
+
+    it('waits for the backoff of a failed reminder', async () => {
+      const id = await dueReminder();
+
+      await setDeliveryState(id, {
+        status: 'failed',
+        attempts: 1,
+        nextAttemptAt: new Date(Date.now() + 60_000),
+      });
+
+      expect(await fannedOut()).toBe(false);
+      expect(await claimDueReminders(dataSource, userId, new Date())).toEqual([]);
+    });
+
+    it('gives up after the last attempt', async () => {
+      const id = await dueReminder();
+
+      await setDeliveryState(id, { status: 'failed', attempts: 5 });
+
+      expect(await fannedOut()).toBe(false);
+      expect(await claimDueReminders(dataSource, userId, new Date())).toEqual([]);
+    });
+
+    it('fans out and reclaims a delivering reminder whose lease expired', async () => {
+      const id = await dueReminder();
+
+      await setDeliveryState(id, {
+        status: 'delivering',
+        attempts: 1,
+        claimedAt: new Date(Date.now() - 11 * 60_000),
+      });
+
+      expect(await fannedOut()).toBe(true);
+
+      const [claimed] = await claimDueReminders(dataSource, userId, new Date());
+
+      expect(claimed.id).toBe(id);
+      expect(claimed.attempts).toBe(2);
+    });
+
+    it('leaves a live lease alone', async () => {
+      const id = await dueReminder();
+
+      await setDeliveryState(id, {
+        status: 'delivering',
+        attempts: 1,
+        claimedAt: new Date(Date.now() - 60_000),
+      });
+
+      expect(await fannedOut()).toBe(false);
+      expect(await claimDueReminders(dataSource, userId, new Date())).toEqual([]);
+    });
+
+    it('never fans out or claims a device-mode reminder', async () => {
+      const id = await dueReminder();
+
+      await setDeliveryState(id, { status: 'pending', deliveryMode: 'device' });
+
+      expect(await fannedOut()).toBe(false);
+      expect(await claimDueReminders(dataSource, userId, new Date())).toEqual([]);
+      expect(await reminderStatus(id)).toBe('pending');
+    });
+
+    it('never re-sends a legacy fired reminder', async () => {
+      const id = await dueReminder();
+
+      await setDeliveryState(id, { status: 'fired' });
+
+      expect(await fannedOut()).toBe(false);
+      expect(await claimDueReminders(dataSource, userId, new Date())).toEqual([]);
     });
   });
 });

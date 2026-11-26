@@ -223,7 +223,7 @@ gh api repos/companionintelligence/CI-Server/branches/main/protection \
 still `workflow_dispatch`-only. Dispatching it before merging something risky
 is now a deliberate judgment call rather than an automatic gate.
 
-The table below is the one place the other nine dispatch-only workflows'
+The table below is the one place the other dispatch-only workflows'
 notable behavior is maintained (the triggers themselves are in the generated
 section below the second `---`; this is what a trigger alone doesn't tell you):
 
@@ -238,6 +238,7 @@ section below the second `---`; this is what a trigger alone doesn't tell you):
 | `mobile-build.yml` | Debug APK + iOS Simulator `.app`. The Android job checks the APK against Play's 16 KB page-size rule with `scripts/check-android-16kb.mjs` (ELF `p_align` and 16 KiB zip offsets of every `arm64-v8a` / `x86_64` library) straight after `assembleDebug` and before anything is uploaded. Then it also runs the Android JVM unit tests (`./gradlew testDebugUnitTest` — `:app` plus the three `:ci-capacitor-*` plugin modules; Robolectric, no emulator), and uploads the HTML/XML reports as `android-unit-test-reports` on failure only. Locally: `make test-android`, and `node scripts/check-android-16kb.mjs <file.apk>`. |
 | `desktop-build.yml` | Unsigned dmg/deb/rpm/AppImage/msi — the desktop local-orchestrator app (`frontend/apps/desktop`). Each host-native matrix entry also runs `cargo test` before bundling (skipped for `x86_64-apple-darwin`, the one cross-compiled entry — `macos-latest` is arm64), uploading the captured log on failure only. This workflow is `desktop-release.yml`'s test gate — deleting or permanently `if:`-disabling that test step turns the desktop release gate into a rubber stamp. Locally: `make test-desktop`. |
 | `desktop-e2e.yml` | Playwright against the desktop appliance: published images, empty database, no seeded account (`tests/desktop`). The deliberate opposite of `e2e.yml` (locally built, migrated, seeded), so neither substitutes for the other. A release gate to dispatch before a `v*` tag, not a merge gate. |
+| `product-safety.yml` | Restore, erasure and delivery checks that need real services: a Docker restore drill that brings a database record, an uploaded file and the master key back in disposable projects (`make test-recovery-docker`), and the account-erasure, reminder-delivery, recovery-code and memory-compaction suites against a throwaway Postgres (`make test-db`, which fails instead of skipping). `gh workflow run product-safety.yml --ref <branch>`. Not a release gate: `publish.yml` does not list it, so a release does not wait for it. |
 
 **This table is the one place these trigger facts are maintained.** `CLAUDE.md`,
 `README.md`, `docs/qa/release-qa-program.md` and `docs/qa/ci-gate-proposal.md`

@@ -303,6 +303,17 @@ export class FileService implements OnModuleInit {
     this.logger.setContext(FileService.name);
   }
 
+  /**
+   * Whether the object store answers for the configured bucket right now, for System status.
+   * Unlike `onModuleInit` it never creates the bucket, and it gives up after 1.5 seconds so a
+   * store that accepts the connection and goes quiet cannot hold the check. Rejects when it is unreachable.
+   */
+  async checkStorage(): Promise<void> {
+    await this.s3.send(new HeadBucketCommand({ Bucket: config.staticfiles.bucket }), {
+      abortSignal: AbortSignal.timeout(1_500),
+    });
+  }
+
   async onModuleInit() {
     // Web-role work: two processes racing HeadBucket→CreateBucket is a boot
     // failure waiting on a timing; the web process (present in every

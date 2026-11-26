@@ -46,7 +46,13 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
     const user = await this.userService.findById({ userId: SYSTEM_USER }, payload.sub);
 
-    if (!user) {
+    if (
+      !user ||
+      (user.credentialsResetAt &&
+        (typeof payload.issuedAtMs !== 'number' ||
+          !Number.isFinite(payload.issuedAtMs) ||
+          payload.issuedAtMs <= user.credentialsResetAt.getTime()))
+    ) {
       return null;
     }
 

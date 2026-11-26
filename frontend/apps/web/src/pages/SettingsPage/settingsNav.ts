@@ -17,6 +17,7 @@ import {
   ShieldCheck,
   Smartphone,
   LockKeyhole,
+  Activity,
 } from '@ci/shadcn/icons';
 
 export interface SettingsSection {
@@ -53,6 +54,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: 'privacy', label: 'Privacy', icon: Lock },
   { id: 'protocols', label: 'Trust & protocols', icon: ShieldCheck },
   { id: 'data', label: 'Your data', icon: HardDrive },
+  { id: 'status', label: 'System status', icon: Activity },
 ];
 
 export function visibleSettingsSections(): SettingsSection[] {

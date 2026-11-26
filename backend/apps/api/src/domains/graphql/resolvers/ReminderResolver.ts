@@ -72,11 +72,16 @@ export class ReminderResolver {
       throw new BadRequestException('`fireAt` must be in the future');
     }
 
+    if (input.deliveryMode && !['push', 'device'].includes(input.deliveryMode)) {
+      throw new BadRequestException('Choose push or device delivery');
+    }
+
     const serviceContext = toServiceContext(context);
     const reminder = await this.reminderService.create(serviceContext, {
       taskId: input.taskId ? GlobalUID.parse('task', input.taskId) : null,
       blockId: input.blockId ? GlobalUID.parse('event', input.blockId) : null,
       fireAt: input.fireAt,
+      deliveryMode: input.deliveryMode === 'device' ? 'device' : 'push',
     });
 
     return { success: true, reminder: ReminderType.toType(reminder) };
@@ -95,6 +100,39 @@ export class ReminderResolver {
 
     const serviceContext = toServiceContext(context);
     const reminder = await this.reminderService.cancel(serviceContext, GlobalUID.parse('reminder', gid));
+
+    return reminder ? ReminderType.toType(reminder) : null;
+  }
+
+  @Mutation(() => ReminderType, {
+    nullable: true,
+    description: 'Record that the native OS accepted a local reminder schedule.',
+  })
+  @GraphqlPrivacy({ destructive: false })
+  async confirmReminderDeviceSchedule(
+    @Context() context: RequestContext,
+    @Args('id', { type: () => ID }) gid: string,
+  ): Promise<ReminderType | null> {
+    await this.assertPlanningEnabled();
+    const reminder = await this.reminderService.confirmDeviceSchedule(
+      toServiceContext(context),
+      GlobalUID.parse('reminder', gid),
+    );
+
+    return reminder ? ReminderType.toType(reminder) : null;
+  }
+
+  @Mutation(() => ReminderType, { nullable: true, description: 'Retry a failed notification delivery.' })
+  @GraphqlPrivacy({ destructive: false })
+  async retryReminder(
+    @Context() context: RequestContext,
+    @Args('id', { type: () => ID }) gid: string,
+  ): Promise<ReminderType | null> {
+    await this.assertPlanningEnabled();
+    const reminder = await this.reminderService.retry(
+      toServiceContext(context),
+      GlobalUID.parse('reminder', gid),
+    );
 
     return reminder ? ReminderType.toType(reminder) : null;
   }

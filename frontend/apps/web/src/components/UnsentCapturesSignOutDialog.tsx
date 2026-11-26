@@ -15,7 +15,7 @@ import { useAuth } from '@/hooks';
  */
 export function UnsentCapturesSignOutDialog() {
   const [{ signOutPrompt }, { confirmSignOut, cancelSignOut }] = useAuth();
-  const { open, unsentCaptures } = signOutPrompt;
+  const { open, unsentCaptures, notificationError } = signOutPrompt;
   const one = unsentCaptures === 1;
 
   return (
@@ -30,12 +30,17 @@ export function UnsentCapturesSignOutDialog() {
       <AlertDialog.Content>
         <AlertDialog.Header>
           <AlertDialog.Title>
-            {one ? "1 capture hasn't uploaded yet" : `${unsentCaptures} captures haven't uploaded yet`}
+            {notificationError
+              ? 'Phone reminders need attention'
+              : one
+                ? "1 capture hasn't uploaded yet"
+                : `${unsentCaptures} captures haven't uploaded yet`}
           </AlertDialog.Title>
           <AlertDialog.Description>
-            {one
-              ? 'Sign out and delete it? To keep it, cancel and stay signed in.'
-              : 'Sign out and delete them? To keep them, cancel and stay signed in.'}
+            {notificationError ??
+              (one
+                ? 'Sign out and delete it? To keep it, cancel and stay signed in.'
+                : 'Sign out and delete them? To keep them, cancel and stay signed in.')}
           </AlertDialog.Description>
         </AlertDialog.Header>
         <AlertDialog.Footer>
@@ -46,7 +51,7 @@ export function UnsentCapturesSignOutDialog() {
             className="bg-destructive text-white hover:bg-destructive/90 dark:bg-destructive/60"
             onClick={() => void confirmSignOut()}
           >
-            Sign out
+            {notificationError ? 'Retry sign out' : 'Sign out'}
           </AlertDialog.Action>
         </AlertDialog.Footer>
       </AlertDialog.Content>

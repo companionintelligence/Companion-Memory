@@ -137,6 +137,9 @@ def _trace_from_dict(raw: dict) -> ConversationTrace:
                 assistant_text=str(turn.get("assistant_text") or ""),
                 tool_calls=calls,
                 tool_results=int(turn.get("tool_results") or len(calls)),
+                grounding=turn.get("grounding")
+                if isinstance(turn.get("grounding"), dict)
+                else None,
             )
         )
     return ConversationTrace(

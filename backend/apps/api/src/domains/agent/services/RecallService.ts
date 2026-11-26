@@ -262,13 +262,9 @@ export class RecallService {
           ? await this.groundedSeeds(context, dto.query, maxResults, policy, seedExcludeTypes)
           : await this.seedThenFallback(context, query, maxResults, policy, seedExcludeTypes);
 
-      if (results.length === 0) {
-        record(0);
-
-        return { block: '', resultCount: 0, lines: [] };
-      }
-
-      const resolved = await this.entityResolution.resolve(context, results);
+      const resolved = results.length
+        ? await this.entityResolution.resolve(context, results)
+        : new Map<string, ResolvedEntity>();
 
       const lines: RecallLine[] = [];
       const includedIds = new Set<string>();
@@ -299,21 +295,14 @@ export class RecallService {
         seenLines?.add(line);
       }
 
-      if (lines.length === 0) {
-        // Seeds were found but none of them survived resolution/serialisation,
-        // so the caller still got nothing. Counted as a zero result, because
-        // from the asker's side that is exactly what it is.
-        record(0);
-
-        return { block: '', resultCount: 0, lines: [] };
-      }
-
       // Expand one query-relevant hop. Seeds are the search hits; their ids are
       // ci.entities entity_ids (item/content/event are indexed under the
       // 'concept' tag but keep their real id). Neighbours already shown as
       // seeds are excluded so we never duplicate a line.
       const seedIds = results.map((r) => r.id);
-      const neighbours = await this.graphExpansion.expand(context, seedIds, query, includedIds);
+      const neighbours = lines.length
+        ? await this.graphExpansion.expand(context, seedIds, query, includedIds)
+        : [];
 
       for (const neighbour of neighbours) {
         if (includedIds.has(neighbour.entityId)) {
@@ -406,6 +395,18 @@ export class RecallService {
           userId: context.userId,
           error: err instanceof Error ? err.message : String(err),
         });
+
+        // A grounded caller must disclose incomplete retrieval rather than
+        // claiming a successful empty search when this channel is unavailable.
+        if (strategy === 'grounded') {
+          throw err;
+        }
+      }
+
+      if (lines.length === 0) {
+        record(0);
+
+        return { block: '', resultCount: 0, lines: [] };
       }
 
       // The rendered block is fenced; `lines` is NOT. Every line here is a clip
@@ -429,6 +430,10 @@ export class RecallService {
         userId: context.userId,
         error: err instanceof Error ? err.message : String(err),
       });
+
+      if (strategy === 'grounded') {
+        throw err;
+      }
 
       return { block: '', resultCount: 0, lines: [] };
     }

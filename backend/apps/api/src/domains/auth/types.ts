@@ -14,6 +14,7 @@ export interface SignupDto {
 
 export interface JwtPayload {
   sub: string;
+  issuedAtMs?: number;
   /**
    * Session id (the SessionEntity row) the token belongs to. Present on
    * session tokens minted since CSRF principal-binding. Access tokens minted

@@ -524,6 +524,7 @@ function ChatPageContent() {
           {local ? <OnDeviceBadge modelId={local.modelId} stats={local.stats} /> : null}
           <Chat
             key={initialThreadId ?? `new-thread-${newThreadCount}`}
+            exportTitle={thread?.name ?? 'Conversation'}
             loading={loading}
             streaming={chatRequestStreaming}
             hasStartedReceiving={hasStartedReceiving}

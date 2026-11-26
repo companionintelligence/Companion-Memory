@@ -5,6 +5,8 @@ import android.content.Intent
 import android.content.Context
 import android.net.Uri
 import android.os.Build
+import androidx.core.content.FileProvider
+import java.io.File
 import android.util.Base64
 import com.companionintelligence.localhub.location.LocationTracking
 import com.companionintelligence.localhub.location.LocationTrackingConfig
@@ -247,6 +249,43 @@ class LocalHubPlugin : Plugin() {
                 call.resolve()
             } catch (e: Exception) {
                 call.reject(e.message ?: "Secure storage remove failed", e)
+            }
+        }
+    }
+
+    /** Share a UTF-8 export through a temporary, read-only FileProvider grant. */
+    @PluginMethod
+    fun shareTextFile(call: PluginCall) {
+        val filename = call.getString("filename")
+        val content = call.getString("content")
+        val mimeType = call.getString("mimeType")
+        if (filename == null || content == null ||
+            !Regex("^[A-Za-z0-9_-]{1,100}\\.(txt|json|md)$").matches(filename) ||
+            content.toByteArray(Charsets.UTF_8).size > 20 * 1024 * 1024 ||
+            mimeType !in setOf("text/plain", "application/json", "text/markdown")) {
+            call.reject("Invalid conversation export")
+            return
+        }
+        activity.runOnUiThread {
+            try {
+                val exports = File(context.cacheDir, "memory-exports").apply { mkdirs() }
+                // Receiving apps can read after the chooser closes. Retain for at most
+                // a day, then prune on the next export rather than deleting too early.
+                exports.listFiles()?.filter { System.currentTimeMillis() - it.lastModified() > 86_400_000L }
+                    ?.forEach { it.deleteRecursively() }
+                val directory = File(exports, java.util.UUID.randomUUID().toString()).apply { mkdirs() }
+                val file = File(directory, filename).apply { writeText(content, Charsets.UTF_8) }
+                val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+                val intent = Intent(Intent.ACTION_SEND).apply {
+                    type = mimeType
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    clipData = android.content.ClipData.newRawUri(filename, uri)
+                }
+                activity.startActivity(Intent.createChooser(intent, "Export conversation"))
+                call.resolve()
+            } catch (error: Exception) {
+                call.reject("Could not share the conversation", error)
             }
         }
     }

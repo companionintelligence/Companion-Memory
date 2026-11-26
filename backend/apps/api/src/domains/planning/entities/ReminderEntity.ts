@@ -20,6 +20,14 @@ export type { ReminderStatus, ReminderSource };
  * `'fired'`. See the migration's header comment
  * (20260916030813_planning_reminders.sql) for the full design rationale and
  * the deltas from CI-Planning's SQLite source.
+ *
+ * Delivery columns (20261124044550_reminder_delivery_retry.sql): the claim now
+ * writes `status = 'delivering'` with `claimedAt` (the lease start) and an
+ * incremented `attempts` (the lease version); the outcome is `'delivered'`
+ * with `firedAt` as the receipt, or `'failed'` with `lastError` and, while
+ * attempts remain, `nextAttemptAt`. `deliveryMode = 'device'` rows are never
+ * claimed: the phone schedules them locally and confirms with `'scheduled'`.
+ * `'fired'` survives only on rows claimed before the lease existed.
  */
 @Entity({ schema: 'ci', name: 'reminders' })
 @Index('idx_reminders_user_due', ['userId', 'status', 'fireAt'])
@@ -45,6 +53,21 @@ export class ReminderEntity {
   @Column({ type: 'timestamptz', name: 'fired_at', nullable: true })
   firedAt!: Date | null;
 
+  @Column({ type: 'text', name: 'delivery_mode', default: 'push' })
+  deliveryMode!: 'push' | 'device';
+
+  @Column({ type: 'integer', default: 0 })
+  attempts!: number;
+
+  @Column({ type: 'timestamptz', name: 'claimed_at', nullable: true })
+  claimedAt!: Date | null;
+
+  @Column({ type: 'timestamptz', name: 'next_attempt_at', nullable: true })
+  nextAttemptAt!: Date | null;
+
+  @Column({ type: 'text', name: 'last_error', nullable: true })
+  lastError!: string | null;
+
   @Column({ type: 'text', default: 'manual' })
   source!: ReminderSource;
 
@@ -60,6 +83,11 @@ export class ReminderEntity {
       fireAt: entity.fireAt,
       status: entity.status,
       firedAt: entity.firedAt,
+      deliveryMode: entity.deliveryMode,
+      attempts: entity.attempts,
+      claimedAt: entity.claimedAt,
+      nextAttemptAt: entity.nextAttemptAt,
+      lastError: entity.lastError,
       source: entity.source,
       createdAt: entity.createdAt,
     };

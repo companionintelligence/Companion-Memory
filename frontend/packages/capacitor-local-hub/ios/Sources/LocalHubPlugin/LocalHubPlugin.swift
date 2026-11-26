@@ -31,6 +31,7 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "secureGet", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "secureSet", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "secureRemove", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "shareTextFile", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "openUrl", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "startAuthSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getCurrentLocation", returnType: CAPPluginReturnPromise),
@@ -191,6 +192,45 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
             call.resolve()
         } catch {
             call.reject(error.localizedDescription, nil, error)
+        }
+    }
+
+    /// Ephemeral UTF-8 exports only. The share sheet owns access while presented;
+    /// its completion handler removes the file, including when it is cancelled.
+    @objc func shareTextFile(_ call: CAPPluginCall) {
+        guard let filename = call.getString("filename"),
+              let content = call.getString("content"),
+              filename.range(of: #"^[A-Za-z0-9_-]{1,100}\.(txt|json|md)$"#, options: .regularExpression) != nil,
+              content.utf8.count <= 20 * 1024 * 1024 else {
+            call.reject("Invalid conversation export")
+            return
+        }
+        DispatchQueue.main.async {
+            guard let presenter = self.bridge?.viewController else {
+                call.reject("The share sheet is unavailable")
+                return
+            }
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("memory-export-\(UUID().uuidString)", isDirectory: true)
+            do {
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                let file = directory.appendingPathComponent(filename)
+                try content.write(to: file, atomically: true, encoding: .utf8)
+                let sheet = UIActivityViewController(activityItems: [file], applicationActivities: nil)
+                sheet.popoverPresentationController?.sourceView = presenter.view
+                sheet.popoverPresentationController?.sourceRect = CGRect(x: presenter.view.bounds.midX, y: presenter.view.bounds.midY, width: 1, height: 1)
+                sheet.completionWithItemsHandler = { _, _, _, error in
+                    try? FileManager.default.removeItem(at: directory)
+                    if let error = error {
+                        call.reject("Could not share the conversation", nil, error)
+                    } else {
+                        call.resolve()
+                    }
+                }
+                presenter.present(sheet, animated: true)
+            } catch {
+                try? FileManager.default.removeItem(at: directory)
+                call.reject("Could not prepare the conversation export", nil, error)
+            }
         }
     }
 

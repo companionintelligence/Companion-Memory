@@ -1046,6 +1046,8 @@ export type CreateRelationshipPayload = {
 export type CreateReminderInput = {
   /** A planned block (`ci.events` id). See `taskId`. */
   blockId?: InputMaybe<Scalars['ID']['input']>;
+  /** push (browser delivery) or device (scheduled by the native app). */
+  deliveryMode?: InputMaybe<Scalars['String']['input']>;
   /** The instant this reminder fires. Must be in the future. */
   fireAt: Scalars['DateTime']['input'];
   /** Exactly one of `taskId`/`blockId` must be set. */
@@ -1969,6 +1971,7 @@ export type MessageEdge = Edge & {
 export type MessageType = Node & {
   __typename?: 'MessageType';
   content: Scalars['String']['output'];
+  grounding?: Maybe<Scalars['JSONObject']['output']>;
   id: Scalars['ID']['output'];
   role?: Maybe<Scalars['String']['output']>;
   threadId: Scalars['ID']['output'];
@@ -2065,6 +2068,8 @@ export type Mutation = {
   /** Mark a task done. Idempotent — the original completion instant is preserved. */
   completeTask?: Maybe<TaskType>;
   confirmObservation?: Maybe<ObjectObservationType>;
+  /** Record that the native OS accepted a local reminder schedule. */
+  confirmReminderDeviceSchedule?: Maybe<ReminderType>;
   createAnswer: AnswerType;
   createAnswers: Array<AnswerType>;
   createAsk: CreateAskPayload;
@@ -2169,6 +2174,8 @@ export type Mutation = {
   rescheduleEvent?: Maybe<EventType>;
   resendPeerKeyRotation: PeerKeyRotationPayload;
   restoreEvent?: Maybe<EventType>;
+  /** Retry a failed notification delivery. */
+  retryReminder?: Maybe<ReminderType>;
   /** Return a placed event to the slate, deleting the event it minted */
   returnEventToSlate: ScheduleCandidateType;
   revokeAskGrant: AskGrantPayload;
@@ -2300,6 +2307,11 @@ export type MutationConfirmObservationArgs = {
   id: Scalars['ID']['input'];
   itemId?: InputMaybe<Scalars['ID']['input']>;
   productId?: InputMaybe<Scalars['ID']['input']>;
+};
+
+
+export type MutationConfirmReminderDeviceScheduleArgs = {
+  id: Scalars['ID']['input'];
 };
 
 
@@ -2700,6 +2712,11 @@ export type MutationRescheduleEventArgs = {
 
 export type MutationRestoreEventArgs = {
   input: RestoreByIdInput;
+};
+
+
+export type MutationRetryReminderArgs = {
+  id: Scalars['ID']['input'];
 };
 
 
@@ -4494,20 +4511,28 @@ export type ReminderSource =
   | 'auto'
   | 'manual';
 
-/** A reminder's claim state. Fired is terminal in this milestone — there is no snooze yet. */
+/** Reminder delivery state; delivered means a push provider accepted it, fired is a legacy outcome. */
 export type ReminderStatus =
   | 'cancelled'
+  | 'delivered'
+  | 'delivering'
+  | 'failed'
   | 'fired'
-  | 'pending';
+  | 'pending'
+  | 'scheduled';
 
 export type ReminderType = Node & {
   __typename?: 'ReminderType';
+  attempts: Scalars['Int']['output'];
   /** A planned block — a `ci.events` row. */
   blockId?: Maybe<Scalars['ID']['output']>;
   createdAt: Scalars['DateTime']['output'];
+  deliveryMode: Scalars['String']['output'];
   fireAt: Scalars['DateTime']['output'];
   firedAt?: Maybe<Scalars['DateTime']['output']>;
   id: Scalars['ID']['output'];
+  lastError?: Maybe<Scalars['String']['output']>;
+  nextAttemptAt?: Maybe<Scalars['DateTime']['output']>;
   source: ReminderSource;
   status: ReminderStatus;
   taskId?: Maybe<Scalars['ID']['output']>;
@@ -7220,6 +7245,46 @@ export type AcceptTaskPendingChangeMutationVariables = Exact<{
 
 export type AcceptTaskPendingChangeMutation = { __typename?: 'Mutation', acceptTaskPendingChange: { __typename?: 'ResolveTaskPendingChangePayload', success: boolean, task?: { __typename?: 'TaskType', id: string, status: TaskStatus, title: string, notes?: string | null, parentId?: string | null } | null } };
 
+export type PlanRemindersQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type PlanRemindersQuery = { __typename?: 'Query', pushPublicKey?: string | null, reminders: Array<{ __typename?: 'ReminderType', id: string, taskId?: string | null, blockId?: string | null, fireAt: any, status: ReminderStatus, deliveryMode: string, attempts: number, nextAttemptAt?: any | null, lastError?: string | null }> };
+
+export type PlanCreateReminderMutationVariables = Exact<{
+  input: CreateReminderInput;
+}>;
+
+
+export type PlanCreateReminderMutation = { __typename?: 'Mutation', createReminder: { __typename?: 'CreateReminderPayload', success: boolean, reminder?: { __typename?: 'ReminderType', id: string, fireAt: any, status: ReminderStatus, deliveryMode: string } | null } };
+
+export type PlanCancelReminderMutationVariables = Exact<{
+  id: Scalars['ID']['input'];
+}>;
+
+
+export type PlanCancelReminderMutation = { __typename?: 'Mutation', cancelReminder?: { __typename?: 'ReminderType', id: string, status: ReminderStatus } | null };
+
+export type PlanRetryReminderMutationVariables = Exact<{
+  id: Scalars['ID']['input'];
+}>;
+
+
+export type PlanRetryReminderMutation = { __typename?: 'Mutation', retryReminder?: { __typename?: 'ReminderType', id: string, status: ReminderStatus } | null };
+
+export type PlanConfirmDeviceReminderMutationVariables = Exact<{
+  id: Scalars['ID']['input'];
+}>;
+
+
+export type PlanConfirmDeviceReminderMutation = { __typename?: 'Mutation', confirmReminderDeviceSchedule?: { __typename?: 'ReminderType', id: string, status: ReminderStatus } | null };
+
+export type PlanSubscribePushMutationVariables = Exact<{
+  input: PushSubscriptionInput;
+}>;
+
+
+export type PlanSubscribePushMutation = { __typename?: 'Mutation', subscribeToPush: boolean };
+
 export type TaskRowFragmentFragment = { __typename?: 'TaskType', id: string, title: string, description?: string | null, status: TaskStatus, priority: number, parentId?: string | null, dueAt?: any | null, scheduledFor?: string | null, placedOnCalendar: boolean, deferUntil?: string | null, estimatedMinutes?: number | null, completedAt?: any | null } & { ' $fragmentName'?: 'TaskRowFragmentFragment' };
 
 export type ListTasksForTestQueryVariables = Exact<{ [key: string]: never; }>;
@@ -7793,6 +7858,12 @@ export const CompleteTaskDocument = {"kind":"Document","definitions":[{"kind":"O
 export const DeclineTaskPendingChangeDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"DeclineTaskPendingChange"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"id"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"declineTaskPendingChange"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"id"},"value":{"kind":"Variable","name":{"kind":"Name","value":"id"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"success"}}]}}]}}]} as unknown as DocumentNode<DeclineTaskPendingChangeMutation, DeclineTaskPendingChangeMutationVariables>;
 export const ReopenTaskDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"ReopenTask"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"id"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"reopenTask"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"id"},"value":{"kind":"Variable","name":{"kind":"Name","value":"id"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"completedAt"}}]}}]}}]} as unknown as DocumentNode<ReopenTaskMutation, ReopenTaskMutationVariables>;
 export const AcceptTaskPendingChangeDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"AcceptTaskPendingChange"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"id"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"acceptTaskPendingChange"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"id"},"value":{"kind":"Variable","name":{"kind":"Name","value":"id"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"success"}},{"kind":"Field","name":{"kind":"Name","value":"task"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"title"}},{"kind":"Field","name":{"kind":"Name","value":"notes"}},{"kind":"Field","name":{"kind":"Name","value":"parentId"}}]}}]}}]}}]} as unknown as DocumentNode<AcceptTaskPendingChangeMutation, AcceptTaskPendingChangeMutationVariables>;
+export const PlanRemindersDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"PlanReminders"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"reminders"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"taskId"}},{"kind":"Field","name":{"kind":"Name","value":"blockId"}},{"kind":"Field","name":{"kind":"Name","value":"fireAt"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"deliveryMode"}},{"kind":"Field","name":{"kind":"Name","value":"attempts"}},{"kind":"Field","name":{"kind":"Name","value":"nextAttemptAt"}},{"kind":"Field","name":{"kind":"Name","value":"lastError"}}]}},{"kind":"Field","name":{"kind":"Name","value":"pushPublicKey"}}]}}]} as unknown as DocumentNode<PlanRemindersQuery, PlanRemindersQueryVariables>;
+export const PlanCreateReminderDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"PlanCreateReminder"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"input"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"CreateReminderInput"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"createReminder"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"input"},"value":{"kind":"Variable","name":{"kind":"Name","value":"input"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"success"}},{"kind":"Field","name":{"kind":"Name","value":"reminder"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"fireAt"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"deliveryMode"}}]}}]}}]}}]} as unknown as DocumentNode<PlanCreateReminderMutation, PlanCreateReminderMutationVariables>;
+export const PlanCancelReminderDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"PlanCancelReminder"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"id"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"cancelReminder"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"id"},"value":{"kind":"Variable","name":{"kind":"Name","value":"id"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"status"}}]}}]}}]} as unknown as DocumentNode<PlanCancelReminderMutation, PlanCancelReminderMutationVariables>;
+export const PlanRetryReminderDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"PlanRetryReminder"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"id"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"retryReminder"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"id"},"value":{"kind":"Variable","name":{"kind":"Name","value":"id"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"status"}}]}}]}}]} as unknown as DocumentNode<PlanRetryReminderMutation, PlanRetryReminderMutationVariables>;
+export const PlanConfirmDeviceReminderDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"PlanConfirmDeviceReminder"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"id"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"ID"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"confirmReminderDeviceSchedule"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"id"},"value":{"kind":"Variable","name":{"kind":"Name","value":"id"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"status"}}]}}]}}]} as unknown as DocumentNode<PlanConfirmDeviceReminderMutation, PlanConfirmDeviceReminderMutationVariables>;
+export const PlanSubscribePushDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"PlanSubscribePush"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"input"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"PushSubscriptionInput"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"subscribeToPush"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"input"},"value":{"kind":"Variable","name":{"kind":"Name","value":"input"}}}]}]}}]} as unknown as DocumentNode<PlanSubscribePushMutation, PlanSubscribePushMutationVariables>;
 export const ListTasksForTestDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"ListTasksForTest"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"tasks"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"first"},"value":{"kind":"IntValue","value":"10"}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"edges"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"node"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"title"}}]}}]}}]}}]}}]} as unknown as DocumentNode<ListTasksForTestQuery, ListTasksForTestQueryVariables>;
 export const DeleteTaskDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"mutation","name":{"kind":"Name","value":"DeleteTask"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"input"}},"type":{"kind":"NonNullType","type":{"kind":"NamedType","name":{"kind":"Name","value":"DeleteByIdInput"}}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"deleteTask"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"input"},"value":{"kind":"Variable","name":{"kind":"Name","value":"input"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"success"}},{"kind":"Field","name":{"kind":"Name","value":"deletedId"}}]}}]}}]} as unknown as DocumentNode<DeleteTaskMutation, DeleteTaskMutationVariables>;
 export const GetTasksDocument = {"kind":"Document","definitions":[{"kind":"OperationDefinition","operation":"query","name":{"kind":"Name","value":"GetTasks"},"variableDefinitions":[{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"first"}},"type":{"kind":"NamedType","name":{"kind":"Name","value":"Int"}}},{"kind":"VariableDefinition","variable":{"kind":"Variable","name":{"kind":"Name","value":"after"}},"type":{"kind":"NamedType","name":{"kind":"Name","value":"String"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"tasks"},"arguments":[{"kind":"Argument","name":{"kind":"Name","value":"first"},"value":{"kind":"Variable","name":{"kind":"Name","value":"first"}}},{"kind":"Argument","name":{"kind":"Name","value":"after"},"value":{"kind":"Variable","name":{"kind":"Name","value":"after"}}}],"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"edges"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"node"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"priority"}},{"kind":"Field","name":{"kind":"Name","value":"parentId"}},{"kind":"Field","name":{"kind":"Name","value":"dueAt"}},{"kind":"Field","name":{"kind":"Name","value":"scheduledFor"}},{"kind":"Field","name":{"kind":"Name","value":"placedOnCalendar"}},{"kind":"Field","name":{"kind":"Name","value":"deferUntil"}},{"kind":"Field","name":{"kind":"Name","value":"title"}},{"kind":"FragmentSpread","name":{"kind":"Name","value":"TaskRowFragment"}}]}}]}},{"kind":"Field","name":{"kind":"Name","value":"totalCount"}}]}},{"kind":"Field","name":{"kind":"Name","value":"taskPendingChanges"},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"taskId"}},{"kind":"Field","name":{"kind":"Name","value":"kind"}},{"kind":"Field","name":{"kind":"Name","value":"patch"}},{"kind":"Field","name":{"kind":"Name","value":"rationale"}},{"kind":"Field","name":{"kind":"Name","value":"confidence"}},{"kind":"Field","name":{"kind":"Name","value":"status"}}]}}]}},{"kind":"FragmentDefinition","name":{"kind":"Name","value":"TaskRowFragment"},"typeCondition":{"kind":"NamedType","name":{"kind":"Name","value":"TaskType"}},"selectionSet":{"kind":"SelectionSet","selections":[{"kind":"Field","name":{"kind":"Name","value":"id"}},{"kind":"Field","name":{"kind":"Name","value":"title"}},{"kind":"Field","name":{"kind":"Name","value":"description"}},{"kind":"Field","name":{"kind":"Name","value":"status"}},{"kind":"Field","name":{"kind":"Name","value":"priority"}},{"kind":"Field","name":{"kind":"Name","value":"parentId"}},{"kind":"Field","name":{"kind":"Name","value":"dueAt"}},{"kind":"Field","name":{"kind":"Name","value":"scheduledFor"}},{"kind":"Field","name":{"kind":"Name","value":"placedOnCalendar"}},{"kind":"Field","name":{"kind":"Name","value":"deferUntil"}},{"kind":"Field","name":{"kind":"Name","value":"estimatedMinutes"}},{"kind":"Field","name":{"kind":"Name","value":"completedAt"}}]}}]} as unknown as DocumentNode<GetTasksQuery, GetTasksQueryVariables>;

@@ -10,9 +10,26 @@
  * `taskStatus.ts`'s discipline (named subsets + a completeness test) rather
  * than growing ad-hoc literals at each call site — that omission is exactly
  * what #2558 got bitten by for `ci.tasks.status`.
+ *
+ * Delivery lifecycle (migration 20261124044550_reminder_delivery_retry.sql):
+ * `pending` -> `delivering` (a 10 minute claim lease) -> `delivered` (a push
+ * provider accepted it) or `failed` (retried with backoff, at most 5 attempts;
+ * "Retry delivery" re-arms it as `pending`). `scheduled` is a device-mode
+ * reminder handed to the phone's own OS. `fired` is now legacy only: rows
+ * claimed before the lease existed, outcome unknown, never re-sent. Nothing
+ * writes `fired` any more. The dispatch states are written only by the claim
+ * and outcome SQL in `ReminderDispatchService`, which keeps them in one place;
+ * the promotion above is still owed if call sites start filtering on them.
  */
-
-export const REMINDER_STATUSES = ['pending', 'fired', 'cancelled'] as const;
+export const REMINDER_STATUSES = [
+  'pending',
+  'scheduled',
+  'delivering',
+  'delivered',
+  'failed',
+  'fired',
+  'cancelled',
+] as const;
 
 export type ReminderStatus = (typeof REMINDER_STATUSES)[number];
 

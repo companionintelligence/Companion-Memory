@@ -159,10 +159,10 @@ volume is the encryption root — lose it and every encrypted column becomes
 unreadable ciphertext, because `setup-secrets` is idempotent and will quietly
 generate a *new* `AUTH_FIELD_ENCRYPTION_KEY` on a rebuilt box rather than fail.
 
-The fast path is [`scripts/backup/appliance-backup.sh`](../../scripts/backup/appliance-backup.sh),
-which dumps Postgres (database plus cluster globals), copies the **master**
-`.env.secrets`, verifies the dump is readable, and writes a `COVERAGE.md` next
-to it:
+Use the [complete backup and recovery guide](../operations/backup-and-recovery.md)
+for a consistent snapshot of the database, uploaded files, persistent model
+stores and master encryption key. The tool stops the selected project while
+copying its data, validates every archive, and resumes the original containers:
 
 ```bash
 ./scripts/backup/appliance-backup.sh --project ci-memory_ci-marketplace ~/ci-backups
@@ -173,26 +173,21 @@ secrets generator mounts it — `setup-secrets` on a Hub install
 (`APP_DATA_DIR/data/secrets/.env.secrets`), `generate-secrets` in production
 compose (the `<project>_secrets` volume). Every other service, the database
 included, mounts a per-service projection (`data/service-secrets/<service>/` on a Hub)
-holding only its own keys, so the script copies the master out of the (exited)
-generator container. It **exits 3** when the snapshot ends up without the key,
-e.g. because that container was pruned — treat that as a failed backup, not a
-warning. On restore, put the file back as the master, never into a
+holding only its own keys, so a snapshot has to take the master from the
+generator's mount. The complete snapshot refuses to finish without the key (a
+deployment that keeps it in a host environment file passes that file with
+`--secrets-file`), and `database-backup.sh` copies the master out of the
+(exited) generator container and **exits 3** when its snapshot ends up without
+the key, e.g. because that container was pruned — treat either as a failed
+backup, not a warning. On restore, put the file back as the master, never into a
 projection: setup-secrets rewrites those from the master on every boot.
 
-It deliberately does **not** cover object-store blobs or the HBPE model/corpus
-volumes — it is small and quick so that it actually gets run. When you need
-everything, including uploaded files, take the full data-directory tar as well.
-Postgres data dirs are owned by uid 999, so a plain `tar` from the host may hit
-permission errors; use a root helper container:
-
-```bash
-docker run --rm \
-  -v ~/.local/share/companion-hub/app-data/ci-marketplace/ci-memory/data:/data:ro \
-  -v ~:/out \
-  alpine tar czf /out/ci-memory-backup-$(date +%Y%m%d-%H%M%S).tar.gz -C /data .
-```
-
-Or use Hub's per-app backup before swapping.
+Retain the matching storage images and original deployment configuration. Test
+restore into a separate project before relying on a snapshot. A database-only
+logical export remains available as `scripts/backup/database-backup.sh`; it does
+not replace a complete snapshot. The guide also describes scheduled backups,
+administrative status and the update wrapper that takes a complete snapshot
+before pulling or starting new images.
 
 ## Production updates (supported path)
 
@@ -385,9 +380,9 @@ Rollback when finished:
 |-------------|---------|
 | **`hub-pr-test-deploy.sh --services`** | Opt-in rebuild list (api, gateway, summary, …) |
 | **Hub "dev channel" tag** | Install compose pointing at `dev-<sha>` without override files |
-| ~~**Documented pg_dump / restore**~~ | Shipped as `scripts/backup/appliance-backup.sh` — smaller portable copy than a 3 GB tar of PGDATA |
+| ~~**Documented pg_dump / restore**~~ | Retained as `scripts/backup/database-backup.sh`; the appliance snapshot now also covers files and encryption keys |
 | **Read-only DB replica profile** | Point local api at restored snapshot; skip writes |
-| **Pre-update backup hook** | Hub already supports backup-on-update; use it before one-off swaps. Wiring `appliance-backup.sh` into the automated upgrade path is still unstarted — it must not go into `migrate-database`, whose failure would break every appliance upgrade |
+| **Pre-update backup hook** | Use `appliance-recovery.py update` for snapshot-before-update. Hub updater integration lives in its repository; direct Hub updates can still bypass this wrapper |
 | **Compose override in Hub UI** | First-class "local image override" for developer appliances |
 | **Separate `APP_DATA_DIR` clone script** | `rsync` + `pg_resetwal` / pg_dump restore for safe sandbox |
 

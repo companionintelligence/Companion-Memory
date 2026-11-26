@@ -161,6 +161,7 @@ export function useOnDeviceModel(): [OnDeviceModelState, OnDeviceModelActions] {
           accelerator: prefs.accelerator ?? undefined,
           enableSpeculativeDecoding: prefs.speculativeDecoding,
           useIntentTools: prefs.intentTools,
+          sampling: prefs.sampling,
         });
         setLocalLlmPrefs({ modelId });
       }),

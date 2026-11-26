@@ -45,6 +45,7 @@ interface SecureStoragePlugin {
  * through `apiBase`, not from this module.
  */
 interface LocalHubPlugin {
+  shareTextFile?(options: { filename: string; content: string; mimeType: string }): Promise<void>;
   secureGet(options: { key: string }): Promise<{ value: string | null }>;
   secureSet(options: { key: string; value: string }): Promise<void>;
   secureRemove(options: { key: string }): Promise<void>;
@@ -202,6 +203,7 @@ interface LocalNotificationsPlugin {
   checkPermissions(): Promise<{ display: string }>;
   requestPermissions(): Promise<{ display: string }>;
   schedule(options: { notifications: LocalNotification[] }): Promise<unknown>;
+  cancel?(options: { notifications: Array<{ id: number }> }): Promise<unknown>;
 }
 
 /**
@@ -1464,6 +1466,22 @@ export async function scheduleLocalNotification(
   }
 }
 
+/** Cancel a previously scheduled native reminder; false when the shell cannot cancel. */
+export async function cancelLocalNotification(id: number): Promise<boolean> {
+  const notifications = plugins()?.LocalNotifications;
+  if (!isNativePlatform() || !notifications?.cancel) {
+    return false;
+  }
+
+  try {
+    await notifications.cancel({ notifications: [{ id }] });
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Open the system camera for a still. Returns a `File` ready to POST to
  * `/api/files/upload`, or `null` when the plugin is missing or the user cancels.
@@ -1847,4 +1865,27 @@ async function decodeTextFrames(
   }
 
   return full;
+}
+
+/**
+ * Open the phone's system share sheet for a conversation export. Returns false on
+ * web, where the caller can download a Blob; errors on native stay visible.
+ */
+export async function shareNativeTextFile(options: {
+  filename: string;
+  content: string;
+  mimeType: string;
+}): Promise<boolean> {
+  if (!isNativePlatform()) {
+    return false;
+  }
+
+  const hub = resolveLocalHub();
+  if (!hub?.shareTextFile) {
+    throw new Error('Update the Companion Memory app to share conversation files.');
+  }
+
+  await hub.shareTextFile(options);
+
+  return true;
 }

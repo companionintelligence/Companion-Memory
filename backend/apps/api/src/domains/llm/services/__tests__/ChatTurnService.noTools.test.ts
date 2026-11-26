@@ -239,7 +239,9 @@ describe('ChatTurnService refuses a plain instruction when the turn has no tools
     await service.execute(payload);
 
     expect(chatStream).not.toHaveBeenCalled();
-    expect(published).toEqual([{ channel: Channel.TEXT, text: TOOLS_OFF_REFUSAL }]);
+    expect(published.filter((chunk) => chunk.channel !== Channel.GROUNDING)).toEqual([
+      { channel: Channel.TEXT, text: TOOLS_OFF_REFUSAL },
+    ]);
     expect(messageService.update).toHaveBeenCalledWith(
       expect.anything(),
       'assistant-msg',
@@ -258,7 +260,9 @@ describe('ChatTurnService refuses a plain instruction when the turn has no tools
       await service.execute(payload);
 
       expect(chatStream).not.toHaveBeenCalled();
-      expect(published).toEqual([{ channel: Channel.TEXT, text: TOOLS_OFF_REFUSAL }]);
+      expect(published.filter((chunk) => chunk.channel !== Channel.GROUNDING)).toEqual([
+        { channel: Channel.TEXT, text: TOOLS_OFF_REFUSAL },
+      ]);
     },
   );
 
@@ -273,7 +277,9 @@ describe('ChatTurnService refuses a plain instruction when the turn has no tools
     await service.execute(payload);
 
     expect(chatStream).toHaveBeenCalledTimes(1);
-    expect(published).toEqual([{ channel: Channel.TEXT, text: 'Done.' }]);
+    expect(published.filter((chunk) => chunk.channel !== Channel.GROUNDING)).toEqual([
+      { channel: Channel.TEXT, text: 'Done.' },
+    ]);
   });
 
   it('still answers a question when the turn has no tools', async () => {
@@ -287,7 +293,9 @@ describe('ChatTurnService refuses a plain instruction when the turn has no tools
     await service.execute(payload);
 
     expect(chatStream).toHaveBeenCalledTimes(1);
-    expect(published).toEqual([{ channel: Channel.TEXT, text: 'From your Plan: Buy milk.' }]);
+    expect(published.filter((chunk) => chunk.channel !== Channel.GROUNDING)).toEqual([
+      { channel: Channel.TEXT, text: 'From your Plan: Buy milk.' },
+    ]);
   });
 });
 
@@ -348,7 +356,9 @@ describe('ChatTurnService keeps the fence markers out of what a person reads', (
 
     await service.execute(payload);
 
-    expect(published).toEqual([{ channel: Channel.TEXT, text: EMPTY_TURN_FALLBACK_TEXT }]);
+    expect(published.filter((chunk) => chunk.channel !== Channel.GROUNDING)).toEqual([
+      { channel: Channel.TEXT, text: EMPTY_TURN_FALLBACK_TEXT },
+    ]);
     expect(messageService.create).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ role: 'assistant', content: EMPTY_TURN_FALLBACK_TEXT }),

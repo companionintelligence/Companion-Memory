@@ -13,6 +13,8 @@ import {
 import { FileEntity, type File } from '@ci/domains/files';
 import { UserEntity, type User } from '@ci/domains/user';
 
+import type { MessageGrounding } from '../grounding';
+
 import { ThreadEntity, type Thread } from './ThreadEntity';
 
 @Entity({ schema: 'ci', name: 'messages' })
@@ -38,6 +40,9 @@ export class MessageEntity {
 
   @Column({ type: 'jsonb', nullable: true, name: 'tool_calls', default: '[]' })
   toolCalls!: Record<string, unknown>[] | null;
+
+  @Column({ type: 'jsonb', nullable: true, name: 'grounding' })
+  grounding?: MessageGrounding | null;
 
   // Direct boolean field for canceled - maps to is_deleted in database
   @Column({ type: 'boolean', default: false, name: 'is_deleted' })
@@ -81,6 +86,7 @@ export class MessageEntity {
       content: entity.content ?? '',
       mimetype: entity.mimetype ?? null,
       toolCalls: entity.toolCalls ?? null,
+      grounding: entity.grounding ?? null,
       canceled: entity.canceled ?? null,
       createdAt: entity.createdAt,
       updatedAt: entity.updatedAt,

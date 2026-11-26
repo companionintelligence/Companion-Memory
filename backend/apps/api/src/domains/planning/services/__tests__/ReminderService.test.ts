@@ -5,7 +5,7 @@ import { ReminderService } from '../ReminderService';
 import type { TaskService } from '../TaskService';
 
 const CTX = { userId: 'user-1' } as never;
-const FIRE_AT = new Date('2026-09-20T09:00:00.000Z');
+const FIRE_AT = new Date(Date.now() + 24 * 60 * 60_000);
 
 function makeService({ task = { id: 'task-1' } as unknown, blockExists = true } = {}) {
   const reminderRepository = {
@@ -34,6 +34,38 @@ describe('ReminderService.create', () => {
       BadRequestException,
     );
     expect(reminderRepository.save).not.toHaveBeenCalled();
+  });
+
+  // The GraphQL resolver rejects a past `fireAt` too, but the service is the
+  // boundary every caller goes through, so it holds the rule itself.
+  it.each([
+    ['in the past', new Date(Date.now() - 60_000)],
+    ['not a valid date', new Date('not a date')],
+  ])('rejects a fire time %s', async (_label, fireAt) => {
+    const { service, reminderRepository } = makeService();
+
+    await expect(service.create(CTX, { taskId: 'task-1', fireAt })).rejects.toThrow(
+      new BadRequestException('Choose a reminder time in the future'),
+    );
+    expect(reminderRepository.save).not.toHaveBeenCalled();
+  });
+
+  it('defaults to push delivery and starts with no attempts', async () => {
+    const { service } = makeService();
+
+    const reminder = await service.create(CTX, { taskId: 'task-1', fireAt: FIRE_AT });
+
+    expect(reminder).toEqual(
+      expect.objectContaining({ deliveryMode: 'push', attempts: 0, nextAttemptAt: null, lastError: null }),
+    );
+  });
+
+  it('keeps device delivery when the phone will schedule the reminder', async () => {
+    const { service } = makeService();
+
+    const reminder = await service.create(CTX, { taskId: 'task-1', fireAt: FIRE_AT, deliveryMode: 'device' });
+
+    expect(reminder).toEqual(expect.objectContaining({ deliveryMode: 'device', status: 'pending' }));
   });
 
   it('creates a pending manual reminder for a task the caller owns', async () => {
@@ -132,5 +164,36 @@ describe('ReminderService reads', () => {
     expect(reminderRepository.findOne).toHaveBeenCalledWith({
       where: { id: 'reminder-1', userId: 'user-1' },
     });
+  });
+});
+
+describe('ReminderService delivery state', () => {
+  it('re-arms only a failed reminder the caller owns, clearing its attempts', async () => {
+    const { service, reminderRepository } = makeService();
+
+    await service.retry(CTX, 'reminder-1');
+
+    expect(reminderRepository.update).toHaveBeenCalledWith(
+      { id: 'reminder-1', userId: 'user-1', status: 'failed' },
+      { status: 'pending', attempts: 0, claimedAt: null, nextAttemptAt: null, lastError: null },
+    );
+  });
+
+  it('returns null from retry when the reminder is not failed', async () => {
+    const { service, reminderRepository } = makeService();
+    reminderRepository.update.mockResolvedValue({ affected: 0 });
+
+    await expect(service.retry(CTX, 'reminder-1')).resolves.toBeNull();
+  });
+
+  it('confirms a device schedule only for a pending device-mode reminder', async () => {
+    const { service, reminderRepository } = makeService();
+
+    await service.confirmDeviceSchedule(CTX, 'reminder-1');
+
+    expect(reminderRepository.update).toHaveBeenCalledWith(
+      { id: 'reminder-1', userId: 'user-1', deliveryMode: 'device', status: 'pending' },
+      { status: 'scheduled', lastError: null },
+    );
   });
 });

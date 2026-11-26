@@ -138,6 +138,7 @@ export default defineConfig({
           type: 'module',
         },
         workbox: {
+          importScripts: ['/push-events.js'],
           // Pre-caches all matching assets. Default 2 MiB rejects the main
           // bundle once it crossed that line (~2.11 MB at last production build).
           globPatterns: ['**/*.{js,css,html,ico,png,svg}'],

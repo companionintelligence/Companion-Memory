@@ -1193,7 +1193,7 @@ export interface UpdateCommunicationDto {
   // source_data: a connector re-sync carries the complete set.
   metadata?: Record<string, unknown>;
   subject?: string;
-  content: string;
+  content?: string;
   attachments?: unknown[];
   duration_seconds?: number;
   sentiment_score?: number;

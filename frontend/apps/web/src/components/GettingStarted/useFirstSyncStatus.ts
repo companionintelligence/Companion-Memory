@@ -10,10 +10,18 @@ import type { MemoryTotals } from './firstSync';
 /** The slice of `GET /v1/ingest/status` the banner reads. */
 interface IngestStatus {
   readonly tables: MemoryTotals & Record<string, number>;
-  readonly searchIndex: { readonly queue: { readonly created: number; readonly active: number } };
+  readonly searchIndex: {
+    readonly queue: { readonly created: number; readonly active: number; readonly failed: number };
+  };
 }
 
 export interface FirstSyncStatus {
+  /** Why the latest refresh failed, if it did. The numbers below are then the last good ones. */
+  readonly error: string | null;
+  /** When the ingest status last answered in full; `null` until it has. */
+  readonly lastCheckedAt: Date | null;
+  /** Search-index jobs that failed rather than waiting. `null` until the index status has answered. */
+  readonly failedIndexingItems: number | null;
   readonly totals: MemoryTotals | null;
   /** Items still waiting on the search index. */
   readonly indexingItems: number | null;
@@ -24,6 +32,9 @@ export interface FirstSyncStatus {
 }
 
 const POLL_MS = 8_000;
+
+/** Longer than this and the request is given up as failed, so the banner can say so. */
+const REQUEST_TIMEOUT_MS = 10_000;
 
 /**
  * Live "what has actually reached my memory" for the first minutes after
@@ -48,6 +59,9 @@ export function useFirstSyncStatus(enabled: boolean, importsEnabled: boolean): F
   const [indexingItems, setIndexingItems] = useState<number | null>(null);
   const [unpushedRuns, setUnpushedRuns] = useState<number | null>(null);
 
+  const [error, setError] = useState<string | null>(null);
+  const [lastCheckedAt, setLastCheckedAt] = useState<Date | null>(null);
+  const [failedIndexingItems, setFailedIndexingItems] = useState<number | null>(null);
   const kick = useRef<() => void>(() => {});
 
   useEffect(() => {
@@ -58,6 +72,7 @@ export function useFirstSyncStatus(enabled: boolean, importsEnabled: boolean): F
     let cancelled = false;
     let timer: number | undefined;
     let loaded = false;
+    let sequence = 0;
 
     const isHidden = () => typeof document !== 'undefined' && document.visibilityState === 'hidden';
 
@@ -68,41 +83,56 @@ export function useFirstSyncStatus(enabled: boolean, importsEnabled: boolean): F
         return;
       }
 
-      await Promise.all([
-        fetchJson<IngestStatus>('/api/v1/ingest/status', { headers })
-          .then((status) => {
-            if (cancelled || !status) {
-              return;
-            }
+      const current = ++sequence;
+      const results = await Promise.allSettled([
+        // `timeout`, not `AbortSignal.timeout`: the iPhone app still supports iOS 15, which has no such function.
+        fetchJson<IngestStatus>('/api/v1/ingest/status', {
+          headers,
+          timeout: REQUEST_TIMEOUT_MS,
+        }).then((status) => {
+          if (cancelled || current !== sequence) {
+            return;
+          }
 
-            const t = status.tables;
+          // An answer with nothing in it is a failed refresh. It must not read as an empty queue.
+          if (!status) {
+            throw new Error('The sync status came back empty.');
+          }
 
-            setTotals({
-              communications: t.communications,
-              events: t.events,
-              content: t.content,
-              objects: t.objects,
-              browser_activity: t.browser_activity,
-              position: t.position,
-            });
-            setIndexingItems(status.searchIndex.queue.created + status.searchIndex.queue.active);
-          })
-          .catch(() => undefined),
+          // Read first: an answer without the index section throws here, before any state changes.
+          const queue = status.searchIndex.queue;
+          const t = status.tables;
+
+          setTotals({
+            communications: t.communications,
+            events: t.events,
+            content: t.content,
+            objects: t.objects,
+            browser_activity: t.browser_activity,
+            position: t.position,
+          });
+          setLastCheckedAt(new Date());
+          setFailedIndexingItems(queue.failed);
+          setIndexingItems(queue.created + queue.active);
+        }),
         importsEnabled
-          ? listUnpushed()
-              .then((runs) => {
-                if (!cancelled) {
-                  setUnpushedRuns(runs.length);
-                }
-              })
-              .catch(() => undefined)
+          ? listUnpushed().then((runs) => {
+              if (!cancelled) {
+                setUnpushedRuns(runs.length);
+              }
+            })
           : Promise.resolve(),
       ]);
 
-      if (cancelled) {
+      if (cancelled || current !== sequence) {
         return;
       }
 
+      setError(
+        results.some((result) => result.status === 'rejected')
+          ? 'Could not refresh your sync status. Any counts shown are from the last successful check.'
+          : null,
+      );
       loaded = true;
 
       if (!isHidden()) {
@@ -136,6 +166,9 @@ export function useFirstSyncStatus(enabled: boolean, importsEnabled: boolean): F
   const refresh = useCallback(() => kick.current(), []);
 
   return {
+    error,
+    lastCheckedAt,
+    failedIndexingItems,
     totals,
     indexingItems,
     unpushedRuns: importsEnabled ? unpushedRuns : 0,

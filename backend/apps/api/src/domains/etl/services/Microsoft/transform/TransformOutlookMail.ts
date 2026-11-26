@@ -14,6 +14,13 @@ import {
 } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
+import {
+  type MailAttachment,
+  type MailAttachmentOutcome,
+  MailAttachmentService,
+  type MailAttachmentRef,
+  withAttachmentRefs,
+} from '../../MailAttachmentService';
 import { type ParticipantGroup, PromoteService } from '../../PromoteService';
 
 interface OutlookEmailAddress {
@@ -67,6 +74,7 @@ interface OutlookMessage {
     name?: string;
     contentType?: string;
     size?: number;
+    '@odata.type'?: string;
   }>;
 }
 
@@ -79,6 +87,26 @@ interface Participant {
 /** The participant groups one message contributes to the page's PromoteService call: from, to, cc, bcc. */
 const GROUPS_PER_MESSAGE = 4;
 
+/**
+ * The attachments the sync listed for a message. Graph names the kind of each
+ * in `@odata.type`: only a file attachment has bytes to download, while a
+ * linked file (referenceAttachment) or an attached item (itemAttachment) is
+ * kept as a record. One that names no kind is taken for a file.
+ */
+function outlookAttachments(message: OutlookMessage): MailAttachment[] {
+  return (message.attachments ?? [])
+    .filter((attachment) => attachment.id)
+    .map((attachment) => ({
+      id: attachment.id!,
+      name: attachment.name,
+      contentType: attachment.contentType,
+      size: attachment.size,
+      unsupported: Boolean(
+        attachment['@odata.type'] && attachment['@odata.type'] !== '#microsoft.graph.fileAttachment',
+      ),
+    }));
+}
+
 /** A message that passed the gates, with everything the page-level write needs from it. */
 interface PreparedMessage {
   message: OutlookMessage;
@@ -88,6 +116,10 @@ interface PreparedMessage {
   ccParticipants: Participant[];
   bccParticipants: Participant[];
   groups: ParticipantGroup[];
+  /** The files the message carries, which are saved before it is written. */
+  attachments: MailAttachment[];
+  /** The content records of the files that were saved: empty until {@link OutlookMailTransformService.saveAttachments} has run. */
+  attachmentRefs: MailAttachmentRef[];
 }
 
 @Injectable()
@@ -97,6 +129,7 @@ export class OutlookMailTransformService {
     private readonly connectionService: ConnectionService,
     private readonly promoteService: PromoteService,
     private readonly logger: LoggerService,
+    private readonly mailAttachments: MailAttachmentService,
   ) {
     this.logger.setContext(OutlookMailTransformService.name);
   }
@@ -130,7 +163,7 @@ export class OutlookMailTransformService {
         messageCount: messages.length,
       });
 
-      const outcome = await this.processPage(messages, userId, connection.id);
+      const outcome = await this.processPage(messages, userId, connection);
 
       this.logger.log('Outlook Mail transformation completed', {
         userId,
@@ -186,16 +219,90 @@ export class OutlookMailTransformService {
    * the page in one call, write the page once with `emitCreated` so the rows
    * this sync inserted still raise CommunicationCreatedEvent for the search
    * index and the people-linker.
+   *
+   * Attachments are saved before the write ({@link saveAttachments}). A message
+   * whose files could not all be saved is still written, with the references
+   * of the ones that were, so a provider that hiccups never costs an email.
+   * The failure is raised after the page is written: the sync job records it
+   * as its `transformError` and the page does not report as clean. A failed
+   * transform is not run again by itself, but processing the message again
+   * repairs it: the files already saved are reused, the missing one is tried
+   * again, and {@link writePage} adds its reference to the stored row. That
+   * is the only per-message error let out; any other is skipped and logged
+   * in `prepareMessage`.
    */
   private async processPage(
     messages: OutlookMessage[],
     userId: string,
+    connection: Connection,
+  ): Promise<{ written: number; inserted: number }> {
+    const gated = messages
+      .map((message) => this.prepareMessage(message, userId, connection.id))
+      .filter((entry): entry is PreparedMessage => entry != null);
+
+    const { prepared, failures } = await this.saveAttachments(gated, userId, connection);
+    const outcome = await this.writePage(prepared, userId, connection.id);
+
+    if (failures.length > 0) {
+      throw failures[0];
+    }
+
+    return outcome;
+  }
+
+  /**
+   * Save the files of every message on the page, and give each message the
+   * references of the ones that saved.
+   *
+   * All the messages are started together; MailAttachmentService itself keeps
+   * at most two downloads running. This waits for every message, so nothing is
+   * still downloading once the page has been written. A message whose files
+   * did not all save is not dropped: the failure is logged against it here and
+   * handed back, for processPage to raise once the page is written.
+   */
+  private async saveAttachments(
+    gated: PreparedMessage[],
+    userId: string,
+    connection: Connection,
+  ): Promise<{ prepared: PreparedMessage[]; failures: unknown[] }> {
+    const outcomes = await Promise.all(
+      gated.map(async ({ message, attachments }): Promise<MailAttachmentOutcome> => {
+        if (attachments.length === 0 || !message.id) {
+          return { refs: [], failures: [] };
+        }
+
+        return await this.mailAttachments.ingest(connection, userId, 'outlook_mail', message.id, attachments);
+      }),
+    );
+    const failures: unknown[] = [];
+    const prepared = gated.map((entry, index) => {
+      const { refs, failures: unsaved } = outcomes[index];
+
+      if (unsaved.length > 0) {
+        failures.push(...unsaved);
+        this.logger.error('Importing an Outlook Mail message without all of its attachments', {
+          userId,
+          connectionId: connection.id,
+          messageId: entry.message.id,
+          saved: refs.length,
+          unsaved: unsaved.length,
+          error: unsaved[0] instanceof Error ? unsaved[0].message : 'Unknown error',
+        });
+      }
+
+      return { ...entry, attachmentRefs: refs };
+    });
+
+    return { prepared, failures };
+  }
+
+  /** The page-level write: participants resolved once, one upsert, then the missing references added to rows already stored. */
+  private async writePage(
+    prepared: PreparedMessage[],
+    userId: string,
     connectionId: string,
   ): Promise<{ written: number; inserted: number }> {
     const context = { userId };
-    const prepared = messages
-      .map((message) => this.prepareMessage(message, userId, connectionId))
-      .filter((entry): entry is PreparedMessage => entry != null);
 
     if (prepared.length === 0) {
       return { written: 0, inserted: 0 };
@@ -227,10 +334,26 @@ export class OutlookMailTransformService {
             bccParticipants: entry.bccParticipants,
           },
           entry.date,
+          entry.attachmentRefs,
         );
       }),
     );
     const results = await this.communicationService.createManyDetailed(context, dtos, { emitCreated: true });
+
+    // A message the page found already imported comes back as it was stored:
+    // `attachments` is not among the columns a re-sync refreshes. So a message
+    // imported before its files were saved, or without one that failed the
+    // last time, gets the references added here, and one it already holds is
+    // not added again. A row this write inserted already has them.
+    for (const [index, { entity, inserted }] of results.entries()) {
+      const attachments = inserted
+        ? null
+        : withAttachmentRefs(entity.attachments, prepared[index].attachmentRefs);
+
+      if (attachments) {
+        await this.communicationService.update(context, entity.id, { attachments });
+      }
+    }
 
     return { written: results.length, inserted: results.filter(({ inserted }) => inserted).length };
   }
@@ -320,6 +443,8 @@ export class OutlookMailTransformService {
           { participants: ccParticipants, relationshipType: 'EMAILED', startDate: date },
           { participants: bccParticipants, relationshipType: 'EMAILED', startDate: date },
         ],
+        attachments: outlookAttachments(message),
+        attachmentRefs: [],
       };
     } catch (error) {
       this.logger.error('Error processing individual Outlook Mail message', {
@@ -401,6 +526,7 @@ export class OutlookMailTransformService {
       bccParticipants: Participant[];
     },
     date: Date,
+    attachments: MailAttachmentRef[],
   ): Promise<CreateCommunicationDto> {
     const direction = this.determineDirection(message);
 
@@ -422,7 +548,7 @@ export class OutlookMailTransformService {
       thread_id: message.conversationId,
       category: 'personal', // TODO: Classify emails
       connection_id: connectionId,
-      attachments: [], // TODO: Handle attachments
+      attachments,
       preview: message.bodyPreview ?? null,
       // Identity: the RFC Message-ID (Graph `internetMessageId`) under the
       // federated `email` system, so the same message converges with a

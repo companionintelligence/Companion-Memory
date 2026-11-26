@@ -190,7 +190,14 @@ describe('SessionController', () => {
 
       expect(response.body).toEqual({ accessToken: 'access-token-value' });
       // Tied to the session it was minted for, so the live-update stream ends when that session is signed out.
-      expect(mockAuthService.issueAccessToken).toHaveBeenCalledWith(mockUser.id, MOCK_SESSION_ID);
+      // It also carries the time the password was checked, which JwtStrategy compares with the last
+      // account recovery; the session is issued only if no recovery landed after that check.
+      expect(mockAuthService.issueAccessToken).toHaveBeenCalledWith(
+        mockUser.id,
+        MOCK_SESSION_ID,
+        expect.any(Number),
+      );
+      expect(mockAuthService.issueSessionToken).toHaveBeenCalledWith(mockUser.id, expect.anything(), null);
     });
 
     it('should not return session token in the response body', async () => {
@@ -292,7 +299,11 @@ describe('SessionController', () => {
         .expect(200);
 
       expect(response.body).toEqual({ accessToken: 'access-token-value' });
-      expect(mockAuthService.issueAccessToken).toHaveBeenCalledWith('user-1', MOCK_SESSION_ID);
+      expect(mockAuthService.issueAccessToken).toHaveBeenCalledWith(
+        'user-1',
+        MOCK_SESSION_ID,
+        expect.any(Number),
+      );
     });
 
     it('should return 400 when no session cookie is present', async () => {

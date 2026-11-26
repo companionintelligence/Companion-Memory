@@ -8,13 +8,11 @@
  *
  * Called by MemoryCompactionCron (periodic) and MemoryController (manual).
  *
- * Deduplication strategy:
- *   - person / concept : exact name match via PersonService / ConceptService
- *   - place / event / item / content : always create a new graph node
- *     (these types lack a reliable name-search API at this stage)
+ * Reuse unambiguous identities, retain dated observations when facts change,
+ * and keep source fragments available when a graph write fails.
  */
 
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import type { Message as OllamaMessage } from 'ollama';
 
 import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/common/context';
@@ -22,7 +20,9 @@ import { LoggerService } from '@ci/common/logging';
 import { RelationshipService } from '@ci/domains/graph';
 import { OllamaService, OpenAiCompatChatDriver } from '@ci/domains/llm';
 import {
+  CalendarEventService,
   ConceptService,
+  ContentService,
   ItemService,
   PersonService,
   PlaceService,
@@ -86,7 +86,9 @@ const PROMPT_EXAMPLE_OUTPUT = {
 export const EXTRACTION_SYSTEM_PROMPT = `You are a knowledge-graph extractor. From informal memory fragments, extract a graph of the entities mentioned and the relationships between them. Capture facts about the user AND about everyone and everything they mention (a friend's job, a sibling's profession, a company's location, where a relative lives) — every concrete fact is worth keeping, not only facts whose subject is the user.
 
 Return ONLY valid JSON with no markdown, no code fences, no extra text:
-{"entities":[{"type":"<type>","name":"<name>","description":"<facts about this entity>"}],"relationships":[{"fromName":"<name>","fromType":"<type>","toName":"<name>","toType":"<type>","relationshipType":"<UPPER_SNAKE_CASE>"}]}
+{"entities":[{"type":"<type>","name":"<name>","description":"<facts about this entity>","sourceIndexes":[1],"startTime":null,"contentType":null}],"relationships":[{"fromName":"<name>","fromType":"<type>","toName":"<name>","toType":"<type>","relationshipType":"<UPPER_SNAKE_CASE>"}]}
+
+sourceIndexes are the 1-based fragment numbers containing the stated facts. For an event, set startTime only to an explicitly stated ISO-8601 timestamp including timezone, otherwise null. Never guess a date/time. For content, set contentType to book, film, show, article, music, or video only when stated, otherwise null. All other entities have null startTime and contentType. Preserve explicit corrections, negations and temporal qualifiers in descriptions ("previously", "now", "no longer"); do not combine obsolete and current facts into an undated assertion.
 
 Entity types (use ONLY these exact strings):
   person   — a human being (the user, or anyone they mention)
@@ -148,6 +150,14 @@ const EXTRACTION_LLM_API_KEY = process.env['EXTRACTION_LLM_API_KEY'] ?? '';
 const EXTRACTION_LLM_TIMEOUT_MS = Number.parseInt(process.env['EXTRACTION_LLM_TIMEOUT_MS'] ?? '120000', 10);
 
 /**
+ * Max fragments per LLM call.  Small models (1–4B) struggle with long outputs;
+ * batching too many fragments at once causes truncation or empty responses.
+ * Declared ahead of {@link EXTRACTION_JSON_SCHEMA}, which bounds the fragment
+ * numbers an entity may cite by it.
+ */
+const BATCH_SIZE = 4;
+
+/**
  * JSON Schema for the OpenAI structured-outputs path.  Mirrors the prompt's
  * shape so the server can constrain decoding at every token.  `additionalProperties:
  * false` is required by OpenAI's strict mode; we keep the entity-type union open
@@ -166,8 +176,11 @@ const EXTRACTION_JSON_SCHEMA = {
           type: { type: 'string' },
           name: { type: 'string' },
           description: { type: ['string', 'null'] },
+          sourceIndexes: { type: 'array', items: { type: 'integer', minimum: 1, maximum: BATCH_SIZE } },
+          startTime: { type: ['string', 'null'] },
+          contentType: { type: ['string', 'null'] },
         },
-        required: ['type', 'name', 'description'],
+        required: ['type', 'name', 'description', 'sourceIndexes', 'startTime', 'contentType'],
         additionalProperties: false,
       },
     },
@@ -359,21 +372,18 @@ export function isNameGrounded(name: string, fragmentsText: string): boolean {
 const MAX_FRAGMENT_CHARS = 600;
 
 /**
- * Max fragments per LLM call.  Small models (1–4B) struggle with long outputs;
- * batching too many fragments at once causes truncation or empty responses.
- */
-const BATCH_SIZE = 4;
-
-/**
  * How many times one fragment may be re-extracted after a failed (thrown or
- * unparseable) batch before we give up and stamp `processed_at` anyway.
+ * unparseable) batch, or one whose graph writes failed, before we give up and
+ * stamp `processed_at` anyway.
  *
  * A fragment whose text reliably makes the model emit truncated or invalid
- * JSON would otherwise be re-fed to the LLM on every cron tick forever, so the
- * retry has to be bounded. The counter lives in this service instance
- * (`extractionAttempts`), which means the budget resets if the API process
- * restarts — see the follow-up note in the PR: making it durable needs a
- * column on `ci.agent_memories`, which is deliberately out of scope here.
+ * JSON, or reliably makes a graph write throw, would otherwise be re-fed to the
+ * LLM on every cron tick forever (and, at 100 fragments per tick, starve the
+ * ones behind it), so the retry has to be bounded. The counter lives in this
+ * service instance (`extractionAttempts`), which means the budget resets if
+ * the API process restarts — see the follow-up note in the PR: making it
+ * durable needs a column on `ci.agent_memories`, which is deliberately out of
+ * scope here.
  */
 const MAX_EXTRACTION_ATTEMPTS = 3;
 
@@ -386,6 +396,9 @@ interface ExtractedEntity {
   name: string;
   description?: string;
   properties?: Record<string, unknown>;
+  sourceIndexes?: number[];
+  startTime?: string | null;
+  contentType?: string | null;
 }
 
 interface ExtractedRelationship {
@@ -414,12 +427,54 @@ interface ExtractionResult {
 type BatchOutcome =
   { status: 'completed'; result: ExtractionResult } | { status: 'unparseable' } | { status: 'failed' };
 
-type PersonVariantCandidate = { id: string; name?: string | null };
+type PersonVariantCandidate = { id: string; name?: string | null; description?: string | null };
 
 type CompactionCache = {
   personCandidatesByUserId: Map<string, PersonVariantCandidate[]>;
-  itemsByUserId?: Map<string, Array<{ id: string; name?: string | null }>>;
+  itemsByUserId: Map<string, Array<{ id: string; name?: string | null; description?: string | null }>>;
 };
+
+/**
+ * Whether one entity of the model's reply has the shape the prompt and
+ * {@link EXTRACTION_JSON_SCHEMA} ask for: text for `type` and `name`, text or
+ * null for `description`, `startTime` and `contentType`, and for
+ * `sourceIndexes` fragment numbers that fall inside a batch.
+ */
+function isExtractedEntity(entry: unknown): entry is ExtractedEntity {
+  if (typeof entry !== 'object' || entry === null) {
+    return false;
+  }
+
+  const value = entry as Record<string, unknown>;
+  const textOrNull = (field: unknown) => field == null || typeof field === 'string';
+  const sourceIndexes = value['sourceIndexes'];
+
+  return (
+    typeof value['name'] === 'string' &&
+    typeof value['type'] === 'string' &&
+    textOrNull(value['description']) &&
+    textOrNull(value['startTime']) &&
+    textOrNull(value['contentType']) &&
+    (sourceIndexes == null ||
+      (Array.isArray(sourceIndexes) &&
+        sourceIndexes.every(
+          (index: unknown) =>
+            typeof index === 'number' && Number.isInteger(index) && index >= 1 && index <= BATCH_SIZE,
+        )))
+  );
+}
+
+function isExtractedRelationship(entry: unknown): entry is ExtractedRelationship {
+  if (typeof entry !== 'object' || entry === null) {
+    return false;
+  }
+
+  const value = entry as Record<string, unknown>;
+
+  return ['fromName', 'fromType', 'toName', 'toType', 'relationshipType'].every(
+    (key) => typeof value[key] === 'string',
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Service
@@ -438,6 +493,13 @@ export class MemoryCompactionService {
   /** Built on first use; one per process, so a refused `json_schema` is remembered. */
   private externalDriver: OpenAiCompatChatDriver | null = null;
 
+  /**
+   * user id → the compaction running (or queued last) for that user. A second
+   * call for the same user waits for it, so two batches never read, merge and
+   * write the same person's description at once and lose one of the appends.
+   */
+  private readonly activeCompactions = new Map<string, Promise<void>>();
+
   constructor(
     private readonly ollamaService: OllamaService,
     private readonly agentMemoryService: AgentMemoryService,
@@ -448,6 +510,8 @@ export class MemoryCompactionService {
     private readonly itemService: ItemService,
     private readonly relationshipService: RelationshipService,
     private readonly logger: LoggerService,
+    @Optional() private readonly calendarEventService?: CalendarEventService,
+    @Optional() private readonly contentService?: ContentService,
   ) {
     this.logger.setContext(MemoryCompactionService.name);
   }
@@ -459,11 +523,38 @@ export class MemoryCompactionService {
    *      `*.created` events fire and downstream indexers see the new rows.
    *   3. Upsert extracted relationships.
    *   4. Stamp processed_at only on the fragments whose batch actually
-   *      produced a usable extraction result (empty counts); fragments whose
-   *      batch threw or came back unparseable are left for the next run,
+   *      produced a usable extraction result (empty counts) AND whose graph
+   *      writes all succeeded; fragments whose batch threw, came back
+   *      unparseable or had a write fail are left for the next run,
    *      up to MAX_EXTRACTION_ATTEMPTS.
+   *
+   * Calls for the same user run one after another (see `activeCompactions`).
    */
   async compactForUser(context: UserServiceContext, fragments: AgentMemory[]): Promise<void> {
+    const previous = this.activeCompactions.get(context.userId) ?? Promise.resolve();
+    const run = previous.catch(() => undefined).then(() => this.compactBatch(context, fragments));
+    this.activeCompactions.set(context.userId, run);
+    try {
+      await run;
+    } finally {
+      if (this.activeCompactions.get(context.userId) === run) {
+        this.activeCompactions.delete(context.userId);
+      }
+    }
+  }
+
+  private async compactBatch(context: UserServiceContext, candidates: AgentMemory[]): Promise<void> {
+    // The eligibility `AgentMemoryService.findUnprocessed` applies, checked
+    // again here for callers that hand fragments in directly and for a validity
+    // window that closed after they were read. A fragment that is superseded,
+    // conflicted, not yet valid or expired is not compacted, and stays as it is.
+    const now = new Date();
+    const fragments = candidates.filter(
+      (fragment) =>
+        (fragment.status ?? 'active') === 'active' &&
+        (fragment.validFrom == null || fragment.validFrom <= now) &&
+        (fragment.validUntil == null || fragment.validUntil > now),
+    );
     if (fragments.length === 0) {
       return;
     }
@@ -483,6 +574,7 @@ export class MemoryCompactionService {
     const entityMap = new Map<string, string>();
     const cache: CompactionCache = {
       personCandidatesByUserId: new Map(),
+      itemsByUserId: new Map(),
     };
 
     // Resolve the canonical "self" node so first-person facts ("my sister",
@@ -525,12 +617,7 @@ export class MemoryCompactionService {
           : null;
 
       if (grounded) {
-        for (const fragment of batch) {
-          this.extractionAttempts.delete(fragment.id);
-          processedIds.push(fragment.id);
-        }
-
-        await this.upsertEntities(
+        const entitiesSaved = await this.upsertEntities(
           grounded.entities,
           userId,
           context,
@@ -538,21 +625,38 @@ export class MemoryCompactionService {
           cache,
           self?.entityId ?? null,
           selfAliases,
+          batch,
         );
-        await this.upsertRelationships(grounded.relationships, userId, entityMap, context);
+        const relationshipsSaved = await this.upsertRelationships(
+          grounded.relationships,
+          userId,
+          entityMap,
+          context,
+        );
 
-        continue;
+        // A usable extraction is not a successful write. When a graph write
+        // failed, the batch is not stamped: its fragments take the retry path
+        // below instead of losing the facts that did not land.
+        if (entitiesSaved && relationshipsSaved) {
+          for (const fragment of batch) {
+            this.extractionAttempts.delete(fragment.id);
+            processedIds.push(fragment.id);
+          }
+
+          continue;
+        }
       }
 
       // ----------------------------------------------------------------
-      // The batch produced NO usable extraction result. The call threw
-      // (Ollama down, UTILITY_MODEL missing), the model's output was
-      // truncated / not JSON, or every name it gave is absent from the
-      // fragments (it answered with something else, such as the prompt's
-      // own example). None of these is an empty extraction, so leave
+      // The batch produced NO usable extraction result, or a graph write
+      // for it failed. The call threw (Ollama down, UTILITY_MODEL missing),
+      // the model's output was truncated / not JSON, or every name it gave
+      // is absent from the fragments (it answered with something else,
+      // such as the prompt's own example), or the database refused part of
+      // what was extracted. None of these is an empty extraction, so leave
       // processed_at unset and let the next run retry, bounded by
-      // MAX_EXTRACTION_ATTEMPTS so a permanently-unparseable fragment
-      // cannot be re-fed to the LLM forever.
+      // MAX_EXTRACTION_ATTEMPTS so a permanently-unparseable fragment (or a
+      // write that always fails) cannot be re-fed to the LLM forever.
       // ----------------------------------------------------------------
 
       for (const fragment of batch) {
@@ -612,7 +716,7 @@ export class MemoryCompactionService {
         const body = f.content;
         const truncated = body.length > MAX_FRAGMENT_CHARS ? `${body.slice(0, MAX_FRAGMENT_CHARS)}…` : body;
 
-        return `${label}\n${truncated}`;
+        return `[Fragment ${index + 1}; captured ${f.createdAt.toISOString()}]\n${label}\n${truncated}`;
       })
       .join('\n\n---\n\n');
   }
@@ -798,6 +902,15 @@ export class MemoryCompactionService {
     return response.message.content || response.message.thinking || '';
   }
 
+  /**
+   * Write the batch's entities into the graph. Resolves to false when a write
+   * threw, so the caller can keep the batch's fragments for another try; an
+   * entity that is skipped on purpose (no usable name or type, no explicit
+   * start time, no content subtype) is not a failure.
+   *
+   * `fragments` are the batch the entities were extracted from: their ids and
+   * capture times are what a dated observation cites.
+   */
   private async upsertEntities(
     entities: ExtractedEntity[],
     userId: string,
@@ -806,7 +919,10 @@ export class MemoryCompactionService {
     cache: CompactionCache,
     selfEntityId: string | null,
     selfAliases: Set<string>,
-  ): Promise<void> {
+    fragments: AgentMemory[],
+  ): Promise<boolean> {
+    let saved = true;
+
     for (const entity of entities) {
       const name = typeof entity.name === 'string' ? entity.name.trim() : '';
       const type = normalizeEntityType(entity.type);
@@ -821,10 +937,34 @@ export class MemoryCompactionService {
 
       // Self-anchor: if this is the user referring to themselves ("the user",
       // "Max", "me"…), point the map at the canonical node and do NOT create a
-      // node or overwrite the canonical one's identity. The user's facts live
-      // as edges + neighbour descriptions, not on the self node's own fields.
+      // node or overwrite the canonical one's identity. What the extractor
+      // states about the user is appended to that node's description as a dated
+      // observation (it used to be dropped), and their links live as edges.
       if (selfEntityId && type === 'Person' && selfAliases.has(name.toLowerCase())) {
         entityMap.set(this.entityKey(type, name), selfEntityId);
+
+        try {
+          const people = await this.getPersonCandidates(context, cache);
+          const canonical = people.find((person) => person.id === selfEntityId);
+
+          if (canonical) {
+            await this.appendPersonObservation(
+              context,
+              cache,
+              canonical,
+              entity.description ?? null,
+              fragments,
+              entity.sourceIndexes,
+            );
+          }
+        } catch (err) {
+          saved = false;
+          this.logger.warn('Failed to add an observation to the canonical person', {
+            userId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+
         continue;
       }
 
@@ -840,12 +980,15 @@ export class MemoryCompactionService {
           name,
           entity.description ?? null,
           cache,
+          entity,
+          fragments,
         );
 
         if (entityId != null) {
           entityMap.set(key, entityId);
         }
       } catch (err) {
+        saved = false;
         this.logger.warn('Failed to upsert entity', {
           userId,
           name,
@@ -854,15 +997,19 @@ export class MemoryCompactionService {
         });
       }
     }
+
+    return saved;
   }
 
+  /** Write the batch's relationships. Resolves to false when an upsert threw; see {@link upsertEntities}. */
   private async upsertRelationships(
     relationships: ExtractedRelationship[],
     userId: string,
     entityMap: Map<string, string>,
     context: UserServiceContext,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const filled = (value: unknown) => typeof value === 'string' && value.trim() !== '';
+    let saved = true;
 
     for (const rel of relationships) {
       if (
@@ -908,6 +1055,7 @@ export class MemoryCompactionService {
           isBidirectional: rel.bidirectional ?? false,
         });
       } catch (err) {
+        saved = false;
         this.logger.warn('Failed to upsert relationship', {
           userId,
           fromName: rel.fromName,
@@ -917,6 +1065,8 @@ export class MemoryCompactionService {
         });
       }
     }
+
+    return saved;
   }
 
   // ---------------------------------------------------------------------------
@@ -929,9 +1079,9 @@ export class MemoryCompactionService {
    * resulting entity id, or null if this type can't be persisted from the
    * limited info the LLM emits.
    *
-   * person / concept : search-by-name; reuse existing id if matched, else create.
-   * place / item     : always create a new row (no name-based dedup yet).
-   * event / content  : no-op for now (see TODOs below).
+   * Person/concept reuse requires an unambiguous identity; descriptions retain
+   * older observations. Place/item/content reuse requires matching attributes.
+   * Events require an explicit instant; content requires an explicit subkind.
    */
   private async upsertEntity(
     context: UserServiceContext,
@@ -939,14 +1089,26 @@ export class MemoryCompactionService {
     name: string,
     description: string | null,
     cache: CompactionCache,
+    entity: ExtractedEntity,
+    fragments: AgentMemory[],
   ): Promise<string | null> {
     switch (type) {
       case 'person': {
         // 1. Exact (case-insensitive) name match — cheapest and safest.
         const matches = await this.personService.search(context, { name });
-        const existing = matches.find((p) => p.name?.toLowerCase() === name.toLowerCase());
+        const exact = matches.filter((p) => p.name?.toLowerCase() === name.toLowerCase());
+        const existing = exact.length === 1 ? exact[0] : null;
 
         if (existing) {
+          await this.appendPersonObservation(
+            context,
+            cache,
+            existing,
+            description,
+            fragments,
+            entity.sourceIndexes,
+          );
+
           return existing.id;
         }
 
@@ -961,13 +1123,22 @@ export class MemoryCompactionService {
         //    another node nor let it block a real merge.
         if (!this.isRelationalDescriptor(name)) {
           const candidates = await this.getPersonCandidates(context, cache);
-          const variant = this.resolvePersonVariant(name, candidates);
+          const variant =
+            exact.length === 0 ? this.resolvePersonVariant(name, candidates, description) : null;
 
           if (variant) {
             // Promote the surviving node to the fuller form ("Priya" ->
             // "Priya Sharma") so it carries the most complete identifier for
             // keyword recall. Best-effort; the shared id is what matters.
             await this.promotePersonName(context, variant, name);
+            await this.appendPersonObservation(
+              context,
+              cache,
+              variant,
+              description,
+              fragments,
+              entity.sourceIndexes,
+            );
 
             return variant.id;
           }
@@ -975,24 +1146,41 @@ export class MemoryCompactionService {
 
         const created = await this.personService.create(context, {
           name,
-          description: description ?? undefined,
+          description: this.mergeObservation(null, description, fragments, entity.sourceIndexes) ?? undefined,
         });
-        this.addPersonCandidate(context, cache, created.id, created.name ?? null);
+        this.addPersonCandidate(
+          context,
+          cache,
+          created.id,
+          created.name ?? null,
+          created.description ?? null,
+        );
 
         return created.id;
       }
 
       case 'concept': {
         const matches = await this.conceptService.search(context, { name });
-        const existing = matches.find((c) => c.name?.toLowerCase() === name.toLowerCase());
+        const exact = matches.filter((c) => c.name?.toLowerCase() === name.toLowerCase());
+        const existing = exact.length === 1 ? exact[0] : null;
 
         if (existing) {
+          const merged = this.mergeObservation(
+            existing.description,
+            description,
+            fragments,
+            entity.sourceIndexes,
+          );
+          if (merged !== (existing.description ?? null)) {
+            await this.conceptService.update(context, existing.id, { description: merged ?? undefined });
+          }
+
           return existing.id;
         }
 
         const created = await this.conceptService.create(context, {
           name,
-          description: description ?? undefined,
+          description: this.mergeObservation(null, description, fragments, entity.sourceIndexes) ?? undefined,
         });
 
         return created.id;
@@ -1000,16 +1188,33 @@ export class MemoryCompactionService {
 
       case 'place': {
         if (typeof this.placeService.findAll === 'function') {
-          const matches = await this.placeService.findAll(context, { query: name });
-          const existing = (matches ?? []).find((p) => p.name?.trim().toLowerCase() === name.toLowerCase());
+          const matches = (await this.placeService.findAll(context, { query: name })) ?? [];
+          const exact = matches.filter((place) => place.name?.trim().toLowerCase() === name.toLowerCase());
+          const existing =
+            exact.length === 1
+              ? exact[0]
+              : exact.find((place) => this.hasObservation(place.description, description));
           if (existing) {
+            const merged = this.mergeObservation(
+              existing.description,
+              description,
+              fragments,
+              entity.sourceIndexes,
+            );
+            if (merged !== (existing.description ?? null) && typeof this.placeService.update === 'function') {
+              await this.placeService.update(context, existing.id, {
+                description: merged ?? undefined,
+                properties: existing.properties ?? {},
+              });
+            }
+
             return existing.id;
           }
         }
 
         const [created] = await this.placeService.create(context, {
           name,
-          description: description ?? undefined,
+          description: this.mergeObservation(null, description, fragments, entity.sourceIndexes) ?? undefined,
         });
 
         return created?.id ?? null;
@@ -1017,50 +1222,110 @@ export class MemoryCompactionService {
 
       case 'item': {
         if (typeof this.itemService.findAll === 'function') {
-          const itemMap = (cache.itemsByUserId ??= new Map());
-          let items: Array<{ id: string; name?: string | null }> | undefined = itemMap.get(context.userId);
+          const itemMap = cache.itemsByUserId;
+          let items = itemMap.get(context.userId);
           if (!items) {
             items = (await this.itemService.findAll(context)) ?? [];
             itemMap.set(context.userId, items);
           }
 
-          const existing = items.find(
-            (i: { id: string; name?: string | null }) => i.name?.trim().toLowerCase() === name.toLowerCase(),
-          );
+          const exact = items.filter((item) => item.name?.trim().toLowerCase() === name.toLowerCase());
+          const existing =
+            exact.length === 1
+              ? exact[0]
+              : exact.find((item) => this.hasObservation(item.description, description));
           if (existing) {
+            const merged = this.mergeObservation(
+              existing.description,
+              description,
+              fragments,
+              entity.sourceIndexes,
+            );
+            if (merged !== (existing.description ?? null) && typeof this.itemService.update === 'function') {
+              await this.itemService.update(context, existing.id, { description: merged ?? undefined });
+              existing.description = merged;
+            }
+
             return existing.id;
           }
         }
 
         const created = await this.itemService.create(context, {
           name,
-          description: description ?? undefined,
+          description: this.mergeObservation(null, description, fragments, entity.sourceIndexes) ?? undefined,
         });
-        cache.itemsByUserId?.get(context.userId)?.push({ id: created.id, name });
+        cache.itemsByUserId
+          ?.get(context.userId)
+          ?.push({ id: created.id, name, description: created.description });
 
         return created.id;
       }
 
-      // TODO: CalendarEventService.create requires `title` and a real `start_time: Date`,
-      // neither of which the extraction prompt asks for. Either extend the LLM
-      // output schema to include those fields, or route events through a
-      // separate extraction path.
-      case 'event':
+      case 'event': {
+        if (
+          this.calendarEventService &&
+          entity.startTime &&
+          /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/.test(
+            entity.startTime,
+          ) &&
+          Number.isFinite(Date.parse(entity.startTime))
+        ) {
+          const start = new Date(entity.startTime);
+          const matches = await this.calendarEventService.search(context, { title: name, startTime: start });
+          if (matches.length === 1) {
+            return matches[0].id;
+          }
+
+          const [created] = await this.calendarEventService.create(context, {
+            title: name,
+            description:
+              this.mergeObservation(null, description, fragments, entity.sourceIndexes) ?? undefined,
+            start_time: start,
+            time_source: 'source',
+            time_precision: /T\d{2}:\d{2}:\d{2}/.test(entity.startTime) ? 'second' : 'minute',
+          });
+
+          return created?.id ?? null;
+        }
+
         this.logger.debug('Skipping event entity: extraction prompt does not yield start_time', {
           name,
         });
 
         return null;
+      }
 
-      // TODO: ContentService.create requires a `type` subkind (book / film /
-      // article / …) that the extraction prompt does not produce. Extend the
-      // LLM schema before enabling this branch.
-      case 'content':
+      case 'content': {
+        if (
+          this.contentService &&
+          entity.contentType &&
+          ['book', 'film', 'show', 'article', 'music', 'video'].includes(entity.contentType)
+        ) {
+          const matches = await this.contentService.search(context, {
+            title: name,
+            type: entity.contentType,
+          });
+          const text = this.mergeObservation(null, description, fragments, entity.sourceIndexes) ?? undefined;
+          const existing = matches.find((content) => this.hasObservation(content.text, description));
+          if (existing) {
+            return existing.id;
+          }
+
+          const [created] = await this.contentService.create(context, {
+            type: entity.contentType,
+            title: name,
+            text,
+          });
+
+          return created?.id ?? null;
+        }
+
         this.logger.debug('Skipping content entity: extraction prompt does not yield content type', {
           name,
         });
 
         return null;
+      }
 
       default:
         return null;
@@ -1069,6 +1334,84 @@ export class MemoryCompactionService {
 
   private entityKey(type: string, name: string): string {
     return `${(type ?? '').toLowerCase()}:${(name ?? '').toLowerCase()}`;
+  }
+
+  /** Whether `existing` already says `incoming` (ignoring case), so recording it again would add nothing. */
+  private hasObservation(existing: string | null | undefined, incoming: string | null): boolean {
+    return Boolean(incoming?.trim() && existing?.toLowerCase().includes(incoming.trim().toLowerCase()));
+  }
+
+  /**
+   * `existing` with `incoming` appended as a dated observation, "Memory
+   * observation (captured <when>; fragment <ids>): <text>". Nothing already
+   * there is rewritten, so an older fact (or one the person edited by hand)
+   * survives a correction that contradicts it, and the correction says where
+   * and when it came from. `indexes` are the 1-based numbers of the batch
+   * fragments the entity was drawn from; without any that fit, the observation
+   * cites the whole batch. Returns `existing` as it was when there is nothing
+   * new to add.
+   */
+  private mergeObservation(
+    existing: string | null | undefined,
+    incoming: string | null,
+    fragments: AgentMemory[],
+    indexes?: number[],
+  ): string | null {
+    if (!incoming?.trim() || this.hasObservation(existing, incoming)) {
+      return existing ?? null;
+    }
+
+    const selected = indexes?.length
+      ? fragments.filter((_fragment, index) => indexes.includes(index + 1))
+      : fragments;
+    const sources = selected.length ? selected : fragments;
+    const captured = sources
+      .map((fragment) => fragment.createdAt.toISOString())
+      .sort()
+      .at(-1);
+    const observation = `Memory observation (captured ${captured}; fragment${sources.length === 1 ? '' : 's'} ${sources.map((fragment) => fragment.id).join(', ')}): ${incoming.trim()}`;
+
+    return [existing?.trim(), observation].filter(Boolean).join('\n\n');
+  }
+
+  /**
+   * Append `incoming` to a person's description as a dated observation, and
+   * write it only when it adds something. Named after this method in Change
+   * History, as the other background writers through PersonService.update are.
+   *
+   * The cached copy of the person keeps what was stored, not what was asked
+   * for: a description the person set by hand is kept by PersonService.update,
+   * and the next observation of this run has to be appended to the text that is
+   * actually there. `person` need not be the cached object itself (an exact
+   * match comes from a search), so the cache is found by id.
+   */
+  private async appendPersonObservation(
+    context: UserServiceContext,
+    cache: CompactionCache,
+    person: { id: string; description?: string | null },
+    incoming: string | null,
+    fragments: AgentMemory[],
+    indexes?: number[],
+  ): Promise<void> {
+    const merged = this.mergeObservation(person.description, incoming, fragments, indexes);
+
+    if (merged === null || merged === (person.description ?? null)) {
+      return;
+    }
+
+    const updated = await this.personService.update(
+      context,
+      person.id,
+      { description: merged },
+      { source: 'MemoryCompactionService.appendPersonObservation' },
+    );
+    const cached = cache.personCandidatesByUserId
+      .get(context.userId)
+      ?.find((candidate) => candidate.id === person.id);
+
+    if (cached) {
+      cached.description = updated?.description ?? merged;
+    }
   }
 
   /**
@@ -1096,9 +1439,9 @@ export class MemoryCompactionService {
    * Resolve a person name against existing nodes by token-subset relation
    * ("Priya" <-> "Priya Sharma"), returning the matched node or null.
    *
-   * Only an UNAMBIGUOUS match is accepted: if a bare first name fits several
-   * full names (e.g. "John" against both "John Smith" and "John Doe") we return
-   * null and let the caller create a fresh node rather than collapse two people.
+   * A single-token overlap additionally needs a shared explicit identity anchor
+   * (for example, "the user's sister"). Being the only saved Priya is not proof
+   * that a newly mentioned Priya is that person.
    * Names of length two or more tokens are only merged when one word-set fully
    * contains the other, so "Priya Sharma" and "Priya Patel" never merge.
    * Relational descriptors are excluded so they neither match nor cause
@@ -1106,13 +1449,16 @@ export class MemoryCompactionService {
    */
   private resolvePersonVariant(
     name: string,
-    candidates: { id: string; name?: string | null }[],
-  ): { id: string; name?: string | null } | null {
+    candidates: PersonVariantCandidate[],
+    description: string | null,
+  ): PersonVariantCandidate | null {
     const target = this.nameTokens(name);
 
     if (target.size === 0) {
       return null;
     }
+
+    const anchor = this.identityAnchor(description);
 
     const matches = candidates.filter((candidate) => {
       if (!candidate.name || this.isRelationalDescriptor(candidate.name)) {
@@ -1125,10 +1471,36 @@ export class MemoryCompactionService {
         return false; // exact matches are handled before this is called
       }
 
+      // One bare name against a fuller one ("Priya" / "Priya Sharma") is only
+      // the same person when both descriptions name them the same way.
+      if (
+        Math.min(target.size, tokens.size) < 2 &&
+        (!anchor || anchor !== this.identityAnchor(candidate.description))
+      ) {
+        return false;
+      }
+
       return this.isSubset(target, tokens) || this.isSubset(tokens, target);
     });
 
     return matches.length === 1 ? matches[0] : null;
+  }
+
+  /**
+   * The family tie to the user that a description states ("the user's sister",
+   * or "my sister" in the user's own words), as the first form; null when it
+   * states none. A shared anchor is the corroboration a single-token name
+   * overlap needs before two people are treated as one.
+   */
+  private identityAnchor(description: string | null | undefined): string | null {
+    return (
+      description
+        ?.toLowerCase()
+        .match(
+          /(?:the user's|my) (?:sister|brother|mother|father|wife|husband|spouse|partner|daughter|son)\b/,
+        )?.[0]
+        .replace(/^my /, "the user's ") ?? null
+    );
   }
 
   /**
@@ -1184,13 +1556,14 @@ export class MemoryCompactionService {
     cache: CompactionCache,
     id: string,
     name: string | null,
+    description: string | null,
   ): void {
     const candidates = cache.personCandidatesByUserId.get(context.userId);
     if (!candidates) {
       return;
     }
 
-    candidates.push({ id, name });
+    candidates.push({ id, name, description });
   }
 
   private isSubset(a: Set<string>, b: Set<string>): boolean {
@@ -1210,7 +1583,8 @@ export class MemoryCompactionService {
   /**
    * Parse the model's reply into an ExtractionResult, or `null` when the reply
    * cannot be parsed at all (truncated, wrapped in prose, not JSON, or JSON
-   * that isn't an object).
+   * that isn't an object), has no entities or relationships list, or holds
+   * nothing but malformed entries.
    *
    * `null` is deliberately NOT the same value as `{entities: [], relationships:
    * []}`: a valid JSON object with no entities is the model saying "nothing to
@@ -1249,16 +1623,42 @@ export class MemoryCompactionService {
       }
 
       const obj = parsed as Record<string, unknown>;
-      // A null entry would throw on its first field read downstream.
-      const objectsIn = (value: unknown) =>
-        Array.isArray(value)
-          ? value.filter((entry): entry is object => typeof entry === 'object' && entry !== null)
-          : [];
+      const rawEntities = obj['entities'];
+      const rawRelationships = obj['relationships'];
 
-      return {
-        entities: objectsIn(obj['entities']) as ExtractedEntity[],
-        relationships: objectsIn(obj['relationships']) as ExtractedRelationship[],
-      };
+      // Both lists have to be there: a reply without them says nothing about
+      // these fragments, which is not the same as "nothing to extract".
+      if (!Array.isArray(rawEntities) || !Array.isArray(rawRelationships)) {
+        this.logger.warn('LLM result lacks its entities or relationships list; will retry', {
+          preview: content.slice(0, 200),
+        });
+
+        return null;
+      }
+
+      // An entry the model got wrong (not an object, a name or type that is not
+      // text, a fragment number outside the batch, …) is left out, so one bad
+      // entry does not cost the rest of the reply, and a null one cannot throw
+      // on its first field read downstream.
+      const entities = rawEntities.filter(isExtractedEntity);
+      const relationships = rawRelationships.filter(isExtractedRelationship);
+      const offered = rawEntities.length + rawRelationships.length;
+      const kept = entities.length + relationships.length;
+
+      if (kept < offered) {
+        this.logger.warn('Left out malformed entries of the LLM extraction result', {
+          offered,
+          kept,
+        });
+      }
+
+      // A reply made only of malformed entries is a failed extraction, not an
+      // empty one: stamping it would lose the fragments for good.
+      if (offered > 0 && kept === 0) {
+        return null;
+      }
+
+      return { entities, relationships };
     } catch {
       this.logger.warn('Failed to parse LLM extraction result as JSON; will retry', {
         preview: content.slice(0, 300),

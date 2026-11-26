@@ -1,16 +1,21 @@
+import { useState } from 'react';
+
 import {
   formatModelBytes,
   gpuAllowedOn,
   type LocalLlmCapability,
   type LocalLlmMode,
+  type LocalLlmModelSpec,
   type LocalLlmModelState,
+  type LocalLlmPrefs,
 } from '@ci/common';
-import { Badge, Button, Progress, Select, Switch } from '@ci/shadcn';
+import { LOCAL_LLM_BOUNDS } from '@ci/common/src/utils/localLlmPrefs';
+import { Badge, Button, Input, Progress, Select, Switch } from '@ci/shadcn';
 import { Download, Trash2 } from '@ci/shadcn/icons';
 
 import { useLocalLlmPrefs, useOnDeviceModel } from '@/hooks/useOnDeviceModel';
 
-import { SettingsGroup, SettingsRow, SettingsSection, SettingsStatus } from '../kit';
+import { SettingsFooter, SettingsGroup, SettingsRow, SettingsSection, SettingsStatus } from '../kit';
 
 const MODE_OPTIONS: { value: LocalLlmMode; label: string; hint: string }[] = [
   {
@@ -35,6 +40,34 @@ const CAPABILITY_LABEL: Record<LocalLlmCapability, string> = {
   vision: 'Photos',
   tools: 'Memory lookup',
 };
+
+/** The sampler fields in the order they are shown. Their ranges come from `LOCAL_LLM_BOUNDS`. */
+const SAMPLER_FIELDS = [
+  {
+    key: 'temperature',
+    id: 'on-device-temperature',
+    label: 'Temperature',
+    hint: 'Lower is more predictable.',
+    step: 0.1,
+  },
+  {
+    key: 'topP',
+    id: 'on-device-top-p',
+    label: 'Top P',
+    hint: 'Probability mass sampled.',
+    step: 0.05,
+  },
+  {
+    key: 'topK',
+    id: 'on-device-top-k',
+    label: 'Top K',
+    hint: 'Candidate tokens per step.',
+    step: 1,
+  },
+] as const;
+
+/** The reply limits on offer. Any whole number in `LOCAL_LLM_BOUNDS.maxOutputTokens` can be stored. */
+const REPLY_LIMITS: readonly number[] = [256, 512, 1024, 2048];
 
 function percent(bytes: number, total: number): number {
   return total > 0 ? Math.min(100, Math.round((bytes / total) * 100)) : 0;
@@ -242,7 +275,150 @@ export function OnDeviceModelSection() {
           ) : null}
         </SettingsGroup>
       ) : null}
+
+      {selected && selectedReady ? (
+        <AnswerSettings spec={selected.spec} prefs={prefs} setPrefs={setPrefs} />
+      ) : null}
     </SettingsSection>
+  );
+}
+
+/**
+ * How the selected model answers: its sampler and how long a reply may run. Saved per device and applied by
+ * chat, not here — a changed sampler is picked up by the next message (see `ensureLocalLlmLoaded`), which is
+ * why nothing reloads the model on edit. The fields show the model's own defaults until one is changed, and
+ * "Reset to model defaults" clears every override. Values are clamped by `setLocalLlmPrefs`.
+ */
+function AnswerSettings({
+  spec,
+  prefs,
+  setPrefs,
+}: {
+  spec: LocalLlmModelSpec;
+  prefs: LocalLlmPrefs;
+  setPrefs: (patch: Partial<LocalLlmPrefs>) => void;
+}) {
+  const replyLimit = prefs.maxOutputTokens;
+  // A stored limit that is not one of the presets (set by hand, or by another version) joins the list, so the
+  // picker is never blank.
+  const replyLimits =
+    replyLimit && !REPLY_LIMITS.includes(replyLimit)
+      ? [...REPLY_LIMITS, replyLimit].sort((a, b) => a - b)
+      : REPLY_LIMITS;
+  const customised =
+    prefs.sampling !== undefined ||
+    prefs.maxOutputTokens !== undefined ||
+    prefs.thinkingTokenBudget !== undefined;
+
+  return (
+    <SettingsGroup
+      title="Answer settings"
+      description="Saved on this device. Changing temperature, Top P or Top K starts a fresh model conversation with your next message; your chat stays on screen."
+    >
+      {SAMPLER_FIELDS.map(({ key, id, label, hint, step }) => (
+        <SettingsRow
+          key={key}
+          label={label}
+          htmlFor={id}
+          hint={hint}
+          control={
+            <NumberField
+              id={id}
+              value={prefs.sampling?.[key] ?? spec.defaultConfig[key]}
+              bounds={LOCAL_LLM_BOUNDS[key]}
+              step={step}
+              onSave={(value) => setPrefs({ sampling: { ...prefs.sampling, [key]: value } })}
+            />
+          }
+        />
+      ))}
+
+      <SettingsRow
+        label="Reply limit"
+        htmlFor="on-device-reply-limit"
+        hint="Includes reasoning. The device may stop sooner."
+        control={
+          <Select
+            value={replyLimit ? String(replyLimit) : 'default'}
+            onValueChange={(value) =>
+              setPrefs({ maxOutputTokens: value === 'default' ? undefined : Number(value) })
+            }
+          >
+            <Select.Trigger id="on-device-reply-limit" className="w-40">
+              <Select.Value />
+            </Select.Trigger>
+            <Select.Content>
+              <Select.Item value="default">Default</Select.Item>
+              {replyLimits.map((tokens) => (
+                <Select.Item key={tokens} value={String(tokens)}>
+                  {tokens} tokens
+                </Select.Item>
+              ))}
+            </Select.Content>
+          </Select>
+        }
+      />
+
+      <SettingsFooter>
+        <Button
+          type="button"
+          variant="outline"
+          disabled={!customised}
+          onClick={() =>
+            setPrefs({ sampling: undefined, maxOutputTokens: undefined, thinkingTokenBudget: undefined })
+          }
+        >
+          Reset to model defaults
+        </Button>
+      </SettingsFooter>
+    </SettingsGroup>
+  );
+}
+
+/**
+ * A number field that saves as you type. While it has focus it shows what was typed rather than what is saved:
+ * the saved number is clamped, so a "0" typed on the way to "0.5" would be rewritten to Top P's floor of 0.05, and
+ * a field could never be emptied to retype it. An empty or half-typed field saves nothing; out of focus the field
+ * shows what is saved, which is the clamped value.
+ */
+function NumberField({
+  id,
+  value,
+  bounds,
+  step,
+  onSave,
+}: {
+  id: string;
+  value: number;
+  bounds: { min: number; max: number };
+  step: number;
+  onSave: (value: number) => void;
+}) {
+  const [focused, setFocused] = useState(false);
+  const [typed, setTyped] = useState('');
+
+  return (
+    <Input
+      id={id}
+      type="number"
+      className="w-28"
+      min={bounds.min}
+      max={bounds.max}
+      step={step}
+      value={focused ? typed : value}
+      onFocus={() => {
+        setTyped(String(value));
+        setFocused(true);
+      }}
+      onBlur={() => setFocused(false)}
+      onChange={(event) => {
+        setTyped(event.target.value);
+
+        if (Number.isFinite(event.target.valueAsNumber)) {
+          onSave(event.target.valueAsNumber);
+        }
+      }}
+    />
   );
 }
 

@@ -86,6 +86,8 @@ class Expected:
     # Substrings that must appear in the JSON arguments of a matching call.
     argument_contains: dict[str, list[str]] = field(default_factory=dict)
     admit_unknown: bool = False
+    require_grounding: bool = False
+    source_contains: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any] | None) -> Expected:
@@ -102,6 +104,8 @@ class Expected:
             answer_must_not_contain=_str_list(raw.get("answer_must_not_contain")),
             argument_contains={str(k): _str_list(v) for k, v in args.items()},
             admit_unknown=bool(raw.get("admit_unknown", False)),
+            require_grounding=bool(raw.get("require_grounding", False)),
+            source_contains=_str_list(raw.get("source_contains")),
         )
 
     def is_empty(self) -> bool:
@@ -114,6 +118,8 @@ class Expected:
             or self.answer_must_not_contain
             or self.argument_contains
             or self.admit_unknown
+            or self.require_grounding
+            or self.source_contains
         )
 
 
@@ -137,6 +143,9 @@ class Case:
     # unless asked to score incomplete cases.
     needs_owner: bool = False
     source: str = ""
+    setup_memories: list[str] = field(default_factory=list)
+    setup_query: str = ""
+    readiness_contains: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any], source: str = "") -> Case:
@@ -172,6 +181,9 @@ class Case:
             anywhere_should_use_any=_str_list(anywhere.get("should_use_any")),
             needs_owner=bool(raw.get("needs_owner", False)),
             source=source,
+            setup_memories=_str_list(raw.get("setup_memories")),
+            setup_query=str(raw.get("setup_query") or ""),
+            readiness_contains=_str_list(raw.get("readiness_contains")),
         )
 
 
@@ -188,6 +200,30 @@ def validate_case(raw: Any) -> list[str]:
             f"capability must be one of {', '.join(CAPABILITIES)} (got {capability!r})"
         )
     conversation = raw.get("conversation")
+    setup = raw.get("setup_memories")
+    if setup is not None:
+        if not isinstance(setup, list) or not all(
+            isinstance(text, str) and 0 < len(text) <= 10000 for text in setup
+        ):
+            errors.append(
+                "setup_memories must be a list of non-empty memory fragments (max 10000 characters each)"
+            )
+        if setup and (
+            not isinstance(raw.get("setup_query"), str)
+            or not raw["setup_query"].strip()
+        ):
+            errors.append("setup_query is required for setup_memories")
+        if setup and (
+            not isinstance(raw.get("readiness_contains"), list)
+            or not raw["readiness_contains"]
+            or not all(
+                isinstance(phrase, str) and phrase.strip()
+                for phrase in raw["readiness_contains"]
+            )
+        ):
+            errors.append(
+                "readiness_contains must contain non-empty strings for setup_memories"
+            )
     if not isinstance(conversation, list) or not conversation:
         errors.append("conversation must be a non-empty list")
     else:
@@ -250,12 +286,23 @@ def expand_spec(spec: str) -> frozenset[str]:
 
 
 def _check_tool_specs(errors: list[str], block: dict[str, Any], where: str) -> None:
-    for key in ("should_use", "should_use_any", "must_not_use"):
+    for key in (
+        "should_use",
+        "should_use_any",
+        "must_not_use",
+        "answer_contains",
+        "answer_contains_any",
+        "answer_must_not_contain",
+        "source_contains",
+    ):
         values = block.get(key)
         if values is None:
             continue
         if not isinstance(values, list) or not all(isinstance(v, str) for v in values):
             errors.append(f"{where}.{key} must be a list of strings")
+    for key in ("admit_unknown", "require_grounding"):
+        if key in block and not isinstance(block[key], bool):
+            errors.append(f"{where}.{key} must be a boolean")
 
 
 def _str_list(value: Any) -> list[str]:

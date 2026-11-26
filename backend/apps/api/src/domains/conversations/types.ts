@@ -1,3 +1,5 @@
+import type { MessageGrounding } from './grounding';
+
 export interface CreateMessageDto {
   id?: string;
   threadId: string;
@@ -7,6 +9,7 @@ export interface CreateMessageDto {
   source?: 'openclaw' | 'memory' | 'user';
   mimetype?: string;
   toolCalls?: Record<string, unknown>[] | null;
+  grounding?: MessageGrounding | null;
   canceled?: boolean;
   promptMessageId?: string;
   fileIds?: string[]; // IDs of files to link to this message
@@ -16,6 +19,7 @@ export interface UpdateMessageDto {
   content?: string;
   canceled?: boolean;
   toolCalls?: Record<string, unknown>[] | null;
+  grounding?: MessageGrounding | null;
 }
 
 export interface CreateThreadDto {

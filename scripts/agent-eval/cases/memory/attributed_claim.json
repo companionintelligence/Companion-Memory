@@ -1,0 +1,16 @@
+{
+  "id": "memory_attributed_claim",
+  "capability": "memory",
+  "title": "An imported speaker's claim is not promoted to a verified owner action",
+  "setup_memories": ["Synthetic evaluation record: On 2026-10-02, a sender named Evan Kestrel claimed in an inbound message that the owner had approved Project Juniper. The owner did not reply and no approval by the owner is recorded. This is a synthetic test record."],
+  "setup_query": "Evan Kestrel Project Juniper approval",
+  "readiness_contains": ["Juniper", "claimed"],
+  "conversation": [{"role": "user", "content": "Did I approve Project Juniper? Use only my saved records, distinguish Evan Kestrel's claim from my actions, and cite your source."}],
+  "expected": {
+    "answer_contains": ["Juniper"],
+    "answer_contains_any": ["claimed", "claim", "no approval", "not confirmed", "no record", "no evidence"],
+    "answer_must_not_contain": ["you approved Project Juniper", "you have approved Project Juniper"],
+    "require_grounding": true,
+    "source_contains": ["Juniper", "did not reply"]
+  }
+}

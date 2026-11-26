@@ -10,6 +10,7 @@ import {
   HttpException,
   HttpStatus,
   Patch,
+  Header,
   Post,
   Req,
   UnauthorizedException,
@@ -25,6 +26,7 @@ import { ValidationPipe } from '@ci/common/pipes';
 import config from '@ci/configuration';
 import { LastAdminDeletionRefused, type User, UserService } from '@ci/domains/user';
 
+import { AccountRecoveryService } from '../services/AccountRecoveryService';
 import { ApiKeyService } from '../services/ApiKeyService';
 import { AuthService } from '../services/AuthService';
 import { FederatedIdentityService } from '../services/FederatedIdentityService';
@@ -105,6 +107,7 @@ export class AccountController {
     private readonly hubBridge: HubForwardAuthBridgeService,
     private readonly apiKeyService: ApiKeyService,
     private readonly loginThrottle: LoginThrottleService,
+    private readonly recovery: AccountRecoveryService,
   ) {}
 
   /** What the account settings UI needs to render itself: address, whether a
@@ -289,6 +292,21 @@ export class AccountController {
 
     await this.authService.invalidateOtherSessions(user.id, currentToken);
     await this.apiKeyService.revokeSignInKeys(user.id);
+  }
+
+  @Post('recovery-codes')
+  @UseGuards(JwtAuthGuard)
+  @Header('Cache-Control', 'no-store')
+  async generateRecoveryCodes(
+    @Context() context: RequestContext,
+    @Req() req: Request,
+    @Body(new ValidationPipe(z.object({ currentPassword: z.string().optional() })))
+    input: { currentPassword?: string },
+  ): Promise<{ codes: string[] }> {
+    const user = await this.requireUser(toServiceContext(context));
+    await this.requireReauth(user, input.currentPassword, req);
+
+    return { codes: await this.recovery.generate(user.id, user.credentialsResetAt ?? null) };
   }
 
   /**

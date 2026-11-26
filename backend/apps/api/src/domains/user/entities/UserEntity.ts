@@ -74,6 +74,9 @@ export class UserEntity {
   @Column({ type: 'timestamptz', name: 'password_set_at', nullable: true })
   passwordSetAt?: Date | null;
 
+  @Column({ type: 'timestamptz', name: 'credentials_reset_at', nullable: true })
+  credentialsResetAt?: Date | null;
+
   @Column({ type: 'uuid', name: 'entity_id', nullable: true })
   entityId?: string | null;
 
@@ -145,6 +148,7 @@ export class UserEntity {
       createdAt: entity.createdAt,
       updatedAt: entity.updatedAt,
       passwordSetAt: entity.passwordSetAt ?? null,
+      credentialsResetAt: entity.credentialsResetAt ?? null,
       emailProvenAt: entity.emailProvenAt ?? null,
     };
   }

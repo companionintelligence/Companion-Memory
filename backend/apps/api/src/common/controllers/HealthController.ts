@@ -1,8 +1,15 @@
-import { Controller, Get, HttpCode, Optional } from '@nestjs/common';
+import { readFile } from 'node:fs/promises';
+
+import { Controller, Get, HttpCode, Optional, UseGuards } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
+import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
+import { READ_CAPABILITY, RequireCapability } from '@ci/common/decorators';
+import { FeatureService } from '@ci/common/feature';
+import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import config from '@ci/configuration';
+import { FileService } from '@ci/domains/files';
 import { OllamaService } from '@ci/domains/llm';
 
 import { API_VERSION, MIN_CLIENT_VERSION } from '../apiContract';
@@ -38,6 +45,9 @@ const DETAILED_CACHE_TTL_MS = 5_000;
 /** Same TTL against the monotonic clock — see {@link probe} on why not `Date.now()`. */
 const DETAILED_CACHE_TTL_NS = BigInt(DETAILED_CACHE_TTL_MS) * 1_000_000n;
 
+/** A last successful backup older than this is reported as overdue. */
+const BACKUP_OVERDUE_AFTER_MS = 48 * 60 * 60_000;
+
 /** One dependency's probe outcome. */
 interface DependencyHealth {
   name: string;
@@ -50,6 +60,14 @@ interface DependencyHealth {
 
 /** What a probe body reports; {@link probe} adds the name and the latency. */
 type ProbeResult = Pick<DependencyHealth, 'ok' | 'detail'>;
+
+/** The slice of the appliance backup an administrator is shown (see `backupStatus`). */
+interface BackupSummary {
+  state: string;
+  lastSuccessAt?: string;
+  bytes?: number;
+  coverage?: string;
+}
 
 /** The body of {@link HealthController.detailed}. */
 interface DetailedHealth {
@@ -130,6 +148,8 @@ export class HealthController {
     // than make the controller — and `GET /health` with it — unconstructible.
     @Optional() @InjectDataSource() private readonly dataSource?: DataSource,
     @Optional() private readonly ollama?: OllamaService,
+    @Optional() private readonly files?: FileService,
+    @Optional() private readonly features?: FeatureService,
   ) {}
 
   @Get()
@@ -188,6 +208,168 @@ export class HealthController {
     });
 
     return this.inFlight;
+  }
+
+  /** Authenticated, user-scoped progress. Reachability alone is not pipeline readiness. */
+  @Get('operations')
+  @UseGuards(JwtOrApiKeyAuthGuard)
+  @RequireCapability(READ_CAPABILITY)
+  async operations(@Context() context: RequestContext) {
+    const { userId } = toServiceContext(context);
+    const [base, storage, summary, parser, hbpe, progress, syncEnabled] = await Promise.all([
+      this.detailed(),
+      probe('files', async () => {
+        if (!this.files) {
+          return { ok: false, detail: 'not configured' };
+        }
+
+        await this.files.checkStorage();
+
+        return { ok: true };
+      }),
+      this.probeSidecar('summaries', config.services.summary.host),
+      this.probeSidecar('documents', config.services.parser.host),
+      this.probeSidecar('predictions', config.services.hbpe.host),
+      probe('processing', async () => {
+        if (!this.dataSource) {
+          return { ok: false, detail: 'not configured' };
+        }
+
+        // "Delayed" is late against the job's OWN schedule, not old: a job created
+        // days ago for a start time that has only just passed is on time, so a
+        // waiting job counts once it is 15 minutes past `start_after`, and an
+        // active one once it has run for two hours. A large import can
+        // legitimately run that long: this is a prompt to look, never a limit.
+        const [row] = await this.dataSource.query(
+          `SELECT
+          count(*) FILTER (WHERE state = 'created')::int AS waiting,
+          count(*) FILTER (WHERE state = 'active')::int AS active,
+          count(*) FILTER (WHERE state = 'failed')::int AS failed,
+          count(*) FILTER (
+            WHERE (state = 'created' AND start_after < now() - interval '15 minutes')
+              OR (state = 'active' AND started_on < now() - interval '2 hours')
+          )::int AS delayed,
+          max(completed_on) FILTER (WHERE state = 'completed') AS "lastCompletedAt"
+          FROM pgboss.job WHERE data->>'userId' = $1`,
+          [userId],
+        );
+
+        return { ok: Number(row?.delayed ?? 0) === 0, ...row };
+      }),
+      this.features?.isFeatureEnabled('scheduled.connection.sync').catch(() => false) ??
+        Promise.resolve(false),
+    ]);
+    let connections: unknown = null;
+    let backup: BackupSummary | null = null;
+    let connectionStatus = { name: 'connections', ok: false, detail: 'Status could not be read.' };
+    if (this.dataSource) {
+      try {
+        const [row] = await withProbeTimeout(() =>
+          this.dataSource!.query(
+            `SELECT
+          count(*) FILTER (WHERE active AND NOT needs_reauth)::int AS connected,
+          EXISTS(SELECT 1 FROM ci.users WHERE id = $1 AND role = 'admin' AND deleted_at IS NULL) AS "isAdmin",
+          count(*) FILTER (WHERE needs_reauth)::int AS "needsSignIn",
+          (SELECT max(last_transformed) FROM ci_etl.connection_sync_jobs WHERE user_id = $1) AS "lastSyncedAt",
+          (SELECT count(*)::int FROM ci_etl.connection_sync_jobs j
+            WHERE j.user_id = $1 AND j.status IN ('pending', 'in_progress')) AS syncing
+          FROM ci.connections WHERE user_id = $1`,
+            [userId],
+          ),
+        );
+        connections = row;
+        if (row?.isAdmin === true) {
+          backup = await this.backupStatus();
+        }
+
+        connectionStatus = {
+          name: 'connections',
+          ok: Number(row?.needsSignIn ?? 0) === 0,
+          detail: !syncEnabled
+            ? 'Automatic syncing is paused.'
+            : Number(row?.needsSignIn ?? 0) > 0
+              ? 'Sign in to a source again to resume syncing.'
+              : 'Source connections checked.',
+        };
+      } catch {
+        // Keep other component outcomes when this one cannot be measured.
+      }
+    }
+
+    const dependencies = [...base.dependencies, storage, summary, parser, hbpe, progress, connectionStatus];
+
+    return {
+      ok: dependencies.every((item) => item.ok),
+      at: new Date().toISOString(),
+      dependencies,
+      connections,
+      syncEnabled,
+      processing: progress,
+      backup,
+    };
+  }
+
+  /**
+   * What an administrator sees of the appliance backup: the outcome the backup scheduler wrote to the JSON
+   * status file that `CI_BACKUP_STATUS_FILE` names. Only the state, the last success, the size and what the
+   * backup covers leave here: never the file's path and never its error text, whatever else it holds.
+   *
+   * A last success older than 48 hours is `overdue`, however recent the last attempt was. A file that is
+   * unset is `not_configured`; one that cannot be read or parsed is `unavailable`.
+   */
+  private async backupStatus(): Promise<BackupSummary> {
+    const filename = process.env.CI_BACKUP_STATUS_FILE;
+    if (!filename) {
+      return { state: 'not_configured' };
+    }
+
+    try {
+      const saved = JSON.parse(await readFile(filename, 'utf8')) as Record<string, unknown>;
+      const at =
+        typeof saved.last_success_at === 'string' && Number.isFinite(Date.parse(saved.last_success_at))
+          ? saved.last_success_at
+          : undefined;
+      const stale = !at || Date.now() - Date.parse(at) > BACKUP_OVERDUE_AFTER_MS;
+
+      return {
+        state:
+          saved.state === 'failed'
+            ? 'failed'
+            : stale
+              ? 'overdue'
+              : saved.state === 'complete'
+                ? 'complete'
+                : 'unavailable',
+        ...(at ? { lastSuccessAt: at } : {}),
+        ...(typeof saved.bytes === 'number' && saved.bytes >= 0 ? { bytes: saved.bytes } : {}),
+        ...(typeof saved.coverage === 'string' ? { coverage: saved.coverage } : {}),
+      };
+    } catch {
+      return { state: 'unavailable' };
+    }
+  }
+
+  private probeSidecar(name: string, host: string): Promise<DependencyHealth> {
+    return probe(name, async () => {
+      if (!host) {
+        return { ok: false, detail: 'not configured' };
+      }
+
+      const response = await fetch(`${host.replace(/\/$/, '')}/health`, {
+        signal: AbortSignal.timeout(LLM_PROBE_TIMEOUT_MS),
+        headers: config.services.sidecarAuthSecret
+          ? { Authorization: `Bearer ${config.services.sidecarAuthSecret}` }
+          : {},
+      });
+      const body = (await response.json()) as { status?: string };
+
+      return {
+        ok: response.ok && body.status === 'ok',
+        ...(!(response.ok && body.status === 'ok')
+          ? { detail: 'Service or its model needs attention.' }
+          : {}),
+      };
+    });
   }
 
   private async runProbes(): Promise<DetailedHealth> {

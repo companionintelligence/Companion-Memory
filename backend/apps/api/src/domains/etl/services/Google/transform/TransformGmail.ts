@@ -29,6 +29,14 @@ import { TagService } from '@ci/domains/search-next';
 
 import { ConnectionSyncJob } from '../../../types';
 import { parseDate } from '../../../util';
+import {
+  type MailAttachment,
+  type MailAttachmentOutcome,
+  MailAttachmentService,
+  type MailAttachmentRef,
+  gmailAttachments,
+  withAttachmentRefs,
+} from '../../MailAttachmentService';
 import { type ParticipantGroup, PromoteService } from '../../PromoteService';
 
 /** The participant groups one message contributes to the page's PromoteService call: from, to, cc, bcc. */
@@ -44,6 +52,10 @@ interface PreparedMessage {
   ccParticipants: EmailParticipant[];
   bccParticipants: EmailParticipant[];
   groups: ParticipantGroup[];
+  /** The files the message carries, which are saved before it is written. */
+  attachments: MailAttachment[];
+  /** The content records of the files that were saved: empty until {@link GmailTransformService.saveAttachments} has run. */
+  attachmentRefs: MailAttachmentRef[];
 }
 
 @Injectable()
@@ -54,6 +66,7 @@ export class GmailTransformService {
     private readonly promoteService: PromoteService,
     private readonly tagService: TagService,
     private readonly logger: LoggerService,
+    private readonly mailAttachments: MailAttachmentService,
   ) {
     this.logger.setContext(GmailTransformService.name);
   }
@@ -73,7 +86,7 @@ export class GmailTransformService {
       });
 
       const messages = (data.messages as GmailMessage[]) || [];
-      const outcome = await this.processPage(messages, userId, connection.id);
+      const outcome = await this.processPage(messages, userId, connection);
 
       this.logger.log('Gmail message promotion completed', {
         userId,
@@ -109,16 +122,90 @@ export class GmailTransformService {
    * per-row CommunicationCreatedEvent for the rows this sync inserted: the
    * search index and the people-linker consume it, and nothing else schedules
    * either for a connection sync (the arrival sweep covers content only).
+   *
+   * Attachments are saved before the write ({@link saveAttachments}). A message
+   * whose files could not all be saved is still written, with the references
+   * of the ones that were, so a provider that hiccups never costs an email.
+   * The failure is raised after the page is written: the sync job records it
+   * as its `transformError` and the page does not report as clean. A failed
+   * transform is not run again by itself, but processing the message again
+   * repairs it: the files already saved are reused, the missing one is tried
+   * again, and {@link writePage} adds its reference to the stored row. That
+   * is the only per-message error let out; any other is skipped and logged
+   * in `prepareMessage`.
    */
   private async processPage(
     messages: GmailMessage[],
     userId: string,
+    connection: Connection,
+  ): Promise<{ written: number; inserted: number }> {
+    const gated = messages
+      .map((message) => this.prepareMessage(message, userId, connection.id))
+      .filter((entry): entry is PreparedMessage => entry != null);
+
+    const { prepared, failures } = await this.saveAttachments(gated, userId, connection);
+    const outcome = await this.writePage(prepared, userId, connection.id);
+
+    if (failures.length > 0) {
+      throw failures[0];
+    }
+
+    return outcome;
+  }
+
+  /**
+   * Save the files of every message on the page, and give each message the
+   * references of the ones that saved.
+   *
+   * All the messages are started together; MailAttachmentService itself keeps
+   * at most two downloads running. This waits for every message, so nothing is
+   * still downloading once the page has been written. A message whose files
+   * did not all save is not dropped: the failure is logged against it here and
+   * handed back, for processPage to raise once the page is written.
+   */
+  private async saveAttachments(
+    gated: PreparedMessage[],
+    userId: string,
+    connection: Connection,
+  ): Promise<{ prepared: PreparedMessage[]; failures: unknown[] }> {
+    const outcomes = await Promise.all(
+      gated.map(async ({ message, attachments }): Promise<MailAttachmentOutcome> => {
+        if (attachments.length === 0 || !message.id) {
+          return { refs: [], failures: [] };
+        }
+
+        return await this.mailAttachments.ingest(connection, userId, 'gmail', message.id, attachments);
+      }),
+    );
+    const failures: unknown[] = [];
+    const prepared = gated.map((entry, index) => {
+      const { refs, failures: unsaved } = outcomes[index];
+
+      if (unsaved.length > 0) {
+        failures.push(...unsaved);
+        this.logger.error('Importing a Gmail message without all of its attachments', {
+          userId,
+          connectionId: connection.id,
+          messageId: entry.message.id,
+          saved: refs.length,
+          unsaved: unsaved.length,
+          error: unsaved[0] instanceof Error ? unsaved[0].message : 'Unknown error',
+        });
+      }
+
+      return { ...entry, attachmentRefs: refs };
+    });
+
+    return { prepared, failures };
+  }
+
+  /** The page-level write: participants resolved once, one upsert, the missing references added to rows already stored, then tags. */
+  private async writePage(
+    prepared: PreparedMessage[],
+    userId: string,
     connectionId: string,
   ): Promise<{ written: number; inserted: number }> {
     const context = { userId };
-    const prepared = messages
-      .map((message) => this.prepareMessage(message, userId, connectionId))
-      .filter((entry): entry is PreparedMessage => entry != null);
 
     if (prepared.length === 0) {
       return { written: 0, inserted: 0 };
@@ -138,6 +225,21 @@ export class GmailTransformService {
       ),
     );
     const results = await this.communicationService.createManyDetailed(context, dtos, { emitCreated: true });
+
+    // A message the page found already imported comes back as it was stored:
+    // `attachments` is not among the columns a re-sync refreshes. So a message
+    // imported before its files were saved, or without one that failed the
+    // last time, gets the references added here, and one it already holds is
+    // not added again. A row this write inserted already has them.
+    for (const [index, { entity, inserted }] of results.entries()) {
+      const attachments = inserted
+        ? null
+        : withAttachmentRefs(entity.attachments, prepared[index].attachmentRefs);
+
+      if (attachments) {
+        await this.communicationService.update(context, entity.id, { attachments });
+      }
+    }
 
     // Labels become tags. One call per distinct label set, not one per
     // message: a page of inbox mail is mostly the same two or three labels.
@@ -242,6 +344,8 @@ export class GmailTransformService {
           { participants: ccParticipants, relationshipType: 'EMAILED', startDate: date },
           { participants: bccParticipants, relationshipType: 'EMAILED', startDate: date },
         ],
+        attachments: gmailAttachments(message.payload),
+        attachmentRefs: [],
       };
     } catch (error) {
       this.logger.error('Error processing individual Gmail message', {
@@ -289,6 +393,7 @@ export class GmailTransformService {
       // masquerading as the body is not.
       content: details.body,
       category: 'personal', // TODO: Classify emails
+      attachments: entry.attachmentRefs,
       connection_id: connectionId,
       preview: details.snippet || null,
       // Identity: the RFC Message-ID under the federated `email` system,

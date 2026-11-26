@@ -1,6 +1,6 @@
 import { Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, IsNull, LessThan, Repository } from 'typeorm';
+import { In, IsNull, LessThan, LessThanOrEqual, MoreThan, Or, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/common/context';
@@ -659,6 +659,9 @@ export class AgentMemoryService {
   /**
    * Fragments that have not yet been processed by the compaction cron.
    * Skips very recent writes so burst-written fragments settle before LLM extraction.
+   * Only `active` fragments whose validity window includes now are returned: a
+   * superseded or conflicted one, one that is not valid yet and one that has
+   * expired are left as they are, still unprocessed.
    * Pass SYSTEM_USER context to query across all users (cron use case).
    */
   async findUnprocessed(
@@ -666,6 +669,7 @@ export class AgentMemoryService {
     options: { limit?: number; minAgeMinutes?: number } = {},
   ): Promise<AgentMemory[]> {
     const { limit = 50, minAgeMinutes = 2 } = options;
+    const asOf = new Date();
     const cutoff = new Date(Date.now() - minAgeMinutes * 60 * 1000);
 
     const rows = await this.repository.find({
@@ -673,6 +677,9 @@ export class AgentMemoryService {
         ...(context.userId !== SYSTEM_USER && { userId: context.userId }),
         processedAt: IsNull(),
         createdAt: LessThan(cutoff),
+        status: 'active',
+        validFrom: Or(IsNull(), LessThanOrEqual(asOf)),
+        validUntil: Or(IsNull(), MoreThan(asOf)),
       },
       order: { createdAt: 'ASC' },
       take: limit,

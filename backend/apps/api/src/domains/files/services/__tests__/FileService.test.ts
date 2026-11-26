@@ -1,9 +1,10 @@
 import { createHash } from 'crypto';
 
-import { CreateMultipartUploadCommand, UploadPartCommand } from '@aws-sdk/client-s3';
+import { CreateMultipartUploadCommand, HeadBucketCommand, UploadPartCommand } from '@aws-sdk/client-s3';
 import { NotFoundException } from '@nestjs/common';
 
 import { SYSTEM_USER, type UserServiceContext } from '@ci/common/context';
+import config from '@ci/configuration';
 
 import { FileUploadedEvent } from '../../events';
 import { FileVariant } from '../../types';
@@ -884,5 +885,29 @@ describe('FileService.openObjectWriter writes an object a piece at a time', () =
     ]);
 
     await writer.abort();
+  });
+});
+
+describe('FileService.checkStorage — whether photos and attachments can be stored right now', () => {
+  it('asks the object store about the configured bucket, under a deadline of its own', async () => {
+    const { service, s3Send } = makeService(makeRepo());
+
+    await service.checkStorage();
+
+    expect(s3Send).toHaveBeenCalledTimes(1);
+
+    const [command, options] = s3Send.mock.calls[0];
+
+    expect(command).toBeInstanceOf(HeadBucketCommand);
+    expect(command.input).toEqual({ Bucket: config.staticfiles.bucket });
+    // A store that accepts the connection and goes quiet must not hold the status page.
+    expect(options.abortSignal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('lets a store that cannot be reached fail the check', async () => {
+    const { service, s3Send } = makeService(makeRepo());
+    s3Send.mockRejectedValue(new Error('connect ECONNREFUSED'));
+
+    await expect(service.checkStorage()).rejects.toThrow('connect ECONNREFUSED');
   });
 });

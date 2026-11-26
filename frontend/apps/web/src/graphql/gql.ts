@@ -249,6 +249,12 @@ type Documents = {
     "\n  mutation DeclineTaskPendingChange($id: ID!) {\n    declineTaskPendingChange(id: $id) {\n      success\n    }\n  }\n": typeof types.DeclineTaskPendingChangeDocument,
     "\n  mutation ReopenTask($id: ID!) {\n    reopenTask(id: $id) {\n      id\n      status\n      completedAt\n    }\n  }\n": typeof types.ReopenTaskDocument,
     "\n  mutation AcceptTaskPendingChange($id: ID!) {\n    acceptTaskPendingChange(id: $id) {\n      success\n      task {\n        id\n        status\n        title\n        notes\n        parentId\n      }\n    }\n  }\n": typeof types.AcceptTaskPendingChangeDocument,
+    "\n  query PlanReminders {\n    reminders { id taskId blockId fireAt status deliveryMode attempts nextAttemptAt lastError }\n    pushPublicKey\n  }\n": typeof types.PlanRemindersDocument,
+    "\n  mutation PlanCreateReminder($input: CreateReminderInput!) {\n    createReminder(input: $input) { success reminder { id fireAt status deliveryMode } }\n  }\n": typeof types.PlanCreateReminderDocument,
+    "mutation PlanCancelReminder($id: ID!) { cancelReminder(id: $id) { id status } }": typeof types.PlanCancelReminderDocument,
+    "mutation PlanRetryReminder($id: ID!) { retryReminder(id: $id) { id status } }": typeof types.PlanRetryReminderDocument,
+    "mutation PlanConfirmDeviceReminder($id: ID!) { confirmReminderDeviceSchedule(id: $id) { id status } }": typeof types.PlanConfirmDeviceReminderDocument,
+    "mutation PlanSubscribePush($input: PushSubscriptionInput!) { subscribeToPush(input: $input) }": typeof types.PlanSubscribePushDocument,
     "\n  fragment TaskRowFragment on TaskType {\n    id\n    title\n    description\n    status\n    priority\n    parentId\n    dueAt\n    scheduledFor\n    placedOnCalendar\n    deferUntil\n    estimatedMinutes\n    completedAt\n  }\n": typeof types.TaskRowFragmentFragmentDoc,
     "\n  query ListTasksForTest {\n    tasks(first: 10) {\n      edges {\n        node {\n          id\n          title\n        }\n      }\n    }\n  }\n": typeof types.ListTasksForTestDocument,
     "\n  mutation DeleteTask($input: DeleteByIdInput!) {\n    deleteTask(input: $input) {\n      success\n      deletedId\n    }\n  }\n": typeof types.DeleteTaskDocument,
@@ -528,6 +534,12 @@ const documents: Documents = {
     "\n  mutation DeclineTaskPendingChange($id: ID!) {\n    declineTaskPendingChange(id: $id) {\n      success\n    }\n  }\n": types.DeclineTaskPendingChangeDocument,
     "\n  mutation ReopenTask($id: ID!) {\n    reopenTask(id: $id) {\n      id\n      status\n      completedAt\n    }\n  }\n": types.ReopenTaskDocument,
     "\n  mutation AcceptTaskPendingChange($id: ID!) {\n    acceptTaskPendingChange(id: $id) {\n      success\n      task {\n        id\n        status\n        title\n        notes\n        parentId\n      }\n    }\n  }\n": types.AcceptTaskPendingChangeDocument,
+    "\n  query PlanReminders {\n    reminders { id taskId blockId fireAt status deliveryMode attempts nextAttemptAt lastError }\n    pushPublicKey\n  }\n": types.PlanRemindersDocument,
+    "\n  mutation PlanCreateReminder($input: CreateReminderInput!) {\n    createReminder(input: $input) { success reminder { id fireAt status deliveryMode } }\n  }\n": types.PlanCreateReminderDocument,
+    "mutation PlanCancelReminder($id: ID!) { cancelReminder(id: $id) { id status } }": types.PlanCancelReminderDocument,
+    "mutation PlanRetryReminder($id: ID!) { retryReminder(id: $id) { id status } }": types.PlanRetryReminderDocument,
+    "mutation PlanConfirmDeviceReminder($id: ID!) { confirmReminderDeviceSchedule(id: $id) { id status } }": types.PlanConfirmDeviceReminderDocument,
+    "mutation PlanSubscribePush($input: PushSubscriptionInput!) { subscribeToPush(input: $input) }": types.PlanSubscribePushDocument,
     "\n  fragment TaskRowFragment on TaskType {\n    id\n    title\n    description\n    status\n    priority\n    parentId\n    dueAt\n    scheduledFor\n    placedOnCalendar\n    deferUntil\n    estimatedMinutes\n    completedAt\n  }\n": types.TaskRowFragmentFragmentDoc,
     "\n  query ListTasksForTest {\n    tasks(first: 10) {\n      edges {\n        node {\n          id\n          title\n        }\n      }\n    }\n  }\n": types.ListTasksForTestDocument,
     "\n  mutation DeleteTask($input: DeleteByIdInput!) {\n    deleteTask(input: $input) {\n      success\n      deletedId\n    }\n  }\n": types.DeleteTaskDocument,
@@ -1514,6 +1526,30 @@ export function gql(source: "\n  mutation ReopenTask($id: ID!) {\n    reopenTask
  * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function gql(source: "\n  mutation AcceptTaskPendingChange($id: ID!) {\n    acceptTaskPendingChange(id: $id) {\n      success\n      task {\n        id\n        status\n        title\n        notes\n        parentId\n      }\n    }\n  }\n"): (typeof documents)["\n  mutation AcceptTaskPendingChange($id: ID!) {\n    acceptTaskPendingChange(id: $id) {\n      success\n      task {\n        id\n        status\n        title\n        notes\n        parentId\n      }\n    }\n  }\n"];
+/**
+ * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function gql(source: "\n  query PlanReminders {\n    reminders { id taskId blockId fireAt status deliveryMode attempts nextAttemptAt lastError }\n    pushPublicKey\n  }\n"): (typeof documents)["\n  query PlanReminders {\n    reminders { id taskId blockId fireAt status deliveryMode attempts nextAttemptAt lastError }\n    pushPublicKey\n  }\n"];
+/**
+ * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function gql(source: "\n  mutation PlanCreateReminder($input: CreateReminderInput!) {\n    createReminder(input: $input) { success reminder { id fireAt status deliveryMode } }\n  }\n"): (typeof documents)["\n  mutation PlanCreateReminder($input: CreateReminderInput!) {\n    createReminder(input: $input) { success reminder { id fireAt status deliveryMode } }\n  }\n"];
+/**
+ * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function gql(source: "mutation PlanCancelReminder($id: ID!) { cancelReminder(id: $id) { id status } }"): (typeof documents)["mutation PlanCancelReminder($id: ID!) { cancelReminder(id: $id) { id status } }"];
+/**
+ * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function gql(source: "mutation PlanRetryReminder($id: ID!) { retryReminder(id: $id) { id status } }"): (typeof documents)["mutation PlanRetryReminder($id: ID!) { retryReminder(id: $id) { id status } }"];
+/**
+ * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function gql(source: "mutation PlanConfirmDeviceReminder($id: ID!) { confirmReminderDeviceSchedule(id: $id) { id status } }"): (typeof documents)["mutation PlanConfirmDeviceReminder($id: ID!) { confirmReminderDeviceSchedule(id: $id) { id status } }"];
+/**
+ * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function gql(source: "mutation PlanSubscribePush($input: PushSubscriptionInput!) { subscribeToPush(input: $input) }"): (typeof documents)["mutation PlanSubscribePush($input: PushSubscriptionInput!) { subscribeToPush(input: $input) }"];
 /**
  * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

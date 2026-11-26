@@ -749,6 +749,14 @@ test-db: ## Run the database-backed jest suites against a throwaway Postgres (ne
 	@# running ci-testdb-* container and a leftover temp dir.
 	@yarn node --import tsx scripts/xtask/index.ts test-db $(if $(KEEP),--keep) $(if $(KEEP_FOR),--keep-for $(KEEP_FOR)) $(if $(WORKERS),--workers $(WORKERS)) $(if $(DB_IMAGE),--image $(DB_IMAGE)) $(if $(NO_RETRY),--no-retry) -- $(ARGS)
 
+.PHONY: test-recovery
+test-recovery: ## Run the appliance snapshot and restore safety checks (no Docker needed)
+	@python3 -m unittest discover -s scripts/backup/tests -p 'test_appliance_recovery.py'
+
+.PHONY: test-recovery-docker
+test-recovery-docker: ## Restore a snapshot into disposable Docker projects and check the data (needs Docker)
+	@RUN_DOCKER_RECOVERY_TESTS=1 python3 -m unittest discover -s scripts/backup/tests
+
 .PHONY: test-android
 test-android: ## Run the Android native unit tests (JVM; no emulator needed)
 	@printf "$(call task_icon,test-android,🤖) Running Android unit tests...\n\n"

@@ -45,3 +45,5 @@ export class ConversationModule {}
 
 export { MessageEntity, MessageService, ThreadEntity, ThreadService };
 export type { Message, Thread };
+export { verifyMemoryCitations } from './grounding';
+export type { MessageGrounding } from './grounding';

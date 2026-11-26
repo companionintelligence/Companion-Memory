@@ -254,6 +254,51 @@ describe('useChatRequester — device mode', () => {
     expect(llm.stream).toHaveBeenLastCalledWith('a', expect.objectContaining({ enableThinking: true }));
   });
 
+  it('hands the saved sampler to the load, and the reply limits to the turn', async () => {
+    Object.assign(llm.prefs, {
+      thinking: true,
+      sampling: { temperature: 0.3, topK: 20 },
+      maxOutputTokens: 512,
+      thinkingTokenBudget: 256,
+    });
+    vi.stubGlobal('fetch', vi.fn());
+
+    const { result } = renderHook(() => useChatRequester({ threadId: null }));
+
+    await act(async () => {
+      await result.current[1].submit({ message: 'hi', fileIds: [] });
+    });
+
+    // The sampler is fixed when the model is loaded (and a changed one reloads it there); the limits are per turn.
+    expect(llm.ensureLoaded).toHaveBeenCalledWith(
+      'gemma-4-e2b-it',
+      expect.objectContaining({ sampling: { temperature: 0.3, topK: 20 } }),
+    );
+    expect(llm.stream).toHaveBeenLastCalledWith(
+      'hi',
+      expect.objectContaining({ enableThinking: true, maxOutputTokens: 512, thinkingTokenBudget: 256 }),
+    );
+  });
+
+  it('sets no sampler and no limit when none were saved, so the model’s own defaults apply', async () => {
+    vi.stubGlobal('fetch', vi.fn());
+
+    const { result } = renderHook(() => useChatRequester({ threadId: null }));
+
+    await act(async () => {
+      await result.current[1].submit({ message: 'hi', fileIds: [] });
+    });
+
+    const turn = llm.stream.mock.calls.at(-1)?.[1];
+
+    expect(llm.ensureLoaded).toHaveBeenCalledWith(
+      'gemma-4-e2b-it',
+      expect.not.objectContaining({ sampling: expect.anything() }),
+    );
+    expect(turn.maxOutputTokens).toBeUndefined();
+    expect(turn.thinkingTokenBudget).toBeUndefined();
+  });
+
   it('refuses a write request in code when the phone has no tools, without asking the model', async () => {
     llm.ensureLoaded.mockResolvedValueOnce({ alreadyLoaded: true, accelerator: 'cpu', toolCount: 0 });
 

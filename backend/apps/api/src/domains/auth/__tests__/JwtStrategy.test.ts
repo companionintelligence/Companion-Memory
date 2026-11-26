@@ -76,6 +76,22 @@ describe('JwtStrategy', () => {
     expect(user).toBeNull();
     expect(setSpy).not.toHaveBeenCalled();
   });
+
+  it.each([undefined, 999, 1_000, NaN, Infinity])(
+    'rejects a token issued before or during recovery (%s)',
+    async (issuedAtMs) => {
+      userService.findById.mockResolvedValue({ ...USER, credentialsResetAt: new Date(1_000) });
+      expect(await strategy.validate(req, { sub: USER.id, issuedAtMs })).toBeNull();
+      expect(setSpy).not.toHaveBeenCalled();
+    },
+  );
+
+  it('accepts a newly issued token after recovery', async () => {
+    const resetUser = { ...USER, credentialsResetAt: new Date(1_000) };
+    userService.findById.mockResolvedValue(resetUser);
+    expect(await strategy.validate(req, { sub: USER.id, issuedAtMs: 1_001 })).toEqual(resetUser);
+    expect(setSpy).toHaveBeenCalledWith({ userId: USER.id });
+  });
 });
 
 /**

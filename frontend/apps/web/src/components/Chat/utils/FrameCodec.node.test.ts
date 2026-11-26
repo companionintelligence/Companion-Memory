@@ -46,6 +46,25 @@ describe('FrameEncoder / FrameDecoder round-trip', () => {
     expect(decoded.flags).toBe(Flag.START | Flag.END);
   });
 
+  it('sends a channel above 3 as an extended keepalive frame that older decoders skip', () => {
+    const frame = new FrameEncoder().encodeFrame(Channel.GROUNDING, '{}', Flag.END);
+
+    // A decoder that reads only the two channel bits sees KEEPALIVE, never TEXT.
+    expect((frame[0] >> 6) & 0b11).toBe(Channel.KEEPALIVE);
+
+    const decoded = new FrameDecoder().push(frame)[0];
+    expect(decoded.channel).toBe(Channel.GROUNDING);
+    expect(decoded.flags).toBe(Flag.END);
+    expect(text(decoded.payload)).toBe('{}');
+  });
+
+  it('still decodes a plain keepalive as KEEPALIVE', () => {
+    const decoded = new FrameDecoder().push(new FrameEncoder().encodeFrame(Channel.KEEPALIVE, ''))[0];
+
+    expect(decoded.channel).toBe(Channel.KEEPALIVE);
+    expect(decoded.flags).toBe(0);
+  });
+
   it('preserves multi-byte UTF-8 payloads (big-endian length)', () => {
     const message = 'héllo 🌍 world';
     const frame = new FrameEncoder().encodeFrame(Channel.TEXT, message);

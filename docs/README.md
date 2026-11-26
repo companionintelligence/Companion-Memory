@@ -81,6 +81,9 @@ ADR-0004 lives one level up as [`architecture/adr-pipeline-ledger.md`](architect
 
 - [setup/companion-memory.md](setup/companion-memory.md) — the current first-run,
   inference-backend, Hub-managed, API-key, and troubleshooting guide for Companion Memory
+- [self-service-memory.md](self-service-memory.md) — what a person can do without an
+  operator: save account recovery codes, finish the first sync, read System status, set
+  reminders, and delete an account
 
 ## Spikes & scratch designs
 
@@ -183,6 +186,13 @@ How a personal archive becomes rows in `ci.*`, and how to work on that safely.
   switches.
 - [operations/job-controls.md](operations/job-controls.md) — turning Memory's work down
   without turning it off. See [Jobs & background work](#jobs--background-work) above.
+- [operations/backup-and-recovery.md](operations/backup-and-recovery.md) — complete appliance
+  snapshots (database, uploaded files, model volumes and the master encryption key),
+  scheduled backups and their status, restoring into a separate project, and the
+  snapshot-before-update wrapper.
+- [operations/mail-attachments.md](operations/mail-attachments.md) — how Gmail and Outlook
+  attachments are saved as files, the 25 MiB limit, retries, and what reprocessing does for
+  messages imported earlier.
 - [CI.md](CI.md) — **running CI for this repo.** Every workflow is gated to
   `workflow_dispatch`; this is how to dispatch one and how to run the same checks locally.
   Generated from `CI-Local-CICD` — do not hand-edit.

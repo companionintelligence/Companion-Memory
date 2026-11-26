@@ -219,7 +219,91 @@ class ChatBodyTests(unittest.TestCase):
         self.assertEqual(_decode_body(b'{"ok": true}'), {"ok": True})
 
 
+class GroundingTests(unittest.TestCase):
+    def case(self) -> Case:
+        return _case(
+            {
+                "id": "grounded",
+                "capability": "memory",
+                "conversation": [{"role": "user", "content": "Where does Mira work?"}],
+                "expected": {
+                    "answer_contains": ["Orbit"],
+                    "require_grounding": True,
+                    "source_contains": ["Orbit"],
+                },
+            }
+        )
+
+    def trace(self, answer: str, sources: list[dict]):
+        return messages_to_trace(
+            "grounded",
+            "thread",
+            [
+                {"role": "user", "content": "Where does Mira work?"},
+                {
+                    "role": "assistant",
+                    "content": answer,
+                    "grounding": {"status": "retrieved", "sources": sources},
+                },
+            ],
+        )
+
+    def test_right_answer_with_invented_citation_fails(self) -> None:
+        trace = self.trace(
+            "Orbit [M9]", [{"citation": 1, "text": "Mira works at Orbit"}]
+        )
+        checks = evaluate_trace(self.case(), trace)
+        self.assertTrue(
+            any(check.metric == "grounding" and not check.passed for check in checks)
+        )
+
+    def test_real_citation_with_wrong_source_fails_separately(self) -> None:
+        trace = self.trace("Orbit [M1]", [{"citation": 1, "text": "A recipe for soup"}])
+        checks = evaluate_trace(self.case(), trace)
+        self.assertTrue(
+            any(check.metric == "grounding" and check.passed for check in checks)
+        )
+        self.assertTrue(
+            any(
+                check.metric == "source_correctness" and not check.passed
+                for check in checks
+            )
+        )
+
+    def test_correct_source_and_fact_pass(self) -> None:
+        trace = self.trace(
+            "Orbit [M1]", [{"citation": 1, "text": "Mira works at Orbit"}]
+        )
+        self.assertTrue(
+            all(check.passed for check in evaluate_trace(self.case(), trace))
+        )
+
+    def test_uncited_relevant_source_does_not_rescue_an_unrelated_citation(
+        self,
+    ) -> None:
+        trace = self.trace(
+            "Orbit [M1]",
+            [
+                {"citation": 1, "text": "A recipe for soup"},
+                {"citation": 2, "text": "Mira works at Orbit"},
+            ],
+        )
+        self.assertTrue(
+            any(
+                check.metric == "source_correctness" and not check.passed
+                for check in evaluate_trace(self.case(), trace)
+            )
+        )
+
+
 class CaseFileTests(unittest.TestCase):
+    def test_seed_readiness_cannot_be_an_empty_or_non_string_match(self) -> None:
+        raw = json.loads((CASES / "memory" / "temporal_correction.json").read_text())
+        for invalid in ([""], [123], ["   "]):
+            with self.subTest(readiness=invalid):
+                raw["readiness_contains"] = invalid
+                self.assertTrue(validate_case(raw))
+
     def test_committed_cases_validate(self) -> None:
         cases, errors = load_cases(CASES)
         self.assertEqual(errors, [])

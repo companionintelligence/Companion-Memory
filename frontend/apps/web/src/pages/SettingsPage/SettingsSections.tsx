@@ -45,6 +45,9 @@ const TrustProtocolsSection = lazy(() =>
 const DataPortabilitySection = lazy(() =>
   import('./sections/DataPortabilitySection').then((m) => ({ default: m.DataPortabilitySection })),
 );
+const SystemStatusSection = lazy(() =>
+  import('./sections/SystemStatusSection').then((m) => ({ default: m.SystemStatusSection })),
+);
 
 function sectionElement(section: string): ReactNode {
   switch (section) {
@@ -80,6 +83,8 @@ function sectionElement(section: string): ReactNode {
       return <TrustProtocolsSection />;
     case 'data':
       return <DataPortabilitySection />;
+    case 'status':
+      return <SystemStatusSection />;
     default:
       return null;
   }

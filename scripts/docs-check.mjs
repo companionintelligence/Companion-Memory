@@ -23,6 +23,8 @@ export const NORMATIVE_DOCS = [
   'docs/README.md',
   'docs/asks-system-guide.md',
   'docs/qa/ci-gate-proposal.md',
+  'docs/operations/backup-and-recovery.md',
+  'docs/self-service-memory.md',
 ];
 
 /**

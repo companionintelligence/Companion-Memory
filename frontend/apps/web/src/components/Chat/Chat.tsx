@@ -12,7 +12,7 @@ import {
 } from 'react';
 
 import { LocalLlmGenerationError } from '@ci/common';
-import { cn } from '@ci/shadcn';
+import { Button, cn } from '@ci/shadcn';
 import * as smd from 'streaming-markdown';
 import { type Parser as StreamingParser } from 'streaming-markdown';
 import { v7 as uuid7 } from 'uuid';
@@ -26,6 +26,9 @@ import { UserMessage } from './blocks/UserMessage';
 import { ChatInput, type FormData } from './ChatInput';
 import { ChatLoader } from './ChatLoader';
 import { ChatMessage } from './ChatMessage';
+import { ConversationExport } from './ConversationExport';
+import type { ExportMessage } from './conversationExportFormat';
+import { GroundingSources, parseGrounding } from './GroundingSources';
 import { streamingMarkdownRenderer } from './streamingRenderer';
 import { useConditionalAutoscroll } from './useConditionalAutoscroll';
 import { Channel, type Decoded, createStreamProcessor } from './utils';
@@ -39,6 +42,7 @@ interface Message {
   source?: 'openclaw' | 'memory' | 'user';
   /** Persisted tool calls. The live stream draws these as they arrive; a reload has only this column. */
   toolCalls?: object[] | null;
+  grounding?: unknown;
 }
 
 interface Props extends Omit<ChatInputProps, 'refocusWhenEnabled'> {
@@ -59,6 +63,8 @@ interface Props extends Omit<ChatInputProps, 'refocusWhenEnabled'> {
    */
   onStreamError?: () => void;
   initialDraft?: string;
+  /** The open conversation's name, for the export file. */
+  exportTitle?: string;
 }
 
 const textDecoder = new TextDecoder();
@@ -73,14 +79,38 @@ export function Chat({
   hasStartedReceiving,
   emptyState,
   onSubmit,
+  onStop,
   children,
   onResponseFinished,
   onStreamError,
   initialDraft,
+  exportTitle = 'Conversation',
   ...chatInputProps
 }: Props) {
   const autoFocusRef = useRef<HTMLTextAreaElement | null>(null);
   const lastProcessedResponseRef = useRef<string>('');
+  const [liveGrounding, setLiveGrounding] = useState<unknown>(null);
+  const liveGroundingRef = useRef<unknown>(null);
+  const [sendFailed, setSendFailed] = useState(false);
+  // Turns sent and answered since the thread was loaded; `messages` holds the ones before.
+  const [exportTurns, setExportTurns] = useState<ExportMessage[]>([]);
+  const exportAnswerRef = useRef('');
+
+  // A reply cut short by a stop or a broken stream still goes into an export, marked incomplete.
+  const keepIncompleteAnswer = useCallback(() => {
+    if (!exportAnswerRef.current) {
+      return;
+    }
+
+    const incomplete: ExportMessage = {
+      role: 'assistant',
+      content: exportAnswerRef.current,
+      grounding: liveGroundingRef.current,
+      incomplete: true,
+    };
+    setExportTurns((turns) => [...turns, incomplete]);
+    exportAnswerRef.current = '';
+  }, []);
 
   // We want to maintain reference to the scroll container so that we can auto-scroll
   // when we deem it appropriate. According to the contract stipulated here, that's when
@@ -204,6 +234,21 @@ export function Chat({
         return true;
       }
 
+      // The turn's evidence snapshot: shown under the answer, and not a channel change.
+      if (chunk.channel === Channel.GROUNDING) {
+        try {
+          const metadata: unknown = JSON.parse(textDecoder.decode(chunk.payload));
+          if (parseGrounding(metadata)) {
+            liveGroundingRef.current = metadata;
+            setLiveGrounding(metadata);
+          }
+        } catch {
+          // Bad optional metadata cannot interrupt an otherwise readable answer.
+        }
+
+        return true;
+      }
+
       if (!supportedChannels.has(chunk.channel)) {
         console.warn('Ignored unsupported chunk channel:', chunk.channel);
 
@@ -277,6 +322,9 @@ export function Chat({
         }
 
         smd.parser_write(parser, payload);
+        if (chunk.channel === Channel.TEXT) {
+          exportAnswerRef.current += payload;
+        }
 
         maybeAutoScroll();
       }
@@ -292,6 +340,13 @@ export function Chat({
         return false;
       }
 
+      setLiveGrounding(null);
+      liveGroundingRef.current = null;
+      setSendFailed(false);
+      exportAnswerRef.current = '';
+      const exportTurn: ExportMessage = { role: 'user', content: data.message };
+      setExportTurns((turns) => [...turns, exportTurn]);
+
       // What this send added to the transcript: the bubble, and the empty reply blocks that were started after it.
       let echoed: ReactNode[] = [];
 
@@ -304,11 +359,23 @@ export function Chat({
         console.error('Error inserting user block', err);
       }
 
-      const result = await onSubmit?.(data, e);
+      let result: boolean | void;
+      try {
+        result = await onSubmit?.(data, e);
+      } catch {
+        result = false;
+      }
 
       // The bubble goes up the moment the send starts, so a slow model load or request still reads as sent. But an
       // explicit refusal leaves the text in the composer, and the transcript must not also say it went out — each
       // try added a bubble with no reply. Taking the reply blocks back too restores the empty state.
+      // The composer keeps the text and attachments, and the notice offers a retry. Nothing is replayed on its own:
+      // a request that failed on the way back may already have been accepted.
+      if (result === false) {
+        setSendFailed(true);
+        setExportTurns((turns) => turns.filter((turn) => turn !== exportTurn));
+      }
+
       if (result === false && echoed.length > 0) {
         setAccumulatedMessages((prev) => prev.filter((node) => !echoed.includes(node)));
       }
@@ -332,9 +399,24 @@ export function Chat({
       responseText = accumulatedTextRef.current;
     }
 
+    if (exportAnswerRef.current) {
+      const completed: ExportMessage = {
+        role: 'assistant',
+        content: exportAnswerRef.current,
+        grounding: liveGroundingRef.current,
+      };
+      setExportTurns((turns) => [...turns, completed]);
+      exportAnswerRef.current = '';
+    }
+
     // First, check that we have a valid channel and flush the stream
     if (lastChannel != null) {
-      flushStream();
+      flushStream(
+        liveGroundingRef.current ? (
+          <GroundingSources key={uuid7()} value={liveGroundingRef.current} />
+        ) : undefined,
+      );
+      setLiveGrounding(null);
     }
 
     // Only handle response finished for TEXT channel with meaningful content
@@ -380,9 +462,10 @@ export function Chat({
         </div>,
       );
 
+      keepIncompleteAnswer();
       onStreamError?.();
     },
-    [flushStream, onStreamError],
+    [flushStream, onStreamError, keepIncompleteAnswer],
   );
 
   // The processor's handlers, dereferenced at call time. The effect below must
@@ -460,6 +543,15 @@ export function Chat({
 
   return (
     <div className="relative flex h-full min-h-0 min-w-0 w-full flex-col">
+      {((messages?.length ?? 0) > 0 || exportTurns.length > 0) && (
+        <div className="flex shrink-0 justify-end px-2">
+          <ConversationExport
+            title={exportTitle}
+            messages={[...(messages ?? []), ...exportTurns]}
+            disabled={Boolean(loading || streaming)}
+          />
+        </div>
+      )}
       {children == null && (messages?.length ?? 0) === 0 && accumulatedMessages.length === 1 && (
         // Scrolls on its own, like the starters column inside it: with the keyboard up a phone
         // has less height than an error state with its button, and an overflowing flex item
@@ -485,10 +577,29 @@ export function Chat({
           {children}
           {renderedMessages}
           {accumulatedMessages}
+          <GroundingSources value={liveGrounding} />
         </div>
       )}
 
       {hasStartedReceiving === false && <ChatLoader className="mt-2 device:mt-4" />}
+
+      {sendFailed && (
+        <div
+          role="alert"
+          className="mx-2 mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-sm"
+        >
+          <span>Message was not sent. Your text is still in the composer.</span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={Boolean(loading || streaming || chatInputProps.disabled)}
+            onClick={() => autoFocusRef.current?.form?.requestSubmit()}
+          >
+            Retry send
+          </Button>
+        </div>
+      )}
 
       <div className="w-full px-2 pb-2 pt-1 device:p-4">
         <ChatInput
@@ -498,6 +609,11 @@ export function Chat({
           onSubmit={handleSubmit}
           initialDraft={initialDraft}
           {...chatInputProps}
+          onStop={(event) => {
+            keepIncompleteAnswer();
+
+            return onStop?.(event);
+          }}
           refocusWhenEnabled={autoFocus}
         />
       </div>

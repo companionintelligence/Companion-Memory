@@ -215,6 +215,113 @@ describe('on-device preferences', () => {
     });
   });
 
+  it('bounds device answer settings and rejects nonnumeric stored values without discarding routing', () => {
+    const parsed = parseLocalLlmPrefs(
+      JSON.stringify({
+        mode: 'device',
+        modelId: 'gemma-4-e2b-it',
+        sampling: { temperature: 100, topP: -1, topK: 4.7 },
+        maxOutputTokens: 90_000,
+        thinkingTokenBudget: 'unlimited',
+      }),
+    );
+
+    expect(parsed).toMatchObject({
+      mode: 'device',
+      modelId: 'gemma-4-e2b-it',
+      sampling: { temperature: 2, topP: 0.05, topK: 5 },
+      maxOutputTokens: 8192,
+    });
+    expect(parsed.thinkingTokenBudget).toBeUndefined();
+    expect(
+      parseLocalLlmPrefs(JSON.stringify({ sampling: { temperature: 'hot', topP: null } })).sampling,
+    ).toBeUndefined();
+  });
+
+  it('clears sampler overrides on reset and keeps that reset after reopening settings', () => {
+    setLocalLlmPrefs({ sampling: { temperature: 0.2, topK: 12 }, maxOutputTokens: 512 });
+    resetLocalLlmPrefsCache();
+    expect(getLocalLlmPrefs()).toMatchObject({
+      sampling: { temperature: 0.2, topK: 12 },
+      maxOutputTokens: 512,
+    });
+
+    setLocalLlmPrefs({ sampling: undefined, maxOutputTokens: undefined });
+    resetLocalLlmPrefsCache();
+    expect(getLocalLlmPrefs().sampling).toBeUndefined();
+    expect(getLocalLlmPrefs().maxOutputTokens).toBeUndefined();
+  });
+
+  it('keeps both ends of every answer-setting range and clamps just past them', () => {
+    const sampling = (value: object) => parseLocalLlmPrefs(JSON.stringify({ sampling: value })).sampling;
+    const limits = (maxOutputTokens: number, thinkingTokenBudget: number) =>
+      parseLocalLlmPrefs(JSON.stringify({ maxOutputTokens, thinkingTokenBudget }));
+
+    // Temperature 0 is greedy decoding: a real setting, not "unset".
+    expect(sampling({ temperature: 0, topP: 0.05, topK: 1 })).toEqual({
+      temperature: 0,
+      topP: 0.05,
+      topK: 1,
+    });
+    expect(sampling({ temperature: 2, topP: 1, topK: 100 })).toEqual({ temperature: 2, topP: 1, topK: 100 });
+    expect(sampling({ temperature: -0.1, topP: 1.5, topK: 0 })).toEqual({ temperature: 0, topP: 1, topK: 1 });
+    expect(sampling({ temperature: 2.1, topP: 0.01, topK: 100.6 })).toEqual({
+      temperature: 2,
+      topP: 0.05,
+      topK: 100,
+    });
+
+    expect(limits(128, 64)).toMatchObject({ maxOutputTokens: 128, thinkingTokenBudget: 64 });
+    expect(limits(8192, 2048)).toMatchObject({ maxOutputTokens: 8192, thinkingTokenBudget: 2048 });
+    expect(limits(127.4, 63)).toMatchObject({ maxOutputTokens: 128, thinkingTokenBudget: 64 });
+    expect(limits(8192.4, 2049)).toMatchObject({ maxOutputTokens: 8192, thinkingTokenBudget: 2048 });
+  });
+
+  it('ignores a stored sampler that is not an object of numbers', () => {
+    for (const sampling of [null, 5, 'fast', [], {}, { topK: '40' }, { temperature: true }]) {
+      expect(parseLocalLlmPrefs(JSON.stringify({ sampling })).sampling).toBeUndefined();
+    }
+  });
+
+  it('clamps answer settings as Settings saves them, and drops a value that is not a number', () => {
+    const stored = () => JSON.parse(localStorage.getItem('ci.localLlm.prefs') ?? '{}');
+
+    setLocalLlmPrefs({
+      sampling: { temperature: 9, topP: 0, topK: 0.2 },
+      maxOutputTokens: 1,
+      thinkingTokenBudget: 99_999,
+    });
+
+    const clamped = {
+      sampling: { temperature: 2, topP: 0.05, topK: 1 },
+      maxOutputTokens: 128,
+      thinkingTokenBudget: 2048,
+    };
+
+    // What chat reads at once is what storage keeps for the next launch.
+    expect(getLocalLlmPrefs()).toMatchObject(clamped);
+    expect(stored()).toMatchObject(clamped);
+
+    // NaN and the infinities are not settings (JSON cannot carry them, so only a save can see them): the field is
+    // dropped and its neighbours stay.
+    setLocalLlmPrefs({
+      sampling: { temperature: Number.NaN, topP: Number.POSITIVE_INFINITY, topK: 40 },
+      maxOutputTokens: Number.NaN,
+    });
+    expect(getLocalLlmPrefs().sampling).toEqual({ topK: 40 });
+    expect(getLocalLlmPrefs().maxOutputTokens).toBeUndefined();
+    expect(stored().sampling).toEqual({ topK: 40 });
+    expect(stored()).not.toHaveProperty('maxOutputTokens');
+
+    // Routing changes leave the answer settings alone.
+    setLocalLlmPrefs({ mode: 'device' });
+    expect(getLocalLlmPrefs()).toMatchObject({
+      mode: 'device',
+      sampling: { topK: 40 },
+      thinkingTokenBudget: 2048,
+    });
+  });
+
   it('forgets a stored model the catalog no longer ships, keeping the rest of the preference', () => {
     // Seen on a device the day Qwen3-0.6B was dropped: the saved id reached requireModel() from the
     // settings section and the whole On-device card showed "Unknown on-device model: qwen3-0.6b-int4".

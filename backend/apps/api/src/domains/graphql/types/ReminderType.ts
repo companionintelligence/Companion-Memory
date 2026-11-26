@@ -1,4 +1,4 @@
-import { Field, GraphQLISODateTime, ID, ObjectType, registerEnumType } from '@nestjs/graphql';
+import { Field, GraphQLISODateTime, ID, ObjectType, registerEnumType, Int } from '@nestjs/graphql';
 
 import { type Reminder } from '@ci/domains/planning';
 
@@ -8,12 +8,17 @@ import { Node } from './Node';
 export enum ReminderStatusEnum {
   pending = 'pending',
   fired = 'fired',
+  delivering = 'delivering',
+  scheduled = 'scheduled',
+  delivered = 'delivered',
+  failed = 'failed',
   cancelled = 'cancelled',
 }
 
 registerEnumType(ReminderStatusEnum, {
   name: 'ReminderStatus',
-  description: "A reminder's claim state. Fired is terminal in this milestone — there is no snooze yet.",
+  description:
+    'Reminder delivery state; delivered means a push provider accepted it, fired is a legacy outcome.',
 });
 
 export enum ReminderSourceEnum {
@@ -51,6 +56,18 @@ export class ReminderType implements Node {
   @Field(() => GraphQLISODateTime, { nullable: true })
   firedAt!: Date | null;
 
+  @Field(() => String)
+  deliveryMode!: string;
+
+  @Field(() => Int)
+  attempts!: number;
+
+  @Field(() => GraphQLISODateTime, { nullable: true })
+  nextAttemptAt!: Date | null;
+
+  @Field(() => String, { nullable: true })
+  lastError!: string | null;
+
   @Field(() => ReminderSourceEnum)
   source!: ReminderSourceEnum;
 
@@ -68,6 +85,10 @@ export class ReminderType implements Node {
       status: source.status as ReminderStatusEnum,
       firedAt: source.firedAt,
       source: source.source as ReminderSourceEnum,
+      deliveryMode: source.deliveryMode,
+      attempts: source.attempts,
+      nextAttemptAt: source.nextAttemptAt,
+      lastError: source.lastError,
       createdAt: source.createdAt,
     };
   }

@@ -16,6 +16,8 @@ import {
   SettingsStatus,
 } from '../kit';
 
+import { RecoveryCodesSection } from './RecoveryCodesSection';
+
 /**
  * What "sign in again" means for someone the Hub signs in: the bridge only mints a
  * fresh session when there is no Memory session to keep, so reloading alone would
@@ -426,6 +428,8 @@ export function AccountSection() {
               </SettingsFooter>
             </SettingsForm>
           </SettingsGroup>
+
+          <RecoveryCodesSection requiresPassword={asksCurrentPassword} signInAgain={signInAgain} />
 
           <SettingsGroup>
             <SettingsRow

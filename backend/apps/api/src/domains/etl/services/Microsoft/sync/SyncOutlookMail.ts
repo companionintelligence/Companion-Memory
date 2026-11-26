@@ -66,20 +66,9 @@ export async function syncOutlookMail({
       const messages = (response.value as OutlookMailMessageEntity[]) || [];
       nextLink = response['@odata.nextLink'] as string | undefined;
 
-      // We could use $expand on the messages call to get attachments, but that will always return the full contentBytes
-      // of every attachment, which makes the whole call very slow and the payload very large
       for (const message of messages) {
-        if (message.hasAttachments) {
-          try {
-            message.attachments = (
-              (await client.request(
-                connection,
-                `/v1.0/me/messages/${message.id}/attachments?$select=id,lastModifiedDateTime,name,contentType,size,isInline&top=100`,
-              )) as { value: OutlookAttachment[] }
-            ).value;
-          } catch (err) {
-            console.log('Could not fetch attachments, skipping', err);
-          }
+        if (hasMailAttachments(message)) {
+          message.attachments = await fetchMailAttachments(connection, client, message.id);
         }
       }
 
@@ -117,20 +106,9 @@ export async function syncOutlookMail({
       const response = (await client.request(connection, endpoint)) as Record<string, unknown>;
       const messages = (response.value as OutlookMailMessageEntity[]) || [];
 
-      // We could use $expand on the messages call to get attachments, but that will always return the full contentBytes
-      // of every attachment, which makes the whole call very slow and the payload very large
       for (const message of messages) {
-        if (message.hasAttachments) {
-          try {
-            message.attachments = (
-              (await client.request(
-                connection,
-                `/v1.0/me/messages/${message.id}/attachments?$select=id,lastModifiedDateTime,name,contentType,size,isInline&top=100`,
-              )) as { value: OutlookAttachment[] }
-            ).value;
-          } catch (err) {
-            console.log('Could not fetch attachments, skipping', err);
-          }
+        if (hasMailAttachments(message)) {
+          message.attachments = await fetchMailAttachments(connection, client, message.id);
         }
       }
 
@@ -162,4 +140,65 @@ export async function syncOutlookMail({
     });
     throw err;
   }
+}
+
+function hasMailAttachments(message: OutlookMailMessageEntity): boolean {
+  // Graph's hasAttachments excludes inline-only files. Its message contract
+  // directs clients to inspect cid: image references in the HTML body too.
+  return message.hasAttachments || /\bsrc\s*=\s*["']?\s*cid:/i.test(message.body?.content ?? '');
+}
+
+/**
+ * Whether `url` is Graph's own listing of this message's attachments. The path
+ * is compared decoded, because Graph may write a message id with a literal `=`
+ * where this code writes `%3D`, and both name the same message.
+ */
+function isAttachmentListOf(messageId: string, url: URL): boolean {
+  if (url.origin !== 'https://graph.microsoft.com') {
+    return false;
+  }
+
+  try {
+    return decodeURIComponent(url.pathname).endsWith(`/messages/${messageId}/attachments`);
+  } catch {
+    // Percent-encoding that does not decode is not a path Graph wrote.
+    return false;
+  }
+}
+
+/** Read every metadata page. Bytes are downloaded during transformation, not queued in Postgres. */
+async function fetchMailAttachments(
+  connection: Connection,
+  client: BaseClient,
+  messageId: string,
+): Promise<OutlookAttachment[]> {
+  const attachments: OutlookAttachment[] = [];
+  let endpoint: string | undefined =
+    `/v1.0/me/messages/${encodeURIComponent(messageId)}/attachments?$select=id,lastModifiedDateTime,name,contentType,size,isInline&$top=100`;
+  const visited = new Set<string>();
+  while (endpoint) {
+    if (visited.has(endpoint)) {
+      throw new Error('Outlook attachment pagination repeated a page');
+    }
+
+    visited.add(endpoint);
+    const response: { value?: OutlookAttachment[]; '@odata.nextLink'?: string } = await client.request(
+      connection,
+      endpoint,
+    );
+    attachments.push(...(response.value ?? []));
+    const next = response['@odata.nextLink'];
+    if (next) {
+      const url = new URL(next, 'https://graph.microsoft.com');
+      if (!isAttachmentListOf(messageId, url)) {
+        throw new Error('Outlook attachment pagination left the expected provider resource');
+      }
+
+      endpoint = url.toString();
+    } else {
+      endpoint = undefined;
+    }
+  }
+
+  return attachments;
 }
