@@ -1,0 +1,200 @@
+#:schema https://raw.githubusercontent.com/companionintelligence/CI-Agent-Sync/main/integrations/verification/specs.schema.json
+# Spec registry: the formal and executable specifications this repo keeps.
+version = 1
+repo = "Companion-Memory"
+
+[[spec]]
+id = "asks-disclosure-ladder"
+title = "Asks disclosure ladder: rung order, ceiling meet and the ask answer clamp"
+kind = "algorithm"
+tool = "lemmascript"
+status = "conformance"
+gate = "advisory"
+artefacts = [
+  "backend/apps/api/src/domains/asks/policy.ts",
+  "backend/apps/api/src/domains/asks/policy.dfy.gen",
+  "backend/apps/api/src/domains/asks/policy.dfy",
+  "backend/apps/api/src/domains/asks/policy.properties.spec.ts",
+  "spec/lemmascript/lemmascript.json",
+  "spec/lemmascript/LemmaScript-files.txt",
+]
+covers = ["backend/apps/api/src/domains/asks/policy.ts"]
+docs = [
+  "docs/asks-system-guide.md#23-the-disclosure-ladder",
+  "docs/asks-system-guide.md#24-four-ceilings-combined-by-taking-the-narrowest",
+]
+requires = ["node", "lemmascript", "dafny"]
+check = ["npm", "run", "--silent", "check", "--", "backend/apps/api/src/domains/asks/policy.ts"]
+workdir = "spec/lemmascript"
+properties = [
+  "rungIndex_ensures",
+  "rungAtLeast_ensures",
+  "minRung_ensures",
+  "narrowestRung_ensures",
+  "narrowerForm_ensures",
+  "rungForForm_ensures",
+  "applyDisclosureCeiling_ensures",
+]
+conformance = "The proved functions are the ones the app runs. policy.properties.spec.ts runs the same contracts on them over every rung and form, and over seeded answers that include NaN, -0, doubles past 2^53, astral characters and lone surrogates."
+target = "MEM-3"
+notes = "Proved with lemmascript 0.6.14 and Dafny 4.11.0 under the unicode-scalar string model: numbers are mathematical integers and a string union holds only its members. Of the three clamps only applyDisclosureCeiling is proved; applySearchCeiling (a constant table) and clampAvailability (dates) are covered by their own spec files. disclosureCeiling (the tier table) is tested, not proved. See spec/lemmascript/README.md for the two lsc limits behind that."
+
+[[spec]]
+id = "asks-grant-match"
+title = "Asks grant matching: block wins, auto is sound on every field, a null data class leans toward denial"
+kind = "algorithm"
+tool = "lemmascript"
+status = "conformance"
+gate = "advisory"
+artefacts = [
+  "backend/apps/api/src/domains/asks/grantMatch.ts",
+  "backend/apps/api/src/domains/asks/grantMatch.dfy.gen",
+  "backend/apps/api/src/domains/asks/grantMatch.dfy",
+  "backend/apps/api/src/domains/asks/grantMatch.properties.spec.ts",
+  "spec/lemmascript/lemmascript.json",
+  "spec/lemmascript/LemmaScript-files.txt",
+]
+covers = ["backend/apps/api/src/domains/asks/grantMatch.ts"]
+docs = ["docs/asks-system-guide.md#22-modes-and-why-review-is-the-floor"]
+requires = ["node", "lemmascript", "dafny"]
+check = ["npm", "run", "--silent", "check", "--", "backend/apps/api/src/domains/asks/grantMatch.ts"]
+workdir = "spec/lemmascript"
+properties = [
+  "decideGrant",
+  "strictestOf",
+  "grantMatchesQuery_ensures",
+  "classMatchesQuery_ensures",
+  "scopeCoversQuery_ensures",
+  "blockCoversQuery_ensures",
+  "autoGrantNamesQueryClass_ensures",
+  "actorSatisfiesDelegation_ensures",
+]
+conformance = "decideGrant is the decision evaluateGrant returns. grantMatch.properties.spec.ts checks its contract on the real function, and checks evaluateGrant against a brute-force reading of the rules on raw rows with seeded respellings, astral and lone-surrogate strings, and ids that collate as equal."
+target = "MEM-2"
+notes = "evaluateGrant canonicalizes strings, decides liveness against the clock, resolves each ceiling and fixes the id order (localeCompare) before calling decideGrant; that shell is tested, not proved. In the model string < compares Unicode scalars; JavaScript compares UTF-16 code units, and the property suite pins the runtime reading of a validity window."
+
+[[spec]]
+id = "tool-capability-policy"
+title = "Tool capability policy: monotone over read, write and full; removing data needs full"
+kind = "algorithm"
+tool = "lemmascript"
+status = "conformance"
+gate = "advisory"
+artefacts = [
+  "backend/packages/tool-core/src/policy/capabilityPolicy.ts",
+  "backend/packages/tool-core/src/policy/capabilityPolicy.dfy.gen",
+  "backend/packages/tool-core/src/policy/capabilityPolicy.dfy",
+  "backend/packages/tool-core/src/policy/__tests__/capabilityPolicy.properties.test.ts",
+  "spec/lemmascript/lemmascript.json",
+  "spec/lemmascript/LemmaScript-files.txt",
+]
+covers = [
+  "backend/packages/tool-core/src/policy/capabilityPolicy.ts",
+  "backend/packages/tool-core/src/capability.ts",
+]
+docs = ["backend/packages/tool-core/README.md"]
+requires = ["node", "lemmascript", "dafny"]
+check = ["npm", "run", "--silent", "check", "--", "backend/packages/tool-core/src/policy/capabilityPolicy.ts"]
+workdir = "spec/lemmascript"
+properties = ["removesData_ensures", "capabilityAllows_ensures", "capabilityRequiredFor_ensures"]
+conformance = "The proved functions are the ones ToolRegistryCore calls on every execution. capabilityPolicy.properties.test.ts runs the contracts over every label and level, and checks that a level outside the union can do no more than read."
+target = "W10"
+notes = "Covers removesData, capabilityAllows and capabilityRequiredFor. stricterPrivacy, reachesThirdParty and the dispatch and confirmation gates are not proved yet."
+
+[[spec]]
+id = "ask-lifecycle"
+title = "Ask lifecycle and deadlines: allowed transitions, terminal states, every open ask expires"
+kind = "state-machine"
+tool = "quint"
+status = "planned"
+covers = [
+  "backend/apps/api/src/domains/asks/askStatus.ts",
+  "backend/apps/api/src/domains/asks/askDeadline.ts",
+  "backend/apps/api/src/domains/asks/services/AskExpiryService.ts",
+  "backend/apps/api/src/domains/asks/cron/AskExpiryCron.ts",
+  "backend/apps/api/src/domains/asks/services/AskService.ts",
+]
+docs = ["docs/asks-system-guide.md"]
+requires = ["node", "java", "quint"]
+target = "MEM-1"
+notes = "Model the transitions askStatus.ts allows, with answered, declined and expired terminal and a deadline on every ask. Check safety with quint, and liveness under the expiry cron (an open ask past its deadline reaches expired), then replay traces in jest."
+
+[[spec]]
+id = "capture-outbox-drain"
+title = "Capture outbox drain: FIFO, one drain at a time, a row leaves only on success, discard or sign-out"
+kind = "protocol"
+tool = "quint"
+status = "planned"
+covers = [
+  "frontend/packages/common/src/utils/outbox.ts",
+  "frontend/packages/common/src/utils/outboxFlush.ts",
+  "frontend/packages/common/src/utils/outboxOwners.ts",
+  "frontend/packages/capacitor-local-hub/android/src/main/java/com/companionintelligence/localhub/OutboxStore.kt",
+  "frontend/packages/capacitor-local-hub/android/src/main/java/com/companionintelligence/localhub/upload/OutboxUploader.kt",
+  "frontend/packages/capacitor-local-hub/ios/Sources/LocalHubPlugin/OutboxStore.swift",
+  "frontend/packages/capacitor-local-hub/ios/Sources/LocalHubPlugin/OutboxUpload.swift",
+]
+requires = ["node", "java", "quint"]
+target = "MEM-4"
+notes = "One model for the web, Android and iOS drains. Include a crash between the upload and its report, and an aborted drain followed by a new trigger; delivery is at least once through the idempotency key."
+
+[[spec]]
+id = "pending-actions-tool-gate"
+title = "Pending agent actions and the tool gate: nothing queued runs without approval, and runs at most once"
+kind = "state-machine"
+tool = "quint"
+status = "planned"
+covers = [
+  "backend/apps/api/src/domains/tools/pendingActionStatus.ts",
+  "backend/apps/api/src/domains/tools/controllers/PendingActionsController.ts",
+  "backend/packages/tool-core/src/policy/toolGate.ts",
+  "backend/packages/tool-core/src/policy/dispatchPolicy.ts",
+]
+requires = ["node", "java", "quint"]
+target = "MEM-5"
+notes = "proposed goes to approved and then executed; declined and expired are reachable only from proposed. The capability rule this gate applies is proved separately (tool-capability-policy)."
+
+[[spec]]
+id = "v1-ingest-envelope"
+title = "/v1 ingest envelope: one schema for every producer, with its idempotency key"
+kind = "data-contract"
+tool = "effect-schema"
+status = "planned"
+covers = [
+  "backend/apps/api/src/domains/ingest/types.ts",
+  "backend/apps/api/src/domains/ingest/controllers/BulkIngestController.ts",
+]
+requires = ["node", "effect"]
+target = "W13"
+notes = "Decode with Effect Schema at the boundary and export JSON Schema for the producers in other languages. A re-POST answers duplicate; unknown keys are rejected or declared, never stripped silently."
+
+[[spec]]
+id = "harness-tool-contract"
+title = "Memory-to-harness tool contract: tool errors, queued calls and intent inputs declared once"
+kind = "data-contract"
+tool = "effect-schema"
+status = "planned"
+covers = [
+  "backend/apps/api/src/domains/mcp/services/GraphQLToolAdapter.ts",
+  "backend/apps/cli/src/wire.ts",
+  "backend/packages/tool-core/src/core/types.ts",
+]
+docs = ["docs/mcp/server.md"]
+requires = ["node", "effect"]
+target = "B10"
+notes = "One schema for ToolError, the queued-call result with its pending action id, each intent's input and each tool's destructive flag. The server encodes with it, the ci CLI and the agent harnesses decode with it, and fixtures are generated from it."
+
+[[spec]]
+id = "consent-ask-ui"
+title = "Consent and ask UI components: every state a story, keyboard reachable, axe at error"
+kind = "component"
+tool = "storybook"
+status = "planned"
+covers = [
+  "frontend/apps/web/src/pages/AsksPage/**",
+  "frontend/apps/web/src/pages/SavedSearchesPage/ShareSavedSearchModal*",
+  "frontend/apps/web/.storybook/**",
+]
+requires = ["node", "storybook", "chromium"]
+target = "MEM-6"
+notes = "The stories exist. Add a play function per interaction and turn the a11y test from todo to error. Peer-supplied text must never render in the app's own voice."
