@@ -36,24 +36,29 @@ export const PROMOTE_OBSERVATION_STAGE_ID = 'promote.observation';
 const ENTITY_TYPE = 'event';
 
 /**
- * v1 — initial scan-sighting promotion.
+ * v2 — each sighting keeps its object's oriented box.
+ *
+ * v1 read `{label, position}`, which was the whole wire when it shipped. The
+ * push now sends each object as an oriented box (see {@link ScanBox}) and v2
+ * keeps it, so every scan promoted at v1 is promoted once more. That pass
+ * updates v1's sightings in place rather than adding a second set: the
+ * per-object id is built from the label and `position`, `position` is the
+ * box's centre, so the id does not change when the box arrives. A sighting a
+ * person has confirmed keeps what it had (`ObjectObservationService.createMany`).
  *
  * A literal, for the same reason `promote.object`'s is: this stage reads
  * nothing another stage produces. It reads `capture.scan` metadata, which
  * arrives whole from `/v1/events` and is never rewritten.
  *
- * Bump when {@link extractScanObjects} changes what it extracts — most likely
- * when CI-Spatial widens its wire (see the class docblock), because the day a
- * scan starts carrying 3-D extents is the day every already-promoted scan is
- * carrying less than it could.
+ * Bump when {@link extractScanObjects} changes what it extracts.
  */
-export const PROMOTE_OBSERVATION_VERSION = 1;
+export const PROMOTE_OBSERVATION_VERSION = 2;
 
 /**
  * `ci.events.event_type` for a Companion Scan room capture.
  *
  * `/v1/events` writes `event_type` straight from the record's `kind`
- * (`BulkIngestController`), so the value CI-Spatial sends in `kind:
+ * (`BulkIngestController`), so the value Companion Scan sends in `kind:
  * 'capture.scan'` IS this string. Not a mapping, an identity — which is why
  * there is no translation table anywhere in this file.
  */
@@ -102,7 +107,7 @@ const SCAN_POSITION_PRECISION = 2;
  * would INSERT a fresh set of sightings instead of updating them.
  *
  * `/v1/events` requires `source_system` (`captureEventSchema` has
- * `z.string().min(1)`), so a scan pushed by CI-Spatial always has one. But
+ * `z.string().min(1)`), so a scan pushed by Companion Scan always has one. But
  * `ci.events.source_system` is NULLABLE and this stage selects on `event_type`
  * alone, so an event written by any other path is one NULL away from that
  * failure. Making the arbiter total costs a constant.
@@ -148,13 +153,75 @@ export interface ScanRow {
   lng: number | null;
 }
 
+/** A point or a size in a scan's own frame: three finite numbers. */
+export interface ScanVec3 {
+  x: number;
+  y: number;
+  z: number;
+}
+
+/** An orientation, as the xyzw quaternion the push writes. */
+export interface ScanQuat {
+  x: number;
+  y: number;
+  z: number;
+  w: number;
+}
+
+/**
+ * One object's ORIENTED BOX, as Companion Scan sends it. Stored on the sighting
+ * as `attributes.scan_box`.
+ *
+ * Every geometry key is the wire's own name, copied verbatim, so the
+ * `object_extents.convention` text on the scan event describes this record
+ * too:
+ *
+ *  - `position` is the box's centre, in the splat's own frame and units, and
+ *    `rotation` is its orientation in that frame;
+ *  - `extent_m` is the full side lengths along the box's own axes, so x, y and
+ *    z are not length, width and height, and `extent_mm` is the same lengths
+ *    rounded to whole millimetres. Both are in the splat's units, which are
+ *    metres in name only until a fit makes them so;
+ *  - `extent_metric_m`, `position_project` and `rotation_project` are the same
+ *    box in the Place's metric frame. The push adds them only when the scan's
+ *    splat-align fit is good enough to convert a length, so `extent_metric_m`
+ *    is the one size here that is in metres.
+ *
+ * A key the push left out is left out here, never defaulted.
+ *
+ * The first three keys come from the scan's `object_extents` block, which the
+ * push says must travel with the numbers. `calibrated` and
+ * `world_frame_aligned` are false on every push so far: the box is detector
+ * output, not a measurement, and the splat frame is not tied to the frame the
+ * scan's `location` is in. They are null when a payload has no such block. The
+ * rest of the block (the caveat, and the parameters the detector ran with)
+ * stays on the scan event, which the sighting's `event_id` points at.
+ */
+export interface ScanBox {
+  frame: string | null;
+  calibrated: boolean | null;
+  world_frame_aligned: boolean | null;
+  position: ScanVec3;
+  rotation?: ScanQuat;
+  extent_m?: ScanVec3;
+  extent_mm?: ScanVec3;
+  extent_metric_m?: ScanVec3;
+  position_project?: ScanVec3;
+  rotation_project?: ScanQuat;
+}
+
+/** The `object_extents` facts every box in one scan shares. */
+type ScanBoxFrame = Pick<ScanBox, 'frame' | 'calibrated' | 'world_frame_aligned'>;
+
 /** One detected object, after extraction and validation. */
 export interface ScanObject {
   label: string;
-  /** Scan-LOCAL metres, not degrees. See {@link extractScanObjects}. */
-  position: { x: number; y: number; z: number } | null;
+  /** Scan-LOCAL coordinates, not degrees. See {@link extractScanObjects}. */
+  position: ScanVec3 | null;
   /** Stable within the scan; the third component of the provenance triple. */
   objectKey: string;
+  /** The object's oriented box, when the push sent one. */
+  box: ScanBox | null;
 }
 
 /** The geo block a scan carries, once validated. */
@@ -171,6 +238,32 @@ function finiteNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+function vec3(value: unknown): ScanVec3 | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const x = finiteNumber(value.x);
+  const y = finiteNumber(value.y);
+  const z = finiteNumber(value.z);
+
+  return x != null && y != null && z != null ? { x, y, z } : null;
+}
+
+/** A size: three lengths, every one of them positive. A zero axis is not a box. */
+function size3(value: unknown): ScanVec3 | null {
+  const size = vec3(value);
+
+  return size != null && size.x > 0 && size.y > 0 && size.z > 0 ? size : null;
+}
+
+function quaternion(value: unknown): ScanQuat | null {
+  const xyz = vec3(value);
+  const w = isRecord(value) ? finiteNumber(value.w) : null;
+
+  return xyz != null && w != null ? { ...xyz, w } : null;
+}
+
 /**
  * The scan's geographic fix, from the payload rather than from a column.
  *
@@ -182,7 +275,7 @@ function finiteNumber(value: unknown): number | null {
  * first, because an importer or a later stage may legitimately have filled
  * them; `metadata.location` is the fallback that actually fires today.
  *
- * CI-Spatial writes `lon`, not `lng` (`memory_push.ts`). Both spellings are
+ * Companion Scan writes `lon`, not `lng` (`memory_push.ts`). Both spellings are
  * accepted because this is a cross-repo wire and one of them being wrong here
  * is a silent NULL, not an error.
  */
@@ -208,26 +301,32 @@ export function extractScanLocation(row: ScanRow): ScanLocation | null {
  *
  * ── BUILT FOR WHAT ARRIVES ─────────────────────────────────────────────────
  *
- * CI-Spatial's `memory_push.ts` narrows every detection to `{label, position}`
- * before it sends — the sidecar's 3-D extents and rotations are dropped at the
- * push, not lost in transit:
+ * Companion Scan's `server/memory_push.ts` (the repository was CI-Spatial)
+ * sends one entry per object its splat detector found, and each entry is now
+ * an ORIENTED BOX: `position` (the centre), `rotation`, `extent_m` and
+ * `extent_mm`, plus the same box in the Place's frame when the scan has a
+ * metric fit. A sibling `object_extents` block names the frame and says what
+ * the numbers are not (see {@link ScanBox}). For a detector sidecar that has no
+ * boxes the push still ships `{label, position}` and nothing else, as every push
+ * did before the boxes were added.
  *
- *     objects: detections
- *       .filter((d) => d.label && d.position)
- *       .map((d) => ({ label: d.label, position: d.position }))
+ * So a sighting has a label, a point and, when the push sent one, its box, and
+ * this function reads exactly those keys (see {@link extractScanBox}). There
+ * is still no speculative parsing of `extent`, `bbox3d` or `dimensions`: no
+ * push sends them, code that reads them cannot be tested against real data,
+ * and a reader written for a wire that does not exist is how a fabricated
+ * `dimensions` field ends up being believed downstream. The recorded pushes in
+ * `src/domains/__tests__/support/fixtures/companion-scan/` are the wire this
+ * is tested against. Each object's `confidence` and `frame_votes` arrive too,
+ * and are not read yet. When the push widens again, this function and
+ * {@link PROMOTE_OBSERVATION_VERSION} change together and every scan
+ * re-promotes.
  *
- * So a scan sighting has a label and a point, and this function reads exactly
- * that. There is no speculative parsing of `extent`, `rotation`, `bbox3d` or
- * `dimensions` here: those fields do not arrive, code that reads them cannot be
- * tested against real data, and a reader written for a wire that does not exist
- * is how a fabricated `dimensions` field ends up being believed downstream.
- * When the push widens, this function and
- * {@link PROMOTE_OBSERVATION_VERSION} change together and every scan re-promotes.
- *
- * `position` is SCAN-LOCAL metres in the capture's own frame — not latitude and
- * longitude, and not comparable between two scans of the same room. That is why
- * it goes to `attributes.scan_position` under an explicit
- * `scan_frame: 'scan_local'` tag and never near `location_coordinates`.
+ * `position` is SCAN-LOCAL: a point in the splat's own frame and units. It is
+ * not latitude and longitude, not metres until a fit makes it so, and not
+ * comparable between two scans of the same room. That is why it goes to
+ * `attributes.scan_position` under an explicit `scan_frame: 'scan_local'` tag
+ * and never near `location_coordinates`.
  */
 export function extractScanObjects(row: ScanRow): ScanObject[] {
   const raw = isRecord(row.metadata) ? row.metadata.objects : null;
@@ -236,6 +335,7 @@ export function extractScanObjects(row: ScanRow): ScanObject[] {
     return [];
   }
 
+  const frame = scanBoxFrame(row.metadata);
   const objects: ScanObject[] = [];
 
   raw.forEach((entry, index) => {
@@ -249,11 +349,7 @@ export function extractScanObjects(row: ScanRow): ScanObject[] {
       return;
     }
 
-    const rawPosition = isRecord(entry.position) ? entry.position : null;
-    const x = rawPosition != null ? finiteNumber(rawPosition.x) : null;
-    const y = rawPosition != null ? finiteNumber(rawPosition.y) : null;
-    const z = rawPosition != null ? finiteNumber(rawPosition.z) : null;
-    const position = x != null && y != null && z != null ? { x, y, z } : null;
+    const position = vec3(entry.position);
 
     // ── The per-object id, and why it is not the array index ───────────────
     //
@@ -272,6 +368,11 @@ export function extractScanObjects(row: ScanRow): ScanObject[] {
     // With no position there is only one dimension, so the ordinal comes back
     // as the second. `memory_push` filters those out before sending, so this
     // branch covers a malformed or hand-written payload rather than the wire.
+    //
+    // The box is deliberately NOT in the key. Its centre is `position`, which
+    // is already here, and keeping the rest out means a scan promoted before
+    // the push sent boxes keys every object exactly as it did then, so a
+    // re-promotion updates those sightings instead of minting a second set.
     const objectKey =
       position != null
         ? sha256Hex(
@@ -284,10 +385,74 @@ export function extractScanObjects(row: ScanRow): ScanObject[] {
           ).slice(0, 32)
         : `ordinal:${index}`;
 
-    objects.push({ label, position, objectKey });
+    objects.push({ label, position, objectKey, box: extractScanBox(entry, position, frame) });
   });
 
   return objects;
+}
+
+/**
+ * What the scan's `object_extents` block says about every box in it, read once
+ * per scan. The push sends that block whenever an object carries an extent.
+ */
+function scanBoxFrame(metadata: Record<string, unknown> | null): ScanBoxFrame {
+  const block = isRecord(metadata) && isRecord(metadata.object_extents) ? metadata.object_extents : null;
+  const frame = block?.frame;
+  const flag = (value: unknown): boolean | null => (typeof value === 'boolean' ? value : null);
+
+  return {
+    frame: typeof frame === 'string' && frame.trim() !== '' ? frame : null,
+    calibrated: flag(block?.calibrated),
+    world_frame_aligned: flag(block?.world_frame_aligned),
+  };
+}
+
+/**
+ * One object's oriented box, or null when the push sent none.
+ *
+ * Reads the box keys `memory_push.ts` writes and keeps each one that is well
+ * formed: three finite numbers for a point, positive ones for a size, four for
+ * a quaternion. A malformed key is dropped on its own, so one bad number costs
+ * that number and not the rest of the box. A size with a zero axis is dropped
+ * because the push drops one too: it is not a box, and `ci.inventory`'s size
+ * columns CHECK every axis > 0.
+ *
+ * A box needs a centre, so an object with no usable `position` has none. An
+ * object with an orientation and no size still gets one. The push sends that
+ * for a box whose extent it refused, and the orientation is real.
+ */
+function extractScanBox(
+  entry: Record<string, unknown>,
+  position: ScanVec3 | null,
+  frame: ScanBoxFrame,
+): ScanBox | null {
+  if (position == null) {
+    return null;
+  }
+
+  const rotation = quaternion(entry.rotation);
+  const extentM = size3(entry.extent_m);
+  const extentMm = size3(entry.extent_mm);
+  const extentMetricM = size3(entry.extent_metric_m);
+  const positionProject = vec3(entry.position_project);
+  const rotationProject = quaternion(entry.rotation_project);
+
+  const parts = [rotation, extentM, extentMm, extentMetricM, positionProject, rotationProject];
+
+  if (parts.every((part) => part == null)) {
+    return null;
+  }
+
+  return {
+    ...frame,
+    position,
+    ...(rotation != null && { rotation }),
+    ...(extentM != null && { extent_m: extentM }),
+    ...(extentMm != null && { extent_mm: extentMm }),
+    ...(extentMetricM != null && { extent_metric_m: extentMetricM }),
+    ...(positionProject != null && { position_project: positionProject }),
+    ...(rotationProject != null && { rotation_project: rotationProject }),
+  };
 }
 
 function sha256Hex(input: string): string {
@@ -299,8 +464,8 @@ function sha256Hex(input: string): string {
  *
  * ── The gap this closes ────────────────────────────────────────────────────
  *
- * CI-Spatial has been pushing one `capture.scan` event per room scan to
- * `POST /v1/events` — with `payload.objects`, `payload.detected_labels`, a
+ * Companion Scan (then CI-Spatial) has been pushing one `capture.scan` event
+ * per room scan to `POST /v1/events` — with `payload.objects`, `payload.detected_labels`, a
  * point count and a geo block — and NOTHING IN THIS REPO READ IT. `promote.object`
  * promotes `purchase` and `order` and stops there; the string `capture.scan`
  * appeared nowhere in the backend. The scans landed as events with a title and
@@ -325,8 +490,9 @@ function sha256Hex(input: string): string {
  * ── What it writes, and what it refuses to ─────────────────────────────────
  *
  * One `ci.object_observations` row per detected object: a label, the scan's
- * place and coordinates, and the scan-local position in `attributes`. Nothing
- * else, because nothing else arrives (see {@link extractScanObjects}).
+ * place and coordinates, and in `attributes` the scan-local position and, when
+ * the push sent one, the object's oriented box. Nothing else (see
+ * {@link extractScanObjects}).
  *
  * It writes NO `ci.objects` row and sets NO resolution column. A scan says a
  * chair-shaped thing was at a point in a room; it does not say whose chair, or
@@ -455,14 +621,19 @@ export class ObservationPromoteStage implements Stage {
       coordinates: location != null ? { lat: location.lat, lon: location.lng } : null,
       attributes: {
         ...(object.position != null && {
-          // NAMED, not `position`, and tagged with its frame. This is metres in
-          // the capture's own coordinate system — it is not geographic, it is
-          // not comparable across two scans of the same room, and the one bug
-          // worth designing against here is someone downstream reading it as
-          // lat/lon.
+          // NAMED, not `position`, and tagged with its frame. This is a point in
+          // the capture's own coordinate system (the splat's frame and units) —
+          // it is not geographic, it is not comparable across two scans of the
+          // same room, and the one bug worth designing against here is someone
+          // downstream reading it as lat/lon.
           scan_position: object.position,
           scan_frame: 'scan_local',
         }),
+        // The oriented box, beside the position its centre repeats (see
+        // `ScanBox`). Not in `bbox`, which is a 2-D rectangle in 0..1 of an
+        // image, and not a column of its own: `attributes` is the sighting's
+        // observed state, and a size and pose are exactly that.
+        ...(object.box != null && { scan_box: object.box }),
       },
       metadata: {
         ...(isRecord(row.metadata) && {
