@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { buildOvermindEnv, powersyncEnabled, powersyncUrl } from './overmind-env';
+import { buildOvermindEnv, powersyncEnabled, powersyncMissingKeys, powersyncUrl } from './overmind-env';
 import { allocPort, DEFAULTS, type PublishedPorts, type StackPorts } from './ports';
 
 /** What `docker ps` shows a worktree started beside another stack: the
@@ -89,5 +89,36 @@ test('a loopback POWERSYNC_URL follows the port this stack published, a remote o
   assert.equal(
     buildOvermindEnv({ POWERSYNC_URL: 'http://localhost:18080' }, ports, STACK).POWERSYNC_URL,
     `http://localhost:${port}`,
+  );
+});
+
+test('an opted-in .env must also name the two PowerSync secrets, and a blank one counts as missing', () => {
+  // Off: nothing is missing, whatever .env holds.
+  assert.deepEqual(powersyncMissingKeys({}), []);
+  assert.deepEqual(powersyncMissingKeys({ POWERSYNC_JWT_SECRET: '' }), []);
+
+  // On, with neither: an older .env that predates both keys.
+  assert.deepEqual(powersyncMissingKeys({ POWERSYNC_URL: 'http://localhost:18080' }), [
+    'POWERSYNC_JWT_SECRET',
+    'POWERSYNC_DATABASE_PASSWORD',
+  ]);
+
+  // Only the one that is missing is named.
+  assert.deepEqual(
+    powersyncMissingKeys({
+      POWERSYNC_URL: 'http://localhost:18080',
+      POWERSYNC_JWT_SECRET: '   ',
+      POWERSYNC_DATABASE_PASSWORD: 'test-password',
+    }),
+    ['POWERSYNC_JWT_SECRET'],
+  );
+
+  assert.deepEqual(
+    powersyncMissingKeys({
+      POWERSYNC_URL: 'http://localhost:18080',
+      POWERSYNC_JWT_SECRET: 'test-secret',
+      POWERSYNC_DATABASE_PASSWORD: 'test-password',
+    }),
+    [],
   );
 });

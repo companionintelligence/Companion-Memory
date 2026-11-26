@@ -37,6 +37,24 @@ export function powersyncEnabled(base: NodeJS.ProcessEnv): boolean {
   return Boolean(base.POWERSYNC_URL?.trim());
 }
 
+/**
+ * The keys a stack that names POWERSYNC_URL cannot run without. The token endpoint
+ * answers 503 without the JWT secret, the service refuses to boot without the key
+ * derived from it, and it cannot authenticate to Postgres without the replication
+ * password (setup-database creates that role only when the password is set). `make
+ * init` writes them into a new .env and never adds them to one that already exists.
+ */
+export const POWERSYNC_REQUIRED_KEYS = ['POWERSYNC_JWT_SECRET', 'POWERSYNC_DATABASE_PASSWORD'] as const;
+
+/** The POWERSYNC_REQUIRED_KEYS that `base` leaves empty. Nothing is missing unless the feature is on. */
+export function powersyncMissingKeys(base: NodeJS.ProcessEnv): string[] {
+  if (!powersyncEnabled(base)) {
+    return [];
+  }
+
+  return POWERSYNC_REQUIRED_KEYS.filter((key) => !base[key]?.trim());
+}
+
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 /**

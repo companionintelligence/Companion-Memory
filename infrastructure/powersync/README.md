@@ -5,7 +5,7 @@ on-device SQLite database that syncs bidirectionally with Postgres via
 [PowerSync](https://docs.powersync.com/). It is **infrastructure + config only** — the
 client SDK integration lives in `frontend/apps/web/src/api/powersync/`.
 
-> ⚠️ **Partially verified, and NOT running locally.**
+> ⚠️ **Verified against a local stack (2026-11-23), and opt-in under `make dev`.**
 >
 > - Server-side replication works against `journeyapps/powersync-service:1.23.0`: the
 >   service boots, storage migrations run, the router listens on 8080, and the
@@ -14,8 +14,9 @@ client SDK integration lives in `frontend/apps/web/src/api/powersync/`.
 >   make dev" below). Without `POWERSYNC_URL` in `.env` it does not start,
 >   `GET /api/powersync/token` returns 503 and the app falls back to GraphQL, so
 >   nothing breaks — but the end-to-end path is then not exercised either.
-> - The client phase **has shipped** (see below); what remains unverified is the two
->   sync-rule questions under "Verify before relying on it".
+> - The client phase **has shipped** (see below), and the two sync-rule questions under
+>   "Verify before relying on it" are answered. What that run did not exercise is listed
+>   there too.
 
 ## Pieces
 
@@ -92,12 +93,19 @@ before being added.
 
 ## Running it under `make dev`
 
-Put a loopback URL in the root `.env` and start the stack as usual:
+Put a loopback URL in the root `.env`, with the two secrets beside it, and start the stack as usual:
 
 ```bash
-POWERSYNC_URL=http://localhost:18080   # .env — the one switch
+POWERSYNC_URL=http://localhost:18080        # the switch
+POWERSYNC_JWT_SECRET=<value from .env.default>
+POWERSYNC_DATABASE_PASSWORD=<value from .env.default>
 make dev
 ```
+
+`make init` writes the two secrets into a new `.env` only, so an older `.env` needs both
+lines copied from `.env.default`. Without them `scripts/dev-stack` stops before it starts
+any service and names the empty ones: the token endpoint would answer 503, and the service
+refuses to boot without the key and cannot authenticate without the password.
 
 `scripts/dev-stack` then:
 
@@ -318,15 +326,20 @@ Done (against 1.23.0):
    `frontend/apps/web/src/api/powersync/` carries `PowerSyncProvider` (mounted in
    `App.tsx`), `schema.ts`, `connector.ts`, and the web/native database factories.
 
-Still open:
+5. ~~Confirm `request.user_id()` is the correct sync-rules accessor for the token `sub`
+   (older docs use `token_parameters.user_id`).~~ Yes: on a local stack with
+   `POWERSYNC_URL` set (2026-11-23), the stream for a new user carried the bucket
+   `user_data["<that user's id>"]`, the id being the token's `sub`.
+6. ~~Check uuid↔text comparison of `user_id = bucket.user_id` in the replicated schema.~~
+   It works: a note created through GraphQL arrived on an open stream about 40 ms after
+   the API answered, and its deletion arrived as a REMOVE.
 
-5. Confirm `request.user_id()` is the correct sync-rules accessor for the token `sub`
-   (older docs use `token_parameters.user_id`).
-6. Check uuid↔text comparison of `user_id = bucket.user_id` in the replicated schema.
-
-Items 5 and 6 still need a **connected** client against a running service. Because the
-`powersync` container is out of the `local` profile, `make dev` does not provide one —
-set `POWERSYNC_URL` and run the service under the `staging` profile to exercise them.
+That run (a `make dev` stack with the opt-in `powersync` profile) also saw: the token
+endpoint answer 200 with `aud` `powersync` and a 300 s lifetime, both directly and
+through the gateway; the stream close at token expiry and the simulator app reconnect
+with a fresh token five seconds later; and a 401 with no, a malformed or a wrongly signed
+token. Not yet exercised: the `ci.saved_searches`, `ci_search.tags` and
+`ci_search.entity_tag` buckets, and the phone and Capacitor path against a real device.
 
 ## Next
 

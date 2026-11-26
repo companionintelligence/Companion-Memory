@@ -33,7 +33,7 @@ import dotenv from 'dotenv';
 import { CaddyClient, routeId } from './caddy';
 import { keyFromArgv } from './key';
 import { fail, link, note, ok, step, table } from './log';
-import { buildOvermindEnv, powersyncEnabled } from './overmind-env';
+import { buildOvermindEnv, powersyncEnabled, powersyncMissingKeys } from './overmind-env';
 import { allocStackPorts, dockerPublishedPorts } from './ports';
 import { ensureSidecarAuthSecret } from './sidecar-secret';
 import { removeStaleContainers } from './stale-containers';
@@ -400,6 +400,19 @@ function migrate(dbPort: number, env: NodeJS.ProcessEnv): void {
 // --- lifecycle --------------------------------------------------------------
 
 async function up(key: string): Promise<void> {
+  // A .env that names POWERSYNC_URL without the secrets beside it cannot run the
+  // sync stack, and it is the usual state of a .env older than those keys. Say so
+  // before anything starts, rather than letting the service crash-loop under compose.
+  const missingPowersync = powersyncMissingKeys(process.env);
+
+  if (missingPowersync.length > 0) {
+    fail(
+      `POWERSYNC_URL is set in .env, but ${missingPowersync.join(' and ')} ${missingPowersync.length === 1 ? 'is' : 'are'} empty. ` +
+        'Copy the lines from .env.default into .env, or unset POWERSYNC_URL to run without PowerSync.',
+    );
+    process.exit(1);
+  }
+
   // One supervisor per worktree, before anything is touched — see
   // supervisor-lock.ts for what a second one did to the first.
   const lock = acquireSupervisorLock(ROOT, key);
