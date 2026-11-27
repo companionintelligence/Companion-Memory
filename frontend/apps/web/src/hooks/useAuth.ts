@@ -21,6 +21,7 @@ import {
   deviceKeyId,
   ensureFreshDeviceAccessToken,
   nativeDeviceAccessToken,
+  oldShellDeviceKeyForSignOut,
   onDeviceKeyRevoked,
   startDeviceAccessTokens,
   stopDeviceAccessTokens,
@@ -85,7 +86,15 @@ async function storedKeyCredential(): Promise<string | null> {
   try {
     const result = await nativeDeviceAccessToken({ refresh: false });
 
-    return result.status === 'ok' || result.status === 'legacy' ? result.token : null;
+    if (result.status === 'ok') {
+      return result.token;
+    }
+
+    // A shell too old for tokens: read the key once, only to give it back, so signing out does
+    // not leave it working (that shell lets the page read it anyway).
+    return result.status === 'legacy' && result.outdated === 'app'
+      ? await oldShellDeviceKeyForSignOut()
+      : null;
   } catch {
     return null;
   }
@@ -698,6 +707,8 @@ async function giveBackStoredDesktopKey(): Promise<void> {
   }
 
   if (result.status === 'ok' || result.status === 'legacy') {
+    // A Memory too old for tokens (`legacy`) gets no token to give the key back with, so the key
+    // stays in its key list, as a key from any lost device does, until removed there.
     if (result.token) {
       await revokeDeviceKey(result.token);
     }

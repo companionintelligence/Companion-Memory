@@ -293,8 +293,9 @@ function fingerprint(value: string): string {
 export function outboxOwnerStamp(): string | null {
   // The phone and desktop apps no longer hold the key in the page; their native side computes
   // this same stamp from the key and origin it stored (`deviceAccessToken`). A native side from
-  // before tokens gives no stamp, but then the credential the page holds is the key itself, so
-  // the stamp is computed from it below, as before.
+  // before tokens gives none, and the page has no key to compute it from, so there is no stamp:
+  // that app shows the update notice and queues nothing. On web (and in tests) the credential
+  // set directly is used below.
   const nativeStamp = deviceOwnerStamp();
 
   if (deviceAccessTokensActive() && nativeStamp !== null) {

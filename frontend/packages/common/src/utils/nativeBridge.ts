@@ -1938,8 +1938,8 @@ const NO_DEVICE_KEY: DeviceAccessTokenResult = {
  * the desktop its own `device_access_token_command`. `none` on web, and when no key is stored.
  *
  * A native side from before tokens (a dev build served live, or a desktop app older than the
- * Memory serving its window) has no such method. Then the stored key is read the old way and
- * sent as it is (`legacy`), so signing in keeps working until that app is updated.
+ * Memory serving its window) has no such method. Then it is signed in with nothing to send
+ * (`legacy`, outdated `app`): the page never holds the key, and the app asks to be updated.
  */
 export async function nativeDeviceAccessToken(options: {
   refresh: boolean;
@@ -2001,20 +2001,65 @@ export async function nativeDeviceAccessToken(options: {
   return NO_DEVICE_KEY;
 }
 
-/** The stored key itself as the credential, for a native side that cannot hand out tokens. */
+/**
+ * The stored key, read the old way, from a native shell too old to hand out tokens; null on any
+ * other shell or when none is stored. Only for giving the key back to Memory at sign-out
+ * (`DELETE /keys/current`), so that signing out of an old shell does not leave a key that still
+ * works: such a shell lets the page read it anyway. Never sent for anything else.
+ */
+export async function oldShellDeviceKeyForSignOut(): Promise<string | null> {
+  const read = async (get: () => Promise<{ value?: string | null } | null | undefined>) => {
+    try {
+      return (await get())?.value || null;
+    } catch {
+      return null;
+    }
+  };
+
+  if (isNativePlatform()) {
+    const hub = plugins()?.LocalHub;
+
+    if (!hub) {
+      const secure = plugins()?.SecureStoragePlugin;
+
+      return secure ? read(() => secure.get({ key: DEVICE_KEY_STORAGE_KEY })) : null;
+    }
+
+    return typeof hub.deviceAccessToken === 'function'
+      ? null
+      : read(() => hub.secureGet({ key: DEVICE_KEY_STORAGE_KEY }));
+  }
+
+  if (isTauriPlatform()) {
+    return read(() =>
+      tauriInvoke<{ value: string | null }>('plugin:ci-auth|secure_get', {
+        key: desktopSecureKey(DEVICE_KEY_STORAGE_KEY),
+      }),
+    );
+  }
+
+  return null;
+}
+
+/**
+ * A native side that cannot hand out tokens: signed in when a key is stored, with no credential.
+ * The key is read only to learn whether one is stored and is not kept or sent. Sending it, as this
+ * used to, put a credential that works from anywhere until revoked in the page; the app asks for
+ * an update instead (`deviceAppOutdated`).
+ */
 async function legacyDeviceKey(
   read: () => Promise<string | null | undefined>,
 ): Promise<DeviceAccessTokenResult> {
-  let key: string | null | undefined;
+  let stored: boolean;
 
   try {
-    key = await read();
+    stored = Boolean(await read());
   } catch {
-    key = null;
+    stored = false;
   }
 
-  return key
-    ? { status: 'legacy', token: key, expiresAt: null, keyId: null, ownerStamp: null }
+  return stored
+    ? { status: 'legacy', token: null, expiresAt: null, keyId: null, ownerStamp: null, outdated: 'app' }
     : NO_DEVICE_KEY;
 }
 

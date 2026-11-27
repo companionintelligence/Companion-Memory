@@ -21,13 +21,22 @@ export type DeviceAccessTokenStatus = 'ok' | 'none' | 'revoked' | 'unreachable' 
 
 export interface DeviceAccessTokenResult {
   status: DeviceAccessTokenStatus;
-  /** A token (`ok`), the stored key itself when Memory predates tokens (`legacy`), else null. */
+  /** A token, only for `ok`. Never the stored key itself, whatever the status. */
   token: string | null;
   /** When `token` stops working, in ms since the epoch. Only for `ok`. */
   expiresAt: number | null;
   keyId: string | null;
   ownerStamp: string | null;
+  /**
+   * For `legacy`, which side is too old to trade the key for tokens: Memory (it has no
+   * `/keys/access-token`, the native side's answer) or this app's native shell (it has no token
+   * command, `nativeDeviceAccessToken`'s answer). Absent means Memory.
+   */
+  outdated?: DeviceAppOutdated;
 }
+
+/** Which side has to be updated before the app can sign in without the page holding the key. */
+export type DeviceAppOutdated = 'memory' | 'app';
 
 /** Asks the native side; `refresh` makes it ask Memory even when its copy is still good. */
 export type DeviceAccessTokenSource = (options: { refresh: boolean }) => Promise<DeviceAccessTokenResult>;
@@ -39,7 +48,7 @@ const MIN_DELAY_MS = 5_000;
 /** While Memory cannot be reached: first retry, then doubling up to the ceiling. */
 const UNREACHABLE_FLOOR_MS = 15_000;
 const UNREACHABLE_CEILING_MS = 120_000;
-/** A Memory from before tokens is asked again this often, so an upgrade takes effect. */
+/** A Memory from before tokens is asked again this often, so an upgrade takes effect without a restart. */
 const LEGACY_RECHECK_MS = 30 * 60_000;
 /** A forced refresh (a 401, the app coming back into view) at most this often. */
 const FORCED_REFRESH_MIN_GAP_MS = 10_000;
@@ -49,6 +58,7 @@ let source: DeviceAccessTokenSource | null = null;
 let expiresAt: number | null = null;
 let ownerStamp: string | null = null;
 let keyId: string | null = null;
+let outdated: DeviceAppOutdated | null = null;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let unreachableDelay = UNREACHABLE_FLOOR_MS;
 let inFlight: Promise<DeviceAccessTokenResult> | null = null;
@@ -104,9 +114,18 @@ function setOwnerStamp(next: string | null): void {
   }
 }
 
+/** Announced like a new credential, so the app swaps its pages for the update notice and back. */
+function setOutdated(next: DeviceAppOutdated | null): void {
+  if (next !== outdated) {
+    outdated = next;
+    notify();
+  }
+}
+
 function apply(result: DeviceAccessTokenResult): void {
   keyId = result.keyId;
   setOwnerStamp(result.ownerStamp);
+  setOutdated(result.status === 'legacy' ? (result.outdated ?? 'memory') : null);
 
   switch (result.status) {
     case 'ok':
@@ -117,9 +136,12 @@ function apply(result: DeviceAccessTokenResult): void {
 
       return;
     case 'legacy':
+      // Signed in, with nothing to send: the page is never handed the key itself, which works from
+      // anywhere until revoked. The app shows what to update instead (deviceAppOutdated), and the
+      // native uploaders keep sending queued captures with the key, as before.
       expiresAt = null;
       unreachableDelay = UNREACHABLE_FLOOR_MS;
-      setCredential(result.token);
+      setCredential(null);
       schedule(LEGACY_RECHECK_MS);
 
       return;
@@ -208,9 +230,19 @@ export function stopDeviceAccessTokens(): void {
   clearTimer();
   expiresAt = null;
   setOwnerStamp(null);
+  setOutdated(null);
   keyId = null;
   unreachableDelay = UNREACHABLE_FLOOR_MS;
   setCredential(null);
+}
+
+/**
+ * Which side must be updated before this signed-in app can reach Memory, or null when none must.
+ * Set while the native side answers `legacy`: Memory is too old to hand out access tokens, or the
+ * app's shell is too old to ask for them. Changes are announced through {@link subscribeApiKey}.
+ */
+export function deviceAppOutdated(): DeviceAppOutdated | null {
+  return source ? outdated : null;
 }
 
 /** Whether requests are carrying the native side's tokens (a phone or desktop signed in with a key). */

@@ -140,13 +140,15 @@ class DeviceAccessTokensTest {
     }
 
     @Test
-    fun `a Memory without the route is legacy and gets the key itself, uncached`() {
+    fun `a Memory without the route is legacy and the page gets no token, never the key, uncached`() {
+        val store = signedIn()
         val exchange = ScriptedExchange { ExchangeResponse(404, null) }
-        val tokens = DeviceAccessTokens(signedIn(), exchange)
+        val tokens = DeviceAccessTokens(store, exchange)
 
         val result = tokens.get(false)
         assertEquals(Status.LEGACY, result.status)
-        assertEquals(KEY, result.token)
+        assertNull(result.token)
+        assertEquals(KEY, store.get(DeviceCredentialKeys.API_KEY))
         assertNull(result.expiresAt)
         tokens.get(false)
         assertEquals(2, exchange.calls.get())

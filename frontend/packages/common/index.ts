@@ -21,6 +21,7 @@ export { GlobalUID } from './src/utils/GlobalUID';
 export {
   apiKeyHeaders,
   deviceAccessTokensActive,
+  deviceAppOutdated,
   deviceKeyId,
   deviceOwnerStamp,
   ensureFreshDeviceAccessToken,
@@ -36,6 +37,7 @@ export type {
   DeviceAccessTokenResult,
   DeviceAccessTokenSource,
   DeviceAccessTokenStatus,
+  DeviceAppOutdated,
 } from './src/utils/apiAuth';
 export {
   clearMemorySignInEnded,
@@ -336,6 +338,7 @@ export {
   syncNativeIntentConfig,
   takeNativePhoto,
   nativeDeviceAccessToken,
+  oldShellDeviceKeyForSignOut,
   DEVICE_KEY_STORAGE_KEY,
 } from './src/utils/nativeBridge';
 export type {

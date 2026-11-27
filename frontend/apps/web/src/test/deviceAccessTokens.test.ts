@@ -2,11 +2,13 @@ import {
   apiFetch,
   apiKeyHeaders,
   deviceAccessTokensActive,
+  deviceAppOutdated,
   deviceKeyId,
   deviceOwnerStamp,
   ensureFreshDeviceAccessToken,
   fetchJson,
   getApiKey,
+  nativeDeviceAccessToken,
   onDeviceKeyRevoked,
   outboxOwnerStamp,
   refreshDeviceAccessToken,
@@ -14,6 +16,7 @@ import {
   startDeviceAccessTokens,
   stopDeviceAccessTokens,
   streamingFetch,
+  subscribeApiKey,
   type DeviceAccessTokenResult,
 } from '@ci/common';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -161,16 +164,59 @@ describe('device access tokens: keeping one fresh', () => {
     }
   });
 
-  it('sends a key the native side could not trade (a Memory from before tokens) and asks again later', async () => {
-    const source = nativeSide({ ...unreachable, status: 'legacy', token: 'the-key' });
+  // Before, the page was handed the key itself here: a credential that works from anywhere until
+  // revoked, in reach of any script that ran in the page.
+  it('sends nothing for a Memory from before tokens, says Memory must be updated, and asks again later', async () => {
+    const source = nativeSide({ ...unreachable, status: 'legacy' });
 
     await startDeviceAccessTokens(source);
 
-    expect(getApiKey()).toBe('the-key');
+    expect(getApiKey()).toBeNull();
+    expect(apiKeyHeaders()).toEqual({});
+    expect(deviceAccessTokensActive()).toBe(true);
+    expect(deviceAppOutdated()).toBe('memory');
     await advance(29 * MINUTE);
     expect(source).toHaveBeenCalledTimes(1);
     await advance(2 * MINUTE);
     expect(source).toHaveBeenCalledTimes(2);
+  });
+
+  it('never sends a key a native side hands over with a legacy answer anyway', async () => {
+    await startDeviceAccessTokens(nativeSide({ ...unreachable, status: 'legacy', token: 'the-key' }));
+
+    expect(getApiKey()).toBeNull();
+  });
+
+  it('names the app as what to update when the shell itself is too old', async () => {
+    await startDeviceAccessTokens(nativeSide({ ...unreachable, status: 'legacy', outdated: 'app' }));
+
+    expect(deviceAppOutdated()).toBe('app');
+  });
+
+  it('drops the notice once an updated Memory hands out a token', async () => {
+    const source = nativeSide({ ...unreachable, status: 'legacy' }, ok('token-1'));
+    const changes = vi.fn();
+    const stop = subscribeApiKey(changes);
+
+    try {
+      await startDeviceAccessTokens(source);
+      expect(deviceAppOutdated()).toBe('memory');
+
+      await advance(31 * MINUTE);
+
+      expect(deviceAppOutdated()).toBeNull();
+      expect(getApiKey()).toBe('token-1');
+      expect(changes).toHaveBeenCalled();
+    } finally {
+      stop();
+    }
+  });
+
+  it('says nothing is outdated once signed out', async () => {
+    await startDeviceAccessTokens(nativeSide({ ...unreachable, status: 'legacy' }));
+    stopDeviceAccessTokens();
+
+    expect(deviceAppOutdated()).toBeNull();
   });
 
   it('stop forgets everything, and an answer to the stopped session is dropped', async () => {
@@ -399,11 +445,54 @@ describe('the outbox owner stamp while tokens are running', () => {
     expect(outboxOwnerStamp()).toBe(before);
   });
 
-  it('is computed from the key, as before, when the native side gives none (a shell from before tokens)', async () => {
+  it('is none when a shell from before tokens gives none: the page has no key to compute it from', async () => {
     await startDeviceAccessTokens(
-      nativeSide({ status: 'legacy', token: 'the-key', expiresAt: null, keyId: null, ownerStamp: null }),
+      nativeSide({
+        status: 'legacy',
+        token: null,
+        expiresAt: null,
+        keyId: null,
+        ownerStamp: null,
+        outdated: 'app',
+      }),
     );
 
-    expect(outboxOwnerStamp()).toMatch(/^same-origin [0-9a-f]{14}$/);
+    expect(outboxOwnerStamp()).toBeNull();
+  });
+});
+
+describe('a native shell from before tokens', () => {
+  afterEach(() => {
+    delete (window as unknown as { Capacitor?: unknown }).Capacitor;
+  });
+
+  /** A phone shell whose LocalHub has a secure store holding the key, and no token command. */
+  function oldShell(stored: string | null) {
+    const secureGet = vi.fn(async ({ key }: { key: string }) => ({
+      value: key === 'ci.apiKey' ? stored : null,
+    }));
+
+    (window as unknown as { Capacitor?: unknown }).Capacitor = {
+      isNativePlatform: () => true,
+      getPlatform: () => 'android',
+      Plugins: { LocalHub: { secureGet } },
+    };
+
+    return secureGet;
+  }
+
+  it('is signed in with nothing to send, and the app is what to update', async () => {
+    oldShell('the-key');
+
+    const result = await nativeDeviceAccessToken({ refresh: false });
+
+    expect(result).toMatchObject({ status: 'legacy', token: null, outdated: 'app' });
+    expect(JSON.stringify(result)).not.toContain('the-key');
+  });
+
+  it('is signed out when that shell has no key stored', async () => {
+    oldShell(null);
+
+    expect((await nativeDeviceAccessToken({ refresh: false })).status).toBe('none');
   });
 });

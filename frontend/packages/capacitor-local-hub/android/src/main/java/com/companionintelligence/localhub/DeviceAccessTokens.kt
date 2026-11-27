@@ -126,7 +126,11 @@ data class DeviceAccessTokenResult(
         REVOKED("revoked"),
         /** Memory could not be asked, or answered something unusable. Signed in, no token now. */
         UNREACHABLE("unreachable"),
-        /** Memory predates the route (404): [token] is the key itself. */
+        /**
+         * Memory predates the route (404). No token, and never the key itself: the page would hold a
+         * credential that works anywhere until revoked. The page asks the person to update Memory;
+         * the native uploaders keep sending the key as before.
+         */
         LEGACY("legacy"),
     }
 
@@ -284,7 +288,7 @@ class DeviceAccessTokens(
                 synchronized(lock) { if (cached?.credential == credential) cached = null }
                 result(DeviceAccessTokenResult.Status.REVOKED)
             }
-            404 -> result(DeviceAccessTokenResult.Status.LEGACY, apiKey)
+            404 -> result(DeviceAccessTokenResult.Status.LEGACY)
             else -> result(DeviceAccessTokenResult.Status.UNREACHABLE)
         }
     }

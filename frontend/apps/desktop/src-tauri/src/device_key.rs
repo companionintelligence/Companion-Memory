@@ -52,7 +52,8 @@ pub enum TokenStatus {
     Revoked,
     /// Memory did not answer usefully, or the keychain could not be read. Still signed in; ask again later.
     Unreachable,
-    /// Memory predates access tokens (404). The token is the key itself, as before.
+    /// Memory predates access tokens (404). No token, and never the key itself: the page would hold a
+    /// credential that works anywhere until revoked. The page asks the person to update Memory.
     Legacy,
 }
 
@@ -62,7 +63,7 @@ pub enum TokenStatus {
 pub struct DeviceAccessToken {
     pub status: TokenStatus,
     pub token: Option<String>,
-    /// When `token` stops working, in ms since the epoch. Null for a legacy key.
+    /// When `token` stops working, in ms since the epoch. Only for `Ok`.
     pub expires_at: Option<i64>,
     /// The device key's server-side id, when the keychain has one.
     pub key_id: Option<String>,
@@ -241,13 +242,7 @@ impl DeviceTokens {
             }
             MintOutcome::Legacy => {
                 *cache = None;
-                DeviceAccessToken {
-                    status: TokenStatus::Legacy,
-                    token: Some(key),
-                    expires_at: None,
-                    key_id,
-                    owner_stamp,
-                }
+                DeviceAccessToken::without_token(TokenStatus::Legacy, key_id, owner_stamp)
             }
             MintOutcome::Unreachable => {
                 DeviceAccessToken::without_token(TokenStatus::Unreachable, key_id, owner_stamp)
@@ -588,14 +583,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn hands_back_the_key_itself_to_a_memory_too_old_for_tokens() {
+    async fn hands_the_page_no_token_and_never_the_key_for_a_memory_too_old_for_tokens() {
         let (url, _) = server(404, "{}").await;
         let result = DeviceTokens::with_url(url)
             .resolve(auth_with(&[(DEVICE_KEY_ENTRY, KEY)]), false, 0)
             .await;
 
         assert_eq!(result.status, TokenStatus::Legacy);
-        assert_eq!(result.token.as_deref(), Some(KEY));
+        assert_eq!(result.token, None);
         assert_eq!(result.expires_at, None);
     }
 

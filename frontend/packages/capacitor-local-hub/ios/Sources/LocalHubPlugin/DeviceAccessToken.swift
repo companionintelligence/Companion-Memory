@@ -25,7 +25,9 @@ enum DeviceAccessTokenStatus: String {
     case revoked
     /// No answer from Memory, or one that settles nothing. The key is still there.
     case unreachable
-    /// Memory predates access tokens (404): `token` is the key itself, as before.
+    /// Memory predates access tokens (404). No token, and never the key itself: the page would hold a
+    /// credential that works anywhere until revoked. The page asks the person to update Memory; the
+    /// native uploaders keep sending the key as before.
     case legacy
 }
 
@@ -284,7 +286,7 @@ actor DeviceAccessTokenBroker {
             cached = nil
             return DeviceAccessTokenResult(status: .revoked, token: nil, expiresAt: nil, keyId: keyId, ownerStamp: stamp)
         case .legacy:
-            return DeviceAccessTokenResult(status: .legacy, token: apiKey, expiresAt: nil, keyId: keyId, ownerStamp: stamp)
+            return DeviceAccessTokenResult(status: .legacy, token: nil, expiresAt: nil, keyId: keyId, ownerStamp: stamp)
         case .unreachable:
             return DeviceAccessTokenResult(status: .unreachable, token: nil, expiresAt: nil, keyId: keyId, ownerStamp: stamp)
         }

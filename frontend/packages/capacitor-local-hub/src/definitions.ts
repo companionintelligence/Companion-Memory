@@ -31,15 +31,16 @@ export interface LocalHubSecureGetResult {
  *   decides to sign out.
  * - `unreachable`: Memory could not be asked (offline, a timeout, a 5xx, a redirect), or no
  *   origin is stored. Still signed in.
- * - `legacy`: Memory predates access tokens (404), so `token` is the stored key itself and
- *   `expiresAt` is null.
+ * - `legacy`: Memory predates access tokens (404). Still signed in, with no token: the stored key
+ *   is never handed to the page. The app asks the person to update Memory, and the native
+ *   uploaders keep sending the key as before.
  */
 export type DeviceAccessTokenStatus = 'ok' | 'none' | 'revoked' | 'unreachable' | 'legacy';
 
 /** Result of {@link LocalHubPlugin.deviceAccessToken}. */
 export interface DeviceAccessTokenResult {
   status: DeviceAccessTokenStatus;
-  /** The credential requests carry: a token (`ok`), the key itself (`legacy`), else null. */
+  /** The credential requests carry: a token, only for `ok`; never the stored key itself. */
   token: string | null;
   /** When `token` stops working, in ms since the epoch. Only for `ok`. */
   expiresAt: number | null;

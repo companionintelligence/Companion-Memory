@@ -11,6 +11,7 @@ import {
   setApiBaseUrl,
   setApiKey,
   syncNativeIntentConfig,
+  deviceAppOutdated,
 } from '@ci/common';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { jwtDecode } from 'jwt-decode';
@@ -829,7 +830,8 @@ describe('useAuth', () => {
   });
 
   it('native logout forgets the paired Memory origin so the next account can pick a device', async () => {
-    // A shell from before the LocalHub plugin: the key is sent as it is (the `legacy` fallback).
+    // A shell from before the LocalHub plugin: signed in with nothing sent (`legacy`), and still
+    // signs out.
     const secureStore = new Map<string, string>([
       ['ci.apiKey', 'stored-api-key'],
       ['ci.apiKeyId', 'stored-key-id'],
@@ -1908,19 +1910,21 @@ describe('useAuth', () => {
     }
   });
 
-  it('desktop: an app from before the device-key commands still signs in with the key it stored', async () => {
+  it('desktop: an app from before the device-key commands stays signed in, sends nothing and asks to be updated', async () => {
     // The window is served by Memory, so a newer page can meet an older desktop app.
-    const desktop = fakeDesktop(new Map([['memory:ci.apiKey', 'older-app-key']]), { olderApp: true });
-    setFetch(() => emptyResponse(true, 204));
+    fakeDesktop(new Map([['memory:ci.apiKey', 'older-app-key']]), { olderApp: true });
+    const fetchMock = setFetch(() => emptyResponse(true, 204));
 
     try {
       const { result } = renderHook(() => useAuth(), { wrapper });
       await waitFor(() => expect(result.current[0].initializing).toBe(false));
 
       expect(result.current[0].authenticated).toBe(true);
-      // That app cannot hand out tokens, so the key is sent as it always was.
-      expect(getApiKey()).toBe('older-app-key');
-      expect(desktop.invoke).toHaveBeenCalledWith('plugin:ci-auth|secure_get', { key: 'memory:ci.apiKey' });
+      // That app cannot hand out tokens. The key it stored is not sent: the page would hold a
+      // credential that works anywhere until revoked. The app is named as what to update.
+      expect(getApiKey()).toBeNull();
+      expect(deviceAppOutdated()).toBe('app');
+      expect(JSON.stringify(fetchMock.mock.calls)).not.toContain('older-app-key');
     } finally {
       delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
     }
@@ -2548,13 +2552,14 @@ describe('useAuth', () => {
 
     const { result } = renderHook(() => useAuth(), { wrapper });
     await waitFor(() => expect(result.current[0].authenticated).toBe(true));
-    expect(getApiKey()).toBe('first-box-key');
+    // A shell from before tokens: signed in, with nothing sent.
+    expect(getApiKey()).toBeNull();
 
     await act(async () => {
       await result.current[1].completePortalMemoryConnect('portal-bearer', 'https://second.example.com');
     });
 
-    expect(getApiKey()).toBe('second-box-key');
+    expect(getApiKey()).toBeNull();
     expect(secureStore.get('ci.apiKey')).toBe('second-box-key');
     const toSecondBox = fetchMock.mock.calls.filter(([input]) =>
       String(input).startsWith('https://second.example.com'),
@@ -2922,7 +2927,7 @@ describe('useAuth', () => {
       expect(sentApiKeys(fetchMock)).toEqual([]);
     });
 
-    it('a shell without deviceAccessToken still sends the stored key, as it did before tokens', async () => {
+    it('a shell without deviceAccessToken sends nothing and asks to be updated, never the stored key', async () => {
       localStorage.setItem('ci.apiBaseUrl', FIRST);
       setApiBaseUrl(FIRST);
       const store = new Map([
@@ -2946,9 +2951,10 @@ describe('useAuth', () => {
       const { result } = renderHook(() => useAuth(), { wrapper });
       await waitFor(() => expect(result.current[0].authenticated).toBe(true));
 
-      expect(getApiKey()).toBe('dev-shell-key');
-      // And captures are still stamped for this key, computed from it as before.
-      expect(outboxOwnerStamp()).toMatch(/^https:\/\/first\.example\.com [0-9a-f]{14}$/);
+      expect(getApiKey()).toBeNull();
+      expect(deviceAppOutdated()).toBe('app');
+      // No stamp either: there is no key in the page to compute it from, and that app queues nothing.
+      expect(outboxOwnerStamp()).toBeNull();
     });
   });
 });

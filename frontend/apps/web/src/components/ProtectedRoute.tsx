@@ -1,8 +1,9 @@
-import { Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Suspense, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 
-import { isNativePlatform, LoadingPage } from '@ci/common';
+import { deviceAppOutdated, isNativePlatform, LoadingPage, subscribeApiKey } from '@ci/common';
 import { Navigate, useLocation } from 'react-router-dom';
 
+import { DeviceAppOutdated } from '@/components/DeviceAppOutdated';
 import { MemoryUnreachable } from '@/components/MemoryUnreachable';
 import { useAuth, useCurrentUser } from '@/hooks';
 
@@ -63,11 +64,20 @@ export function ProtectedRoute({
     };
   }, [expired, canRecover, hadSession, triedRecover, refresh, authLoading, userLoading]);
 
+  // Signed in with a key nothing can be sent for (Memory or this app is too old for tokens). Ahead
+  // of the loader and the sign-in redirect: the profile cannot load without a credential, and
+  // signing in again would only mint another key the same Memory cannot trade.
+  const outdated = useSyncExternalStore(subscribeApiKey, deviceAppOutdated, deviceAppOutdated);
+
   const recovering = expired && canRecover && hadSession && !triedRecover;
   const blocking = (authLoading || userLoading) && !user;
 
   if (!blocking && !recovering && user && !expired) {
     shown.current = true;
+  }
+
+  if (outdated) {
+    return <DeviceAppOutdated outdated={outdated} />;
   }
 
   if (!shown.current && (blocking || recovering)) {
