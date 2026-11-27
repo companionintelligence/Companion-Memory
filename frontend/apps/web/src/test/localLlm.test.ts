@@ -567,9 +567,9 @@ describe('ensureLocalLlmLoaded', () => {
     expect(plugin.loadModel).toHaveBeenCalledWith(expect.objectContaining({ modelId: 'gemma-4-e4b-it' }));
   });
 
-  it('binds the appliance’s intent tools only with an origin, an API key, and a model that can use them', async () => {
+  it('binds the appliance’s intent tools only with an origin, a signed-in device, and a model that can use them', async () => {
     setApiBaseUrl('https://memory.example.com');
-    setApiKey('key-123');
+    setApiKey('token-123');
 
     const { plugin } = fakeLlm();
 
@@ -577,13 +577,27 @@ describe('ensureLocalLlmLoaded', () => {
 
     await ensureLocalLlmLoaded('gemma-4-e2b-it', { useIntentTools: true });
 
+    // No key or token crosses the bridge: the native intent client reads the stored key itself.
     expect(plugin.configureIntentTools).toHaveBeenLastCalledWith({
       enabled: true,
       baseUrl: 'https://memory.example.com',
-      apiKey: 'key-123',
       connectionMode: 'fresh',
       localSearch: undefined,
     });
+    expect(JSON.stringify(plugin.configureIntentTools.mock.calls)).not.toContain('token-123');
+  });
+
+  it('loads toolless when nothing is signed in, even with an origin', async () => {
+    setApiBaseUrl('https://memory.example.com');
+    setApiKey(null);
+
+    const { plugin } = fakeLlm();
+
+    nativeWindow('android', plugin);
+
+    await ensureLocalLlmLoaded('gemma-4-e2b-it', { useIntentTools: true });
+
+    expect(plugin.configureIntentTools).toHaveBeenLastCalledWith({ enabled: false });
   });
 
   it('loads toolless when the user switched tools off, even with credentials present', async () => {

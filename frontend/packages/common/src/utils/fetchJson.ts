@@ -1,4 +1,4 @@
-import { apiKeyHeaders } from './apiAuth';
+import { apiKeyHeaders, deviceAccessTokensActive, refreshDeviceAccessToken } from './apiAuth';
 import { buildApiUrl, isNativePlatform } from './apiBase';
 import { guardApplianceRequest } from './offlineWrites';
 
@@ -255,6 +255,59 @@ function flattenHeaders(headers?: HeadersInit): Record<string, string> {
   return { ...headers };
 }
 
+/** The value of `name` in `headers`, matched without regard to case. */
+function headerValue(headers: Record<string, string>, name: string): string | undefined {
+  const lower = name.toLowerCase();
+  const match = Object.keys(headers).find((key) => key.toLowerCase() === lower);
+
+  return match === undefined ? undefined : headers[match];
+}
+
+/** `headers` with `name` set to `value`, replacing it whatever its case. */
+function withHeader(headers: Record<string, string>, name: string, value: string): Record<string, string> {
+  const lower = name.toLowerCase();
+  const out = Object.fromEntries(Object.entries(headers).filter(([key]) => key.toLowerCase() !== lower));
+
+  out[name] = value;
+
+  return out;
+}
+
+/**
+ * Send, and when Memory answers 401 to the device access token the request carried, send once
+ * more with a new one (`apiAuth.ts`). A token can expire between the app checking it and the
+ * request arriving, or while the phone slept with its timers stopped. A 401 means Memory did
+ * nothing, so sending again is safe. Only a body that can be sent twice is: none, or text.
+ */
+async function sendWithFreshDeviceToken(
+  send: (headers: Record<string, string>) => Promise<Response>,
+  headers: Record<string, string>,
+  body: BodyInit | null | undefined,
+  signal: AbortSignal | null | undefined,
+): Promise<Response> {
+  const response = await send(headers);
+
+  if (response.status !== 401 || !deviceAccessTokensActive() || signal?.aborted) {
+    return response;
+  }
+
+  const sent = headerValue(headers, 'x-api-key');
+
+  if (!sent || (body != null && typeof body !== 'string')) {
+    return response;
+  }
+
+  const fresh = await refreshDeviceAccessToken(sent);
+
+  if (!fresh) {
+    return response;
+  }
+
+  void response.body?.cancel().catch(() => undefined);
+
+  return send(withHeader(headers, 'x-api-key', fresh));
+}
+
 function requestData(body: BodyInit | null | undefined): unknown {
   if (body == null) {
     return undefined;
@@ -377,18 +430,16 @@ async function nativeAwareFetch(input: RequestInfo, init: RequestInit, timeout?:
 export async function apiFetch(input: RequestInfo | URL, init?: ApiFetchInit): Promise<Response> {
   const { allowOffline, ...rest } = init ?? {};
 
-  if (typeof input === 'string') {
-    const url = buildApiUrl(input);
+  if (typeof input === 'string' || input instanceof URL) {
+    const url = typeof input === 'string' ? buildApiUrl(input) : input.toString();
     guardApplianceRequest(url, rest.method, allowOffline);
 
-    return nativeAwareFetch(url, rest);
-  }
-
-  if (input instanceof URL) {
-    const url = input.toString();
-    guardApplianceRequest(url, rest.method, allowOffline);
-
-    return nativeAwareFetch(url, rest);
+    return sendWithFreshDeviceToken(
+      (headers) => nativeAwareFetch(url, { ...rest, headers }),
+      flattenHeaders(rest.headers),
+      rest.body,
+      rest.signal,
+    );
   }
 
   guardApplianceRequest(input.url, rest.method ?? input.method, allowOffline);
@@ -427,21 +478,25 @@ export async function streamingFetch(input: string, init?: StreamingFetchInit): 
     ...apiKeyHeaders(),
     ...flattenHeaders(rest.headers),
   };
-  const next = { ...rest, headers };
+  const send = async (sentHeaders: Record<string, string>): Promise<Response> => {
+    const next = { ...rest, headers: sentHeaders };
 
-  if (!isNativePlatform()) {
-    return fetch(url, next);
-  }
-
-  try {
-    return await unpatchedWebFetch()(url, next);
-  } catch (error) {
-    if (!bufferedFallback || rest.signal?.aborted) {
-      throw error;
+    if (!isNativePlatform()) {
+      return fetch(url, next);
     }
 
-    return nativeBinaryFetch(url, next);
-  }
+    try {
+      return await unpatchedWebFetch()(url, next);
+    } catch (error) {
+      if (!bufferedFallback || rest.signal?.aborted) {
+        throw error;
+      }
+
+      return nativeBinaryFetch(url, next);
+    }
+  };
+
+  return sendWithFreshDeviceToken(send, headers, rest.body, rest.signal);
 }
 
 function unpatchedWebFetch(): typeof fetch {
@@ -566,7 +621,15 @@ export async function fetchJson<T>(input: RequestInfo, init?: Opts): Promise<T |
   let res: Response;
   let text: string | undefined;
   try {
-    res = await nativeAwareFetch(resolved, rest, timeout);
+    res =
+      typeof resolved === 'string'
+        ? await sendWithFreshDeviceToken(
+            (headers) => nativeAwareFetch(resolved, { ...rest, headers }, timeout),
+            flattenHeaders(rest.headers),
+            rest.body,
+            rest.signal,
+          )
+        : await nativeAwareFetch(resolved, rest, timeout);
 
     if (res.ok) {
       text = await res.text();

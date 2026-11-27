@@ -156,7 +156,13 @@ export interface ConfigureIntentToolsOptions {
   enabled?: boolean;
   /** The configured CI-Server origin (the same value `@ci/common`'s `apiBase` resolves). */
   baseUrl?: string;
-  /** The device's API key — sent as `x-api-key`, exactly as the iOS App Intents already do. */
+  /**
+   * Ignored, and no longer sent: the native intent client reads the device key, and the origin it
+   * was stored for, from the credential store itself, so the key never passes through the page.
+   * Kept so an older caller still type-checks.
+   *
+   * @deprecated
+   */
   apiKey?: string;
   /**
    * The connection chip's answer at the time of the call (`@ci/common`'s `ConnectionMode`). Anything

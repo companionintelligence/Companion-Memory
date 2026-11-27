@@ -18,7 +18,25 @@ export {
 } from './src/hooks';
 export type { DeviceSizeClass, ScrollOverflow } from './src/hooks';
 export { GlobalUID } from './src/utils/GlobalUID';
-export { apiKeyHeaders, getApiKey, setApiKey } from './src/utils/apiAuth';
+export {
+  apiKeyHeaders,
+  deviceAccessTokensActive,
+  deviceKeyId,
+  deviceOwnerStamp,
+  ensureFreshDeviceAccessToken,
+  getApiKey,
+  onDeviceKeyRevoked,
+  refreshDeviceAccessToken,
+  setApiKey,
+  startDeviceAccessTokens,
+  stopDeviceAccessTokens,
+  subscribeApiKey,
+} from './src/utils/apiAuth';
+export type {
+  DeviceAccessTokenResult,
+  DeviceAccessTokenSource,
+  DeviceAccessTokenStatus,
+} from './src/utils/apiAuth';
 export { API_CONTRACT, MIN_SERVER_CONTRACT, memoryContractNotice } from './src/utils/apiContract';
 export type { MemoryContractNotice } from './src/utils/apiContract';
 export {
@@ -311,6 +329,8 @@ export {
   shareNativeTextFile,
   syncNativeIntentConfig,
   takeNativePhoto,
+  nativeDeviceAccessToken,
+  DEVICE_KEY_STORAGE_KEY,
 } from './src/utils/nativeBridge';
 export type {
   BackgroundUploadState,

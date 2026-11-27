@@ -23,6 +23,36 @@ export interface LocalHubSecureGetResult {
   value: string | null;
 }
 
+/**
+ * What {@link LocalHubPlugin.deviceAccessToken} found:
+ * - `ok`: `token` is a short-lived access token for the stored key, working until `expiresAt`.
+ * - `none`: no key is stored (signed out).
+ * - `revoked`: Memory refused the stored key (401/403). The key is left where it is; the app
+ *   decides to sign out.
+ * - `unreachable`: Memory could not be asked (offline, a timeout, a 5xx, a redirect), or no
+ *   origin is stored. Still signed in.
+ * - `legacy`: Memory predates access tokens (404), so `token` is the stored key itself and
+ *   `expiresAt` is null.
+ */
+export type DeviceAccessTokenStatus = 'ok' | 'none' | 'revoked' | 'unreachable' | 'legacy';
+
+/** Result of {@link LocalHubPlugin.deviceAccessToken}. */
+export interface DeviceAccessTokenResult {
+  status: DeviceAccessTokenStatus;
+  /** The credential requests carry: a token (`ok`), the key itself (`legacy`), else null. */
+  token: string | null;
+  /** When `token` stops working, in ms since the epoch. Only for `ok`. */
+  expiresAt: number | null;
+  /** The stored key's id (`ci.apiKeyId`), whenever a key is stored and it has one. */
+  keyId: string | null;
+  /**
+   * The outbox owner stamp (`outboxOwnerStamp()` in `@ci/common`) for the stored key and
+   * origin, whenever both are stored. Computed natively, because the page no longer holds
+   * the key it is a fingerprint of.
+   */
+  ownerStamp: string | null;
+}
+
 /** Sanitized, content-limited summary rendered by the iOS and Android home widgets. */
 export interface CompanionWidgetSnapshot {
   version: 1;
@@ -110,6 +140,18 @@ export interface LocalHubPlugin {
    * themselves.
    */
   secureGet(options: { key: string }): Promise<LocalHubSecureGetResult>;
+
+  /**
+   * A short-lived access token for the device key in the credential store, so the web page
+   * never holds the key itself. `secureGet` refuses `ci.apiKey` for the same reason.
+   *
+   * The native side reads the key and the origin it was stored for, and trades the key at
+   * `POST {origin}/api/keys/access-token` (no redirects followed). It keeps the token until a
+   * minute before it expires; `refresh: true` asks Memory again regardless (after a 401).
+   * Changing `ci.apiBaseUrl` while a key is stored removes the key: it is never sent to an
+   * address other than the one it was stored for.
+   */
+  deviceAccessToken(options?: { refresh?: boolean }): Promise<DeviceAccessTokenResult>;
 
   /**
    * Encrypts and stores one value, rejecting rather than storing anything the keystore did

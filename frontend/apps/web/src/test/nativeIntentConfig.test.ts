@@ -160,8 +160,12 @@ describe('secure storage in the HALF-NATIVE state (plugin missing)', () => {
 
     expect(keychain.size).toBe(0);
     expect(localStorage.get('ci.apiKey')).toBe('super-secret-key');
-    // Round-trips, so the app cannot tell it was downgraded.
-    expect(await secureStorageGet('ci.apiKey')).toBe('super-secret-key');
+    // The page never reads the device key back, from any store, so this read is null. Other
+    // values still round-trip, so the app cannot tell it was downgraded.
+    expect(await secureStorageGet('ci.apiKey')).toBeNull();
+    await secureStorageSet('ci.apiKeyId', 'key-id');
+    expect(localStorage.get('ci.apiKeyId')).toBe('key-id');
+    expect(await secureStorageGet('ci.apiKeyId')).toBe('key-id');
   });
 
   it('does not leak the value into localStorage when the plugin IS present', async () => {

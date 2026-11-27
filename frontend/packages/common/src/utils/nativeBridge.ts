@@ -12,6 +12,7 @@
  * {@link desktopSecureGet}.
  */
 
+import type { DeviceAccessTokenResult } from './apiAuth';
 import { isAndroidPlatform, isIosPlatform, isNativePlatform, isTauriPlatform } from './apiBase';
 import { streamingFetch } from './fetchJson';
 import type { NativeLocationEvent } from './deviceSources/location';
@@ -47,6 +48,8 @@ interface SecureStoragePlugin {
 interface LocalHubPlugin {
   shareTextFile?(options: { filename: string; content: string; mimeType: string }): Promise<void>;
   secureGet(options: { key: string }): Promise<{ value: string | null }>;
+  /** Absent on a native build from before device access tokens (a dev build served live). */
+  deviceAccessToken?(options: { refresh?: boolean }): Promise<DeviceAccessTokenResult>;
   secureSet(options: { key: string; value: string }): Promise<void>;
   secureRemove(options: { key: string }): Promise<void>;
   /** `external`: not a sign-in, so Android skips the Auth Tab (see the plugin's definitions). */
@@ -398,6 +401,9 @@ async function migrateLegacySecureValue(hub: LocalHubPlugin, key: string): Promi
  * plugin's `secureSet` accepts these and nothing else on both platforms, so a new key has to
  * be added there too (`capacitorPluginContract.test.ts` checks the three lists agree).
  */
+/** The device API key's name in the credential store. Written once at sign-in, never read back. */
+export const DEVICE_KEY_STORAGE_KEY = 'ci.apiKey';
+
 export const SECURE_STORE_KEYS = [
   'ci.apiKey',
   'ci.apiKeyId',
@@ -415,6 +421,12 @@ export const SECURE_STORE_KEYS = [
  * in a credential being written somewhere weaker.
  */
 export async function secureStorageGet(key: string): Promise<string | null> {
+  // The device key is never read back into the page: the native side keeps it and hands out
+  // short-lived tokens instead (`nativeDeviceAccessToken`). Native refuses this read too.
+  if (key === DEVICE_KEY_STORAGE_KEY) {
+    return null;
+  }
+
   const hub = plugins()?.LocalHub;
 
   if (isNativePlatform() && hub) {
@@ -568,9 +580,7 @@ function desktopSecureKey(key: string): string {
  */
 async function desktopSecureGet(key: string): Promise<string | null> {
   try {
-    const { value } = await tauriInvoke<{ value: string | null }>('plugin:ci-auth|secure_get', {
-      key: desktopSecureKey(key),
-    });
+    const { value } = await desktopKeychainGet(desktopSecureKey(key));
 
     if (value !== null && value !== undefined) {
       // The keychain copy is authoritative, so a legacy copy an earlier build left is removed.
@@ -602,6 +612,30 @@ async function migrateLegacyLocalStorageValue(key: string): Promise<string | nul
   removeLegacyLocalStorageValue(key);
 
   return legacyValue;
+}
+
+/**
+ * Reads a namespaced keychain entry through the desktop app's own `device_secure_get_command`, which
+ * refuses the device key. A desktop app from before it has only the plugin's `secure_get`, so the
+ * page falls back to that when the command is not there.
+ */
+async function desktopKeychainGet(namespacedKey: string): Promise<{ value: string | null }> {
+  try {
+    return await tauriInvoke<{ value: string | null }>('device_secure_get_command', { key: namespacedKey });
+  } catch (error) {
+    if (!isUnknownTauriCommand(error)) {
+      throw error;
+    }
+
+    return tauriInvoke<{ value: string | null }>('plugin:ci-auth|secure_get', { key: namespacedKey });
+  }
+}
+
+/** Whether Tauri refused a command because this desktop app does not have it (an older build). */
+function isUnknownTauriCommand(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+
+  return /not found|not allowed|unknown command|command .* not/i.test(message);
 }
 
 /**
@@ -1888,4 +1922,121 @@ export async function shareNativeTextFile(options: {
   await hub.shareTextFile(options);
 
   return true;
+}
+
+const NO_DEVICE_KEY: DeviceAccessTokenResult = {
+  status: 'none',
+  token: null,
+  expiresAt: null,
+  keyId: null,
+  ownerStamp: null,
+};
+
+/**
+ * A short-lived access token for this device's key, from the native side, which keeps the key
+ * (`DeviceAccessTokenSource` for `startDeviceAccessTokens`). The phone asks the LocalHub plugin,
+ * the desktop its own `device_access_token_command`. `none` on web, and when no key is stored.
+ *
+ * A native side from before tokens (a dev build served live, or a desktop app older than the
+ * Memory serving its window) has no such method. Then the stored key is read the old way and
+ * sent as it is (`legacy`), so signing in keeps working until that app is updated.
+ */
+export async function nativeDeviceAccessToken(options: {
+  refresh: boolean;
+}): Promise<DeviceAccessTokenResult> {
+  if (isNativePlatform()) {
+    const hub = plugins()?.LocalHub;
+
+    if (!hub) {
+      // A shell older still, with only the retired plugin: the key is where `secureStorageSet` put it.
+      const secure = plugins()?.SecureStoragePlugin;
+
+      return secure
+        ? legacyDeviceKey(async () => (await secure.get({ key: DEVICE_KEY_STORAGE_KEY })).value)
+        : NO_DEVICE_KEY;
+    }
+
+    if (typeof hub.deviceAccessToken !== 'function') {
+      return legacyDeviceKey(async () => (await hub.secureGet({ key: DEVICE_KEY_STORAGE_KEY })).value);
+    }
+
+    const result = await hub.deviceAccessToken({ refresh: options.refresh });
+
+    if (result.status === 'none' && (await moveLegacyDeviceKey(hub))) {
+      return hub.deviceAccessToken({ refresh: options.refresh });
+    }
+
+    return result;
+  }
+
+  if (isTauriPlatform()) {
+    try {
+      const result = await tauriInvoke<DeviceAccessTokenResult>('device_access_token_command', {
+        refresh: options.refresh,
+      });
+
+      // A desktop build from before the keychain kept the key in localStorage. Move it, once.
+      if (result.status === 'none' && (await moveLegacyDesktopDeviceKey())) {
+        return await tauriInvoke<DeviceAccessTokenResult>('device_access_token_command', {
+          refresh: options.refresh,
+        });
+      }
+
+      return result;
+    } catch (error) {
+      if (!isUnknownTauriCommand(error)) {
+        throw error;
+      }
+
+      return legacyDeviceKey(async () => {
+        const { value } = await tauriInvoke<{ value: string | null }>('plugin:ci-auth|secure_get', {
+          key: desktopSecureKey(DEVICE_KEY_STORAGE_KEY),
+        });
+
+        return value;
+      });
+    }
+  }
+
+  return NO_DEVICE_KEY;
+}
+
+/** The stored key itself as the credential, for a native side that cannot hand out tokens. */
+async function legacyDeviceKey(
+  read: () => Promise<string | null | undefined>,
+): Promise<DeviceAccessTokenResult> {
+  let key: string | null | undefined;
+
+  try {
+    key = await read();
+  } catch {
+    key = null;
+  }
+
+  return key
+    ? { status: 'legacy', token: key, expiresAt: null, keyId: null, ownerStamp: null }
+    : NO_DEVICE_KEY;
+}
+
+/**
+ * A key the retired `SecureStoragePlugin` still holds (an install that never launched a build
+ * with the keystore) is moved into the keystore without passing through the page's state.
+ * Resolves true when one was moved. The credential store had none (`none`), so nothing newer is
+ * overwritten.
+ */
+async function moveLegacyDeviceKey(hub: LocalHubPlugin): Promise<boolean> {
+  try {
+    return (await migrateLegacySecureValue(hub, DEVICE_KEY_STORAGE_KEY)) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/** `localStorage`'s copy of the device key, from a desktop build before the keychain, moved into it. */
+async function moveLegacyDesktopDeviceKey(): Promise<boolean> {
+  try {
+    return (await migrateLegacyLocalStorageValue(DEVICE_KEY_STORAGE_KEY)) !== null;
+  } catch {
+    return false;
+  }
 }
