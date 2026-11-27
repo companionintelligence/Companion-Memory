@@ -227,4 +227,14 @@ awk '/^    listen 8642;/{s=1} s&&/^    location /{print NR; exit}' "$here/nginx.
 [ -s "$work/guard" ] || fail "no Host guard in the server block"
 [ "$(cat "$work/guard")" -lt "$(cat "$work/first")" ] || fail "the Host guard comes after a location"
 
+# the refusal is a plain-text page that says how to add the name, served only from the guard
+grep -q '^      rewrite ^ /.gateway-not-this-host last;$' "$here/nginx.conf" || fail "the Host guard does not send the refusal page"
+awk '/^    location = \/.gateway-not-this-host \{/{s=1} s&&/^    \}/{exit} s' "$here/nginx.conf" > "$work/refusal"
+grep -q '^      internal;$' "$work/refusal" || fail "the refusal page can be asked for directly"
+grep -q '^      default_type text/plain;$' "$work/refusal" || fail "the refusal page is not plain text"
+grep -q '^      return 421 ' "$work/refusal" || fail "the refusal page is not a 421"
+grep -q 'More names Memory answers to' "$work/refusal" || fail "the refusal page does not name the Hub setting"
+grep -q 'GATEWAY_ALLOWED_HOSTS' "$work/refusal" || fail "the refusal page does not name the variable"
+grep -q '\$' "$work/refusal" && fail "the refusal page repeats a request value"
+
 echo "gateway: ok"
