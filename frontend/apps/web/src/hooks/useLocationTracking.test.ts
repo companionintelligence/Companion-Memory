@@ -1,3 +1,10 @@
+import {
+  getApiKey,
+  refreshDeviceAccessToken,
+  setApiKey,
+  startDeviceAccessTokens,
+  type DeviceAccessTokenResult,
+} from '@ci/common';
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -111,6 +118,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  setApiKey(null);
   Reflect.deleteProperty(globalThis.navigator, 'geolocation');
   localStorage.clear();
 });
@@ -656,5 +664,65 @@ describe('useLocationTracking — the native background monitor is the only reco
     });
 
     expect(result.current.needsSettingsUpgrade).toBe(true);
+  });
+});
+
+// The tracker is armed with the owner stamp the fixes it queues are stamped with. Signing in again
+// on the phone keeps `authenticated` true, so armed once it went on stamping fixes for the previous
+// key, which nothing could send once that key was gone.
+describe('useLocationTracking — the owner stamp the native monitor is armed with', () => {
+  const tokens = (...results: DeviceAccessTokenResult[]) => {
+    let next = 0;
+
+    return vi.fn(async () => results[Math.min(next++, results.length - 1)]);
+  };
+
+  const ok = (token: string, ownerStamp: string): DeviceAccessTokenResult => ({
+    status: 'ok',
+    token,
+    expiresAt: Date.now() + 300_000,
+    keyId: 'key',
+    ownerStamp,
+  });
+
+  async function armed() {
+    localStorage.setItem(STORAGE_KEY, 'true');
+    h.isNativePlatform.mockReturnValue(true);
+    h.authenticated = true;
+
+    const { result } = renderHook(() => useLocationTracking());
+
+    act(() => result.current.setMode('always'));
+    await waitFor(() => expect(h.startSignificantLocationUpdates).toHaveBeenCalledTimes(1));
+  }
+
+  const ownersArmed = () =>
+    h.startSignificantLocationUpdates.mock.calls.map(
+      ([options]) => (options as { owner: string | null }).owner,
+    );
+
+  it('arms it again with the new key’s stamp after a sign-in that changed the key', async () => {
+    await startDeviceAccessTokens(tokens(ok('t1', 'memory stamp-of-key-1')));
+    await armed();
+
+    await act(async () => {
+      await startDeviceAccessTokens(tokens(ok('t2', 'memory stamp-of-key-2')));
+    });
+
+    await waitFor(() => expect(ownersArmed()).toEqual(['memory stamp-of-key-1', 'memory stamp-of-key-2']));
+  });
+
+  it('leaves it alone when only the token is renewed: the stamp follows the key', async () => {
+    await startDeviceAccessTokens(
+      tokens(ok('t1', 'memory stamp-of-key-1'), ok('t2', 'memory stamp-of-key-1')),
+    );
+    await armed();
+
+    await act(async () => {
+      await refreshDeviceAccessToken('t1');
+    });
+
+    expect(getApiKey()).toBe('t2');
+    expect(ownersArmed()).toEqual(['memory stamp-of-key-1']);
   });
 });

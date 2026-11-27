@@ -92,9 +92,21 @@ function schedule(delayMs: number): void {
   );
 }
 
+/**
+ * The stamp follows the key, not the token, so it changes only with a new key (a sign-in, a
+ * re-pair) or none. Announced like a new credential: the background location tracker is armed
+ * with it, and kept stamping fixes for the previous key after a sign-in that changed it.
+ */
+function setOwnerStamp(next: string | null): void {
+  if (next !== ownerStamp) {
+    ownerStamp = next;
+    notify();
+  }
+}
+
 function apply(result: DeviceAccessTokenResult): void {
   keyId = result.keyId;
-  ownerStamp = result.ownerStamp;
+  setOwnerStamp(result.ownerStamp);
 
   switch (result.status) {
     case 'ok':
@@ -134,7 +146,7 @@ function apply(result: DeviceAccessTokenResult): void {
         }
       } else {
         keyId = null;
-        ownerStamp = null;
+        setOwnerStamp(null);
       }
   }
 }
@@ -195,7 +207,7 @@ export function stopDeviceAccessTokens(): void {
   inFlight = null;
   clearTimer();
   expiresAt = null;
-  ownerStamp = null;
+  setOwnerStamp(null);
   keyId = null;
   unreachableDelay = UNREACHABLE_FLOOR_MS;
   setCredential(null);
@@ -265,7 +277,7 @@ export function deviceKeyId(): string | null {
   return source ? keyId : null;
 }
 
-/** Called whenever the credential requests carry changes (a new token, a sign-out). */
+/** Called whenever the credential requests carry changes (a new token, a sign-out), or the owner stamp does. */
 export function subscribeApiKey(listener: () => void): () => void {
   listeners.add(listener);
 
