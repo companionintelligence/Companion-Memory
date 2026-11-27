@@ -67,6 +67,15 @@ const FILES_TABLE = 'ci.files';
 const EXPORT_ROW_PAGE_SIZE = 500;
 
 /**
+ * The column a page of the export carries its rows' place in, as text, so the next page can start
+ * after the last of them. Removed from every row before it is written.
+ */
+const EXPORT_KEY_COLUMN = '__ci_export_key';
+
+/** Run one SQL statement: on the export's snapshot, or on the pool. */
+type RunQuery = (sql: string, parameters?: unknown[]) => Promise<unknown>;
+
+/**
  * A file the stream import is partway through. Its chunks go to the object
  * store as they arrive, so only the part being filled is held in memory, not
  * the file (see {@link FileService.openObjectWriter}).
@@ -283,13 +292,26 @@ export class UserDataPortabilityService {
     // used to be queued as fast as it could be read: a 1.5 GB file sat in
     // memory several times over and the transfer died partway, with nothing
     // in what had arrived to say so.
+    // Every row is read on one read-only snapshot, so the archive is the account at one moment: a
+    // row edited or added while a large export runs neither appears twice nor goes missing, and the
+    // row order a table is paged in holds from the first page to the last. The snapshot ends once
+    // the file list is read, before the file bytes, which can take far longer.
+    const snapshot = this.dataSource.createQueryRunner();
+    let snapshotOpen = false;
+
     try {
       await writePortabilityLine(res, manifest);
 
-      const tables = await this.discoverUserTables();
+      await snapshot.connect();
+      await snapshot.startTransaction('REPEATABLE READ');
+      snapshotOpen = true;
+      await snapshot.query('SET TRANSACTION READ ONLY');
+      const onSnapshot: RunQuery = (sql, parameters) => snapshot.query(sql, parameters);
+
+      const tables = await this.discoverUserTables(onSnapshot);
 
       for (const table of tables) {
-        for await (const row of this.iterateUserRows(context.userId, table)) {
+        for await (const row of this.iterateUserRows(onSnapshot, context.userId, table)) {
           await writePortabilityLine(res, {
             type: 'row',
             table: qualifiedName(table),
@@ -299,11 +321,15 @@ export class UserDataPortabilityService {
         }
       }
 
-      const fileRows = await this.selectUserRows(context.userId, {
-        schema: 'ci',
-        table: 'files',
-        userColumn: 'user_id',
-      });
+      const fileRows = await this.selectUserRows(
+        context.userId,
+        { schema: 'ci', table: 'files', userColumn: 'user_id' },
+        onSnapshot,
+      );
+
+      await snapshot.commitTransaction();
+      snapshotOpen = false;
+      await snapshot.release();
 
       for (const row of fileRows) {
         if (await this.writeFileChunks(context, res, row)) {
@@ -323,11 +349,27 @@ export class UserDataPortabilityService {
         error: error instanceof Error ? error.message : String(error),
       });
       res.destroy();
+      await this.closeExportSnapshot(snapshot, snapshotOpen);
 
       return;
     }
 
     res.end();
+  }
+
+  /** End an export's snapshot that a failure left open; it only read, so there is nothing to keep. */
+  private async closeExportSnapshot(snapshot: QueryRunner, open: boolean): Promise<void> {
+    try {
+      if (open) {
+        await snapshot.rollbackTransaction();
+      }
+    } catch {
+      // The connection may be what failed; releasing it below is all that is left to do.
+    }
+
+    if (!snapshot.isReleased) {
+      await snapshot.release();
+    }
   }
 
   async importNdjsonStream(
@@ -799,41 +841,71 @@ export class UserDataPortabilityService {
     }
   }
 
-  private async discoverUserTables(): Promise<UserScopedTable[]> {
-    const discovered = (await this.dataSource.query(DISCOVER_USER_TABLES_SQL, [
-      USER_DATA_SCHEMAS,
-    ])) as DiscoveredUserColumn[];
+  private async discoverUserTables(
+    query: RunQuery = (sql, parameters) => this.dataSource.query(sql, parameters),
+  ): Promise<UserScopedTable[]> {
+    const discovered = (await query(DISCOVER_USER_TABLES_SQL, [USER_DATA_SCHEMAS])) as DiscoveredUserColumn[];
 
     return groupUserTables(discovered);
   }
 
+  /**
+   * A table's rows for one account, a page at a time, in a fixed order: the primary key's, or, for a
+   * table without one, where each row is stored (`tableoid`, then `ctid`, which on the export's
+   * snapshot stay put and, with the table they are in, name one row even across a hypertable's
+   * chunks). Each page starts after the last row of the one before.
+   *
+   * It was `LIMIT … OFFSET …` with no order. Postgres promises no order without ORDER BY, so pages
+   * of one table could overlap or leave rows out between them, and a later import would quietly
+   * lack those rows. Each page also re-read every row before it, so a large table slowed with every
+   * page.
+   */
   private async *iterateUserRows(
+    query: RunQuery,
     userId: string,
     table: UserScopedTable,
   ): AsyncGenerator<Record<string, unknown>> {
-    let offset = 0;
+    const keys =
+      table.keyColumns && table.keyColumns.length > 0
+        ? table.keyColumns.map((key) => ({ expression: quoteIdentifier(key.column), type: key.type }))
+        : [
+            { expression: 'tableoid', type: 'oid' },
+            { expression: 'ctid', type: 'tid' },
+          ];
+    const order = keys.map((key) => key.expression).join(', ');
+    // The key goes out and comes back as text, so no value loses precision on the way through
+    // JavaScript (a timestamp's microseconds, which a Date drops, would repeat a row).
+    const keyAsText = `ARRAY[${keys.map((key) => `(${key.expression})::text`).join(', ')}]`;
+    let after: string[] | null = null;
 
     for (;;) {
-      const rows = (await this.dataSource.query(
-        `SELECT * FROM "${table.schema}"."${table.table}"
-         WHERE ${table.userColumn} = $1
-         LIMIT $2 OFFSET $3`,
-        [userId, EXPORT_ROW_PAGE_SIZE, offset],
-      )) as Record<string, unknown>[];
+      const parameters: unknown[] = [userId, EXPORT_ROW_PAGE_SIZE];
+      let startAfter = '';
 
-      if (rows.length === 0) {
-        break;
+      if (after) {
+        const placeholders = keys.map((key, index) => `$${index + 3}::${key.type}`).join(', ');
+        startAfter = ` AND (${order}) > (${placeholders})`;
+        parameters.push(...after);
       }
 
+      const rows = (await query(
+        `SELECT *, ${keyAsText} AS ${quoteIdentifier(EXPORT_KEY_COLUMN)}
+           FROM ${quotedTableName(table)}
+          WHERE ${table.userColumn} = $1${startAfter}
+          ORDER BY ${order}
+          LIMIT $2`,
+        parameters,
+      )) as Record<string, unknown>[];
+
       for (const row of rows) {
+        after = row[EXPORT_KEY_COLUMN] as string[];
+        delete row[EXPORT_KEY_COLUMN];
         yield row;
       }
 
       if (rows.length < EXPORT_ROW_PAGE_SIZE) {
         break;
       }
-
-      offset += EXPORT_ROW_PAGE_SIZE;
     }
   }
 
@@ -960,11 +1032,11 @@ export class UserDataPortabilityService {
   private async selectUserRows(
     userId: string,
     table: Pick<UserScopedTable, 'schema' | 'table' | 'userColumn'>,
+    query: RunQuery = (sql, parameters) => this.dataSource.query(sql, parameters),
   ): Promise<Record<string, unknown>[]> {
-    return this.dataSource.query(
-      `SELECT * FROM "${table.schema}"."${table.table}" WHERE ${table.userColumn} = $1`,
-      [userId],
-    );
+    return (await query(`SELECT * FROM "${table.schema}"."${table.table}" WHERE ${table.userColumn} = $1`, [
+      userId,
+    ])) as Record<string, unknown>[];
   }
 
   private async deleteUserRows(

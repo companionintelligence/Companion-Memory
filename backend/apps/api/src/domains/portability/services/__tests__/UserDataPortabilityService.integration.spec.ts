@@ -113,6 +113,7 @@ describeWithDatabase(
       const users = [testUserId, otherUserId];
 
       await dataSource.query('DELETE FROM ci.notes WHERE user_id = ANY($1::uuid[])', [users]);
+      await dataSource.query('DELETE FROM ci.position WHERE user_id = ANY($1::uuid[])', [users]);
       await dataSource.query('DELETE FROM ci.objects WHERE user_id = ANY($1::uuid[])', [users]);
       await dataSource.query('DELETE FROM ci.receipts WHERE user_id = ANY($1::uuid[])', [users]);
       await dataSource.query('DELETE FROM ci.product_models WHERE user_id = ANY($1::uuid[])', [users]);
@@ -444,6 +445,82 @@ describeWithDatabase(
     });
 
     // Its password is BlueBubbles' own, in plain text: full control of that Mac's iMessage.
+    /** Run a streamed export for the test account, calling `onRow` as each row record goes out. */
+    const exportRecords = async (onRow?: (index: number) => void) => {
+      noopServices.userService.findById = jest.fn().mockResolvedValue(null);
+      const res = Object.assign(new PassThrough(), { setHeader: () => undefined });
+      let text = '';
+      let rows = 0;
+
+      res.on('data', (chunk: Buffer) => {
+        const piece = chunk.toString();
+
+        for (const line of piece.split('\n')) {
+          if (line.includes('"type":"row"')) {
+            onRow?.(rows);
+            rows += 1;
+          }
+        }
+
+        text += piece;
+      });
+      await service.writeExportStream({ userId: testUserId } as never, res as never);
+
+      return text
+        .trimEnd()
+        .split('\n')
+        .map((line) => JSON.parse(line) as { type: string; table?: string; row?: Record<string, unknown> });
+    };
+
+    // Paged with LIMIT/OFFSET and no order, a table longer than one page could come out with rows
+    // twice and others missing, worst while rows were being edited: an edit moves a row in storage.
+    it('lists every row of a table several pages long exactly once, though rows change as it runs', async () => {
+      const ids = Array.from({ length: 1203 }, () => randomUUID());
+
+      await dataSource.query(
+        `INSERT INTO ci.notes (id, title, user_id)
+              SELECT id, 'paged', $2::uuid FROM unnest($1::uuid[]) AS id`,
+        [ids, testUserId],
+      );
+
+      let editing: Promise<unknown> | undefined;
+      const records = await exportRecords((index) => {
+        // Once the export is under way, rewrite every note, which moves each one in storage.
+        if (index === 1) {
+          editing = dataSource.query(`UPDATE ci.notes SET title = 'edited' WHERE user_id = $1::uuid`, [
+            testUserId,
+          ]);
+        }
+      });
+      await editing;
+
+      const notes = records.filter((record) => record.table === 'ci.notes').map((record) => record.row!);
+
+      expect(notes).toHaveLength(ids.length);
+      expect(new Set(notes.map((row) => row.id))).toEqual(new Set(ids));
+      // One moment's account: what was there when the export began, not a mix.
+      expect(new Set(notes.map((row) => row.title))).toEqual(new Set(['paged']));
+      expect(notes.some((row) => '__ci_export_key' in row)).toBe(false);
+    });
+
+    // A position's key is its time, to the microsecond. Handed back through a JavaScript Date, the next
+    // page would start at the millisecond and list again the rows inside it.
+    it('pages a table keyed on a timestamp without repeating rows that share a millisecond', async () => {
+      await dataSource.query(
+        `INSERT INTO ci.position (time, user_id, source, location)
+              SELECT timestamptz '2026-11-27 12:00:00+00' + n * interval '1 microsecond', $1::uuid, 'gps',
+                     ST_SetSRID(ST_MakePoint(-122.4, 37.8), 4326)::geography
+                FROM generate_series(0, 1099) AS n`,
+        [testUserId],
+      );
+
+      const positions = (await exportRecords()).filter((record) => record.table === 'ci.position');
+
+      // Each of the 1,100 exactly once: the pages resumed after a row's own microsecond, not before it.
+      // (The archive itself still writes a timestamp through a Date, to the millisecond.)
+      expect(positions).toHaveLength(1100);
+    });
+
     it("neither exports BlueBubbles' password nor restores a BlueBubbles connection from an archive", async () => {
       await dataSource.query(
         `INSERT INTO ci.bluebubbles_config (host, port, password, webhook_secret, owner_user_id)
