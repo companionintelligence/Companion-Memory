@@ -37,6 +37,12 @@ export type {
   DeviceAccessTokenSource,
   DeviceAccessTokenStatus,
 } from './src/utils/apiAuth';
+export {
+  clearMemorySignInEnded,
+  markMemorySignInEnded,
+  memorySignInEnded,
+  subscribeMemorySignIn,
+} from './src/utils/memorySignIn';
 export { API_CONTRACT, MIN_SERVER_CONTRACT, memoryContractNotice } from './src/utils/apiContract';
 export type { MemoryContractNotice } from './src/utils/apiContract';
 export {

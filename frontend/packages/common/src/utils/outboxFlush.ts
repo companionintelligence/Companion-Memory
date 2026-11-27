@@ -47,6 +47,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useConnectionMode } from './connectionMode';
 import { createHookContext } from './createHookContext';
 import { FetchJsonError, fetchJson } from './fetchJson';
+import { memorySignInEnded } from './memorySignIn';
 import { addAppStateListener } from './nativeBridge';
 import {
   clearOutbox,
@@ -429,6 +430,12 @@ export function flushOutbox(options: FlushOutboxOptions = {}): Promise<FlushOutb
 async function drain(options: FlushOutboxOptions): Promise<FlushOutboxSummary> {
   const { signal, recordTransientFailures = true } = options;
 
+  // Memory no longer takes this device's key: nothing could go out, and each try would spend one
+  // of a row's attempts. The rows wait, unchanged, for the person to sign in again.
+  if (memorySignInEnded()) {
+    return { ...EMPTY_SUMMARY };
+  }
+
   // Before the queue is read, so rows this account queued under a key it no longer has are
   // stamped for the current one and go out in this drain. See outboxOwners.ts.
   await adoptEarlierOutboxRows(signal);
@@ -469,6 +476,11 @@ async function drain(options: FlushOutboxOptions): Promise<FlushOutboxSummary> {
       summary.succeeded += 1;
     } else {
       summary.failed += 1;
+    }
+
+    // Found out during this drain (`fetchJson.ts` asked Memory after a refusal): stop here too.
+    if (memorySignInEnded()) {
+      break;
     }
   }
 
@@ -552,6 +564,12 @@ async function flushOne(
     });
   } catch (err) {
     const permanent = isPermanentFlushFailure(err);
+
+    // Refused for the key, not for the row: the same row goes through once the person signs in
+    // again, so it must not move one attempt nearer `needs_attention` over it.
+    if (err instanceof FetchJsonError && err.status === 401) {
+      return 'failed';
+    }
 
     if (permanent || recordTransientFailures) {
       await recordOutboxAttempt(entry.id, {

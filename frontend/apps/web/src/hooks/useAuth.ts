@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
 import {
   addAppUrlOpenListener,
+  clearMemorySignInEnded,
+  markMemorySignInEnded,
   clearOutboxAfterSignOut,
   clearPersistedApiBaseUrl,
   countUnsentBeforeSignOut,
@@ -24,6 +26,8 @@ import {
   stopDeviceAccessTokens,
   type DeviceAccessTokenResult,
   getLaunchUrl,
+  memorySignInEnded,
+  subscribeMemorySignIn,
   isIosPlatform,
   isNativePlatform,
   isTauriPlatform,
@@ -556,6 +560,8 @@ async function mintAndStoreApiKey(jwt: string, memoryOrigin?: string): Promise<s
   }
 
   const started = await startDeviceAccessTokens(nativeDeviceAccessToken);
+  // A key Memory takes: whatever it refused before no longer applies.
+  clearMemorySignInEnded();
   // Only once the new key is the one requests carry: the window's check of the old key then
   // cannot read the revocation as this window being signed out. Not awaited, so a slow answer
   // does not hold up the sign-in. It never rejects.
@@ -785,6 +791,12 @@ type ReturnValue = [
      * after the answer, so the closing dialog does not change its text.
      */
     signOutPrompt: SignOutPrompt;
+    /**
+     * Phone and desktop: Memory has confirmed it no longer takes this device's key (revoked, or
+     * lost in a restore). Still signed in, so nothing queued is deleted; the app asks the person
+     * to sign in again, which keeps the queue and carries it over to the new key.
+     */
+    signInEnded: boolean;
   },
   {
     login: (username: string, password: string) => Promise<void>;
@@ -838,6 +850,8 @@ function useAuth(): ReturnValue {
   // requests carry come and go, the sign-in does not.
   const [nativeKeyId, setNativeKeyId] = useState<string | null>(null);
   const [signOutPrompt, setSignOutPrompt] = useState<SignOutPrompt>({ open: false, unsentCaptures: 0 });
+
+  const signInEnded = useSyncExternalStore(subscribeMemorySignIn, memorySignInEnded, memorySignInEnded);
 
   const decoded = useMemo(() => (accessToken ? jwtDecode<JwtPayload>(accessToken) : null), [accessToken]);
   const isExpired = useCallback(() => (decoded ? Date.now() >= decoded.exp * 1000 : true), [decoded]);
@@ -1004,6 +1018,7 @@ function useAuth(): ReturnValue {
     // Drop the in-memory credential before the replica wipe. A late keystore restore
     // must not put the previous box's key back under the next account.
     bumpNativeCredentialEpoch();
+    clearMemorySignInEnded();
 
     if (deviceApp) {
       stopDeviceAccessTokens();
@@ -1146,8 +1161,15 @@ function useAuth(): ReturnValue {
 
     const stopRevoked = onDeviceKeyRevoked((revokedKeyId) => {
       // Only the key this sign-in holds: a sign-in since then holds another one.
+      // On the phone not a sign-out, which would delete what is queued: it asks to sign in again,
+      // which keeps the queue and carries it over to the new key (`MemorySignInEndedBanner`). The
+      // desktop has no queue to keep, and its sign-in page is where a new key comes from.
       if (revokedKeyId === null || revokedKeyId === nativeKeyId || nativeKeyId === UNNAMED_DEVICE_KEY) {
-        void logoutRef.current();
+        if (isTauriPlatform()) {
+          void logoutRef.current();
+        } else {
+          markMemorySignInEnded();
+        }
       }
     });
 
@@ -1302,9 +1324,8 @@ function useAuth(): ReturnValue {
             setNativeKeyId(restored.keyId);
 
             if (restored.revoked) {
-              // Memory refused the key while the app was closed. Sign out the usual way, which
-              // asks first about captures that never uploaded.
-              queueMicrotask(() => void logoutRef.current());
+              // Memory refused the key while the app was closed: ask to sign in again, keeping the queue.
+              markMemorySignInEnded();
             }
           }
 
@@ -1586,6 +1607,7 @@ function useAuth(): ReturnValue {
       unreachable,
       error: loginError ?? refreshError,
       signOutPrompt,
+      signInEnded,
     },
     {
       login,

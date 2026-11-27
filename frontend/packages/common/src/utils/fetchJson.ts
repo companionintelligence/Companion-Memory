@@ -1,5 +1,6 @@
-import { apiKeyHeaders, deviceAccessTokensActive, refreshDeviceAccessToken } from './apiAuth';
+import { apiKeyHeaders, deviceAccessTokensActive, getApiKey, refreshDeviceAccessToken } from './apiAuth';
 import { buildApiUrl, isNativePlatform } from './apiBase';
+import { markMemorySignInEnded, memorySignInEnded } from './memorySignIn';
 import { guardApplianceRequest } from './offlineWrites';
 
 interface Opts extends RequestInit {
@@ -382,10 +383,24 @@ function toResponse(
  * Web and tests without the plugin keep `window.fetch`.
  */
 async function nativeAwareFetch(input: RequestInfo, init: RequestInit, timeout?: number): Promise<Response> {
+  const { response, finalUrl } = await sendOnce(input, init, timeout);
+
+  return checkDeviceSignIn(typeof input === 'string' ? input : input.url, init.headers, response, finalUrl);
+}
+
+/** What a request answered, and the URL it ended at after any redirects. */
+interface SentRequest {
+  response: Response;
+  finalUrl: string | undefined;
+}
+
+async function sendOnce(input: RequestInfo, init: RequestInit, timeout?: number): Promise<SentRequest> {
   const cap = typeof input === 'string' ? capacitorHttp() : undefined;
 
   if (!cap?.request || typeof input !== 'string' || isBinaryBody(init.body)) {
-    return fetch(input, init);
+    const response = await fetch(input, init);
+
+    return { response, finalUrl: response.redirected ? response.url : undefined };
   }
 
   // URLSession rejects relative paths (`/api/...`) and non-http(s) schemes
@@ -396,7 +411,7 @@ async function nativeAwareFetch(input: RequestInfo, init: RequestInit, timeout?:
     );
   }
 
-  let result: { status: number; data?: unknown; headers?: HeadersInit };
+  let result: { status: number; data?: unknown; headers?: HeadersInit; url?: string };
   const method = (init.method ?? 'GET').toUpperCase();
 
   try {
@@ -419,7 +434,121 @@ async function nativeAwareFetch(input: RequestInfo, init: RequestInit, timeout?:
 
   const body = typeof result.data === 'string' ? result.data : JSON.stringify(result.data ?? {});
 
-  return toResponse(result, body, method);
+  return { response: toResponse(result, body, method), finalUrl: result.url };
+}
+
+/** The `message` of the 401 a request gets once Memory no longer takes this device's key. */
+export const MEMORY_SIGN_IN_ENDED = 'MEMORY_SIGN_IN_ENDED';
+
+/** Memory is asked whether the key still works at most this often. */
+const SIGN_IN_CHECK_MIN_GAP_MS = 30_000;
+
+let signInCheck: Promise<void> | null = null;
+let lastSignInCheckAt = 0;
+
+/** `url` as an absolute URL, or null. Relative paths resolve against the page, as `fetch` would. */
+function absoluteUrl(url: string): URL | null {
+  try {
+    return new URL(url, typeof window !== 'undefined' ? window.location.href : undefined);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether a request to Memory's API was answered by something else: it ended on another origin
+ * (a Hub's edge redirecting it to the Hub's sign-in page), or it got a web page where Memory's API
+ * only ever answers JSON. Followed silently, the page read as JSON gave the person "invalid JSON".
+ */
+function answeredBySignInPage(requested: string, finalUrl: string | undefined, response: Response): boolean {
+  const from = absoluteUrl(requested);
+
+  if (!from) {
+    return false;
+  }
+
+  const to = finalUrl ? absoluteUrl(finalUrl) : null;
+
+  if (to && to.origin !== from.origin) {
+    return true;
+  }
+
+  return (
+    from.pathname.startsWith('/api/') && /text\/html/i.test(response.headers?.get?.('content-type') ?? '')
+  );
+}
+
+/**
+ * A request that carried this device's key and was refused (401) or turned away to a sign-in page
+ * may mean Memory no longer takes the key. Memory is asked once (`GET /keys/check`) before the app
+ * says so (`memorySignIn.ts`): one failed request proves nothing about the key. A request turned
+ * away to a page comes back as a 401 with {@link MEMORY_SIGN_IN_ENDED}, never as the page.
+ */
+function checkDeviceSignIn(
+  requested: string,
+  headers: HeadersInit | undefined,
+  response: Response,
+  finalUrl: string | undefined,
+): Response {
+  const sentKey = headerValue(flattenHeaders(headers), 'x-api-key');
+
+  if (!sentKey) {
+    return response;
+  }
+
+  const turnedAway = answeredBySignInPage(requested, finalUrl, response);
+
+  // With short-lived tokens the native side answers this itself: the token refresh after a 401
+  // asks Memory about the key, and a refusal arrives as `revoked` (`apiAuth.ts`).
+  if ((turnedAway || response.status === 401) && !deviceAccessTokensActive()) {
+    confirmSignInEnded(requested, sentKey);
+  }
+
+  if (!turnedAway) {
+    return response;
+  }
+
+  void response.body?.cancel?.().catch(() => undefined);
+
+  return new Response(JSON.stringify({ statusCode: 401, message: MEMORY_SIGN_IN_ENDED }), {
+    status: 401,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+/** Ask Memory whether `key` still works, and record it when Memory says it does not. Never throws. */
+function confirmSignInEnded(requested: string, key: string): void {
+  const origin = absoluteUrl(requested)?.origin;
+
+  if (
+    !origin ||
+    signInCheck ||
+    memorySignInEnded() ||
+    Date.now() - lastSignInCheckAt < SIGN_IN_CHECK_MIN_GAP_MS
+  ) {
+    return;
+  }
+
+  lastSignInCheckAt = Date.now();
+  signInCheck = (async () => {
+    try {
+      const url = `${origin}/api/keys/check`;
+      const { response, finalUrl } = await sendOnce(url, { headers: { 'x-api-key': key } }, 10_000);
+      const refused =
+        response.status === 401 || response.status === 403 || answeredBySignInPage(url, finalUrl, response);
+
+      void response.body?.cancel().catch(() => undefined);
+
+      // Only for the key requests still carry: a sign-in since then holds another.
+      if (refused && getApiKey() === key) {
+        markMemorySignInEnded();
+      }
+    } catch {
+      // Memory could not be asked, which says nothing about the key.
+    } finally {
+      signInCheck = null;
+    }
+  })();
 }
 
 /**
@@ -480,19 +609,21 @@ export async function streamingFetch(input: string, init?: StreamingFetchInit): 
   };
   const send = async (sentHeaders: Record<string, string>): Promise<Response> => {
     const next = { ...rest, headers: sentHeaders };
+    const checked = (response: Response) =>
+      checkDeviceSignIn(url, sentHeaders, response, response.redirected ? response.url : undefined);
 
     if (!isNativePlatform()) {
-      return fetch(url, next);
+      return checked(await fetch(url, next));
     }
 
     try {
-      return await unpatchedWebFetch()(url, next);
+      return checked(await unpatchedWebFetch()(url, next));
     } catch (error) {
       if (!bufferedFallback || rest.signal?.aborted) {
         throw error;
       }
 
-      return nativeBinaryFetch(url, next);
+      return checked(await nativeBinaryFetch(url, next));
     }
   };
 

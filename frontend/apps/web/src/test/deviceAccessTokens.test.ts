@@ -363,7 +363,13 @@ describe('requests sent again once with a new token after a 401', () => {
     const fetchMock = refusingFirst();
 
     await expect(fetchJson('/api/users/me')).rejects.toMatchObject({ status: 401 });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // Not sent again. The one other request is Memory being asked whether the key still works
+    // (`memorySignIn.ts`), which is what a 401 with a key and no tokens leads to.
+    const urls = fetchMock.mock.calls.map(([input]) => String(input));
+    expect(urls.filter((url) => url.endsWith('/api/users/me'))).toHaveLength(1);
+    expect(
+      urls.filter((url) => !url.endsWith('/api/users/me')).every((url) => url.endsWith('/api/keys/check')),
+    ).toBe(true);
   });
 
   it('not twice: a second 401 is the answer', async () => {

@@ -94,6 +94,7 @@ const h = vi.hoisted(() => ({
   completePortalMemoryConnect: vi.fn(async () => false),
   completeMemoryPasswordConnect: vi.fn(async () => false),
   authenticated: false,
+  signInEnded: false,
   profileUser: undefined as { id: string; onboarded: boolean } | null | undefined,
   profileError: null as Error | null,
   profileLoading: false,
@@ -118,7 +119,7 @@ vi.mock('@/components/ThemePicker', () => ({
 
 vi.mock('@/hooks', () => ({
   useAuth: () => [
-    { authenticated: h.authenticated, initializing: false },
+    { authenticated: h.authenticated, initializing: false, signInEnded: h.signInEnded },
     {
       completePortalMemoryConnect: h.completePortalMemoryConnect,
       completeMemoryPasswordConnect: h.completeMemoryPasswordConnect,
@@ -198,6 +199,7 @@ beforeEach(() => {
   h.completeMemoryPasswordConnect.mockReset();
   h.completeMemoryPasswordConnect.mockResolvedValue(false);
   h.authenticated = false;
+  h.signInEnded = false;
   h.profileUser = undefined;
   h.profileError = null;
   h.profileLoading = false;
@@ -229,6 +231,28 @@ function portalListingByCode(servers: MemoryServerDevice[] = [HOME]) {
 }
 
 describe('DeviceConnectPage', () => {
+  // Memory refused the phone's key (revoked, or lost in a restore): the profile on hand is the one
+  // remembered for an outage, and the person came here to sign in again without signing out.
+  it('stays open for signing in again while Memory refuses this device’s key', () => {
+    h.authenticated = true;
+    h.signInEnded = true;
+    h.profileUser = { id: 'remembered-user', onboarded: true };
+
+    render(<DeviceConnectPage />);
+
+    expect(screen.getByTestId('oidc-login-btn')).toBeInTheDocument();
+    expect(navigate).not.toHaveBeenCalledWith('/', { replace: true });
+  });
+
+  it('still sends a signed-in phone home when its key works', async () => {
+    h.authenticated = true;
+    h.profileUser = { id: 'u1', onboarded: true };
+
+    render(<DeviceConnectPage />);
+
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith('/', { replace: true }));
+  });
+
   it('keeps an unpaired iOS on the picker when a cached Memory session remains', () => {
     h.ios = true;
     h.authenticated = true;

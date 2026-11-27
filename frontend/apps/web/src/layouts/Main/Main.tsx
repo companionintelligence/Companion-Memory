@@ -9,6 +9,7 @@ import { AppToaster } from '@/components/AppToaster';
 import { DesktopAppClosedBanner } from '@/components/DesktopAppClosed/DesktopAppClosedBanner';
 import { GettingStartedBanner } from '@/components/GettingStarted/GettingStartedBanner';
 import { MemoryContractStrip } from '@/components/MemoryContractStrip/MemoryContractStrip';
+import { MemorySignInEndedBanner } from '@/components/MemorySignInEnded/MemorySignInEndedBanner';
 import { useBackground } from '@/components/ThemePicker';
 import { UnsyncedImportsBanner } from '@/components/UnsyncedImports/UnsyncedImportsBanner';
 import { useCurrentUser } from '@/hooks';
@@ -49,6 +50,7 @@ export function Main() {
               page content, inert behind the scrim like the rest. Every authenticated
               page passes through this layout, which makes it the one place the
               page-load check reaches "across all pages". */}
+          <MemorySignInEndedBanner />
           <DesktopAppClosedBanner />
           <GettingStartedBanner />
           <UnsyncedImportsBanner suppressed={gettingStartedActive} />
@@ -120,6 +122,7 @@ export function Main() {
         <div className="overflow-hidden min-w-0 min-h-0 flex flex-col">
           <MemoryContractStrip />
           {/* Same notices as the phone's, in the same slot: above the page, in flow. */}
+          <MemorySignInEndedBanner />
           <DesktopAppClosedBanner />
           <GettingStartedBanner />
           <UnsyncedImportsBanner suppressed={gettingStartedActive} />
