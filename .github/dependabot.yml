@@ -90,10 +90,16 @@ updates:
     schedule:
       interval: "weekly"
     ignore:
-      # The web bundle runs @powersync/capacitor 0.5.3's JS on this native plugin.
-      # That pairing was only compared against 0.9.4's native code.
+      # The web bundle runs @powersync/common 1.x (and @powersync/capacitor 0.5.3's
+      # JS) on this native plugin, and the core extension the plugin bundles decides
+      # the replica's schema. 0.8.1+ bundle core 0.5, which dropped
+      # ps_buckets.target_op that the 1.x SDK still reads after every upload (#3352
+      # took this to 0.9.4: every phone's upload loop then failed). 0.8.0 already
+      # wants @powersync/web 2.x, so 0.7.x is the newest the 1.x SDK runs on. Lift
+      # this together with the root entry's PowerSync 2.x ignores
+      # (frontend/apps/web/src/api/powersync/nativeCore.node.test.ts checks it).
       - dependency-name: "@powersync/capacitor"
-        versions: [">=0.10.0"]
+        versions: [">=0.8.0"]
     groups:
       minor-patch:
         update-types:
@@ -113,10 +119,16 @@ updates:
     schedule:
       interval: "weekly"
     ignore:
-      # The web bundle runs @powersync/capacitor 0.5.3's JS on this native plugin.
-      # That pairing was only compared against 0.9.4's native code.
+      # The web bundle runs @powersync/common 1.x (and @powersync/capacitor 0.5.3's
+      # JS) on this native plugin, and the core extension the plugin bundles decides
+      # the replica's schema. 0.8.1+ bundle core 0.5, which dropped
+      # ps_buckets.target_op that the 1.x SDK still reads after every upload (#3352
+      # took this to 0.9.4: every phone's upload loop then failed). 0.8.0 already
+      # wants @powersync/web 2.x, so 0.7.x is the newest the 1.x SDK runs on. Lift
+      # this together with the root entry's PowerSync 2.x ignores
+      # (frontend/apps/web/src/api/powersync/nativeCore.node.test.ts checks it).
       - dependency-name: "@powersync/capacitor"
-        versions: [">=0.10.0"]
+        versions: [">=0.8.0"]
     groups:
       minor-patch:
         update-types:

@@ -196,7 +196,7 @@ __metadata:
     "@ci/capacitor-local-hub": "portal:../../packages/capacitor-local-hub"
     "@ci/capacitor-local-llm": "portal:../../packages/capacitor-local-llm"
     "@ci/capacitor-speech": "portal:../../packages/capacitor-speech"
-    "@powersync/capacitor": "npm:^0.9.4"
+    "@powersync/capacitor": "npm:~0.7.0"
     capacitor-secure-storage-plugin: "npm:^0.14.2"
     typescript: "npm:^5.8.3"
   languageName: unknown
@@ -318,25 +318,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@powersync/capacitor@npm:^0.9.4":
-  version: 0.9.4
-  resolution: "@powersync/capacitor@npm:0.9.4"
-  dependencies:
-    "@powersync/shared-internals": "npm:1.4.0"
+"@powersync/capacitor@npm:~0.7.0":
+  version: 0.7.0
+  resolution: "@powersync/capacitor@npm:0.7.0"
   peerDependencies:
     "@capacitor-community/sqlite": ^8.1.0
     "@capacitor/core": ">=8.0.0"
-    "@powersync/web": ^2.5.0
-  checksum: 10c0/cb846e0b1418c22d1a398e02f3c7d617245439803c9839b336c6f927f53277663b4f251be3d7eaaaaae3035fcef8056193974cb082a3278a0aa39881e2c7e09d
-  languageName: node
-  linkType: hard
-
-"@powersync/shared-internals@npm:1.4.0":
-  version: 1.4.0
-  resolution: "@powersync/shared-internals@npm:1.4.0"
-  peerDependencies:
-    "@powersync/common": ^2.4.0
-  checksum: 10c0/54606a2d12cb56c1ec7e48c4a09027d82156765e9e49c27f4717c5dc75dc5a974174ff995eb8b3ccab94e8c024b0ca6f2a0a83a04d7b1ed633022dd59de5b5a7
+    "@powersync/web": ^1.38.3
+  checksum: 10c0/840607aec8a57077775ac69a6f2f08b0a9ab80498423033e397ecc59899fdc5486cf4dc786da615683a4f256312c9711209f29996cae4a9cbe61e600f5306ba0
   languageName: node
   linkType: hard
 
