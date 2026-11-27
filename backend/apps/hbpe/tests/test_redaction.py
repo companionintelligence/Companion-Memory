@@ -669,9 +669,45 @@ CARD_CASES = [
     ),
     pytest.param(
         "Card 4000.0000.0000.0002 now",
-        "Card 4000.[PHONE] now",
-        {"phone": 1},
-        id="known-gap-zero-led-dotted-card-is-read-as-a-phone",
+        "Card [CARD] now",
+        {"card": 1},
+        id="card-zero-led-dotted-groups",
+    ),
+    pytest.param(
+        "paid 5105 1051 0510 5100 100.00 EUR",
+        "paid [CARD].00 EUR",
+        {"card": 1},
+        id="card-zero-led-groups-before-an-amount",
+    ),
+    pytest.param(
+        "4000 0000 0000 0002 100.00 EUR",
+        "[CARD].00 EUR",
+        {"card": 1},
+        id="card-zero-led-tail-before-an-amount",
+    ),
+    pytest.param(
+        "4000 0566 5566 5556 555-123-4567",
+        "[CARD] [PHONE]",
+        {"card": 1, "phone": 1},
+        id="card-zero-led-groups-followed-by-phone",
+    ),
+    pytest.param(
+        "328036 0002432535",
+        "[CARD]",
+        {"card": 1},
+        id="long-card-with-a-zero-led-phone-shaped-tail",
+    ),
+    pytest.param(
+        "97894567 8859164111",
+        "[CARD]",
+        {"card": 1},
+        id="long-card-with-a-north-american-looking-tail",
+    ),
+    pytest.param(
+        "4567432535 978962-7007432535now",
+        "[PHONE] [CARD]now",
+        {"card": 1, "phone": 1},
+        id="phone-then-long-card-with-a-phone-shaped-tail",
     ),
     pytest.param(
         "Card 4111 1111 1111 1111 555-123-4567 now",
@@ -699,8 +735,8 @@ CARD_CASES = [
     ),
     pytest.param(
         "005 3976 0420 4819 6-936-918-8994 now",
-        "[PHONE] 6-[PHONE] now",
-        {"phone": 2},
+        "[CARD] now",
+        {"card": 1},
         id="phone-starting-inside-a-run-is-fully-hidden",
     ),
     pytest.param(

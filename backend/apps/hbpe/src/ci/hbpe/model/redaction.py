@@ -78,8 +78,10 @@ to it is removed.
   security code of three or four digits that is the last group of the run is part of the
   card, as in ``4111 1111 1111 1111 123``, and a card with its security code glued on, as in
   ``4111111111111111123``, is found. Other digits after a card are kept. A 14-digit
-  ``YYYYMMDDhhmmss`` stamp is not treated as a card. A phone-shaped run inside a card is left
-  for the card rule.
+  ``YYYYMMDDhhmmss`` stamp is not treated as a card. Phones and cards compete for the same
+  digits, so they are read two ways and every digit either reading hides is replaced. One
+  reading protects only a card written alone as four groups of four digits, so a phone beside
+  a card is found first. The other leaves any phone match inside a card to the card rule.
 - ``address``: a house number, optionally with a hyphenated letter or a second number, such
   as ``221B``, ``221-B`` or ``12-14``, and optionally with a comma, one to three capitalised
   words, the first of which may be an accented capital, and a street suffix
@@ -115,7 +117,7 @@ such as ``+ 44 20 7946 0958``, or with a bracketed zero, such as ``(0)20 7946 09
 matched, and neither is a national number without a plus sign or a 00 prefix outside North
 America, the UK and France. A UUID in a path is not treated as a token. A short value followed
 by two digit groups in a query is kept, as in ``?ref=abc 12 34``, so a short token there is not
-removed. A house number glued to a word, as in ``Flat221 Baker Street``, is not matched. A card written with dots and a zero-led group, such as ``4000.0000.0000.0002``, and a zero-led card in a longer run of digit groups, are partly read as phone numbers. An
+removed. A house number glued to a word, as in ``Flat221 Baker Street``, is not matched. An
 unseparated North American number whose exchange starts with 0 or 1, such as ``5551234567``, is
 not read as a phone number, though the separated form ``555-123-4567`` is. A secret with no
 keyword and no known format, such as a password written on its own, is not redacted. After a
@@ -155,7 +157,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import datetime
 
 CATEGORIES: tuple[str, ...] = (
@@ -1167,13 +1169,10 @@ def _lone_card_spans(text: str) -> list[tuple[int, int]]:
     return spans
 
 
-def _redact_phones(text: str, counts: Counter[str]) -> str:
-    # A phone-shaped run inside a lone card is part of the card, which the card rule takes.
-    # Without this check the zero-led tail of 4000 0000 0000 0002 is read as a phone number.
-    # A lone card that a phone-shaped match only partly covers is not protected, so the
-    # phone rule treats it as the parent does.
+def _unobstructed_lone_cards(text: str) -> list[tuple[int, int]]:
+    """The lone cards that no phone match only partly covers."""
     matches = [match.span() for match in _PHONE_RE.finditer(text)]
-    lone = [
+    return [
         (start, end)
         for start, end in _lone_card_spans(text)
         if not any(
@@ -1182,17 +1181,22 @@ def _redact_phones(text: str, counts: Counter[str]) -> str:
         )
     ]
 
-    def repl(match: re.Match[str]) -> str:
-        candidate = match.group(0)
-        if any(start <= match.start() and match.end() <= end for start, end in lone):
-            return candidate
-        span = _phone_span(candidate)
-        if span is None:
-            return candidate
-        counts["phone"] += 1
-        return "[PHONE]" + candidate[len(span) :]
 
-    return _PHONE_RE.sub(repl, text)
+def _phone_spans(text: str, protected: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Positions of the numbers the phone rule takes.
+
+    A match that lies wholly inside a protected span is left for the card rule.
+    """
+    spans: list[tuple[int, int]] = []
+    for match in _PHONE_RE.finditer(text):
+        if any(
+            start <= match.start() and match.end() <= end for start, end in protected
+        ):
+            continue
+        number = _phone_span(match.group(0))
+        if number is not None:
+            spans.append((match.start(), match.start() + len(number)))
+    return spans
 
 
 def _card_spans_of(text: str) -> list[tuple[int, int]]:
@@ -1216,17 +1220,79 @@ def _card_spans_of(text: str) -> list[tuple[int, int]]:
     return sorted(found)
 
 
-def _redact_cards(text: str, counts: Counter[str]) -> str:
-    found = _card_spans_of(text)
-    if not found:
+def _blank(chars: list[str], spans: Iterable[tuple[int, int]]) -> None:
+    """Overwrite each span with letters, so positions stay and no rule reads it again."""
+    for start, end in spans:
+        chars[start:end] = "x" * (end - start)
+
+
+def _phone_card_reading(
+    text: str, protect: Callable[[str], list[tuple[int, int]]]
+) -> list[tuple[int, int, str]]:
+    """Everything one reading hides, as (start, end, category) positions in ``text``.
+
+    A pass takes the phones the phone rule finds when ``protect``'s spans are left to the
+    card rule, then the cards in what remains. Passes repeat until one finds nothing, since
+    taking one number can expose the next.
+    """
+    chars = list(text)
+    found: list[tuple[int, int, str]] = []
+    while True:
+        work = "".join(chars)
+        phones = _phone_spans(work, protect(work))
+        _blank(chars, phones)
+        cards = _card_spans_of("".join(chars))
+        _blank(chars, cards)
+        if not phones and not cards:
+            return found
+        found += [(start, end, "phone") for start, end in phones]
+        found += [(start, end, "card") for start, end in cards]
+
+
+def _redact_phones_and_cards(text: str, counts: Counter[str]) -> str:
+    """Replace phone numbers and cards.
+
+    The two rules compete for the same digits. A card can hold a phone-shaped run, as in
+    ``4000 0000 0000 0002``, and a card next to a phone can be read as one longer card
+    that leaves part of the real card behind. So the text is read two ways:
+
+    - the lone-card reading protects only a card written alone as four groups of four
+      digits, so a phone beside a card is taken first and the card is read from the rest;
+    - the whole-card reading protects any phone match that lies inside a card, so the
+      card rule takes a card that the phone rule would otherwise split.
+
+    Every digit that either reading hides is hidden. A span that only the second reading
+    covers is merged with the first reading's spans that it overlaps, and the merged span
+    is a card when any part of it is.
+    """
+    first = _phone_card_reading(text, _unobstructed_lone_cards)
+    second = _phone_card_reading(text, _card_spans_of)
+    hidden = {index for start, end, _ in first for index in range(start, end)}
+    extra = [
+        span
+        for span in second
+        if any(
+            text[index].isdigit() and index not in hidden
+            for index in range(span[0], span[1])
+        )
+    ]
+    merged: list[tuple[int, int, str]] = []
+    for start, end, category in sorted(first + extra):
+        if merged and start < merged[-1][1]:
+            last_start, last_end, last_category = merged[-1]
+            category = "card" if "card" in (last_category, category) else category
+            merged[-1] = (last_start, max(last_end, end), category)
+        else:
+            merged.append((start, end, category))
+    if not merged:
         return text
     pieces: list[str] = []
     cursor = 0
-    for start, end in found:
+    for start, end, category in merged:
         pieces.append(text[cursor:start])
-        pieces.append("[CARD]")
+        pieces.append("[CARD]" if category == "card" else "[PHONE]")
         cursor = end
-        counts["card"] += 1
+        counts[category] += 1
     pieces.append(text[cursor:])
     return "".join(pieces)
 
@@ -1480,5 +1546,4 @@ class Redactor:
         out = _redact_emails(out, counts)
         out = _redact_secret_keywords(out, counts)
         out = _redact_ibans(out, counts)
-        out = _redact_phones(out, counts)
-        return _redact_cards(out, counts)
+        return _redact_phones_and_cards(out, counts)
