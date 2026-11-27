@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-device-secure-get-command"
+description = "Enables the device_secure_get_command command without any pre-configured scope."
+commands.allow = ["device_secure_get_command"]
+
+[[permission]]
+identifier = "deny-device-secure-get-command"
+description = "Denies the device_secure_get_command command without any pre-configured scope."
+commands.deny = ["device_secure_get_command"]
