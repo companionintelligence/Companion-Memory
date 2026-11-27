@@ -61,18 +61,21 @@ enum IntentToolError: Error, LocalizedError {
 ///    handshake whose `Mcp-Session-Id` must be echoed on every later call. Managed transparently below.
 ///
 /// Auth is the same `x-api-key` header `CompanionAPI` already uses for App Intents: no cookies, no
-/// CSRF, so it works with no WebView involved.
+/// CSRF, so it works with no WebView involved. The key is asked for on every request, not held:
+/// the app passes a closure that reads it from the Keychain (`LocalLLMPlugin.configureIntentTools`),
+/// so a sign-out or a new key applies to the next call, and the web page never hands one over.
 actor CompanionIntentClient {
   private let baseURL: URL
-  private let apiKey: String
+  private let credential: @Sendable () -> String?
   private let session: URLSession
 
   private var sessionId: String?
   private var nextRequestId = 1
 
-  init(baseURL: URL, apiKey: String) {
+  /// - Parameter credential: the device key for `baseURL`, or nil when there is none to send.
+  init(baseURL: URL, credential: @escaping @Sendable () -> String?) {
     self.baseURL = baseURL
-    self.apiKey = apiKey
+    self.credential = credential
 
     let configuration = URLSessionConfiguration.ephemeral
     configuration.timeoutIntervalForRequest = 30
@@ -81,7 +84,7 @@ actor CompanionIntentClient {
 
   /// Reads the catalog with the server's own rulings for the on-device tier attached.
   func fetchManifest() async throws -> IntentManifest {
-    var request = authorized(path: "/api/intents", query: "tier=local")
+    var request = try authorized(path: "/api/intents", query: "tier=local")
     request.httpMethod = "GET"
 
     let (data, response) = try await session.data(for: request)
@@ -124,7 +127,7 @@ actor CompanionIntentClient {
         "clientInfo": ["name": "companion-on-device-llm", "version": "1.0.0"],
       ])
 
-    var request = authorized(path: "/api/mcp")
+    var request = try authorized(path: "/api/mcp")
     request.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
     let (data, response) = try await self.session.data(for: request)
@@ -146,7 +149,7 @@ actor CompanionIntentClient {
   }
 
   private func postJsonRpc(_ payload: [String: Any], sessionId: String) async throws -> [String: Any] {
-    var request = authorized(path: "/api/mcp")
+    var request = try authorized(path: "/api/mcp")
     request.setValue(sessionId, forHTTPHeaderField: Self.mcpSessionHeader)
     request.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
@@ -210,7 +213,11 @@ actor CompanionIntentClient {
     return text.isEmpty ? String(describing: result) : text
   }
 
-  private func authorized(path: String, query: String? = nil) -> URLRequest {
+  private func authorized(path: String, query: String? = nil) throws -> URLRequest {
+    guard let apiKey = credential(), !apiKey.isEmpty else {
+      throw IntentToolError.notConfigured
+    }
+
     var components = URLComponents(
       url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)
     components?.query = query

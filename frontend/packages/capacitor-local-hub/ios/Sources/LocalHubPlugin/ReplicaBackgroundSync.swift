@@ -320,6 +320,8 @@ public enum ReplicaBackgroundSync {
     static let runBudget: TimeInterval = 25
     /// `API_KEY_STORAGE` in the web app's `useAuth.ts`.
     private static let apiKey = "ci.apiKey"
+    /// `API_BASE_URL_STORAGE` in the web app's `useAuth.ts`.
+    private static let apiBaseUrl = "ci.apiBaseUrl"
 
     public static func register() {
         ReplicaKeychain.harden()
@@ -371,10 +373,23 @@ public enum ReplicaBackgroundSync {
         defer { gate.endBackgroundRun() }
         let started = Date()
         do {
-            guard let key = try CompanionSecureStore.credentials().get(apiKey), !key.isEmpty else { return true }
+            let store = CompanionSecureStore.credentials()
+            guard let key = try store.get(apiKey), !key.isEmpty else { return true }
+            // The key goes only to the origin stored with it; the config's `apiBaseUrl` (passed by
+            // the page) only has to agree with that one (`DeviceOrigin.backgroundDestination`).
+            // Armed for another origin, the replica belongs to another pairing too, so this syncs
+            // nothing rather than fill it from a different server.
+            let origin: String
+            switch DeviceOrigin.backgroundDestination(armedWith: config.apiBaseUrl, stored: try store.get(apiBaseUrl)) {
+            case .send(let stored):
+                origin = stored
+            case .notArmed, .refused:
+                NSLog("[ReplicaSync] skipped: armed for an origin other than the stored one")
+                return true
+            }
             let cutoff = ISO8601DateFormatter().string(from: started.addingTimeInterval(-Double(config.lookbackDays) * 86_400))
             let runner = ReplicaSyncRunner(
-                transport: URLSessionReplicaTransport(origin: config.apiBaseUrl, apiKey: key, cutoffIso: cutoff),
+                transport: URLSessionReplicaTransport(origin: origin, apiKey: key, cutoffIso: cutoff),
                 openCore: { try SQLCipherReplicaCore.open(databaseFile: config.databaseFile) },
                 startOptions: config.startOptions
             )
