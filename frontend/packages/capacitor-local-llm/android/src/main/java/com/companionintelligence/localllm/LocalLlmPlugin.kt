@@ -11,6 +11,8 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import com.companionintelligence.localllm.intents.CompanionIntentClient
+import com.companionintelligence.localllm.intents.IntentCredential
+import com.companionintelligence.localllm.intents.IntentCredentials
 import com.companionintelligence.localllm.intents.IntentToolProvider
 import com.companionintelligence.localllm.intents.LocalSearchStore
 import com.getcapacitor.JSObject
@@ -18,6 +20,7 @@ import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
 import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.CapacitorPlugin
+import java.security.MessageDigest
 import java.util.concurrent.CancellationException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
@@ -72,7 +75,10 @@ class LocalLlmPlugin : Plugin() {
     @Volatile
     private var intentClient: CompanionIntentClient? = null
 
-    /** The `(baseUrl, apiKey)` [intentClient] was built from, to tell a real reconfiguration from a repeat. */
+    /**
+     * The page's origin and a fingerprint of the stored credential [intentClient] was built for, to
+     * tell a real reconfiguration (another Memory, another sign-in) from a repeat.
+     */
     @Volatile
     private var intentConfig: Pair<String, String>? = null
 
@@ -427,10 +433,11 @@ class LocalLlmPlugin : Plugin() {
     /**
      * Points the on-device model's tool calling at a CI-Server, or turns it off.
      *
-     * Credentials are passed in from the web layer (which already holds the configured origin and
-     * the minted API key) rather than read natively, so this plugin stays self-contained — no
-     * dependency on the sibling Local Hub plugin's keystore, and no second place that has to know
-     * how the app stores its credentials.
+     * `baseUrl` from the page turns the appliance tools on; the origin and key they call with are
+     * read natively, at request time, from the app's credential store ([IntentCredentials], wired by
+     * the app). The page no longer holds the device key (it gets short-lived tokens), so an
+     * `apiKey` an older page still sends is ignored. This plugin stays free of a dependency on the
+     * sibling Local Hub plugin: the app module, which has both, installs the source.
      *
      * Takes effect on the next `loadModel()`, since the tool set is bound when the conversation is
      * created; call this before loading, or reload afterwards.
@@ -463,9 +470,11 @@ class LocalLlmPlugin : Plugin() {
         }
 
         val baseUrl = call.getString("baseUrl")
-        val apiKey = call.getString("apiKey")
+        val source = IntentCredentials.source()
+        // Read now only to tell a new sign-in from a repeat; requests read it again each time.
+        val credential = if (baseUrl.isNullOrBlank() || source == null) null else runCatching { source.current() }.getOrNull()
 
-        if (baseUrl.isNullOrBlank() || apiKey.isNullOrBlank()) {
+        if (baseUrl.isNullOrBlank() || source == null || credential == null) {
             // No appliance, but the phone's own search may still be bound (above).
             if (intentConfig != null) toolsGeneration.incrementAndGet()
             intentClient = null
@@ -477,10 +486,10 @@ class LocalLlmPlugin : Plugin() {
 
         // Only a *change* invalidates the resident model's tool set: the web layer re-sends the same
         // configuration before every load, and counting that as a change would defeat the reuse.
-        val config = baseUrl to apiKey
+        val config = baseUrl to credentialFingerprint(credential)
         if (config != intentConfig) {
             toolsGeneration.incrementAndGet()
-            intentClient = CompanionIntentClient(baseUrl, apiKey)
+            intentClient = CompanionIntentClient(source)
             intentConfig = config
         }
         call.resolve()
@@ -698,6 +707,12 @@ class LocalLlmPlugin : Plugin() {
             }
         return LocalLlmEngine.GenerateRequest(parsed.prompt, parsed.enableThinking, images, parsed.thinkingTokenBudget, parsed.maxOutputTokens)
     }
+
+    /** Which sign-in the tools were configured for, without keeping the key itself around. */
+    private fun credentialFingerprint(credential: IntentCredential): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest("${credential.baseUrl}\n${credential.apiKey}".toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
 
     private fun statsToJs(stats: GenerationStats): JSObject {
         val js = JSObject()

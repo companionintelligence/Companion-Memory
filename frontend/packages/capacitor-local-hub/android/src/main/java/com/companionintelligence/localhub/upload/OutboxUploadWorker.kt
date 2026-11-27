@@ -12,6 +12,7 @@ import androidx.work.WorkManager
 import androidx.work.Worker
 import androidx.work.WorkerParameters
 import com.companionintelligence.localhub.CompanionSecureStore
+import com.companionintelligence.localhub.DeviceCredentialBinding
 import com.companionintelligence.localhub.OutboxStores
 import com.companionintelligence.localhub.location.LocationTracking
 import java.util.concurrent.TimeUnit
@@ -73,8 +74,15 @@ class OutboxUploadWorker(context: Context, params: WorkerParameters) : Worker(co
             return Result.success()
         }
         val outcome = try {
-            val apiKey = CompanionSecureStore.credentials(context).get(API_KEY)
+            val credentials = CompanionSecureStore.credentials(context)
+            val apiKey = credentials.get(API_KEY)
             if (apiKey.isNullOrEmpty()) {
+                return Result.success()
+            }
+            // The origin comes from configuration the page hands the tracker; the key goes only to
+            // the one it is stored with, so a script in the page cannot point it elsewhere.
+            if (!DeviceCredentialBinding.keyMaySendTo(credentials, origin)) {
+                Log.i(TAG, "skipped: the saved origin is not the one the key is stored for")
                 return Result.success()
             }
             OutboxUploader(
