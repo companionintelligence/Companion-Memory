@@ -84,7 +84,8 @@ export class ApiKeyStrategy extends PassportStrategy(RequestStrategy, 'api-key')
       return null;
     }
 
-    const result = await this.apiKeyService.validateKey(apiKey);
+    // The key itself, or a short-lived access token standing for it (`utils/deviceAccessToken.ts`).
+    const result = await this.apiKeyService.validateCredential(apiKey);
 
     if (!result) {
       return null;
@@ -129,6 +130,10 @@ export class ApiKeyStrategy extends PassportStrategy(RequestStrategy, 'api-key')
     // prefix — a user can hand-create a key with that name.
     scopedRequest.apiKeyManagedBy = result.managedBy;
     scopedRequest.apiKeyName = result.name;
+
+    if (result.accessTokenExpiresAt !== undefined) {
+      scopedRequest.apiKeyAccessTokenExpiresAt = result.accessTokenExpiresAt;
+    }
 
     return user;
   }

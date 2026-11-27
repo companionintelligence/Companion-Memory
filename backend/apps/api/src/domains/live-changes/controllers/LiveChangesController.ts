@@ -45,7 +45,12 @@ export function streamCredentialOf(req: GuardedRequest): {
   expiresAt: number | null;
 } {
   if (req.apiKeyId) {
-    return { credential: { kind: 'apiKey', keyId: req.apiKeyId }, expiresAt: null };
+    // A short-lived access token for the key ends the stream when it expires, like a session's
+    // access token does; the key itself has no such end.
+    return {
+      credential: { kind: 'apiKey', keyId: req.apiKeyId },
+      expiresAt: req.apiKeyAccessTokenExpiresAt ?? null,
+    };
   }
 
   const token = extractBearerToken(req.headers?.authorization);
@@ -80,8 +85,9 @@ export function streamCredentialOf(req: GuardedRequest): {
  * The guard checks the caller once, when the stream opens. The stream then
  * outlives whatever let it in unless it is ended, so it is:
  *
- * - when the access token it was opened with expires. The web app has a newer
- *   one by then and reconnects with it, one reconnect per token lifetime.
+ * - when the access token it was opened with expires, a session's or a device
+ *   key's short-lived one. The app has a newer one by then and reconnects with
+ *   it, one reconnect per token lifetime.
  * - when the api key that opened it is revoked or expires, or the session the
  *   access token was minted for is signed out (Sign out, Sign out everywhere,
  *   a password change). A revoke notice makes every open stream of that user

@@ -4,6 +4,7 @@ import { IsNull } from 'typeorm';
 import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/common/context';
 
 import { ApiKeyService } from '../services/ApiKeyService';
+import { mintDeviceAccessToken } from '../utils/deviceAccessToken';
 
 /**
  * Unit tests for the idempotency + scope surface added for the connect flow:
@@ -780,5 +781,78 @@ describe('ApiKeyService: telling open live-update streams', () => {
     await service.revokeSignInKeys('owner-1');
 
     expect(liveChanges.publishRevoked).toHaveBeenCalledWith('owner-1');
+  });
+});
+
+describe('ApiKeyService.validateCredential', () => {
+  const KEY_ID = '019a0000-0000-7000-8000-000000000001';
+  const row = {
+    id: KEY_ID,
+    user_id: 'owner-1',
+    expires_at: null,
+    scopes: [],
+    capability: 'full',
+    name: 'Companion mobile · 2026-11-27',
+    managed_by: 'sign_in',
+  };
+
+  beforeEach(() => jest.clearAllMocks());
+
+  it("resolves an access token to its key, by the key's id and owner, and says when the token ends", async () => {
+    const repo = makeRepo();
+    repo.findOne.mockResolvedValueOnce(row);
+    const { token, expiresAtMs } = await mintDeviceAccessToken({ keyId: KEY_ID, userId: 'owner-1' });
+
+    expect(await makeService(repo).validateCredential(token)).toEqual({
+      keyId: KEY_ID,
+      userId: 'owner-1',
+      scopes: [],
+      capability: 'full',
+      name: 'Companion mobile · 2026-11-27',
+      managedBy: 'sign_in',
+      accessTokenExpiresAt: expiresAtMs,
+    });
+    expect(repo.findOne).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: KEY_ID, user_id: 'owner-1' } }),
+    );
+    expect(repo.update).toHaveBeenCalledWith(KEY_ID, { last_used_at: expect.any(Date) });
+  });
+
+  it('refuses the token of a key that was revoked, or that expired', async () => {
+    const repo = makeRepo();
+    const { token } = await mintDeviceAccessToken({ keyId: KEY_ID, userId: 'owner-1' });
+
+    repo.findOne.mockResolvedValueOnce(null);
+    expect(await makeService(repo).validateCredential(token)).toBeNull();
+
+    repo.findOne.mockResolvedValueOnce({ ...row, expires_at: new Date(Date.now() - 1000) });
+    expect(await makeService(repo).validateCredential(token)).toBeNull();
+  });
+
+  it('refuses an expired or forged token without looking anything up', async () => {
+    const repo = makeRepo();
+    const { token } = await mintDeviceAccessToken(
+      { keyId: KEY_ID, userId: 'owner-1' },
+      Date.now() - 3_600_000,
+    );
+
+    expect(await makeService(repo).validateCredential(token)).toBeNull();
+    expect(
+      await makeService(repo).validateCredential('eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.c2ln'),
+    ).toBeNull();
+    expect(repo.findOne).not.toHaveBeenCalled();
+  });
+
+  it('still takes the raw key, by its hash', async () => {
+    const repo = makeRepo();
+    repo.findOne.mockResolvedValueOnce(row);
+
+    const result = await makeService(repo).validateCredential('a'.repeat(64));
+
+    expect(result).toEqual(expect.objectContaining({ keyId: KEY_ID }));
+    expect(result).not.toHaveProperty('accessTokenExpiresAt');
+    expect(repo.findOne).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { hashed_key: expect.stringMatching(/^[0-9a-f]{64}$/) } }),
+    );
   });
 });

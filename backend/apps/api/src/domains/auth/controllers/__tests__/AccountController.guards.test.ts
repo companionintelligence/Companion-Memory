@@ -26,7 +26,7 @@ const USER = { id: 'user-1', email: 'jsmith@example.com', passwordSetAt: new Dat
 const CHAT_AGENT_URN = 'ci-openclaw:ci-marketplace';
 
 /**
- * Every key shape the deletion route has to tell apart, as `ApiKeyService.validateKey`
+ * Every key shape the deletion route has to tell apart, as `ApiKeyService.validateCredential`
  * reports it. The raw values are 64 hex characters, like a minted key.
  */
 const KEYS: Record<string, { raw: string; validated: ValidatedApiKey }> = {
@@ -117,7 +117,7 @@ const mockHubBridge = {
 };
 
 const mockApiKeyService = {
-  validateKey: jest.fn(),
+  validateCredential: jest.fn(),
   revokeSignInKeys: jest.fn(),
   revokeAllExceptConnect: jest.fn(),
 };
@@ -208,7 +208,7 @@ describe('AccountController (real guards + real JwtStrategy and ApiKeyStrategy)'
     mockFederatedIdentityService.listForUser.mockResolvedValue([]);
     mockHubBridge.namesAccount.mockReturnValue(false);
     mockPortalTokenVerifier.verifyAndProvision.mockResolvedValue(null);
-    mockApiKeyService.validateKey.mockImplementation(
+    mockApiKeyService.validateCredential.mockImplementation(
       async (raw: string) => Object.values(KEYS).find((key) => key.raw === raw)?.validated ?? null,
     );
   });
