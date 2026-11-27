@@ -83,3 +83,40 @@ export function sanitizeMessageHtml(html: string): string {
 export function renderMessageHtml(html: string): ReactNode {
   return parse(sanitizeMessageHtml(html), parserOptions);
 }
+
+/**
+ * Whether a stored message body is HTML: a document or markup an email client wrote, not a text
+ * message or a `text/plain` email that happens to mention `<3` or `a < b`.
+ */
+export function isHtmlMessageBody(body: string): boolean {
+  return /<(?:!doctype\s+html|html|head|body|div|p|br|table|span|a\s|strong|em|b|i|ul|ol|li|h[1-6])\b[^>]*>/i.test(body);
+}
+
+/**
+ * A message body as a reader sees it. HTML is cleaned ({@link sanitizeMessageHtml}) and rendered, with
+ * links opening outside the app. Plain text keeps its line breaks. Shown raw, an email's HTML read as
+ * a page of markup, and its first characters were all `<head>`.
+ */
+export function renderMessageBody(body: string): ReactNode {
+  if (!isHtmlMessageBody(body)) {
+    return <span className="whitespace-pre-wrap break-words">{body}</span>;
+  }
+
+  return <div className="message-body break-words [&_a]:underline [&_a]:text-primary">{renderMessageHtml(body)}</div>;
+}
+
+/** How much of a text message a card shows. */
+const CARD_TEXT_LIMIT = 1000;
+
+/**
+ * The body a card renders: an HTML email whole (the card clips it by height), and a text message cut
+ * short. Cutting HTML first left the card blank: an email's first thousand characters are its <head>,
+ * which cleans to nothing.
+ */
+export function cardMessageBody(body: string): string {
+  if (isHtmlMessageBody(body) || body.length <= CARD_TEXT_LIMIT) {
+    return body;
+  }
+
+  return `${body.substring(0, CARD_TEXT_LIMIT)}...`;
+}

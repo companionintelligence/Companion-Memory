@@ -17,6 +17,22 @@ const FIELDS = [
 ];
 
 describe('EntityFieldsCard', () => {
+  // A message body's HTML reads as the message, not as a page of markup; it is still edited as text.
+  it('shows a field through its own display while reading, and as raw text while editing', () => {
+    const fields = [
+      { key: 'content', label: 'Content', value: '<p>Hi <b>there</b></p>', multiline: true, display: () => <em>rendered</em> },
+    ];
+
+    const { unmount } = render(<EntityFieldsCard fields={fields} editMode={false} onSave={vi.fn()} />);
+    expect(screen.getByText('rendered')).toBeInTheDocument();
+    expect(screen.queryByText('<p>Hi <b>there</b></p>')).not.toBeInTheDocument();
+    unmount();
+
+    render(<EntityFieldsCard fields={fields} editMode onSave={vi.fn()} />);
+    expect(screen.getByDisplayValue('<p>Hi <b>there</b></p>')).toBeInTheDocument();
+    expect(screen.queryByText('rendered')).not.toBeInTheDocument();
+  });
+
   it('shows the whole field set as text when not editing, not just a description', () => {
     render(<EntityFieldsCard fields={FIELDS} editMode={false} onSave={vi.fn()} />);
 
