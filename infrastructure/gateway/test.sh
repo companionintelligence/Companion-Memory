@@ -194,6 +194,19 @@ grep -q '^  box.tail1.ts.net 1;$' "$hosts" || fail "second listed name missing"
 grep -q '^  localhost 1;$' "$hosts" || fail "localhost refused"
 grep -Fq '"~^[0-9]{1,3}(\.[0-9]{1,3}){3}$" 1;' "$hosts" || fail "IPv4 literals refused"
 
+# single-label names (CI-Hub's `ci-memory` link alias, compose service names) always pass,
+# and a dotless entry is not written again beside that pattern
+run_hosts "box.example,ci-memory"
+grep -Fq '"~^[a-z0-9_-]+$" 1;' "$hosts" || fail "single-label names refused"
+grep -q '^  ci-memory 1;$' "$hosts" && fail "a dotless entry written beside the single-label pattern"
+
+# a leading dot is a suffix: every name under it, with its dots escaped
+run_hosts ".TS.net,.ts.net"
+[ "$(grep -cF '"~\.ts\.net$" 1;' "$hosts")" -eq 1 ] || fail "suffix missing, unescaped or written twice"
+run_hosts ".,..x,.-x.example"
+# only the five built-in lines pass anything
+[ "$(grep -c ' 1;$' "$hosts")" -eq 5 ] || fail "a malformed suffix reached the map"
+
 # a name the built-in lines pass already, or one given twice, is written once at most:
 # nginx refuses a map that names a key twice
 run_hosts "localhost,box.localhost,dup.example,DUP.example"
