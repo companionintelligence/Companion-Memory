@@ -1,7 +1,13 @@
 import { render } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import { cardMessageBody, isHtmlMessageBody, renderMessageBody, renderMessageHtml, sanitizeMessageHtml } from './messageHtml';
+import {
+  cardMessageBody,
+  isHtmlMessageBody,
+  renderMessageBody,
+  renderMessageHtml,
+  sanitizeMessageHtml,
+} from './messageHtml';
 
 describe('sanitizeMessageHtml', () => {
   it('keeps the text and its structure', () => {
@@ -56,6 +62,15 @@ describe('sanitizeMessageHtml', () => {
     expect(sanitizeMessageHtml('<a href="tel:+15550100">c</a>')).toBe('<a href="tel:+15550100">c</a>');
   });
 
+  it("drops data and aria attributes, which the app's own styles act on", () => {
+    // A toast's attributes pin the element over the whole app (sonner's global CSS).
+    expect(
+      sanitizeMessageHtml(
+        '<div data-sonner-toaster data-sonner-theme="light"><p aria-label="Sign in" data-mounted="true">Hi</p></div>',
+      ),
+    ).toBe('<div><p>Hi</p></div>');
+  });
+
   it('drops scripts and event handlers with what they hold', () => {
     const clean = sanitizeMessageHtml('<p onclick="steal()">Hi</p><script>steal()</script>');
 
@@ -105,8 +120,19 @@ describe('isHtmlMessageBody', () => {
     ['a heart', 'I <3 you'],
     ['a comparison', 'is a < b > c?'],
     ['an address in brackets', 'Kyle <kyle@example.com>'],
+    ['an address that starts like a tag', 'On Tue, Pat <p.smith@example.com> wrote:'],
+    ['more such addresses', '<b.jones@example.com> <i-team@example.com>'],
   ])('reads %s as text', (_label, body) => {
     expect(isHtmlMessageBody(body)).toBe(false);
+  });
+
+  // 300 KB of unclosed tags: a pattern that rescans to the end from each `<` takes many seconds here.
+  // Timed in the test, since a synchronous test is never cut off by the timeout.
+  it('decides quickly however many tags are left open', () => {
+    const started = performance.now();
+
+    expect(isHtmlMessageBody('<p '.repeat(100_000))).toBe(false);
+    expect(performance.now() - started).toBeLessThan(1000);
   });
 });
 

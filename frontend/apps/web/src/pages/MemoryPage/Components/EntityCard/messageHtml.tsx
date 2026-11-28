@@ -74,6 +74,10 @@ export function sanitizeMessageHtml(html: string): string {
   return DOMPurify.sanitize(html, {
     ALLOWED_TAGS: MESSAGE_TAGS,
     ALLOWED_ATTR: MESSAGE_ATTRIBUTES,
+    // DOMPurify keeps these however short the list above is, and the app's own CSS acts on them: a
+    // toast's `data-sonner-*` pins the element over the whole app.
+    ALLOW_DATA_ATTR: false,
+    ALLOW_ARIA_ATTR: false,
     // DOMPurify's own FORBID_CONTENTS stays in force: a `<style>` or `<script>` goes with what it holds.
     ALLOWED_URI_REGEXP: MESSAGE_LINK_SCHEMES,
   });
@@ -87,9 +91,14 @@ export function renderMessageHtml(html: string): ReactNode {
 /**
  * Whether a stored message body is HTML: a document or markup an email client wrote, not a text
  * message or a `text/plain` email that happens to mention `<3` or `a < b`.
+ *
+ * The tag name has to end where it ends, so `<p.smith@example.com>` is an address. A match stops at
+ * the next `<`, which keeps a long run of unclosed tags linear.
  */
 export function isHtmlMessageBody(body: string): boolean {
-  return /<(?:!doctype\s+html|html|head|body|div|p|br|table|span|a\s|strong|em|b|i|ul|ol|li|h[1-6])\b[^>]*>/i.test(body);
+  return /<(?:!doctype\s+html|(?:html|head|body|div|p|br|table|span|a|strong|em|b|i|ul|ol|li|h[1-6])(?=[\s/>]))[^<>]*>/i.test(
+    body,
+  );
 }
 
 /**
@@ -102,7 +111,11 @@ export function renderMessageBody(body: string): ReactNode {
     return <span className="whitespace-pre-wrap break-words">{body}</span>;
   }
 
-  return <div className="message-body break-words [&_a]:underline [&_a]:text-primary">{renderMessageHtml(body)}</div>;
+  return (
+    <div className="message-body break-words [&_a]:underline [&_a]:text-primary">
+      {renderMessageHtml(body)}
+    </div>
+  );
 }
 
 /** How much of a text message a card shows. */
