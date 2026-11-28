@@ -1,8 +1,8 @@
-import { Injectable, Optional } from '@nestjs/common';
+import { Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, type EntityManager } from 'typeorm';
-import { v7 as uuidv7 } from 'uuid';
+import { validate as isUuid, v7 as uuidv7 } from 'uuid';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
@@ -766,6 +766,15 @@ export class KnownPlacesService {
     // confirmed label + centroid so every candidate is confirmable (previously
     // they were dead ends).
     let locationId = input.locationId ?? null;
+
+    // Only one of this account's own Locations. The relationship below is raw SQL, so nothing else
+    // checks its end: a client naming another account's Location got that place's name and
+    // coordinates back as its own known place. Not found either way, so the answer does not say
+    // whether the id exists.
+    if (locationId && !(await this.ownsLocation(context, locationId))) {
+      throw new NotFoundException(`Location ${locationId} was not found`);
+    }
+
     if (!locationId) {
       const centroid =
         input.coordinates && Number.isFinite(input.coordinates.lat) && Number.isFinite(input.coordinates.lng)
@@ -858,6 +867,23 @@ export class KnownPlacesService {
 
       return place;
     });
+  }
+
+  /** Whether `locationId` is a Location entity this account owns. */
+  private async ownsLocation(context: UserServiceContext, locationId: string): Promise<boolean> {
+    if (!isUuid(locationId)) {
+      return false;
+    }
+
+    const rows: Array<{ owned: boolean }> = await this.dataSource.query(
+      `SELECT EXISTS (
+         SELECT 1 FROM ci.entities
+          WHERE entity_id = $1::uuid AND owner_user_id = $2 AND entity_type = 'Location'
+       ) AS owned`,
+      [locationId, context.userId],
+    );
+
+    return rows[0]?.owned === true;
   }
 
   /**
