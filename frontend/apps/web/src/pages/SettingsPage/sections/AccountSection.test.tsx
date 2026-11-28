@@ -422,7 +422,7 @@ describe('AccountSection — change email', () => {
     fireEvent.change(screen.getByLabelText('New email'), { target: { value: 'new@example.com' } });
     fireEvent.click(screen.getByRole('button', { name: 'Update email' }));
 
-    expect(await screen.findByText('Sign in again to make this change.')).toBeInTheDocument();
+    expect(await screen.findByText('Log out and back in, then come back here within 10 minutes to make this change.')).toBeInTheDocument();
     expect(h.refetch).not.toHaveBeenCalled();
   });
 
@@ -740,7 +740,9 @@ describe('AccountSection — change password', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Set password' }));
 
     expect(
-      await screen.findByText('Sign out, then open Memory from your Hub again to make this change.'),
+      await screen.findByText(
+        'Log out, open Memory from your Hub again, then come back here within 10 minutes to make this change.',
+      ),
     ).toBeInTheDocument();
   });
 

@@ -483,7 +483,7 @@ export class AccountController {
       if (!establishedAt || Date.now() - establishedAt.getTime() > REAUTH_SESSION_WINDOW_MS) {
         throw new UnauthorizedException({
           message: REAUTH_REQUIRED,
-          detail: 'Sign in again to make this change',
+          detail: 'Log out and back in, then come back here within 10 minutes to make this change',
         });
       }
 

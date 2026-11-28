@@ -25,7 +25,15 @@ import { RecoveryCodesSection } from './RecoveryCodesSection';
  * fresh session when there is no Memory session to keep, so reloading alone would
  * keep the old one.
  */
-const HUB_SIGN_IN_AGAIN = 'Sign out, then open Memory from your Hub again to make this change.';
+/**
+ * What to do when the server wants a fresh sign-in for a change (`REAUTH_REQUIRED`): an account with
+ * no password of its own proves itself by a sign-in less than 10 minutes old
+ * (`AccountController.REAUTH_SESSION_WINDOW_MS`). Both say to log out first, since refreshing the
+ * page keeps the same session, and name the time limit, so the message does not read as an error.
+ */
+const SIGN_IN_AGAIN = 'Log out and back in, then come back here within 10 minutes to make this change.';
+const HUB_SIGN_IN_AGAIN =
+  'Log out, open Memory from your Hub again, then come back here within 10 minutes to make this change.';
 
 /**
  * What a 403 from `DELETE /account` means. Only the device key a phone holds can meet
@@ -126,7 +134,7 @@ export function AccountSection() {
   const [companionAccount, setCompanionAccount] = useState<{ email: string | null } | null>(null);
   const [companionAvailable, setCompanionAvailable] = useState(false);
   const [accountVersion, setAccountVersion] = useState(0);
-  const signInAgain = emailManagedByHub ? HUB_SIGN_IN_AGAIN : 'Sign in again to make this change.';
+  const signInAgain = emailManagedByHub ? HUB_SIGN_IN_AGAIN : SIGN_IN_AGAIN;
 
   useEffect(() => {
     if (needsWebSignIn) {
