@@ -152,4 +152,20 @@ fi
 
 # ── Launch ───────────────────────────────────────
 
+# Memory runs as the unprivileged `node` user (uid 1000), not root, so a flaw in
+# anything that parses an imported file (libvips, ffmpeg, unzip, pdftotext, the
+# importers) runs without root in the container. The entrypoint itself starts as
+# root only to read the secrets above and to hand the folders Memory writes to
+# that user: an install that ran as root before has them owned by root.
+# `--user` set by compose (already not root) skips all of this.
+if [ "$(id -u)" = 0 ]; then
+  for dir in /var/lib/ci-import /var/tmp/ci-import; do
+    mkdir -p "$dir"
+    [ "$(stat -c %u "$dir")" = 1000 ] || chown -R node:node "$dir"
+  done
+
+  export HOME=/home/node
+  exec setpriv --reuid=node --regid=node --init-groups -- "$@"
+fi
+
 exec "$@"
