@@ -62,11 +62,19 @@ fi
 # Desktop, before the owner's first sign-in, that page could claim the
 # appliance. With a list set, every other name gets 421 and nothing behind it
 # is reached. IP literals and localhost names always pass: neither can be
-# rebound, since no DNS lookup is involved.
+# rebound, since no DNS lookup is involved. Nor can a single-label name
+# (`ci-memory`, `gateway`): a page's Host is its own origin's name, and a name
+# with no dot resolves only through Docker or the local network's search
+# domain, never through DNS a remote site controls. CI-Hub's other apps reach
+# Memory as `http://ci-memory:8642`.
 #
-# Unset or empty: every Host passes, exactly as before. An appliance or a Hub
-# install is reached under names this file cannot know (a custom domain, the
-# Hub's per-app addresses), so only an install that knows its names sets it.
+# An entry starting with a dot is a suffix: `.ts.net` passes every name under
+# ts.net (the Hub's tailnet names), not `ts.net` itself.
+#
+# Unset or empty: every Host passes, exactly as before. An appliance is reached
+# under names this file cannot know (a custom domain, a LAN name), so only an
+# install that knows its names sets it: Memory Desktop, and CI-Hub, which
+# passes each Memory install the names its routes use.
 HOSTS_CONF="${ALLOWED_HOSTS_CONF:-/etc/nginx/allowed-hosts.conf}"
 ALLOWED="${GATEWAY_ALLOWED_HOSTS:-}"
 
@@ -83,10 +91,13 @@ tmp="$HOSTS_CONF.tmp"
     echo '  "~^[a-z0-9-]+\.localhost$" 1;'
     echo '  "~^[0-9]{1,3}(\.[0-9]{1,3}){3}$" 1;'
     echo '  "~^\[[0-9a-f:.]+\]$" 1;'
+    # Single-label names (Docker service names and link aliases); see above.
+    echo '  "~^[a-z0-9_-]+$" 1;'
     seen=" "
     for name in $(printf '%s' "$ALLOWED" | tr ',' ' ' | tr '[:upper:]' '[:lower:]'); do
-      # A bare DNS name only, so a stray token cannot become a directive.
-      if ! printf '%s' "$name" | grep -Eq '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$'; then
+      # A bare DNS name, or one after a dot (a suffix), only, so a stray token
+      # cannot become a directive.
+      if ! printf '%s' "$name" | grep -Eq '^\.?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$'; then
         echo "[gateway] ignoring invalid GATEWAY_ALLOWED_HOSTS entry: $name" >&2
         continue
       fi
@@ -97,7 +108,17 @@ tmp="$HOSTS_CONF.tmp"
       if [ "$name" = localhost ] || printf '%s' "$name" | grep -Eq '^[a-z0-9-]+\.localhost$'; then
         continue
       fi
-      echo "  $name 1;"
+      case "$name" in
+        .*)
+          # Every name under the domain after the dot. Its dots are escaped,
+          # so the pattern matches them and nothing else.
+          echo "  \"~\\$(printf '%s' "$name" | sed 's/\./\\./g')\$\" 1;"
+          ;;
+        *)
+          # A dotless name already passes as a single label.
+          case "$name" in *.*) echo "  $name 1;" ;; esac
+          ;;
+      esac
     done
   fi
   echo "}"
@@ -105,7 +126,7 @@ tmp="$HOSTS_CONF.tmp"
 mv -f "$tmp" "$HOSTS_CONF"
 
 if [ -n "$ALLOWED" ]; then
-  echo "[gateway] answering only to IP addresses, localhost and: $ALLOWED"
+  echo "[gateway] answering only to IP addresses, localhost, single-label names and: $ALLOWED"
 fi
 
 exec "$@"

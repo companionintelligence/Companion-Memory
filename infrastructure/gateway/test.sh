@@ -194,6 +194,19 @@ grep -q '^  box.tail1.ts.net 1;$' "$hosts" || fail "second listed name missing"
 grep -q '^  localhost 1;$' "$hosts" || fail "localhost refused"
 grep -Fq '"~^[0-9]{1,3}(\.[0-9]{1,3}){3}$" 1;' "$hosts" || fail "IPv4 literals refused"
 
+# single-label names (CI-Hub's `ci-memory` link alias, compose service names) always pass,
+# and a dotless entry is not written again beside that pattern
+run_hosts "box.example,ci-memory"
+grep -Fq '"~^[a-z0-9_-]+$" 1;' "$hosts" || fail "single-label names refused"
+grep -q '^  ci-memory 1;$' "$hosts" && fail "a dotless entry written beside the single-label pattern"
+
+# a leading dot is a suffix: every name under it, with its dots escaped
+run_hosts ".TS.net,.ts.net"
+[ "$(grep -cF '"~\.ts\.net$" 1;' "$hosts")" -eq 1 ] || fail "suffix missing, unescaped or written twice"
+run_hosts ".,..x,.-x.example"
+# only the five built-in lines pass anything
+[ "$(grep -c ' 1;$' "$hosts")" -eq 5 ] || fail "a malformed suffix reached the map"
+
 # a name the built-in lines pass already, or one given twice, is written once at most:
 # nginx refuses a map that names a key twice
 run_hosts "localhost,box.localhost,dup.example,DUP.example"
@@ -213,5 +226,15 @@ awk '/^    listen 8642;/{s=1} s&&/gateway_host_allowed = 0/{print NR; exit}' "$h
 awk '/^    listen 8642;/{s=1} s&&/^    location /{print NR; exit}' "$here/nginx.conf" > "$work/first"
 [ -s "$work/guard" ] || fail "no Host guard in the server block"
 [ "$(cat "$work/guard")" -lt "$(cat "$work/first")" ] || fail "the Host guard comes after a location"
+
+# the refusal is a plain-text page that says how to add the name, served only from the guard
+grep -q '^      rewrite ^ /.gateway-not-this-host last;$' "$here/nginx.conf" || fail "the Host guard does not send the refusal page"
+awk '/^    location = \/.gateway-not-this-host \{/{s=1} s&&/^    \}/{exit} s' "$here/nginx.conf" > "$work/refusal"
+grep -q '^      internal;$' "$work/refusal" || fail "the refusal page can be asked for directly"
+grep -q '^      default_type text/plain;$' "$work/refusal" || fail "the refusal page is not plain text"
+grep -q '^      return 421 ' "$work/refusal" || fail "the refusal page is not a 421"
+grep -q 'More names Memory answers to' "$work/refusal" || fail "the refusal page does not name the Hub setting"
+grep -q 'GATEWAY_ALLOWED_HOSTS' "$work/refusal" || fail "the refusal page does not name the variable"
+grep -q '\$' "$work/refusal" && fail "the refusal page repeats a request value"
 
 echo "gateway: ok"

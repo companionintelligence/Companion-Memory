@@ -24,8 +24,10 @@ RUN : > /etc/nginx/trusted-proxies.conf && \
 #                         is walked back past these to find the client. Empty (the
 #                         default) trusts nothing — $remote_addr is the peer.
 #   GATEWAY_ALLOWED_HOSTS Comma-separated Host names to answer to (Memory Desktop
-#                         sets it). IP literals and localhost always pass; any
-#                         other name gets 421. Empty (the default) answers every Host.
+#                         and CI-Hub set it). `.example.com` is every name under
+#                         it. IP literals, localhost and single-label names always
+#                         pass; any other name gets 421. Empty (the default)
+#                         answers every Host.
 # ──────────────────────────────────────────────────
 
 EXPOSE 8642
