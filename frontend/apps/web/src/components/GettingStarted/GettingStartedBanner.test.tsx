@@ -527,6 +527,12 @@ describe('GettingStartedBanner', () => {
         renderBanner();
 
         expect(await screen.findByTestId('recommended-model-hint')).toBeInTheDocument();
+
+        // The recheck timer is armed in an effect, which can run after the hint is in the DOM.
+        // Let it run before the fake clock moves.
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
         expect(invoke).toHaveBeenCalledTimes(1);
 
         // Done while Memory is stopped: Memory Desktop does not ask the Ollama then.
@@ -583,6 +589,12 @@ describe('GettingStartedBanner', () => {
         renderBanner();
 
         expect(await screen.findByTestId('recommended-model-hint')).toBeInTheDocument();
+
+        // The recheck timer is armed in an effect, which can run after the hint is in the DOM.
+        // Let it run before the fake clock moves.
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
 
         invoke.mockResolvedValue({
           ownOllama: true,
