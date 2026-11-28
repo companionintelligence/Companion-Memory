@@ -28,7 +28,7 @@
     "commander": "^15.1.0"
   },
   "devDependencies": {
-    "@types/node": "^26.6.6",
+    "@types/node": "^26.6.7",
     "rimraf": "^6.1.4",
     "tsup": "^9.0.0",
     "tsx": "^4.7.0",

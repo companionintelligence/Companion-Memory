@@ -20,7 +20,7 @@
     "@swc/core": "^1.16.22",
     "@swc/jest": "^0.2.39",
     "@types/jest": "^30.0.0",
-    "@types/node": "^26.6.6",
+    "@types/node": "^26.6.7",
     "eslint": "^10.15.0",
     "eslint-config-prettier": "^10.1.5",
     "eslint-import-resolver-typescript": "^4.4.4",
