@@ -26,13 +26,18 @@ import org.json.JSONObject
  *    every later call. That handshake is managed transparently below.
  *
  * Auth is the same `x-api-key` header the iOS App Intents already use — no cookies, no CSRF, so it
- * works from a background thread with no WebView involved.
+ * works from a background thread with no WebView involved. The origin and key are read from
+ * [credentials] for every request (the app's credential store, [IntentCredentials]), never handed
+ * in by the web page, which holds only short-lived tokens.
  */
 class CompanionIntentClient(
-    private val baseUrl: String,
-    private val apiKey: String,
+    private val credentials: IntentCredentialSource,
     private val timeoutMs: Int = 30_000,
 ) {
+    /** A fixed origin and key: for tests, and anything that already holds both. */
+    constructor(baseUrl: String, apiKey: String, timeoutMs: Int = 30_000) :
+        this(IntentCredentialSource { IntentCredential(baseUrl, apiKey) }, timeoutMs)
+
     private val requestId = AtomicInteger(1)
 
     @Volatile
@@ -205,13 +210,19 @@ class CompanionIntentClient(
     }
 
     private fun openConnection(path: String, method: String = "POST"): HttpURLConnection {
-        val url = URL(baseUrl.trimEnd('/') + path)
+        val credential =
+            try {
+                credentials.current()
+            } catch (e: Exception) {
+                throw IOException("The app's credential store could not be read", e)
+            } ?: throw IOException("Not signed in to a Memory")
+        val url = URL(credential.baseUrl.trimEnd('/') + path)
         val connection = url.openConnection() as HttpURLConnection
 
         connection.requestMethod = method
         connection.connectTimeout = timeoutMs
         connection.readTimeout = timeoutMs
-        connection.setRequestProperty("x-api-key", apiKey)
+        connection.setRequestProperty("x-api-key", credential.apiKey)
         connection.setRequestProperty("Accept", "application/json, text/event-stream")
 
         if (method == "POST") {

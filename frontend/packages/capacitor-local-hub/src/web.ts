@@ -4,6 +4,7 @@ import type {
   BackgroundUploadState,
   CompanionWidgetAction,
   CompanionWidgetSnapshot,
+  DeviceAccessTokenResult,
   DiscoverLanAppliancesResult,
   LocalHubPlugin,
   LocalHubSecureGetResult,
@@ -56,6 +57,10 @@ export class LocalHubWeb extends WebPlugin implements LocalHubPlugin {
 
   async secureSet(): Promise<void> {
     throw this.unavailable('LocalHub secure storage is only available in the native app.');
+  }
+
+  async deviceAccessToken(): Promise<DeviceAccessTokenResult> {
+    throw this.unavailable('LocalHub device access tokens are only available in the native app.');
   }
 
   async secureRemove(): Promise<void> {

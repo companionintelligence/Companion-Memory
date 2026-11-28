@@ -1,5 +1,5 @@
-import { getApiKey } from '@ci/common';
-import { renderHook } from '@testing-library/react';
+import { getApiKey, setApiKey } from '@ci/common';
+import { act, renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { setLiveChangesAuth, subscribeLiveChanges } from '@/api/liveChanges';
@@ -80,6 +80,23 @@ describe('useLiveChanges', () => {
     rerender();
 
     expect(mockedSetAuth).toHaveBeenLastCalledWith('new-key', 'apiKey');
+  });
+
+  // The phone's token is renewed every few minutes by `apiAuth.ts`, with nothing in React changing.
+  it('passes each new token on as it arrives, without waiting for a render', () => {
+    session(true, null);
+    mockedGetApiKey.mockReturnValue('token-1');
+    renderHook(() => useLiveChanges(['tasks'], () => undefined));
+    expect(mockedSetAuth).toHaveBeenLastCalledWith('token-1', 'apiKey');
+
+    mockedGetApiKey.mockReturnValue('token-2');
+    // What the token manager does when the native side hands over a new token: notify.
+    act(() => {
+      setApiKey('token-2');
+    });
+
+    expect(mockedSetAuth).toHaveBeenLastCalledWith('token-2', 'apiKey');
+    setApiKey(null);
   });
 
   it('takes the key away when the phone signs out', () => {

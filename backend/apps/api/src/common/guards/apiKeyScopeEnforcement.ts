@@ -51,6 +51,12 @@ export interface ApiKeyScopedRequest extends Request {
   /** The key's name (`app:<appUrn>` for connect keys), for LABELLING a card once
    *  {@link ApiKeyScopedRequest.apiKeyManagedBy} has already established trust. */
   apiKeyName?: string | null;
+  /**
+   * Set when the request carried a short-lived access token for the key instead of the key
+   * (`domains/auth/utils/deviceAccessToken.ts`): when that token stops working, in ms since the
+   * epoch. A token may not mint another, and a stream it opens ends when it does.
+   */
+  apiKeyAccessTokenExpiresAt?: number;
 }
 
 /**

@@ -119,11 +119,27 @@ public class AppLockPlugin: CAPPlugin, CAPBridgedPlugin {
             return
         }
 
+        // Loosening a lock that is on asks for the unlock prompt first. A device with no
+        // passcode or biometric left cannot show one, and could never unlock either, so that
+        // change goes through rather than leaving the user locked out of their own memory.
+        if AppLockPolicy.loosens(settings, next), isAvailable() {
+            authenticate(reason: next.enabled ? "Confirm it is you to change the app lock" : "Confirm it is you to turn off the app lock") { [weak self] ok in
+                guard let self else { return }
+                if ok { self.applyConfigured(next) }
+                call.resolve(self.statusJson(reason: ok ? nil : "authentication-cancelled"))
+            }
+            return
+        }
+
+        applyConfigured(next)
+        call.resolve(statusJson())
+    }
+
+    private func applyConfigured(_ next: AppLockSettings) {
         apply(next)
         if !next.enabled, locked {
             setLocked(false)
         }
-        call.resolve(statusJson())
     }
 
     @objc func lock(_ call: CAPPluginCall) {

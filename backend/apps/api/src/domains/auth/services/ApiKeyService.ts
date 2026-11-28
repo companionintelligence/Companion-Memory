@@ -27,6 +27,7 @@ import {
   type CreateApiKeyResponse,
   type UpdateApiKeyDto,
 } from '../types';
+import { looksLikeDeviceAccessToken, verifyDeviceAccessToken } from '../utils/deviceAccessToken';
 
 const API_KEY_BYTE_LENGTH = 32;
 const API_KEY_HEX_LENGTH = API_KEY_BYTE_LENGTH * 2;
@@ -428,15 +429,41 @@ export class ApiKeyService {
     return removed;
   }
 
+  /**
+   * The key a request authenticated with: the raw key, or a short-lived access token for it
+   * (`utils/deviceAccessToken.ts`). A token is looked up as its key on every request, so it has
+   * exactly the key's scopes, capability and provenance, and stops working when the key does.
+   */
+  async validateCredential(raw: string): Promise<ValidatedApiKey | null> {
+    if (!looksLikeDeviceAccessToken(raw)) {
+      return this.validateKey(raw);
+    }
+
+    const claims = await verifyDeviceAccessToken(raw);
+
+    if (!claims) {
+      return null;
+    }
+
+    const key = await this.findUsableKey({ id: claims.keyId, user_id: claims.userId });
+
+    return key ? { ...key, accessTokenExpiresAt: claims.expiresAtMs } : null;
+  }
+
   async validateKey(rawKey: string): Promise<ValidatedApiKey | null> {
     if (rawKey.length !== API_KEY_HEX_LENGTH || !API_KEY_HEX_REGEX.test(rawKey)) {
       return null;
     }
 
-    const hashed = this.hash(rawKey);
+    return this.findUsableKey({ hashed_key: this.hash(rawKey) });
+  }
 
+  /** The key matching `where`, if it exists and has not expired, marked used. */
+  private async findUsableKey(
+    where: { hashed_key: string } | { id: string; user_id: string },
+  ): Promise<ValidatedApiKey | null> {
     const key = await this.apiKeyRepository.findOne({
-      where: { hashed_key: hashed },
+      where,
       select: {
         id: true,
         user_id: true,

@@ -3,7 +3,11 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { localHubPlugin } from '@ci/common/src/utils/localHub';
-import { SECURE_STORE_KEYS } from '@ci/common/src/utils/nativeBridge';
+import {
+  DEVICE_KEY_STORAGE_KEY,
+  SECURE_STORE_KEYS,
+  secureStorageGet,
+} from '@ci/common/src/utils/nativeBridge';
 import { speechPlugin } from '@ci/common/src/utils/speech';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -657,6 +661,66 @@ describe('LocalHub secureSet — only the keys the app itself writes', () => {
     expect(android.indexOf('!in WRITABLE_SECURE_KEYS')).toBeLessThan(android.indexOf('credentialStore.set('));
     expect(ios.indexOf('writableSecureKeys.contains(key)')).toBeGreaterThan(-1);
     expect(ios.indexOf('writableSecureKeys.contains(key)')).toBeLessThan(ios.indexOf('secureStore.set('));
+  });
+
+  // secureGet once read any name back, so a script in the page could ask for whatever the
+  // namespace held, not only the credentials the app itself puts there. And the page read the
+  // device key itself back, which any script in it could then carry off; now the native side
+  // keeps it and hands out short-lived tokens (`deviceAccessToken`).
+  it('both plugins read back only what the page may hold, and never the device key', () => {
+    const android = between(kotlin, 'fun secureGet(', 'fun secureSet(');
+    const ios = between(swift, 'func secureGet(', 'func secureSet(');
+
+    expect(android.indexOf('!in READABLE_SECURE_KEYS')).toBeGreaterThan(-1);
+    expect(android.indexOf('!in READABLE_SECURE_KEYS')).toBeLessThan(android.indexOf('credentialStore.get('));
+    expect(kotlin).toContain('READABLE_SECURE_KEYS = WRITABLE_SECURE_KEYS - DeviceCredentialKeys.API_KEY');
+    expect(ios.indexOf('readableSecureKeys.contains(key)')).toBeGreaterThan(-1);
+    expect(ios.indexOf('readableSecureKeys.contains(key)')).toBeLessThan(ios.indexOf('secureStore.get('));
+
+    const iosReadable = quoted(/readableSecureKeys: Set<String> = \[([^\]]*)\]/.exec(swift)?.[1]);
+    expect(iosReadable).toEqual(SECURE_STORE_KEYS.filter((key) => key !== DEVICE_KEY_STORAGE_KEY).sort());
+  });
+
+  it('both plugins have deviceAccessToken, as definitions.ts declares it', () => {
+    const definitions = read(join(hubDir, 'src/definitions.ts'));
+
+    expect(definitions).toContain(
+      'deviceAccessToken(options?: { refresh?: boolean }): Promise<DeviceAccessTokenResult>;',
+    );
+    expect(kotlin).toMatch(/@PluginMethod\s+fun deviceAccessToken\(/);
+    expect(swift).toContain('CAPPluginMethod(name: "deviceAccessToken"');
+    expect(swift).toContain('@objc func deviceAccessToken(');
+  });
+
+  it('@ci/common never reads the device key back, whatever the store', async () => {
+    await expect(secureStorageGet(DEVICE_KEY_STORAGE_KEY)).resolves.toBeNull();
+  });
+});
+
+/**
+ * The desktop page reads its keychain through the app's own commands, which never return the
+ * device key, and is no longer granted the plugin's `secure_get`, which would.
+ */
+describe('Memory Desktop — the page cannot read the device key back', () => {
+  const tauri = join(ROOT, 'frontend/apps/desktop/src-tauri');
+  const capability = JSON.parse(read(join(tauri, 'capabilities/remote-device-key.json'))) as {
+    permissions: string[];
+  };
+  const main = read(join(tauri, 'src/main.rs'));
+  const nativeBridge = read(join(PACKAGES, 'common/src/utils/nativeBridge.ts'));
+
+  it('grants the page the app commands and not the plugin read', () => {
+    expect(capability.permissions).not.toContain('ci-auth:allow-secure-get');
+    expect(capability.permissions).toEqual(
+      expect.arrayContaining(['allow-device-secure-get-command', 'allow-device-access-token-command']),
+    );
+  });
+
+  it('calls the commands main.rs registers, by their names', () => {
+    for (const command of ['device_secure_get_command', 'device_access_token_command']) {
+      expect(main).toContain(`fn ${command}(`);
+      expect(nativeBridge).toContain(`'${command}'`);
+    }
   });
 });
 

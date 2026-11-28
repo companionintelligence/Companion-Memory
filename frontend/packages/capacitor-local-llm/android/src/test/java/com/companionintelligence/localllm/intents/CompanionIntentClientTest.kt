@@ -46,6 +46,39 @@ class CompanionIntentClientTest {
         }
     }
 
+    // The page no longer holds the device key: the client reads the origin and key from the app's
+    // credential store for every request, so a re-sign-in or a sign-out takes effect at once.
+    @Test
+    fun the_origin_and_key_are_read_for_every_request_from_the_installed_source() {
+        TestHttpServer { exchange, _ ->
+            exchange.respond(200, """{"version": "1.2.0", "tier": "local", "intents": []}""")
+        }.use { server ->
+            var credential: IntentCredential? = IntentCredential(server.baseUrl, "first-key")
+            val client = CompanionIntentClient(IntentCredentialSource { credential })
+
+            client.fetchManifest()
+            credential = IntentCredential(server.baseUrl, "second-key")
+            client.fetchManifest()
+
+            assertEquals(
+                listOf("first-key", "second-key"),
+                server.requests.map { it.headers["x-api-key"]?.firstOrNull() },
+            )
+
+            credential = null
+            val signedOut = assertThrows(IOException::class.java) { client.fetchManifest() }
+            assertTrue(signedOut.message!!.contains("Not signed in"))
+            assertEquals(2, server.requests.size)
+        }
+    }
+
+    @Test
+    fun an_unreadable_credential_store_is_an_io_error_not_a_crash() {
+        val client = CompanionIntentClient(IntentCredentialSource { throw IllegalStateException("keystore locked") })
+
+        assertThrows(IOException::class.java) { client.fetchManifest() }
+    }
+
     @Test
     fun a_catalogue_error_is_raised_with_the_status_code_rather_than_parsed_as_a_manifest() {
         TestHttpServer { exchange, _ -> exchange.respond(500, "boom") }.use { server ->

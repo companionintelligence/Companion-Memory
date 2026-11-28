@@ -335,6 +335,10 @@ export class GraphExpansionService {
          AND r.is_active = true
          AND nb.is_active = true
          AND r.owner_user_id = $2
+         -- Both ends too: an edge onto another owner's entity must not read that
+         -- entity's name and description into this owner's recall.
+         AND seed.owner_user_id = $2
+         AND nb.owner_user_id = $2
        ORDER BY r.strength DESC NULLS LAST
        LIMIT $3`,
       [seedIds, userId, MAX_EDGES],

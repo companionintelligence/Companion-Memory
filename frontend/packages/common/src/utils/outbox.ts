@@ -40,7 +40,7 @@
  * `capacity` block on {@link listOutbox} can warn before hitting that wall.
  */
 
-import { getApiKey } from './apiAuth';
+import { deviceAccessTokensActive, deviceOwnerStamp, getApiKey } from './apiAuth';
 import { getApiBaseUrl } from './apiBase';
 import { FetchJsonError, fetchJson } from './fetchJson';
 import { localHubHeaders, localHubSession } from './localHub';
@@ -291,6 +291,17 @@ function fingerprint(value: string): string {
  * check and the request.
  */
 export function outboxOwnerStamp(): string | null {
+  // The phone and desktop apps no longer hold the key in the page; their native side computes
+  // this same stamp from the key and origin it stored (`deviceAccessToken`). A native side from
+  // before tokens gives none, and the page has no key to compute it from, so there is no stamp:
+  // that app shows the update notice and queues nothing. On web (and in tests) the credential
+  // set directly is used below.
+  const nativeStamp = deviceOwnerStamp();
+
+  if (deviceAccessTokensActive() && nativeStamp !== null) {
+    return nativeStamp;
+  }
+
   const apiKey = getApiKey();
 
   if (!apiKey) {

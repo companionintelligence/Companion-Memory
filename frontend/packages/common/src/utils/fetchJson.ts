@@ -1,5 +1,6 @@
-import { apiKeyHeaders } from './apiAuth';
+import { apiKeyHeaders, deviceAccessTokensActive, getApiKey, refreshDeviceAccessToken } from './apiAuth';
 import { buildApiUrl, isNativePlatform } from './apiBase';
+import { markMemorySignInEnded, memorySignInEnded } from './memorySignIn';
 import { guardApplianceRequest } from './offlineWrites';
 
 interface Opts extends RequestInit {
@@ -255,6 +256,59 @@ function flattenHeaders(headers?: HeadersInit): Record<string, string> {
   return { ...headers };
 }
 
+/** The value of `name` in `headers`, matched without regard to case. */
+function headerValue(headers: Record<string, string>, name: string): string | undefined {
+  const lower = name.toLowerCase();
+  const match = Object.keys(headers).find((key) => key.toLowerCase() === lower);
+
+  return match === undefined ? undefined : headers[match];
+}
+
+/** `headers` with `name` set to `value`, replacing it whatever its case. */
+function withHeader(headers: Record<string, string>, name: string, value: string): Record<string, string> {
+  const lower = name.toLowerCase();
+  const out = Object.fromEntries(Object.entries(headers).filter(([key]) => key.toLowerCase() !== lower));
+
+  out[name] = value;
+
+  return out;
+}
+
+/**
+ * Send, and when Memory answers 401 to the device access token the request carried, send once
+ * more with a new one (`apiAuth.ts`). A token can expire between the app checking it and the
+ * request arriving, or while the phone slept with its timers stopped. A 401 means Memory did
+ * nothing, so sending again is safe. Only a body that can be sent twice is: none, or text.
+ */
+async function sendWithFreshDeviceToken(
+  send: (headers: Record<string, string>) => Promise<Response>,
+  headers: Record<string, string>,
+  body: BodyInit | null | undefined,
+  signal: AbortSignal | null | undefined,
+): Promise<Response> {
+  const response = await send(headers);
+
+  if (response.status !== 401 || !deviceAccessTokensActive() || signal?.aborted) {
+    return response;
+  }
+
+  const sent = headerValue(headers, 'x-api-key');
+
+  if (!sent || (body != null && typeof body !== 'string')) {
+    return response;
+  }
+
+  const fresh = await refreshDeviceAccessToken(sent);
+
+  if (!fresh) {
+    return response;
+  }
+
+  void response.body?.cancel().catch(() => undefined);
+
+  return send(withHeader(headers, 'x-api-key', fresh));
+}
+
 function requestData(body: BodyInit | null | undefined): unknown {
   if (body == null) {
     return undefined;
@@ -329,10 +383,24 @@ function toResponse(
  * Web and tests without the plugin keep `window.fetch`.
  */
 async function nativeAwareFetch(input: RequestInfo, init: RequestInit, timeout?: number): Promise<Response> {
+  const { response, finalUrl } = await sendOnce(input, init, timeout);
+
+  return checkDeviceSignIn(typeof input === 'string' ? input : input.url, init.headers, response, finalUrl);
+}
+
+/** What a request answered, and the URL it ended at after any redirects. */
+interface SentRequest {
+  response: Response;
+  finalUrl: string | undefined;
+}
+
+async function sendOnce(input: RequestInfo, init: RequestInit, timeout?: number): Promise<SentRequest> {
   const cap = typeof input === 'string' ? capacitorHttp() : undefined;
 
   if (!cap?.request || typeof input !== 'string' || isBinaryBody(init.body)) {
-    return fetch(input, init);
+    const response = await fetch(input, init);
+
+    return { response, finalUrl: response.redirected ? response.url : undefined };
   }
 
   // URLSession rejects relative paths (`/api/...`) and non-http(s) schemes
@@ -343,7 +411,7 @@ async function nativeAwareFetch(input: RequestInfo, init: RequestInit, timeout?:
     );
   }
 
-  let result: { status: number; data?: unknown; headers?: HeadersInit };
+  let result: { status: number; data?: unknown; headers?: HeadersInit; url?: string };
   const method = (init.method ?? 'GET').toUpperCase();
 
   try {
@@ -366,7 +434,121 @@ async function nativeAwareFetch(input: RequestInfo, init: RequestInit, timeout?:
 
   const body = typeof result.data === 'string' ? result.data : JSON.stringify(result.data ?? {});
 
-  return toResponse(result, body, method);
+  return { response: toResponse(result, body, method), finalUrl: result.url };
+}
+
+/** The `message` of the 401 a request gets once Memory no longer takes this device's key. */
+export const MEMORY_SIGN_IN_ENDED = 'MEMORY_SIGN_IN_ENDED';
+
+/** Memory is asked whether the key still works at most this often. */
+const SIGN_IN_CHECK_MIN_GAP_MS = 30_000;
+
+let signInCheck: Promise<void> | null = null;
+let lastSignInCheckAt = 0;
+
+/** `url` as an absolute URL, or null. Relative paths resolve against the page, as `fetch` would. */
+function absoluteUrl(url: string): URL | null {
+  try {
+    return new URL(url, typeof window !== 'undefined' ? window.location.href : undefined);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether a request to Memory's API was answered by something else: it ended on another origin
+ * (a Hub's edge redirecting it to the Hub's sign-in page), or it got a web page where Memory's API
+ * only ever answers JSON. Followed silently, the page read as JSON gave the person "invalid JSON".
+ */
+function answeredBySignInPage(requested: string, finalUrl: string | undefined, response: Response): boolean {
+  const from = absoluteUrl(requested);
+
+  if (!from) {
+    return false;
+  }
+
+  const to = finalUrl ? absoluteUrl(finalUrl) : null;
+
+  if (to && to.origin !== from.origin) {
+    return true;
+  }
+
+  return (
+    from.pathname.startsWith('/api/') && /text\/html/i.test(response.headers?.get?.('content-type') ?? '')
+  );
+}
+
+/**
+ * A request that carried this device's key and was refused (401) or turned away to a sign-in page
+ * may mean Memory no longer takes the key. Memory is asked once (`GET /keys/check`) before the app
+ * says so (`memorySignIn.ts`): one failed request proves nothing about the key. A request turned
+ * away to a page comes back as a 401 with {@link MEMORY_SIGN_IN_ENDED}, never as the page.
+ */
+function checkDeviceSignIn(
+  requested: string,
+  headers: HeadersInit | undefined,
+  response: Response,
+  finalUrl: string | undefined,
+): Response {
+  const sentKey = headerValue(flattenHeaders(headers), 'x-api-key');
+
+  if (!sentKey) {
+    return response;
+  }
+
+  const turnedAway = answeredBySignInPage(requested, finalUrl, response);
+
+  // With short-lived tokens the native side answers this itself: the token refresh after a 401
+  // asks Memory about the key, and a refusal arrives as `revoked` (`apiAuth.ts`).
+  if ((turnedAway || response.status === 401) && !deviceAccessTokensActive()) {
+    confirmSignInEnded(requested, sentKey);
+  }
+
+  if (!turnedAway) {
+    return response;
+  }
+
+  void response.body?.cancel?.().catch(() => undefined);
+
+  return new Response(JSON.stringify({ statusCode: 401, message: MEMORY_SIGN_IN_ENDED }), {
+    status: 401,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+/** Ask Memory whether `key` still works, and record it when Memory says it does not. Never throws. */
+function confirmSignInEnded(requested: string, key: string): void {
+  const origin = absoluteUrl(requested)?.origin;
+
+  if (
+    !origin ||
+    signInCheck ||
+    memorySignInEnded() ||
+    Date.now() - lastSignInCheckAt < SIGN_IN_CHECK_MIN_GAP_MS
+  ) {
+    return;
+  }
+
+  lastSignInCheckAt = Date.now();
+  signInCheck = (async () => {
+    try {
+      const url = `${origin}/api/keys/check`;
+      const { response, finalUrl } = await sendOnce(url, { headers: { 'x-api-key': key } }, 10_000);
+      const refused =
+        response.status === 401 || response.status === 403 || answeredBySignInPage(url, finalUrl, response);
+
+      void response.body?.cancel().catch(() => undefined);
+
+      // Only for the key requests still carry: a sign-in since then holds another.
+      if (refused && getApiKey() === key) {
+        markMemorySignInEnded();
+      }
+    } catch {
+      // Memory could not be asked, which says nothing about the key.
+    } finally {
+      signInCheck = null;
+    }
+  })();
 }
 
 /**
@@ -377,18 +559,16 @@ async function nativeAwareFetch(input: RequestInfo, init: RequestInit, timeout?:
 export async function apiFetch(input: RequestInfo | URL, init?: ApiFetchInit): Promise<Response> {
   const { allowOffline, ...rest } = init ?? {};
 
-  if (typeof input === 'string') {
-    const url = buildApiUrl(input);
+  if (typeof input === 'string' || input instanceof URL) {
+    const url = typeof input === 'string' ? buildApiUrl(input) : input.toString();
     guardApplianceRequest(url, rest.method, allowOffline);
 
-    return nativeAwareFetch(url, rest);
-  }
-
-  if (input instanceof URL) {
-    const url = input.toString();
-    guardApplianceRequest(url, rest.method, allowOffline);
-
-    return nativeAwareFetch(url, rest);
+    return sendWithFreshDeviceToken(
+      (headers) => nativeAwareFetch(url, { ...rest, headers }),
+      flattenHeaders(rest.headers),
+      rest.body,
+      rest.signal,
+    );
   }
 
   guardApplianceRequest(input.url, rest.method ?? input.method, allowOffline);
@@ -427,21 +607,27 @@ export async function streamingFetch(input: string, init?: StreamingFetchInit): 
     ...apiKeyHeaders(),
     ...flattenHeaders(rest.headers),
   };
-  const next = { ...rest, headers };
+  const send = async (sentHeaders: Record<string, string>): Promise<Response> => {
+    const next = { ...rest, headers: sentHeaders };
+    const checked = (response: Response) =>
+      checkDeviceSignIn(url, sentHeaders, response, response.redirected ? response.url : undefined);
 
-  if (!isNativePlatform()) {
-    return fetch(url, next);
-  }
-
-  try {
-    return await unpatchedWebFetch()(url, next);
-  } catch (error) {
-    if (!bufferedFallback || rest.signal?.aborted) {
-      throw error;
+    if (!isNativePlatform()) {
+      return checked(await fetch(url, next));
     }
 
-    return nativeBinaryFetch(url, next);
-  }
+    try {
+      return checked(await unpatchedWebFetch()(url, next));
+    } catch (error) {
+      if (!bufferedFallback || rest.signal?.aborted) {
+        throw error;
+      }
+
+      return checked(await nativeBinaryFetch(url, next));
+    }
+  };
+
+  return sendWithFreshDeviceToken(send, headers, rest.body, rest.signal);
 }
 
 function unpatchedWebFetch(): typeof fetch {
@@ -566,7 +752,15 @@ export async function fetchJson<T>(input: RequestInfo, init?: Opts): Promise<T |
   let res: Response;
   let text: string | undefined;
   try {
-    res = await nativeAwareFetch(resolved, rest, timeout);
+    res =
+      typeof resolved === 'string'
+        ? await sendWithFreshDeviceToken(
+            (headers) => nativeAwareFetch(resolved, { ...rest, headers }, timeout),
+            flattenHeaders(rest.headers),
+            rest.body,
+            rest.signal,
+          )
+        : await nativeAwareFetch(resolved, rest, timeout);
 
     if (res.ok) {
       text = await res.text();

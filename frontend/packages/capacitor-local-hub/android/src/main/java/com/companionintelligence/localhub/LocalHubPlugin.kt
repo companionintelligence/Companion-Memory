@@ -178,12 +178,27 @@ class LocalHubPlugin : Plugin() {
      * blob no longer decrypts, so the two cases stay distinguishable at the bridge. The JS
      * `secureStorageGet` chooses to collapse both into "signed out"; that leniency belongs at
      * the call site, not here.
+     *
+     * Only the keys in [WRITABLE_SECURE_KEYS] are read back, the same list [secureSet] takes:
+     * nothing else in this namespace is the page's to read. And of those, not the device key
+     * itself ([READABLE_SECURE_KEYS]): the page writes it once at sign-in and from then on gets
+     * short-lived tokens for it ([deviceAccessToken]), so a script in the page cannot carry off a
+     * key that works for good. Asking for it resolves `{ value: null }`, which is also what an
+     * older web build reads as "no key", rather than a rejection.
      */
     @PluginMethod
     fun secureGet(call: PluginCall) {
         val key = call.getString("key")
         if (key.isNullOrEmpty()) {
             call.reject("A non-empty 'key' is required")
+            return
+        }
+        if (key !in WRITABLE_SECURE_KEYS) {
+            call.reject("'$key' is not a key this store gives out")
+            return
+        }
+        if (key !in READABLE_SECURE_KEYS) {
+            call.resolve(JSObject().apply { put("value", JSONObject.NULL) })
             return
         }
         pluginScope.launch {
@@ -227,7 +242,13 @@ class LocalHubPlugin : Plugin() {
         }
         pluginScope.launch {
             try {
-                withContext(Dispatchers.IO) { credentialStore.set(key, value) }
+                withContext(Dispatchers.IO) {
+                    // A different Memory origin drops the key first: it is only ever sent to the
+                    // origin it was stored with (DeviceCredentialBinding).
+                    DeviceCredentialBinding.beforeSet(credentialStore, key, value)
+                    credentialStore.set(key, value)
+                }
+                accessTokens.invalidate()
                 call.resolve()
             } catch (e: Exception) {
                 call.reject(e.message ?: "Secure storage write failed", e)
@@ -245,7 +266,12 @@ class LocalHubPlugin : Plugin() {
         }
         pluginScope.launch {
             try {
-                withContext(Dispatchers.IO) { credentialStore.remove(key) }
+                withContext(Dispatchers.IO) {
+                    // Removing the origin removes the key it is bound to as well.
+                    DeviceCredentialBinding.beforeRemove(credentialStore, key)
+                    credentialStore.remove(key)
+                }
+                accessTokens.invalidate()
                 call.resolve()
             } catch (e: Exception) {
                 call.reject(e.message ?: "Secure storage remove failed", e)
@@ -287,6 +313,42 @@ class LocalHubPlugin : Plugin() {
             } catch (error: Exception) {
                 call.reject("Could not share the conversation", error)
             }
+        }
+    }
+
+    /**
+     * A short-lived access token for the device key, for the page to send instead of the key.
+     *
+     * Resolves `{ status, token, expiresAt, keyId, ownerStamp }` (see [DeviceAccessTokenResult]):
+     * `status` is `none` (no key: signed out), `ok`, `revoked` (Memory refused the key; it is left
+     * in place for the page to sign out with), `unreachable` (no answer to use now; still signed
+     * in) or `legacy` (Memory predates the route, and `token` is the key itself). `expiresAt` is ms
+     * since the epoch. `ownerStamp` is the outbox owner stamp for the key and its origin, so the
+     * page can stamp captures without holding the key. A cached token is reused until a minute
+     * before it runs out, unless `refresh` is true. Rejects only when the keystore cannot be read.
+     */
+    @PluginMethod
+    fun deviceAccessToken(call: PluginCall) {
+        val refresh = call.getBoolean("refresh", false) ?: false
+        pluginScope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) { accessTokens.get(refresh) }
+                call.resolve(result.toJs())
+            } catch (e: Exception) {
+                call.reject(e.message ?: "Secure storage read failed", e)
+            }
+        }
+    }
+
+    private fun DeviceAccessTokenResult.toJs(): JSObject {
+        // Explicit JSON nulls, as secureGet does: JSObject.put(String, null) drops the entry.
+        fun JSObject.putOrNull(name: String, value: Any?) = put(name, value ?: JSONObject.NULL)
+        return JSObject().apply {
+            put("status", status.wire)
+            putOrNull("token", token)
+            putOrNull("expiresAt", expiresAt)
+            putOrNull("keyId", keyId)
+            putOrNull("ownerStamp", ownerStamp)
         }
     }
 
@@ -651,6 +713,9 @@ class LocalHubPlugin : Plugin() {
      */
     private val credentialStore: CompanionSecureStore by lazy { CompanionSecureStore.credentials(context) }
 
+    /** Tokens for the device key; the cache lives as long as this plugin instance. */
+    private val accessTokens: DeviceAccessTokens by lazy { DeviceAccessTokens(credentialStore) }
+
     /** Must hold [stateMutex]. */
     private suspend fun startLocked(): JSObject {
         val runningServer = server
@@ -750,6 +815,9 @@ class LocalHubPlugin : Plugin() {
             "ci.apiKeyCapability",
             "ci.apiBaseUrl",
         )
+
+        /** What `secureGet` hands back: everything above except the device key, which stays native. */
+        private val READABLE_SECURE_KEYS = WRITABLE_SECURE_KEYS - DeviceCredentialKeys.API_KEY
 
         private const val TOKEN_BYTES = 32
         private const val NANOHTTPD_SOCKET_READ_TIMEOUT_MS = 5000

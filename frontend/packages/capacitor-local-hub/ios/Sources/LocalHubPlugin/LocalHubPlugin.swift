@@ -32,6 +32,7 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "secureSet", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "secureRemove", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "shareTextFile", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "deviceAccessToken", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "openUrl", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "startAuthSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getCurrentLocation", returnType: CAPPluginReturnPromise),
@@ -73,6 +74,37 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
         "ci.apiKeyCapability",
         "ci.apiBaseUrl"
     ]
+
+    /// What `secureGet` gives back: everything the app writes except the device key itself. The
+    /// page used to read the key and send it on every request, so any script in it could carry off
+    /// a key that works for good. It now asks `deviceAccessToken` for a short-lived token instead,
+    /// and only native code here reads the key.
+    private static let readableSecureKeys: Set<String> = [
+        "ci.apiKeyId",
+        "ci.apiKeyCapability",
+        "ci.apiBaseUrl"
+    ]
+
+    /// `API_KEY_STORAGE` and friends in the web app's `useAuth.ts`. The two sets above spell them
+    /// out because `capacitorPluginContract.test.ts` reads those literals.
+    private static let apiKeyKey = "ci.apiKey"
+    private static let apiKeyIdKey = "ci.apiKeyId"
+    private static let apiKeyCapabilityKey = "ci.apiKeyCapability"
+    private static let apiBaseUrlKey = "ci.apiBaseUrl"
+
+    /// Trades the stored key for short-lived tokens (DeviceAccessToken.swift). One per process, so
+    /// its cache and in-flight request are shared however many plugin instances there are.
+    private static let deviceTokens = DeviceAccessTokenBroker(
+        readCredentials: {
+            let store = CompanionSecureStore.credentials()
+            return DeviceCredentials(
+                apiKey: try store.get(LocalHubPlugin.apiKeyKey),
+                keyId: try store.get(LocalHubPlugin.apiKeyIdKey),
+                baseUrl: try store.get(LocalHubPlugin.apiBaseUrlKey)
+            )
+        },
+        transport: URLSessionDeviceTokenTransport()
+    )
 
     /// Kept alive until the sheet finishes. UIKit drops an `ASWebAuthenticationSession`
     /// that nothing retains, and the completion handler never runs.
@@ -142,9 +174,20 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
     /// Rejects -- rather than resolving null -- when the Keychain itself refuses, so the two
     /// cases stay distinguishable at the bridge. The JS `secureStorageGet` chooses to collapse
     /// both into "signed out"; that leniency belongs at the call site, not here.
+    /// Only the keys in `readableSecureKeys` are read back, as on Android: what the app writes,
+    /// except the device key. Asked for the key, this resolves null rather than rejecting, so the
+    /// page reads it as "not here" and goes to `deviceAccessToken`.
     @objc func secureGet(_ call: CAPPluginCall) {
         guard let key = call.getString("key"), !key.isEmpty else {
             call.reject("A non-empty 'key' is required")
+            return
+        }
+        if key == Self.apiKeyKey {
+            call.resolve(["value": NSNull()])
+            return
+        }
+        guard Self.readableSecureKeys.contains(key) else {
+            call.reject("'\(key)' is not a key this store gives out")
             return
         }
         do {
@@ -174,21 +217,34 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
             return
         }
         do {
+            if key == Self.apiBaseUrlKey {
+                try dropDeviceKeyIfOriginChanges(to: value)
+            }
             try secureStore.set(key, value)
+            if key == Self.apiKeyKey || key == Self.apiBaseUrlKey {
+                invalidateDeviceTokens()
+            }
             call.resolve()
         } catch {
             call.reject(error.localizedDescription, nil, error)
         }
     }
 
-    /// Removes one value. Resolves successfully when it was already absent.
+    /// Removes one value. Resolves successfully when it was already absent. Removing the origin
+    /// while a key is stored removes the key with it (`dropDeviceKeyIfOriginChanges`).
     @objc func secureRemove(_ call: CAPPluginCall) {
         guard let key = call.getString("key"), !key.isEmpty else {
             call.reject("A non-empty 'key' is required")
             return
         }
         do {
+            if key == Self.apiBaseUrlKey {
+                try dropDeviceKeyIfOriginChanges(to: nil)
+            }
             try secureStore.remove(key)
+            if key == Self.apiKeyKey || key == Self.apiBaseUrlKey {
+                invalidateDeviceTokens()
+            }
             call.resolve()
         } catch {
             call.reject(error.localizedDescription, nil, error)
@@ -231,6 +287,41 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
                 try? FileManager.default.removeItem(at: directory)
                 call.reject("Could not prepare the conversation export", nil, error)
             }
+        }
+    }
+
+    /// The device key goes only to the origin it was stored with.
+    ///
+    /// Native code sends the key to `ci.apiBaseUrl` -- the token mint below, background upload,
+    /// replica sync, App Intents, the on-device model's tools -- and the page can write that entry.
+    /// So a page that cannot read the key could still have it sent to a server of its choosing by
+    /// changing the origin. Changing a stored origin (or removing it) therefore removes the key,
+    /// its id and its capability first; the app signs in again for the new one, which stores the
+    /// origin before the new key. Writing the same origin again, or one where none was stored,
+    /// leaves the key alone.
+    private func dropDeviceKeyIfOriginChanges(to newValue: String?) throws {
+        let storedOrigin = try secureStore.get(Self.apiBaseUrlKey)
+        let keyStored = try secureStore.get(Self.apiKeyKey) != nil
+        guard DeviceOrigin.changeRemovesDeviceKey(storedOrigin: storedOrigin, newOrigin: newValue, keyStored: keyStored) else {
+            return
+        }
+        try secureStore.remove(Self.apiKeyKey)
+        try secureStore.remove(Self.apiKeyIdKey)
+        try secureStore.remove(Self.apiKeyCapabilityKey)
+        invalidateDeviceTokens()
+    }
+
+    private func invalidateDeviceTokens() {
+        Task { await Self.deviceTokens.invalidate() }
+    }
+
+    /// A short-lived access token for the stored device key; see DeviceAccessToken.swift and
+    /// `deviceAccessToken` in `src/definitions.ts`. Never rejects: every outcome is a `status`.
+    @objc func deviceAccessToken(_ call: CAPPluginCall) {
+        let refresh = call.getBool("refresh") ?? false
+        Task {
+            let result = await Self.deviceTokens.token(refresh: refresh)
+            call.resolve(result.bridgeObject)
         }
     }
 

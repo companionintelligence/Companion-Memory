@@ -36,11 +36,13 @@ import { extractApiKey } from '../services/ApiKeyStrategy';
 import {
   CONNECT_KEY_NAME_PREFIX,
   type CreateApiKeyDto,
+  type DeviceAccessTokenResponse,
   isManagedAppPrincipal,
   PHONE_KEY_NAME,
   SIGN_IN_PROVENANCE,
   type UpdateApiKeyDto,
 } from '../types';
+import { DEVICE_ACCESS_TOKEN_TTL_SECONDS, mintDeviceAccessToken } from '../utils/deviceAccessToken';
 
 /**
  * `app:` is reserved for connection keys minted by the consent flow
@@ -144,9 +146,51 @@ export class ApiKeyController {
   async check(@Req() req: Request): Promise<void> {
     const raw = extractApiKey(req);
 
-    if (!raw || !(await this.apiKeyService.validateKey(raw))) {
+    // A short-lived access token for a key counts as that key: the phone apps send those now.
+    if (!raw || !(await this.apiKeyService.validateCredential(raw))) {
       throw new UnauthorizedException();
     }
+  }
+
+  /**
+   * Trade this device's key for a short-lived access token (`utils/deviceAccessToken.ts`).
+   *
+   * The phone and desktop apps' native side keeps the key and calls this; the web page inside the
+   * app is handed only the token, so a script in the page can no longer carry off a key that works
+   * for good. The token stands for the key: same scopes, capability and provenance, and it stops
+   * working when the key is revoked.
+   *
+   * Only the key may ask. A token asking would let one stolen token renew itself for as long as
+   * the key lives. A scope-limited key never gets here (the guard's scope rule): what it may do is
+   * already confined, and the apps' keys carry no scopes.
+   *
+   * Declared before `:id` routes, like `check` and `current`.
+   */
+  @UseGuards(ApiKeyGuard)
+  @RequireCapability(READ_CAPABILITY)
+  @Post('access-token')
+  @HttpCode(HttpStatus.OK)
+  async accessToken(
+    @Context() context: RequestContext,
+    @Req() req: ApiKeyScopedRequest,
+  ): Promise<DeviceAccessTokenResponse> {
+    const { userId } = toServiceContext(context);
+
+    if (!req.apiKeyId || typeof userId !== 'string') {
+      throw new UnauthorizedException();
+    }
+
+    if (req.apiKeyAccessTokenExpiresAt !== undefined) {
+      throw new ForbiddenException('An access token cannot be traded for another. Ask with the device key.');
+    }
+
+    const { token, expiresAtMs } = await mintDeviceAccessToken({ keyId: req.apiKeyId, userId });
+
+    return {
+      token,
+      expiresAt: new Date(expiresAtMs).toISOString(),
+      expiresIn: DEVICE_ACCESS_TOKEN_TTL_SECONDS,
+    };
   }
 
   /**

@@ -1241,6 +1241,8 @@ export class GraphUtilityService {
       removeProperties?: string[];
     },
   ): Promise<{ relationship: RelationshipEntity; created: boolean }> {
+    await this.assertEndpointsNotForeign(ownerUserId, [payload.fromEntityId, payload.toEntityId]);
+
     const byId = payload.relationshipId
       ? await this.relationshipRepo.findOne({
           where: { relationship_id: payload.relationshipId, owner_user_id: ownerUserId },
@@ -1316,6 +1318,26 @@ export class GraphUtilityService {
     const saved = await this.relationshipRepo.save(relationship);
 
     return { relationship: saved, created: false };
+  }
+
+  /**
+   * Refuses an edge onto another owner's entity. `ci.relationships` has no
+   * foreign key to `ci.entities`, and an end may not be written yet (a create
+   * still queued behind this edge), so a missing end passes; an end that exists
+   * must be the owner's. Without this an `entity.create` naming another user's
+   * `entityId` with nested relationships wrote edges from that entity, and
+   * graph expansion then read its name and description into this owner's recall.
+   */
+  private async assertEndpointsNotForeign(
+    ownerUserId: string,
+    entityIds: Array<string | undefined>,
+  ): Promise<void> {
+    for (const entityId of new Set(entityIds.filter((id): id is string => Boolean(id)))) {
+      const node = await this.entityRepo.findOne({ where: { entity_id: entityId } });
+      if (node && node.owner_user_id !== ownerUserId) {
+        throw new Error(`Graph node ${entityId} is not owned by ${ownerUserId}; refusing to link it`);
+      }
+    }
   }
 
   private findActiveDirectedRelationship(

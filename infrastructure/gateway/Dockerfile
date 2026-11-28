@@ -12,7 +12,8 @@ COPY --chmod=755 infrastructure/gateway/entrypoint.sh /usr/local/bin/gateway-ent
 # nginx.conf includes this file unconditionally; the entrypoint rewrites it
 # from TRUSTED_PROXY_CIDRS at start, and an empty one is what "trust nothing"
 # looks like if the entrypoint is ever bypassed.
-RUN : > /etc/nginx/trusted-proxies.conf
+RUN : > /etc/nginx/trusted-proxies.conf && \
+    printf 'map $host $gateway_host_allowed {\n  default 1;\n}\n' > /etc/nginx/allowed-hosts.conf
 
 # ──────────────────────────────────────────────────
 # Environment Variables
@@ -22,6 +23,9 @@ RUN : > /etc/nginx/trusted-proxies.conf
 #                         in front of this gateway (a Hub sets it). X-Forwarded-For
 #                         is walked back past these to find the client. Empty (the
 #                         default) trusts nothing — $remote_addr is the peer.
+#   GATEWAY_ALLOWED_HOSTS Comma-separated Host names to answer to (Memory Desktop
+#                         sets it). IP literals and localhost always pass; any
+#                         other name gets 421. Empty (the default) answers every Host.
 # ──────────────────────────────────────────────────
 
 EXPOSE 8642

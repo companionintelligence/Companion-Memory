@@ -77,4 +77,16 @@ enum AppLockPolicy {
     static func locksOnPause(_ settings: AppLockSettings) -> Bool {
         settings.enabled && settings.grace == .immediately
     }
+
+    /// Whether going from `current` to `next` loosens a lock that is on: turning it off, a
+    /// longer grace (`Grace.allCases` runs shortest first, "never" last), or no longer
+    /// securing the screen. Such a change needs the same prompt as unlocking: `configure` is
+    /// callable from the web view, and a page script could otherwise turn the lock off, and
+    /// lift a lock that was showing, without anyone proving who they were.
+    static func loosens(_ current: AppLockSettings, _ next: AppLockSettings) -> Bool {
+        guard current.enabled else { return false }
+        let order = Grace.allCases
+        let longerGrace = (order.firstIndex(of: next.grace) ?? 0) > (order.firstIndex(of: current.grace) ?? 0)
+        return !next.enabled || longerGrace || (current.secureScreen && !next.secureScreen)
+    }
 }

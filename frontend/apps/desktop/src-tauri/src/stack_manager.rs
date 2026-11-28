@@ -348,6 +348,8 @@ pub fn apply_llm_env_override(paths: &StackPaths, llm_env: &crate::local_model::
     let (Some(api_base), Some(api_key)) = (&llm_env.llm_api_base, &llm_env.llm_api_key) else {
         return Ok(());
     };
+    env_line_value("LLM_API_BASE", api_base)?;
+    env_line_value("LLM_API_KEY", api_key)?;
     let addition = format!("LLM_API_BASE={api_base}\nLLM_API_KEY={api_key}\n");
     use std::io::Write;
     fs::OpenOptions::new()
@@ -369,12 +371,36 @@ const CHAT_MODEL_KEY: &str = "LLM_DEFAULT_CHAT_MODEL";
 /// empty one. An `up` without CI_SERVER_IMAGE_TAG or CI_LOCAL_ONLY recreates
 /// the containers wrongly.
 pub fn set_env_chat_model(paths: &StackPaths, model: &str) -> Result<(), String> {
+    if !is_env_safe_model_name(model) {
+        return Err(format!("{model:?} is not a model name this app writes to .env"));
+    }
     let env_path = paths.compose_dir.join(".env");
     let staged = paths.compose_dir.join(".env.next");
     let current = fs::read_to_string(&env_path).map_err(|e| format!("Failed to read {}: {e}", env_path.display()))?;
     fs::write(&staged, with_chat_model(&current, model))
         .and_then(|()| fs::rename(&staged, &env_path))
         .map_err(|e| format!("Failed to write {}: {e}", env_path.display()))
+}
+
+/// Whether `model` can be written as one `.env` value: a model name as Ollama and the
+/// OpenAI-compatible servers spell them (`qwen3.5:122b`, `hf.co/org/model:Q4_K_M`,
+/// `library/model@sha256:…`), and nothing else.
+///
+/// The name can come from whatever answers on the host Ollama's port (see
+/// ollama_sidecar::host_ollama_chat_model). Written raw, a name with a newline in it
+/// added any setting it liked to `.env`, which compose hands to every container.
+pub(crate) fn is_env_safe_model_name(model: &str) -> bool {
+    !model.is_empty()
+        && model.len() <= 256
+        && model.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | ':' | '/' | '@' | '+'))
+}
+
+/// Refuses a value that would not stay on its own `.env` line, so it cannot add settings.
+fn env_line_value(name: &str, value: &str) -> Result<(), String> {
+    if value.is_empty() || value.chars().any(|c| matches!(c, '\n' | '\r' | '\0')) {
+        return Err(format!("{name} is empty or holds a line break; not writing it to .env"));
+    }
+    Ok(())
 }
 
 /// The chat model `.env` names, if it can be read.
@@ -2198,5 +2224,45 @@ mod tests {
         wait_until_healthy(std::time::Duration::from_secs(60), || true);
 
         assert!(started.elapsed() < std::time::Duration::from_secs(10), "waited {:?}", started.elapsed());
+    }
+
+    /// The chat model can come from whatever answers on the host Ollama's port. Written raw,
+    /// a name with a line break in it added its own settings to `.env`.
+    #[test]
+    fn a_model_name_that_would_add_lines_to_env_is_refused_and_env_is_left_as_it_was() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = scratch_paths(&dir);
+        fs::create_dir_all(&paths.compose_dir).unwrap();
+        let env_path = paths.compose_dir.join(".env");
+        write_env_file(&env_path, "2026.8.25", &paths.import_work_dir).unwrap();
+        let before = fs::read_to_string(&env_path).unwrap();
+
+        for bad in ["qwen\nCI_LOCAL_ONLY=false", "qwen\r\nAUTH_TOKEN_SECRET=x", "a=b", "has space", ""] {
+            assert!(set_env_chat_model(&paths, bad).is_err(), "{bad:?} was written");
+        }
+        assert_eq!(fs::read_to_string(&env_path).unwrap(), before);
+
+        for good in ["qwen3.5:122b", "hf.co/org/model-GGUF:Q4_K_M", "library/llama3.2@sha256:abc", "gemma3n:e4b"] {
+            set_env_chat_model(&paths, good).unwrap();
+            assert_eq!(env_chat_model(&paths).as_deref(), Some(good));
+        }
+    }
+
+    #[test]
+    fn an_llm_endpoint_or_key_with_a_line_break_is_not_appended() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = scratch_paths(&dir);
+        fs::create_dir_all(&paths.compose_dir).unwrap();
+        let env_path = paths.compose_dir.join(".env");
+        write_env_file(&env_path, "2026.8.25", &paths.import_work_dir).unwrap();
+        let before = fs::read_to_string(&env_path).unwrap();
+
+        let injected = crate::local_model::LlmEnvOverride {
+            llm_api_base: Some("http://127.0.0.1:1234/v1".to_string()),
+            llm_api_key: Some("key\nCI_LOCAL_ONLY=false".to_string()),
+            chat_model: None,
+        };
+        assert!(apply_llm_env_override(&paths, &injected).is_err());
+        assert_eq!(fs::read_to_string(&env_path).unwrap(), before);
     }
 }

@@ -907,7 +907,11 @@ fn choose_host_chat_model(served: &[String]) -> Option<String> {
         return None;
     }
 
-    served.iter().find(|name| is_chat_model_name(name)).cloned()
+    // Only a name .env can hold: it is written there next (stack_manager::set_env_chat_model).
+    served
+        .iter()
+        .find(|name| is_chat_model_name(name) && crate::stack_manager::is_env_safe_model_name(name))
+        .cloned()
 }
 
 /// The models of RECOMMENDED_MODELS that `served` lacks, in that order.
@@ -1098,6 +1102,11 @@ mod tests {
         let names = |list: &[&str]| list.iter().map(|name| name.to_string()).collect::<Vec<_>>();
 
         assert_eq!(choose_host_chat_model(&names(&["qwen3.5:122b", DEFAULT_CHAT_MODEL])), None);
+        // A name .env cannot hold is passed over: it would be written there next.
+        assert_eq!(
+            choose_host_chat_model(&names(&["qwen\nCI_LOCAL_ONLY=false", "qwen3.5:122b"])).as_deref(),
+            Some("qwen3.5:122b")
+        );
         assert_eq!(
             choose_host_chat_model(&names(&["nomic-embed-text:latest", "qwen3.5:122b", "qwen3.5:4b"])),
             Some("qwen3.5:122b".to_string()),

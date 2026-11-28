@@ -1,7 +1,11 @@
 package com.companionintelligence.app;
 
+import android.content.Context;
 import android.os.Bundle;
 import com.companionintelligence.localhub.AuthTabSession;
+import com.companionintelligence.localhub.StoredDeviceCredential;
+import com.companionintelligence.localllm.intents.IntentCredential;
+import com.companionintelligence.localllm.intents.IntentCredentials;
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
@@ -11,6 +15,14 @@ public class MainActivity extends BridgeActivity {
         // activity is started, and the app's own plugins have to be on the builder
         // before BridgeActivity.load() freezes it. See the registration test.
         AuthTabSession.register(this);
+        // The on-device model's intent tools call Memory with the device key, read from Local
+        // Hub's credential store at request time: the page holds only short-lived tokens now.
+        // Wired here because this module is the one with both plugins on its classpath.
+        final Context appContext = getApplicationContext();
+        IntentCredentials.install(() -> {
+            StoredDeviceCredential stored = StoredDeviceCredential.read(appContext);
+            return stored == null ? null : new IntentCredential(stored.getBaseUrl(), stored.getApiKey());
+        });
         registerPlugin(FcmStatusPlugin.class);
         registerPlugin(SystemBarsPlugin.class);
         super.onCreate(savedInstanceState);

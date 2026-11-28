@@ -1,6 +1,6 @@
 {
   "identifier": "remote-device-key",
-  "description": "Lets the real CI-Server web app (served remotely at http://127.0.0.1:8642 / http://localhost:8642 after the bootstrap page's window.location.replace()) read, write and remove its device key in the OS keychain: tauri-plugin-ci-auth's secure_get, secure_set and secure_remove, and nothing else from that plugin. The plugin's loopback sign-in commands and its `ci-auth:default` set are deliberately not granted. The web side namespaces every key it stores (`memory:` in @ci/common's nativeBridge.ts). This is the desktop replacement for keeping the key in window.localStorage.",
+  "description": "Lets the real CI-Server web app (served remotely at http://127.0.0.1:8642 / http://localhost:8642 after the bootstrap page's window.location.replace()) keep its device key in the OS keychain without ever reading it back. It writes and removes keychain entries with tauri-plugin-ci-auth's secure_set and secure_remove (the key once, right after it mints it at sign-in; everything at sign-out). It reads them only through this app's device_secure_get_command, which returns every entry except the device key itself (memory:ci.apiKey reads as absent), and it gets short-lived access tokens for the key from device_access_token_command, which asks Memory at the fixed gateway address and keeps the key in Rust (src-tauri/src/device_key.rs). The plugin's own secure_get, its loopback sign-in commands and its `ci-auth:default` set are deliberately not granted. The web side namespaces every key it stores (`memory:` in @ci/common's nativeBridge.ts).",
   "windows": [
     "main"
   ],
@@ -12,8 +12,9 @@
     ]
   },
   "permissions": [
-    "ci-auth:allow-secure-get",
     "ci-auth:allow-secure-set",
-    "ci-auth:allow-secure-remove"
+    "ci-auth:allow-secure-remove",
+    "allow-device-secure-get-command",
+    "allow-device-access-token-command"
   ]
 }

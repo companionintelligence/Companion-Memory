@@ -32,6 +32,10 @@ const APP_COMMANDS: &[&str] = &[
     // (capabilities/remote-recommended-model.json).
     "get_recommended_model_command",
     "download_recommended_model_command",
+    // Remote CI-Server web app, its device key (capabilities/remote-device-key.json):
+    // keychain reads that never return the key, and short-lived tokens for it.
+    "device_secure_get_command",
+    "device_access_token_command",
 ];
 
 fn main() {

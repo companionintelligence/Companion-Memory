@@ -104,6 +104,13 @@ services:
     # checks the result.
     ports: !override
       - 127.0.0.1:8642:8642
+    # The DNS-rebinding guard (infrastructure/gateway/entrypoint.sh). Loopback is
+    # not enough on its own: a page on any site can point its own name at
+    # 127.0.0.1 and then reach this gateway same-origin under that name, and
+    # before the owner's first sign-in it could claim the appliance. With a list
+    # set, IP addresses and localhost names pass and every other Host gets 421.
+    environment:
+      GATEWAY_ALLOWED_HOSTS: localhost
   object-store:
     image: ghcr.io/companionintelligence/companion/object-store:${CI_SERVER_IMAGE_TAG}
   summary-service:

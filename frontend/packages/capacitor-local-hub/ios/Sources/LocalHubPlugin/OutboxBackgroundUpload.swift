@@ -61,13 +61,18 @@ final class URLSessionUploadTransport: UploadTransport {
 /// there is nothing to batch. The background refresh task (`ReplicaBackgroundSync`) also runs one
 /// upload each time, which catches fixes left behind when the network was down at the time.
 ///
-/// Where to and as whom: the origin is the `apiBaseUrl` the web side passes when it arms Always
-/// (kept in the tracking config); the key is `ci.apiKey` from `CompanionSecureStore`, readable
-/// after the first unlock. Without either -- Always off, signed out, a config saved before the
-/// field existed -- a run does nothing and the next app open uploads as before.
+/// Where to and as whom: the key is `ci.apiKey` from `CompanionSecureStore`, readable after the
+/// first unlock, and it goes only to the origin stored with it (`ci.apiBaseUrl`). The `apiBaseUrl`
+/// the web side passes when it arms Always (kept in the tracking config) only has to agree with
+/// that one (`DeviceOrigin.backgroundDestination`); a config naming another origin uploads nothing,
+/// so the page cannot point the key at a server of its choosing. Without a key or an armed origin
+/// -- Always off, signed out, a config saved before the field existed -- a run does nothing and the
+/// next app open uploads as before.
 public enum OutboxBackgroundUpload {
     /// `API_KEY_STORAGE` in the web app's `useAuth.ts`.
     private static let apiKey = "ci.apiKey"
+    /// `API_BASE_URL_STORAGE` in the web app's `useAuth.ts`.
+    private static let apiBaseUrl = "ci.apiBaseUrl"
     private static let lock = NSLock()
     private static var running = false
     private static var again = false
@@ -126,12 +131,24 @@ public enum OutboxBackgroundUpload {
     /// One upload; true when it finished (sent everything, or had nothing to do).
     static func runOnce() async -> Bool {
         // LocationTracking lives on the main thread.
-        let origin = await MainActor.run { LocationTracking.shared.apiBaseUrl }
-        guard BackgroundUploadSettings.isEnabled, let origin = origin, !origin.isEmpty else {
+        let armedOrigin = await MainActor.run { LocationTracking.shared.apiBaseUrl }
+        guard BackgroundUploadSettings.isEnabled else {
             return true
         }
         do {
-            guard let key = try CompanionSecureStore.credentials().get(apiKey), !key.isEmpty else { return true }
+            let store = CompanionSecureStore.credentials()
+            guard let key = try store.get(apiKey), !key.isEmpty else { return true }
+            let origin: String
+            switch DeviceOrigin.backgroundDestination(armedWith: armedOrigin, stored: try store.get(apiBaseUrl)) {
+            case .send(let stored):
+                origin = stored
+            case .notArmed:
+                return true
+            case .refused:
+                // Nothing to retry: the next arming from the app carries the right origin.
+                NSLog("[OutboxUpload] skipped: armed for an origin other than the stored one")
+                return true
+            }
             let outcome = try await OutboxUploader(
                 outbox: try OutboxStore.shared(),
                 transport: URLSessionUploadTransport(),

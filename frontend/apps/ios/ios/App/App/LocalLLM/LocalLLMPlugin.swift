@@ -493,9 +493,10 @@ public class LocalLLMPlugin: CAPPlugin, CAPBridgedPlugin {
 
   /// Points the on-device model's tool calling at a CI-Server, or turns it off.
   ///
-  /// Credentials are passed in from the web layer (which already holds the configured origin and the
-  /// minted API key) rather than read from the Keychain here, so this matches the Android plugin's
-  /// contract exactly and only one place knows how the app stores credentials.
+  /// The server and the key come from the Keychain (`CompanionConfig`, as for App Intents), not from
+  /// the web layer: the page no longer holds the device key at all (it gets short-lived tokens from
+  /// the Local Hub plugin's `deviceAccessToken`), and a `baseUrl` or `apiKey` it sends is ignored, so
+  /// the key only ever goes to the origin it was stored with. The key is read on each request.
   ///
   /// Fetches the catalog immediately, so `toolCount` reflects what the appliance will actually allow.
   @objc func configureIntentTools(_ call: CAPPluginCall) {
@@ -523,12 +524,7 @@ public class LocalLLMPlugin: CAPPlugin, CAPBridgedPlugin {
       LocalSearchStore.shared = nil
     }
 
-    guard
-      let baseUrlString = call.getString("baseUrl"),
-      let baseURL = URL(string: baseUrlString),
-      let apiKey = call.getString("apiKey"),
-      !apiKey.isEmpty
-    else {
+    guard let baseURL = CompanionConfig.baseUrl, CompanionConfig.apiKey != nil else {
       // No appliance; the phone's own search may still be the whole tool set.
       CompanionToolContext.disable()
       call.resolve(["toolCount": CompanionToolContext.withLocalSearch([]).count])
@@ -536,7 +532,11 @@ public class LocalLLMPlugin: CAPPlugin, CAPBridgedPlugin {
       return
     }
 
-    CompanionToolContext.client = CompanionIntentClient(baseURL: baseURL, apiKey: apiKey)
+    // Only while the Keychain still names this origin: the Local Hub plugin removes the key when the
+    // origin changes, and this keeps a client made before that from sending a later key elsewhere.
+    CompanionToolContext.client = CompanionIntentClient(baseURL: baseURL) {
+      CompanionConfig.baseUrl == baseURL ? CompanionConfig.apiKey : nil
+    }
 
     Task {
       let tools = await CompanionToolContext.refreshRulings()

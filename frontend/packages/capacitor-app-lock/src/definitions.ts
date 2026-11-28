@@ -54,8 +54,11 @@ export interface AppLockPlugin {
   /**
    * Change settings. Turning the lock ON first runs the unlock prompt once, so a user who
    * cannot pass it (no biometric, no passcode) is never locked out of their own memory:
-   * if the prompt fails or is cancelled the settings are left as they were. Everything
-   * else applies at once. Resolves with the resulting status.
+   * if the prompt fails or is cancelled the settings are left as they were. Loosening a
+   * lock that is on (turning it off, a longer grace, secureScreen off) runs the same prompt,
+   * and also leaves the settings as they were when it fails, with `reason:
+   * 'authentication-cancelled'`; a device with no passcode or biometric left skips it.
+   * Tightening applies at once. Resolves with the resulting status.
    */
   configure(settings: Partial<AppLockSettings>): Promise<AppLockStatus>;
 

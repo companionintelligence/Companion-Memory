@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
 import {
   addAppUrlOpenListener,
+  clearMemorySignInEnded,
+  markMemorySignInEnded,
   clearOutboxAfterSignOut,
   clearPersistedApiBaseUrl,
   countUnsentBeforeSignOut,
@@ -15,7 +17,18 @@ import {
   setApiBaseUrl,
   syncNativeIntentConfig,
   getApiKey,
+  deviceAccessTokensActive,
+  deviceKeyId,
+  ensureFreshDeviceAccessToken,
+  nativeDeviceAccessToken,
+  oldShellDeviceKeyForSignOut,
+  onDeviceKeyRevoked,
+  startDeviceAccessTokens,
+  stopDeviceAccessTokens,
+  type DeviceAccessTokenResult,
   getLaunchUrl,
+  memorySignInEnded,
+  subscribeMemorySignIn,
   isIosPlatform,
   isNativePlatform,
   isTauriPlatform,
@@ -26,7 +39,6 @@ import {
   secureStorageGet,
   secureStorageRemove,
   secureStorageSet,
-  setApiKey,
   takePendingNativeOidcSignIn,
 } from '@ci/common';
 import { jwtDecode } from 'jwt-decode';
@@ -43,8 +55,9 @@ import { forgetUser, MEMORY_ANSWER_DEADLINE_MS } from './rememberedUser';
 const authChannel = new BroadcastChannel('auth');
 
 // On native the durable credential is an API key kept in the OS keystore — the
-// cookie/JWT session does not survive cross-origin inside a webview. We store the
-// raw key (sent as x-api-key) and its server id (for reference/future revocation).
+// cookie/JWT session does not survive cross-origin inside a webview. The page writes the
+// key once, when it is minted, and never reads it back: the native side keeps it and hands
+// the page short-lived access tokens for it (`startDeviceAccessTokens` in @ci/common).
 const API_KEY_STORAGE = 'ci.apiKey';
 const API_KEY_ID_STORAGE = 'ci.apiKeyId';
 // What the stored key was minted with. Absent on a key issued before the app
@@ -52,6 +65,84 @@ const API_KEY_ID_STORAGE = 'ci.apiKeyId';
 const API_KEY_CAPABILITY_STORAGE = 'ci.apiKeyCapability';
 // The paired Memory origin, mirrored into the keystore for native consumers.
 const API_BASE_URL_STORAGE = 'ci.apiBaseUrl';
+
+/**
+ * What `nativeKeyId` holds for a key stored without an id (one minted before the app kept it).
+ * Signed in all the same; only the comparisons by id below cannot tell such keys apart.
+ */
+const UNNAMED_DEVICE_KEY = 'device-key';
+
+/** The signed-in marker for what the native side found, or null when that is not signed in. */
+function signedInKeyOf(result: DeviceAccessTokenResult): string | null {
+  return result.status === 'none' ? null : (result.keyId ?? UNNAMED_DEVICE_KEY);
+}
+
+/**
+ * A credential for the key in the keystore right now, from the native side, without starting
+ * the page's own tokens: to give a key back (revoke it) that the page is not signed in with.
+ * Null when there is none, Memory refused it, or Memory cannot be asked.
+ */
+async function storedKeyCredential(): Promise<string | null> {
+  try {
+    const result = await nativeDeviceAccessToken({ refresh: false });
+
+    if (result.status === 'ok') {
+      return result.token;
+    }
+
+    // A shell too old for tokens: read the key once, only to give it back, so signing out does
+    // not leave it working (that shell lets the page read it anyway).
+    return result.status === 'legacy' && result.outdated === 'app'
+      ? await oldShellDeviceKeyForSignOut()
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The stored key's id, or null when there is none or the store cannot be read. */
+async function storedDeviceKeyId(): Promise<string | null> {
+  try {
+    return await secureStorageGet(API_KEY_ID_STORAGE);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Launch: start the native side's access tokens for the key the keystore holds. Resolves with the
+ * signed-in marker, and whether Memory refused the key, or null when no key is stored (or a sign-in
+ * or sign-out since `epoch` took over). Memory not answering is still signed in.
+ */
+async function restoreDeviceSignIn(epoch: number): Promise<{ keyId: string; revoked: boolean } | null> {
+  let result: DeviceAccessTokenResult;
+
+  try {
+    result = await startDeviceAccessTokens(nativeDeviceAccessToken);
+  } catch {
+    return null;
+  }
+
+  if (epoch !== nativeCredentialEpoch) {
+    return null;
+  }
+
+  // A keystore that cannot be read (the native side rejected, which reads as Memory not answering)
+  // is signed out, as it always was: the way back is signing in again, not waiting.
+  const unreadable =
+    result.status === 'unreachable' && result.keyId === null && !(await hasStoredDeviceKey());
+  const keyId = unreadable ? null : signedInKeyOf(result);
+
+  if (!keyId || epoch !== nativeCredentialEpoch) {
+    if (epoch === nativeCredentialEpoch) {
+      stopDeviceAccessTokens();
+    }
+
+    return null;
+  }
+
+  return { keyId, revoked: result.status === 'revoked' };
+}
 
 /** Forget this device's stored key, its id and its capability. Never rejects: secureStorageRemove swallows a refused delete. */
 async function removeStoredKeyEntries(): Promise<void> {
@@ -276,24 +367,6 @@ const UNREACHABLE_RETRY_MS = 5000;
 const DEVICE_KEY_CHECK_MS = 60_000;
 
 /**
- * Whether Memory says `key` no longer works. True only on its 401: a Memory that did not answer
- * (the stack stopped, a timeout) says nothing about the key and must not sign anyone out.
- */
-async function deviceKeyRevoked(key: string): Promise<boolean> {
-  try {
-    await fetchJson('/api/keys/check', {
-      skipApiKey: true,
-      headers: { 'x-api-key': key },
-      timeout: MEMORY_ANSWER_DEADLINE_MS,
-    });
-
-    return false;
-  } catch (error) {
-    return error instanceof FetchJsonError && error.status === 401;
-  }
-}
-
-/**
  * Whether a session call was cut off by its own deadline (`MEMORY_ANSWER_DEADLINE_MS`).
  * None of these calls is handed a caller signal, so an abort here can only be that
  * deadline (while waiting for the headers or for the body); `fetchJson` raises it as an
@@ -394,7 +467,8 @@ function deviceKeyName(): string {
 
 // Exchange a freshly-issued JWT for a long-lived API key (the /api/keys endpoint is
 // JWT-guarded, so this must run while we still hold the login JWT), persist it to the
-// keystore, and activate it for subsequent requests. Returns the raw key, or null.
+// keystore, and start the native side's access tokens for it. Returns the signed-in marker
+// (the key's id), or null. The raw key is not kept: the page never holds it after this.
 async function mintAndStoreApiKey(jwt: string, memoryOrigin?: string): Promise<string | null> {
   await requireDeviceRemindersCleared();
 
@@ -428,15 +502,31 @@ async function mintAndStoreApiKey(jwt: string, memoryOrigin?: string): Promise<s
   // appliance it is served from, so the old key goes back to the server that issued it. A phone,
   // or any sign-in to a Memory named by `memoryOrigin`, can be talking to a different appliance,
   // which must never be sent the old one.
-  const replaced = isTauriPlatform() && !memoryOrigin ? await storedDeviceKey() : null;
+  //
+  // The page cannot read the old key back, so it asks for a credential for it now, before the new
+  // key takes its place in the keychain, and gives it back with that.
+  const replacing = isTauriPlatform() && !memoryOrigin;
+  const replacedKeyId = replacing ? await storedDeviceKeyId() : null;
+  const replacedCredential = replacing ? await storedKeyCredential() : null;
   const giveBackReplaced = async () => {
-    if (replaced && replaced !== created.key) {
-      await revokeDeviceKey(replaced, revokeUrl);
+    if (replacedCredential && replacedKeyId !== created.id) {
+      await revokeDeviceKey(replacedCredential, revokeUrl);
     }
   };
 
+  // Whether the keystore took the new key itself. Its id may still have failed after it, and the
+  // page cannot read the key back to see which one is there.
+  let keyWritten = false;
+
   try {
+    // The origin first: the native side never sends a key to an address other than the one it
+    // was stored for, and a different origin written after the key would remove it.
+    if (isNativePlatform() && base) {
+      await secureStorageSet(API_BASE_URL_STORAGE, base);
+    }
+
     await secureStorageSet(API_KEY_STORAGE, created.key);
+    keyWritten = true;
     await secureStorageSet(API_KEY_ID_STORAGE, created.id);
     await secureStorageSet(API_KEY_CAPABILITY_STORAGE, NATIVE_KEY_CAPABILITY);
   } catch (error) {
@@ -447,7 +537,8 @@ async function mintAndStoreApiKey(jwt: string, memoryOrigin?: string): Promise<s
 
     // The key the window is signed in with stays: it still works and the window's sign-out gives
     // it back. Given back here, the window would carry on with a key Memory no longer takes.
-    const giveBack = replaced !== null && getApiKey() !== replaced;
+    const giveBack =
+      replacedCredential !== null && !(deviceAccessTokensActive() && deviceKeyId() === replacedKeyId);
 
     if (giveBack) {
       // A keystore read still in flight from launch must not put the key given back in place.
@@ -455,10 +546,10 @@ async function mintAndStoreApiKey(jwt: string, memoryOrigin?: string): Promise<s
       await giveBackReplaced();
     }
 
-    // A write that got partway kept the key just revoked; nothing may read that back.
-    const stored = await storedDeviceKey();
-
-    if (stored !== null && (stored === created.key || (giveBack && stored === replaced))) {
+    // A write that got partway kept the key just revoked (whether or not its id followed), and a
+    // key given back above is no good either; nothing may read either back. Only a key the window
+    // is still signed in with, which the refused write did not replace, stays.
+    if (keyWritten || giveBack) {
       await removeStoredKeyEntries();
     }
 
@@ -467,13 +558,25 @@ async function mintAndStoreApiKey(jwt: string, memoryOrigin?: string): Promise<s
 
   // A keystore read still in flight from launch must not put the previous key back over this one.
   bumpNativeCredentialEpoch();
-  setApiKey(created.key);
+
+  // The page's own copy of the origin follows at once, now that the key for it is stored. Left
+  // for the caller, after the first token came back (seconds on a slow link), the app coming back
+  // into view in between mirrored the old origin over the keystore's (`syncNativeIntentConfig`),
+  // and the native side dropped the key it had just stored, as it drops any key whose origin
+  // changes.
+  if (isNativePlatform() && memoryOrigin) {
+    persistApiBaseUrl(memoryOrigin);
+  }
+
+  const started = await startDeviceAccessTokens(nativeDeviceAccessToken);
+  // A key Memory takes: whatever it refused before no longer applies.
+  clearMemorySignInEnded();
   // Only once the new key is the one requests carry: the window's check of the old key then
   // cannot read the revocation as this window being signed out. Not awaited, so a slow answer
   // does not hold up the sign-in. It never rejects.
   void giveBackReplaced();
 
-  return created.key;
+  return started.keyId ?? created.id ?? UNNAMED_DEVICE_KEY;
 }
 
 /**
@@ -510,7 +613,7 @@ async function adoptKeystoreOrigin(storedOrigin: string | null): Promise<boolean
   // An origin with no key is what a sign-out cut short leaves (the key goes first). There is
   // nothing to sign back in with, and a saved origin makes iOS skip the device picker, so
   // the next sign-in would go to this box. Finish the sign-out instead of asking.
-  if (!(await secureStorageGet(API_KEY_STORAGE))) {
+  if (!(await hasStoredDeviceKey())) {
     await secureStorageRemove(API_BASE_URL_STORAGE);
 
     return true;
@@ -549,12 +652,18 @@ function isHttpAddress(value: string): boolean {
   }
 }
 
-/** This device's stored key, or null when there is none or the store cannot be read. */
-async function storedDeviceKey(): Promise<string | null> {
+/**
+ * Whether a device key is stored, without reading it: the page cannot. A key is always stored
+ * with its id and capability; one minted before the app kept those is not seen here.
+ */
+async function hasStoredDeviceKey(): Promise<boolean> {
   try {
-    return await secureStorageGet(API_KEY_STORAGE);
+    return (
+      (await secureStorageGet(API_KEY_ID_STORAGE)) !== null ||
+      (await secureStorageGet(API_KEY_CAPABILITY_STORAGE)) !== null
+    );
   } catch {
-    return null;
+    return false;
   }
 }
 
@@ -584,14 +693,31 @@ async function revokeDeviceKey(key: string, url = '/api/keys/current'): Promise<
  * ends the email session with it.
  */
 async function giveBackStoredDesktopKey(): Promise<void> {
-  const stored = await storedDeviceKey();
-
-  if (!stored || stored === getApiKey()) {
+  // The window is signed in with the stored key: nothing to give back.
+  if (deviceAccessTokensActive()) {
     return;
   }
 
-  await revokeDeviceKey(stored);
-  await removeStoredKeyEntries();
+  let result: DeviceAccessTokenResult;
+
+  try {
+    result = await nativeDeviceAccessToken({ refresh: false });
+  } catch {
+    return;
+  }
+
+  if (result.status === 'ok' || result.status === 'legacy') {
+    // A Memory too old for tokens (`legacy`) gets no token to give the key back with, so the key
+    // stays in its key list, as a key from any lost device does, until removed there.
+    if (result.token) {
+      await revokeDeviceKey(result.token);
+    }
+
+    await removeStoredKeyEntries();
+  } else if (result.status === 'revoked') {
+    // Already given up on the server; only the keychain copy is left.
+    await removeStoredKeyEntries();
+  }
 }
 
 interface OidcNativeExchangeResponse {
@@ -676,6 +802,12 @@ type ReturnValue = [
      * after the answer, so the closing dialog does not change its text.
      */
     signOutPrompt: SignOutPrompt;
+    /**
+     * Phone and desktop: Memory has confirmed it no longer takes this device's key (revoked, or
+     * lost in a restore). Still signed in, so nothing queued is deleted; the app asks the person
+     * to sign in again, which keeps the queue and carries it over to the new key.
+     */
+    signInEnded: boolean;
   },
   {
     login: (username: string, password: string) => Promise<void>;
@@ -723,10 +855,14 @@ function useAuth(): ReturnValue {
   const [unreachable, setUnreachable] = useState<boolean>(false);
 
   const [accessToken, setAccessToken] = useState<string | null>(null);
-  // Phone and desktop (after a Companion sign-in): present once the stored API key is loaded or a
-  // new one minted. Drives the authenticated state there, where there is no JWT in `accessToken`.
-  const [nativeApiKey, setNativeApiKey] = useState<string | null>(null);
+  // Phone and desktop (after a Companion sign-in): the stored device key's id, once the launch
+  // restore found a key or a new one was minted. Drives the authenticated state there, where there
+  // is no JWT in `accessToken`. It stays while Memory cannot be reached: the access tokens the
+  // requests carry come and go, the sign-in does not.
+  const [nativeKeyId, setNativeKeyId] = useState<string | null>(null);
   const [signOutPrompt, setSignOutPrompt] = useState<SignOutPrompt>({ open: false, unsentCaptures: 0 });
+
+  const signInEnded = useSyncExternalStore(subscribeMemorySignIn, memorySignInEnded, memorySignInEnded);
 
   const decoded = useMemo(() => (accessToken ? jwtDecode<JwtPayload>(accessToken) : null), [accessToken]);
   const isExpired = useCallback(() => (decoded ? Date.now() >= decoded.exp * 1000 : true), [decoded]);
@@ -760,7 +896,7 @@ function useAuth(): ReturnValue {
 
         if (jwt && isNativePlatform()) {
           // Native: trade the JWT for a durable API key and authenticate via that.
-          setNativeApiKey(await mintAndStoreApiKey(jwt));
+          setNativeKeyId(await mintAndStoreApiKey(jwt));
         } else {
           setAccessToken(jwt);
 
@@ -806,7 +942,7 @@ function useAuth(): ReturnValue {
           void syncNativeIntentConfig();
         }
 
-        setNativeApiKey(key);
+        setNativeKeyId(key);
 
         return true;
       } catch (err) {
@@ -825,6 +961,9 @@ function useAuth(): ReturnValue {
 
       const native = isNativePlatform();
       const data = await fetchJson<AuthResponse>('/api/authenticate', {
+        // The picked Memory may be another appliance: it must not be sent the credential this
+        // phone holds for the one it was paired with. The sign-in is the password.
+        skipApiKey: true,
         method: 'POST',
         headers: withCsrfHeader({
           'Content-Type': 'application/json',
@@ -849,7 +988,7 @@ function useAuth(): ReturnValue {
           throw new Error('Memory Server did not return an API key.');
         }
 
-        setNativeApiKey(key);
+        setNativeKeyId(key);
       } else {
         setAccessToken(jwt);
       }
@@ -873,28 +1012,36 @@ function useAuth(): ReturnValue {
       return;
     }
 
-    // The key this device signs in with (phone and desktop), read before it is dropped below.
-    // The stored copy when none is in memory: the app can sign out before the keystore restore
-    // lands. A desktop whose keychain could not be read at start never loaded it at all. Deleting
-    // that copy below without revoking it would leave a working key on the server that no
-    // device holds.
-    const deviceKey =
-      getApiKey() ?? (isNativePlatform() || isTauriPlatform() ? await storedDeviceKey() : null);
+    // A credential for the key this device signs in with (phone and desktop), taken before it is
+    // dropped below: the current access token, or one asked for now when there is none yet (the
+    // app can sign out before the launch restore lands, and a desktop whose keychain could not be
+    // read at start never started its tokens). Deleting the key below without revoking it would
+    // leave a working key on the server that no device holds.
+    const deviceApp = isNativePlatform() || isTauriPlatform();
+    const signedOutKeyId = deviceApp ? (deviceKeyId() ?? (await storedDeviceKeyId())) : null;
+    // The stored key only while it is still the one signed out: a sign-in that finished meanwhile
+    // (one the browser handed over at launch) saved its own, which must not be revoked here.
+    const storedIsSignedOutKey = async () =>
+      signedOutKeyId === null || (await storedDeviceKeyId()) === signedOutKeyId;
+    const deviceCredential =
+      getApiKey() ?? (deviceApp && (await storedIsSignedOutKey()) ? await storedKeyCredential() : null);
 
-    // Drop the in-memory key before the replica wipe. A late keystore restore
+    // Drop the in-memory credential before the replica wipe. A late keystore restore
     // must not put the previous box's key back under the next account.
     bumpNativeCredentialEpoch();
+    clearMemorySignInEnded();
 
-    if (isNativePlatform() || isTauriPlatform()) {
-      setApiKey(null);
-      setNativeApiKey(null);
+    if (deviceApp) {
+      stopDeviceAccessTokens();
+      setNativeKeyId(null);
     }
 
     // Revoke it on the server while the app still knows which server that is (the
     // native branch below forgets the origin). Without this, signing out only forgot
-    // the key on this device and it kept working for whoever else had a copy.
-    if (deviceKey) {
-      await revokeDeviceKey(deviceKey);
+    // the key on this device and it kept working for whoever else had a copy. An access
+    // token revokes its key (`DELETE /keys/current`).
+    if (deviceCredential) {
+      await revokeDeviceKey(deviceCredential);
     }
 
     // Bounded: a replica that cannot be dropped (worker never came up) must not
@@ -906,9 +1053,9 @@ function useAuth(): ReturnValue {
       // left there would only be read back as a credential that no longer works. A different
       // key there is one a Companion sign-in saved while this ran (the launch check of a revoked
       // key can sign out alongside it). That key is the window's now, so it stays.
-      const stored = await storedDeviceKey();
+      const storedId = await storedDeviceKeyId();
 
-      if (stored === null || stored === deviceKey) {
+      if (storedId === null || storedId === signedOutKeyId) {
         await removeStoredKeyEntries();
       }
 
@@ -918,7 +1065,7 @@ function useAuth(): ReturnValue {
 
     if (isNativePlatform()) {
       // No cookie session to revoke; the key was revoked above. Clear the local copy.
-      setApiKey(null);
+      stopDeviceAccessTokens();
       await removeStoredDeviceKey();
       // A saved public origin makes iOS skip the device picker, so the next
       // Companion login would still talk to the previous box and never list
@@ -930,7 +1077,7 @@ function useAuth(): ReturnValue {
       // ones), and would otherwise upload into whichever account signs in next
       // on this phone.
       await clearOutboxAfterSignOut();
-      setNativeApiKey(null);
+      setNativeKeyId(null);
       setAccessToken(null);
       setUnreachable(false);
       setLoginLoading(false);
@@ -1012,61 +1159,48 @@ function useAuth(): ReturnValue {
     logoutRef.current = logout;
   }, [logout]);
 
-  // Desktop only. The window's Companion sign-in holds its own key. Nothing ended that sign-in
-  // when the key was revoked somewhere else (a password change, Sign out everywhere, deleting
-  // it under Settings > API keys): every request got 401 and each page said this device could
-  // not reach Memory, for as long as the window stayed open. A browser session finds out at its
-  // next renewal. This asks about the key on a similar schedule while the window is in view and
-  // again whenever it comes back into view. Once Memory says the key is gone, it signs the
-  // window out.
+  // Phone and desktop. Nothing ended a Companion sign-in when its key was revoked somewhere else (a
+  // password change, Sign out everywhere, deleting it under Settings > API keys): every request got
+  // 401 and each page said this device could not reach Memory, for as long as the app stayed open.
+  // The native side now asks Memory for a new access token every few minutes, and again after a
+  // 401, and says when Memory refuses the key; that signs the app out. Coming back into view asks
+  // too when the token is about to run out, since timers do not run while the app is asleep.
   useEffect(() => {
-    if (!isTauriPlatform() || !nativeApiKey) {
+    if (!nativeKeyId || !(isNativePlatform() || isTauriPlatform())) {
       return;
     }
 
-    let stopped = false;
-    let asking = false;
-
-    const check = () => {
-      if (asking) {
-        return;
+    const stopRevoked = onDeviceKeyRevoked((revokedKeyId) => {
+      // Only the key this sign-in holds: a sign-in since then holds another one.
+      // On the phone not a sign-out, which would delete what is queued: it asks to sign in again,
+      // which keeps the queue and carries it over to the new key (`MemorySignInEndedBanner`). The
+      // desktop has no queue to keep, and its sign-in page is where a new key comes from.
+      if (revokedKeyId === null || revokedKeyId === nativeKeyId || nativeKeyId === UNNAMED_DEVICE_KEY) {
+        if (isTauriPlatform()) {
+          void logoutRef.current();
+        } else {
+          markMemorySignInEnded();
+        }
       }
+    });
 
-      asking = true;
-      void deviceKeyRevoked(nativeApiKey)
-        .then((revoked) => {
-          // Only the key this check asked about: a sign-in since then holds another one.
-          if (revoked && !stopped && getApiKey() === nativeApiKey) {
-            void logoutRef.current();
-          }
-        })
-        .finally(() => {
-          asking = false;
-        });
-    };
-
-    // A hidden window (closed to the tray) has nobody to sign out; it asks when it is shown again.
-    const checkWhenVisible = () => {
+    const freshenWhenVisible = () => {
       if (document.visibilityState === 'visible') {
-        check();
+        ensureFreshDeviceAccessToken();
       }
     };
 
-    const timer = setInterval(checkWhenVisible, DEVICE_KEY_CHECK_MS);
-    document.addEventListener('visibilitychange', checkWhenVisible);
-    window.addEventListener('focus', check);
-    // Ask once straight away too. A key read back from the keychain at start may have been
-    // revoked while the app was closed. Waiting a minute to ask would leave the window on error
-    // pages until then.
-    checkWhenVisible();
+    const timer = setInterval(freshenWhenVisible, DEVICE_KEY_CHECK_MS);
+    document.addEventListener('visibilitychange', freshenWhenVisible);
+    window.addEventListener('focus', freshenWhenVisible);
 
     return () => {
-      stopped = true;
+      stopRevoked();
       clearInterval(timer);
-      document.removeEventListener('visibilitychange', checkWhenVisible);
-      window.removeEventListener('focus', check);
+      document.removeEventListener('visibilitychange', freshenWhenVisible);
+      window.removeEventListener('focus', freshenWhenVisible);
     };
-  }, [nativeApiKey]);
+  }, [nativeKeyId]);
 
   const confirmSignOut = useCallback(async () => {
     setSignOutPrompt((prompt) => ({ ...prompt, open: false }));
@@ -1103,7 +1237,7 @@ function useAuth(): ReturnValue {
         const jwt = data?.accessToken ?? null;
 
         if (jwt && isNativePlatform()) {
-          setNativeApiKey(await mintAndStoreApiKey(jwt));
+          setNativeKeyId(await mintAndStoreApiKey(jwt));
         } else {
           setAccessToken(jwt);
 
@@ -1195,15 +1329,15 @@ function useAuth(): ReturnValue {
             return;
           }
 
-          const storedKey = await secureStorageGet(API_KEY_STORAGE);
+          const restored = await restoreDeviceSignIn(epoch);
 
-          if (epoch !== nativeCredentialEpoch) {
-            return;
-          }
+          if (restored) {
+            setNativeKeyId(restored.keyId);
 
-          if (storedKey) {
-            setApiKey(storedKey);
-            setNativeApiKey(storedKey);
+            if (restored.revoked) {
+              // Memory refused the key while the app was closed: ask to sign in again, keeping the queue.
+              markMemorySignInEnded();
+            }
           }
 
           return;
@@ -1217,16 +1351,19 @@ function useAuth(): ReturnValue {
           // its cookie and stores no key, so with nothing stored (or a keychain that cannot be
           // read) it carries on to the cookie check below.
           const epoch = nativeCredentialEpoch;
-          const storedKey = await storedDeviceKey();
+          const restored = await restoreDeviceSignIn(epoch);
 
-          if (epoch !== nativeCredentialEpoch) {
+          if (restored) {
+            setNativeKeyId(restored.keyId);
+
+            if (restored.revoked) {
+              queueMicrotask(() => void logoutRef.current());
+            }
+
             return;
           }
 
-          if (storedKey) {
-            setApiKey(storedKey);
-            setNativeApiKey(storedKey);
-
+          if (epoch !== nativeCredentialEpoch) {
             return;
           }
         }
@@ -1379,7 +1516,7 @@ function useAuth(): ReturnValue {
             return;
           }
 
-          setNativeApiKey(key);
+          setNativeKeyId(key);
           navigate('/', { replace: true });
         } catch (err: unknown) {
           setLoginError(err);
@@ -1423,12 +1560,12 @@ function useAuth(): ReturnValue {
   }, [navigate]);
 
   useEffect(() => {
-    if (!isNativePlatform() || (!nativeApiKey && !accessToken)) {
+    if (!isNativePlatform() || (!nativeKeyId && !accessToken)) {
       return;
     }
 
     void registerNativePushToken();
-  }, [nativeApiKey, accessToken]);
+  }, [nativeKeyId, accessToken]);
 
   useEffect(() => {
     const handleAuthMessage = (event: MessageEvent) => {
@@ -1470,17 +1607,18 @@ function useAuth(): ReturnValue {
 
   return [
     {
-      // A native API key never "expires" from the client's point of view (there is
-      // no short-lived JWT to age out); web keeps the JWT expiry check.
-      expired: nativeApiKey ? false : isExpired(),
+      // A native sign-in never "expires" from the client's point of view: its access tokens are
+      // renewed underneath it. Web keeps the JWT expiry check.
+      expired: nativeKeyId ? false : isExpired(),
       authToken: accessToken,
       subject: decoded?.sub ?? null,
-      authenticated: Boolean(accessToken) || Boolean(nativeApiKey),
+      authenticated: Boolean(accessToken) || Boolean(nativeKeyId),
       loading: loginLoading || initializing,
       initializing,
       unreachable,
       error: loginError ?? refreshError,
       signOutPrompt,
+      signInEnded,
     },
     {
       login,
