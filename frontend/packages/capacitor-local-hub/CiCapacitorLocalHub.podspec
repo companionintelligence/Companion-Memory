@@ -52,8 +52,11 @@ Pod::Spec.new do |s|
   # PowerSync's core, for the background replica sync (ReplicaBackgroundSync.swift), which
   # registers it with SQLCipher itself (CiPowerSyncCore.c) because a background launch runs no
   # JavaScript. Same pod and range as @powersync/capacitor, so CocoaPods resolves one copy.
-  # @powersync/capacitor 0.9.4 (the version the shells pin) requires ~> 0.5.3, the same core
-  # the Android plugin links, so this follows it. The old ~> 0.4.12 range predates that bump.
-  s.dependency 'powersync-sqlite-core', '~> 0.5.3'
+  # @powersync/capacitor ~0.7.0 (the version the shells pin) requires ~> 0.4.12, the same core
+  # the Android plugin links, so this follows it. Core 0.5 (plugin 0.8.1+) dropped
+  # ps_buckets.target_op, which the app's @powersync/common 1.x still reads after every upload;
+  # the shells' brief move to 0.9.4 / core 0.5.3 broke the upload loop on every phone. The
+  # replica sync here uses only start / line_text / connection / stop, which 0.4.12 has.
+  s.dependency 'powersync-sqlite-core', '~> 0.4.12'
   s.swift_version = '5.1'
 end

@@ -31,7 +31,7 @@ PODS:
   - CiCapacitorLocalHub (0.0.0):
     - Capacitor
     - GCDWebServer (~> 3.5)
-    - powersync-sqlite-core (~> 0.5.3)
+    - powersync-sqlite-core (~> 0.4.12)
     - SQLCipher (~> 4.9)
   - CiCapacitorSpeech (0.0.0):
     - Capacitor
@@ -84,10 +84,10 @@ PODS:
     - nanopb/encode (= 3.30910.0)
   - nanopb/decode (3.30910.0)
   - nanopb/encode (3.30910.0)
-  - powersync-sqlite-core (0.5.4)
-  - PowersyncCapacitor (0.9.4):
+  - powersync-sqlite-core (0.4.12)
+  - PowersyncCapacitor (0.7.0):
     - Capacitor
-    - powersync-sqlite-core (~> 0.5.3)
+    - powersync-sqlite-core (~> 0.4.12)
     - SQLCipher (~> 4.0)
   - PromisesObjC (2.4.1)
   - SQLCipher (4.10.0):
@@ -182,7 +182,7 @@ SPEC CHECKSUMS:
   CapacitorSplashScreen: 7bf61c2001557ff9e195e601c6b87344480d3c65
   CapacitorStatusBar: ff844df1f126da6c4fbc4028272425fa3a91e7e3
   CiCapacitorAppLock: 5f016286369522c4f28afdefb00f155f9ef5a33d
-  CiCapacitorLocalHub: 31d6382239f23829b466e97ff934e22d8d7e4add
+  CiCapacitorLocalHub: 40e922d93a2b687d5c541ab0a3b1013c42e6cd9d
   CiCapacitorSpeech: c186847fc27adaf0d5f574734cfe0423357e6ece
   GCDWebServer: 2c156a56c8226e2d5c0c3f208a3621ccffbe3ce4
   GoogleDataTransport: a24e58982ab3ba2f64d79613e027fe7f57e88539
@@ -196,8 +196,8 @@ SPEC CHECKSUMS:
   MLKitCommon: 26b779f072a182c1603d4c88a101c350cac837b1
   MLKitVision: fa8dea9012ac59497c79ddbe9ebf32051047ac4c
   nanopb: fad817b59e0457d11a5dfbde799381cd727c1275
-  powersync-sqlite-core: 4234a7db4877f8baf3f60fdf59f640fd10742d0f
-  PowersyncCapacitor: 5af8af23e0267513a233f765da97a1de34334a6e
+  powersync-sqlite-core: 116ecf3391859445f1477f8c230914e04d9874e7
+  PowersyncCapacitor: 3ba1f4f6ed84e41791e71b0c7c2016d828aefb3b
   PromisesObjC: 752c3227f599e3467650e47ea36f433eeb10c273
   SQLCipher: eb79c64049cb002b4e9fcb30edb7979bf4706dfc
   ZIPFoundation: dfd3d681c4053ff7e2f7350bc4e53b5dba3f5351
