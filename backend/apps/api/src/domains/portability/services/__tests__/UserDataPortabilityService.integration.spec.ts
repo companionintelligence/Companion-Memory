@@ -445,8 +445,11 @@ describeWithDatabase(
     });
 
     // Its password is BlueBubbles' own, in plain text: full control of that Mac's iMessage.
-    /** Run a streamed export for the test account, calling `onRow` as each row record goes out. */
-    const exportRecords = async (onRow?: (index: number) => void) => {
+    /**
+     * Run a streamed export for the test account, calling `onRow` as each row record goes out. When it
+     * returns a promise, no more of the archive is taken until that settles, so the export waits.
+     */
+    const exportRecords = async (onRow?: (index: number) => Promise<unknown> | undefined) => {
       noopServices.userService.findById = jest.fn().mockResolvedValue(null);
       const res = Object.assign(new PassThrough(), { setHeader: () => undefined });
       let text = '';
@@ -457,8 +460,13 @@ describeWithDatabase(
 
         for (const line of piece.split('\n')) {
           if (line.includes('"type":"row"')) {
-            onRow?.(rows);
+            const held = onRow?.(rows);
             rows += 1;
+
+            if (held) {
+              res.pause();
+              void held.finally(() => res.resume());
+            }
           }
         }
 
@@ -485,12 +493,17 @@ describeWithDatabase(
 
       let editing: Promise<unknown> | undefined;
       const records = await exportRecords((index) => {
-        // Once the export is under way, rewrite every note, which moves each one in storage.
-        if (index === 1) {
-          editing = dataSource.query(`UPDATE ci.notes SET title = 'edited' WHERE user_id = $1::uuid`, [
-            testUserId,
-          ]);
+        // Once the export is under way, rewrite every note, which moves each one in storage, and hold
+        // the download until that has committed, so the later pages are read after it.
+        if (index !== 1) {
+          return undefined;
         }
+
+        editing = dataSource.query(`UPDATE ci.notes SET title = 'edited' WHERE user_id = $1::uuid`, [
+          testUserId,
+        ]);
+
+        return editing;
       });
       await editing;
 

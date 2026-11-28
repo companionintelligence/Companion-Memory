@@ -247,10 +247,30 @@ describe('UserDataPortabilityService', () => {
 
     it('ends the snapshot and lets its connection go when the download is cut', async () => {
       const { res } = readableResponse();
-      (res as unknown as PassThrough).destroy();
+
+      queryRunner.query = jest
+        .fn()
+        // the snapshot's READ ONLY, discoverUserTables, then a page of ci.notes the client never takes
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          {
+            schema: 'ci',
+            table: 'notes',
+            user_column: 'user_id',
+            key_columns: [{ column: 'id', type: 'uuid' }],
+          },
+        ])
+        .mockImplementationOnce(async () => {
+          (res as unknown as PassThrough).destroy();
+
+          return page(0, 1);
+        }) as unknown as QueryRunner['query'];
 
       await service.writeExportStream({ userId: 'user-1' } as never, res);
 
+      expect(queryRunner.startTransaction).toHaveBeenCalledTimes(1);
+      expect(queryRunner.rollbackTransaction).toHaveBeenCalledTimes(1);
+      expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
       expect(queryRunner.release).toHaveBeenCalledTimes(1);
     });
 
