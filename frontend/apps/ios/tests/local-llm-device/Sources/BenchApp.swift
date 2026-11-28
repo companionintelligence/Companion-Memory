@@ -68,7 +68,7 @@ enum BenchEntry {
     }
 
     CompanionToolContext.client = CompanionIntentClient(
-      baseURL: FakeAppliance.shared.baseURL, apiKey: "bench")
+      baseURL: FakeAppliance.shared.baseURL, credential: { "bench" })
     let tools = await CompanionToolContext.refreshRulings()
     Bench.log("appliance up at \(FakeAppliance.shared.baseURL), \(tools.count) tools offered")
 

@@ -135,6 +135,15 @@ export interface CreateApiKeyResponse extends ApiKeyResponse {
   key: string;
 }
 
+/** `POST /keys/access-token`: a short-lived token standing for the key that asked (`utils/deviceAccessToken.ts`). */
+export interface DeviceAccessTokenResponse {
+  token: string;
+  /** When it stops working, ISO 8601. */
+  expiresAt: string;
+  /** Its lifetime in seconds, for a client whose clock is off. */
+  expiresIn: number;
+}
+
 /**
  * What `ApiKeyService.validateKey` hands the auth strategy.
  *
@@ -151,6 +160,11 @@ export interface ValidatedApiKey {
   capability: ApiKeyCapability;
   managedBy: ApiKeyProvenance | null;
   name: string | null;
+  /**
+   * Set when the request carried a short-lived access token for the key rather than the key
+   * itself (`utils/deviceAccessToken.ts`): when that token stops working, in ms since the epoch.
+   */
+  accessTokenExpiresAt?: number;
 }
 
 /**

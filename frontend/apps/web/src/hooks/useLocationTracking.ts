@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 
 import {
   type LocationCaptureOutcome,
@@ -22,6 +22,7 @@ import {
   isIosPlatform,
   isNativePlatform,
   outboxOwnerStamp,
+  subscribeApiKey,
   publishLocationNeedsSettingsUpgrade,
   publishLocationTrackingMode,
   readLocationTrackingMode,
@@ -93,6 +94,22 @@ async function ensureIosAlwaysAuthorization(): Promise<boolean> {
 export function useLocationTracking(options: { watch?: boolean } = {}) {
   const { watch = true } = options;
   const [{ authToken, authenticated }] = useAuth();
+  // Whose fixes the background tracker queues. It is armed with this, so it is armed again when the
+  // key behind it changes (a sign-in again on the phone keeps `authenticated` true throughout);
+  // armed once, it went on stamping new fixes for the previous key.
+  const currentOwner = useSyncExternalStore(subscribeApiKey, outboxOwnerStamp, outboxOwnerStamp);
+  // A sign-in again clears the stamp for a moment before the new key's arrives. Arming in between
+  // would queue fixes stamped for nobody, so the last stamp stands until the next one; signing out
+  // stops the tracker on `authenticated` instead.
+  const lastOwnerRef = useRef<string | null>(null);
+
+  if (currentOwner) {
+    lastOwnerRef.current = currentOwner;
+  } else if (!authenticated) {
+    lastOwnerRef.current = null;
+  }
+
+  const owner = currentOwner ?? lastOwnerRef.current;
   const [mode, setModeState] = useState<LocationTrackingMode>(() => readLocationTrackingMode());
   const [lastOutcome, setLastOutcome] = useState<LocationCaptureOutcome | null>(null);
   const [needsSettingsUpgrade, setNeedsSettingsUpgrade] = useState(false);
@@ -260,7 +277,7 @@ export function useLocationTracking(options: { watch?: boolean } = {}) {
         {
           deviceKey: deviceSourceKey(),
           provider: 'companion-mobile',
-          owner: outboxOwnerStamp(),
+          owner,
           minDistanceMeters: MIN_DISTANCE_METERS,
           minIntervalMs: MIN_INTERVAL_MS,
           maxAccuracyMeters: BACKGROUND_MAX_ACCURACY_METERS,
@@ -285,7 +302,7 @@ export function useLocationTracking(options: { watch?: boolean } = {}) {
       void stopSignificant?.();
       samplerRef.current?.reset();
     };
-  }, [watch, mode, authenticated, authToken]);
+  }, [watch, mode, authenticated, authToken, owner]);
 
   return {
     mode,

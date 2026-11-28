@@ -53,6 +53,26 @@ updates:
         versions: [">=4.3.0"]
       - dependency-name: "@tailwindcss/vite"
         versions: [">=4.3.0"]
+      # config 5 and web-push 4 are ESM-only. The API is CommonJS under Jest and
+      # ts-node, and Jest cannot require() an ES module before Node 24.9, so on the
+      # pinned Node (.nvmrc) every API suite that loads config fails to start.
+      # 0d6de7ca5 held these back once; with no rule here #3680 brought them
+      # straight back. Lift with a Node 24.9+ pin, or an ESM API build.
+      - dependency-name: "config"
+        versions: [">=5.0.0"]
+      - dependency-name: "web-push"
+        versions: [">=4.0.0"]
+      # graphql 17 breaks the codegen 6 that `make graphql` runs, and codegen 8
+      # (client-preset 7, fragment-matcher 8) is the line built for graphql 17.
+      # The four move together, in both workspaces, on purpose.
+      - dependency-name: "graphql"
+        versions: [">=17.0.0"]
+      - dependency-name: "@graphql-codegen/cli"
+        versions: [">=7.0.0"]
+      - dependency-name: "@graphql-codegen/client-preset"
+        versions: [">=6.0.0"]
+      - dependency-name: "@graphql-codegen/fragment-matcher"
+        versions: [">=7.0.0"]
       # 0.6 and 0.7 need Capacitor 8 on the web app. 0.8+ also need @powersync/web
       # 2.x. frontend/apps/web/src/api/powersync/nativeDatabase.ts carries a copy of
       # 0.5.3's init(), so that upgrade has to be done on purpose, with that copy

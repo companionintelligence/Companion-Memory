@@ -24,7 +24,7 @@ tauri-plugin-ci-auth = { path = "vendor/tauri-plugin-ci-auth" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking", "stream"] }
-tokio = { version = "1", features = ["rt-multi-thread", "process", "macros", "time", "fs", "io-util"] }
+tokio = { version = "1", features = ["rt-multi-thread", "process", "macros", "time", "fs", "io-util", "sync", "net"] }
 log = "0.4"
 env_logger = "0.11"
 chrono = "0.4"

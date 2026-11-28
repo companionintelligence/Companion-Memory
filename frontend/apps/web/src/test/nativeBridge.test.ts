@@ -78,7 +78,7 @@ describe('nativeBridge — desktop (Tauri) keeps secure values in the OS keychai
    * commands read and write; `store` is the webview's localStorage. `refuse` names commands the
    * keychain rejects, the way a locked or missing Secret Service does.
    */
-  function fakeTauriWindow(refuse: string[] = []) {
+  function fakeTauriWindow(refuse: string[] = [], options: { olderApp?: boolean } = {}) {
     const keychain = new Map<string, string>();
     const store = new Map<string, string>();
 
@@ -90,6 +90,14 @@ describe('nativeBridge — desktop (Tauri) keeps secure values in the OS keychai
       const key = args?.key as string;
 
       switch (command) {
+        // The desktop app's own read, which never returns the device key. A desktop app from
+        // before it does not have the command, and Tauri says so.
+        case 'device_secure_get_command':
+          if (options.olderApp) {
+            throw new Error(`Command ${command} not found`);
+          }
+
+          return { value: key === 'memory:ci.apiKey' ? null : (keychain.get(key) ?? null) };
         case 'plugin:ci-auth|secure_get':
           return { value: keychain.get(key) ?? null };
         case 'plugin:ci-auth|secure_set':
@@ -136,12 +144,31 @@ describe('nativeBridge — desktop (Tauri) keeps secure values in the OS keychai
     });
   });
 
-  it('get reads the keychain copy back', async () => {
-    const { win, keychain } = fakeTauriWindow();
+  it("get reads the keychain copy back through the app's own command", async () => {
+    const { win, keychain, invoke } = fakeTauriWindow();
+    keychain.set('memory:ci.apiKeyId', 'key-id-1');
+    setWindow(win);
+
+    expect(await secureStorageGet('ci.apiKeyId')).toBe('key-id-1');
+    expect(invoke).toHaveBeenCalledWith('device_secure_get_command', { key: 'memory:ci.apiKeyId' });
+    expect(invoke).not.toHaveBeenCalledWith('plugin:ci-auth|secure_get', expect.anything());
+  });
+
+  it('never reads the device key back, even though the keychain holds it', async () => {
+    const { win, keychain, invoke } = fakeTauriWindow();
     keychain.set('memory:ci.apiKey', 'device-key');
     setWindow(win);
 
-    expect(await secureStorageGet('ci.apiKey')).toBe('device-key');
+    expect(await secureStorageGet('ci.apiKey')).toBeNull();
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('a desktop app from before its own read command still reads through the plugin', async () => {
+    const { win, keychain } = fakeTauriWindow([], { olderApp: true });
+    keychain.set('memory:ci.apiKeyId', 'key-id-1');
+    setWindow(win);
+
+    expect(await secureStorageGet('ci.apiKeyId')).toBe('key-id-1');
   });
 
   it('remove clears the keychain copy and any legacy localStorage copy', async () => {
@@ -159,35 +186,35 @@ describe('nativeBridge — desktop (Tauri) keeps secure values in the OS keychai
 
   it('moves a localStorage value from an earlier build into the keychain on first read', async () => {
     const { win, keychain, store } = fakeTauriWindow();
-    store.set('ci.apiKey', 'legacy-key');
+    store.set('ci.apiKeyId', 'legacy-id');
     setWindow(win);
 
-    expect(await secureStorageGet('ci.apiKey')).toBe('legacy-key');
+    expect(await secureStorageGet('ci.apiKeyId')).toBe('legacy-id');
 
-    expect(keychain.get('memory:ci.apiKey')).toBe('legacy-key');
-    expect(store.has('ci.apiKey')).toBe(false);
+    expect(keychain.get('memory:ci.apiKeyId')).toBe('legacy-id');
+    expect(store.has('ci.apiKeyId')).toBe(false);
   });
 
   it('a keychain that refuses the read reads as no value and never hands back the legacy copy', async () => {
-    const { win, keychain, store } = fakeTauriWindow(['plugin:ci-auth|secure_get']);
-    store.set('ci.apiKey', 'legacy-key');
+    const { win, keychain, store } = fakeTauriWindow(['device_secure_get_command']);
+    store.set('ci.apiKeyId', 'legacy-id');
     setWindow(win);
 
-    expect(await secureStorageGet('ci.apiKey')).toBeNull();
+    expect(await secureStorageGet('ci.apiKeyId')).toBeNull();
 
     expect(keychain.size).toBe(0);
-    expect(store.get('ci.apiKey')).toBe('legacy-key');
+    expect(store.get('ci.apiKeyId')).toBe('legacy-id');
   });
 
   it('a failed migration write returns no value and leaves the legacy copy for the next launch', async () => {
     const { win, keychain, store } = fakeTauriWindow(['plugin:ci-auth|secure_set']);
-    store.set('ci.apiKey', 'legacy-key');
+    store.set('ci.apiKeyId', 'legacy-id');
     setWindow(win);
 
-    expect(await secureStorageGet('ci.apiKey')).toBeNull();
+    expect(await secureStorageGet('ci.apiKeyId')).toBeNull();
 
     expect(keychain.size).toBe(0);
-    expect(store.get('ci.apiKey')).toBe('legacy-key');
+    expect(store.get('ci.apiKeyId')).toBe('legacy-id');
   });
 
   it('a refused write rejects and stores the value nowhere else', async () => {
@@ -442,10 +469,22 @@ describe('nativeBridge — LocalHub secure storage and the migration off the leg
   }
 
   it('prefers LocalHub for reads and never consults the legacy plugin when it has a value', async () => {
-    const { win, legacy } = fakeHubWindow({ hub: { 'ci.apiKey': 'from-keystore' } });
+    const { win, legacy } = fakeHubWindow({ hub: { 'ci.apiKeyId': 'from-keystore' } });
     setWindow(win);
 
-    expect(await secureStorageGet('ci.apiKey')).toBe('from-keystore');
+    expect(await secureStorageGet('ci.apiKeyId')).toBe('from-keystore');
+    expect(legacy.get).not.toHaveBeenCalled();
+  });
+
+  it('never reads the device key back, from LocalHub or from the legacy plugin', async () => {
+    const { win, hub, legacy } = fakeHubWindow({
+      hub: { 'ci.apiKey': 'from-keystore' },
+      legacy: { 'ci.apiKey': 'from-legacy' },
+    });
+    setWindow(win);
+
+    expect(await secureStorageGet('ci.apiKey')).toBeNull();
+    expect(hub.secureGet).not.toHaveBeenCalled();
     expect(legacy.get).not.toHaveBeenCalled();
   });
 
@@ -463,18 +502,18 @@ describe('nativeBridge — LocalHub secure storage and the migration off the leg
 
   it('migrates an existing install: reads through, rewrites into the keystore, then drops the old copy', async () => {
     const { win, hub, legacyStore, hubStore } = fakeHubWindow({
-      legacy: { 'ci.apiKey': 'pre-existing-key' },
+      legacy: { 'ci.apiKeyId': 'pre-existing-id' },
     });
     setWindow(win);
 
-    expect(await secureStorageGet('ci.apiKey')).toBe('pre-existing-key');
-    expect(hub.secureSet).toHaveBeenCalledWith({ key: 'ci.apiKey', value: 'pre-existing-key' });
-    expect(hubStore.get('ci.apiKey')).toBe('pre-existing-key');
-    expect(legacyStore.has('ci.apiKey')).toBe(false);
+    expect(await secureStorageGet('ci.apiKeyId')).toBe('pre-existing-id');
+    expect(hub.secureSet).toHaveBeenCalledWith({ key: 'ci.apiKeyId', value: 'pre-existing-id' });
+    expect(hubStore.get('ci.apiKeyId')).toBe('pre-existing-id');
+    expect(legacyStore.has('ci.apiKeyId')).toBe(false);
 
     // Second read is served from the keystore; nothing is migrated twice.
     hub.secureSet.mockClear();
-    expect(await secureStorageGet('ci.apiKey')).toBe('pre-existing-key');
+    expect(await secureStorageGet('ci.apiKeyId')).toBe('pre-existing-id');
     expect(hub.secureSet).not.toHaveBeenCalled();
   });
 
@@ -485,23 +524,23 @@ describe('nativeBridge — LocalHub secure storage and the migration off the leg
    * URL the user may no longer remember.
    */
   it('keeps the legacy copy when the keystore write fails mid-migration', async () => {
-    const { win, hub, legacy, legacyStore } = fakeHubWindow({ legacy: { 'ci.apiKey': 'pre-existing-key' } });
+    const { win, hub, legacy, legacyStore } = fakeHubWindow({ legacy: { 'ci.apiKeyId': 'pre-existing-id' } });
     hub.secureSet.mockRejectedValueOnce(new Error('keystore unavailable'));
     setWindow(win);
 
-    expect(await secureStorageGet('ci.apiKey')).toBeNull();
+    expect(await secureStorageGet('ci.apiKeyId')).toBeNull();
     expect(legacy.remove).not.toHaveBeenCalled();
-    expect(legacyStore.get('ci.apiKey')).toBe('pre-existing-key');
+    expect(legacyStore.get('ci.apiKeyId')).toBe('pre-existing-id');
   });
 
   it('reports no value — rather than reading the weaker store — when the keystore is unusable', async () => {
-    const { win, hub, legacy } = fakeHubWindow({ legacy: { 'ci.apiKey': 'pre-existing-key' } });
+    const { win, hub, legacy } = fakeHubWindow({ legacy: { 'ci.apiKeyId': 'pre-existing-id' } });
     hub.secureGet.mockRejectedValueOnce(new Error('keystore unavailable'));
     setWindow(win);
 
     // "Signed out" is recoverable and writes nothing weaker; silently falling back to the
     // plugin whose storage guarantees we just rejected would not be.
-    expect(await secureStorageGet('ci.apiKey')).toBeNull();
+    expect(await secureStorageGet('ci.apiKeyId')).toBeNull();
     expect(legacy.get).not.toHaveBeenCalled();
   });
 

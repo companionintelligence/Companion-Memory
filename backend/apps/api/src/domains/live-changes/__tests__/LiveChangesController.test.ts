@@ -312,6 +312,13 @@ describe('streamCredentialOf', () => {
     });
   });
 
+  it("names the key behind a device key's access token, and times the stream by that token", () => {
+    expect(streamCredentialOf(makeReq({ apiKeyId: 'key-1', apiKeyAccessTokenExpiresAt: 123_000 }))).toEqual({
+      credential: { kind: 'apiKey', keyId: 'key-1' },
+      expiresAt: 123_000,
+    });
+  });
+
   it('ties our own access token to its session and times it by its expiry', () => {
     const req = makeReq({
       headers: { authorization: `Bearer ${fakeJwt({ sub: 'alice', sid: 'sess-1', exp: 100 })}` },

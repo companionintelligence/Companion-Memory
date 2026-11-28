@@ -1,6 +1,6 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useSyncExternalStore } from 'react';
 
-import { getApiKey } from '@ci/common';
+import { getApiKey, subscribeApiKey } from '@ci/common';
 
 import { type LiveChangeTopic, setLiveChangesAuth, subscribeLiveChanges } from '@/api/liveChanges';
 
@@ -15,10 +15,11 @@ import { useSessionAuth } from './useSessionAuth';
  */
 export function useLiveChanges(topics: readonly LiveChangeTopic[], onChange: () => void): void {
   const { ready, authToken } = useSessionAuth();
-  // The phone app has no web token. It signs in with the device's API key,
-  // which the stream sends as `x-api-key`. Read on every render, so a new key
-  // (signing in again) reaches the stream.
-  const apiKey = ready && !authToken ? getApiKey() : null;
+  // The phone and desktop apps have no web token. They send a short-lived access token for the
+  // device's key as `x-api-key`, which is renewed every few minutes. Subscribed, so each new one
+  // (and a sign-in or sign-out) reaches the stream without waiting for a render.
+  const currentKey = useSyncExternalStore(subscribeApiKey, getApiKey, getApiKey);
+  const apiKey = ready && !authToken ? currentKey : null;
   const onChangeRef = useRef(onChange);
   const key = topics.join(',');
 

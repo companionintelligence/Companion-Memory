@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AuthProvider, useAuth } from '@/hooks/useAuth';
 import { reminderNotificationId } from '@/lib/reminderNotifications';
+import { fakeLocalHub, installNativeShell, sentApiKeys, tokenFor } from '@/test/fakeNativeDeviceKey';
 
 import { UnsentCapturesSignOutDialog } from './UnsentCapturesSignOutDialog';
 
@@ -51,31 +52,20 @@ function phone({ online }: { online: boolean }) {
   localStorage.setItem('ci.apiBaseUrl', MEMORY);
   setApiBaseUrl(MEMORY);
 
-  const keystore = new Map([
+  const hub = fakeLocalHub([
     ['ci.apiKey', DEVICE_KEY],
+    ['ci.apiKeyId', 'key-1'],
     ['ci.apiBaseUrl', MEMORY],
   ]);
+  const keystore = hub.store;
   const queue = new Map<string, OutboxItem>();
   const calls: Call[] = [];
   const cancelNotification = vi.fn(async () => {});
 
-  (window as unknown as { Capacitor?: unknown }).Capacitor = {
-    isNativePlatform: () => true,
-    getPlatform: () => 'android',
-    Plugins: {
-      LocalNotifications: { cancel: cancelNotification },
-      LocalHub: {
-        start: vi.fn(async () => ({ baseUrl: HUB, token: 'hub-token' })),
-        secureGet: vi.fn(async ({ key }: { key: string }) => ({ value: keystore.get(key) ?? null })),
-        secureSet: vi.fn(async ({ key, value }: { key: string; value: string }) => {
-          keystore.set(key, value);
-        }),
-        secureRemove: vi.fn(async ({ key }: { key: string }) => {
-          keystore.delete(key);
-        }),
-      },
-    },
-  };
+  installNativeShell({
+    LocalNotifications: { cancel: cancelNotification },
+    LocalHub: { ...hub.plugin, start: vi.fn(async () => ({ baseUrl: HUB, token: 'hub-token' })) },
+  });
 
   const sidecar = (path: string, method: string): Response => {
     const [route, query] = path.split('?');
@@ -126,27 +116,26 @@ function phone({ online }: { online: boolean }) {
     return json({ error: 'not_found' }, 404);
   };
 
-  vi.stubGlobal(
-    'fetch',
-    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      const method = (init?.method ?? 'GET').toUpperCase();
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const method = (init?.method ?? 'GET').toUpperCase();
 
-      calls.push({ url, method });
+    calls.push({ url, method });
 
-      if (url.startsWith(HUB)) {
-        return sidecar(url.slice(HUB.length), method);
-      }
+    if (url.startsWith(HUB)) {
+      return sidecar(url.slice(HUB.length), method);
+    }
 
-      if (!online) {
-        throw new TypeError('Load failed');
-      }
+    if (!online) {
+      throw new TypeError('Load failed');
+    }
 
-      return url.endsWith('/api/keys/current') ? empty() : json({ id: 'accepted' }, 201);
-    }),
-  );
+    return url.endsWith('/api/keys/current') ? empty() : json({ id: 'accepted' }, 201);
+  });
 
-  return { keystore, queue, calls, cancelNotification };
+  vi.stubGlobal('fetch', fetchMock);
+
+  return { keystore, queue, calls, fetchMock, cancelNotification };
 }
 
 function AccountMenu() {
@@ -237,7 +226,8 @@ describe('signing out of the phone app with captures that have not uploaded', ()
 
     await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
     expect(screen.getByText('signed in')).toBeInTheDocument();
-    expect(getApiKey()).toBe(DEVICE_KEY);
+    // Requests carry the native side's token for the key, never the key.
+    expect(getApiKey()).toBe(tokenFor(DEVICE_KEY));
     expect(keystore.get('ci.apiKey')).toBe(DEVICE_KEY);
     expect(localStorage.getItem('ci.apiBaseUrl')).toBe(MEMORY);
     expect(cleared(calls)).toBe(false);
@@ -276,7 +266,7 @@ describe('signing out of the phone app with captures that have not uploaded', ()
   });
 
   it('signs out without asking when the last upload try empties the queue', async () => {
-    const { queue, calls } = phone({ online: true });
+    const { queue, calls, fetchMock } = phone({ online: true });
     await signedIn();
     queue.set('note', row('note', 1, { owner: outboxOwnerStamp() }));
 
@@ -287,6 +277,9 @@ describe('signing out of the phone app with captures that have not uploaded', ()
     expect(calls.some((call) => call.url === `${MEMORY}/api/v1/notes`)).toBe(true);
     expect(queue.size).toBe(0);
     expect(revoked(calls)).toBe(true);
+    // The upload and the revoke went with the token; the key itself was never sent.
+    expect(sentApiKeys(fetchMock)).toContain(tokenFor(DEVICE_KEY));
+    expect(sentApiKeys(fetchMock)).not.toContain(DEVICE_KEY);
   });
 
   it('asks about captures this session cannot send, rather than deleting them unasked', async () => {

@@ -12,6 +12,7 @@ import androidx.work.WorkManager
 import androidx.work.Worker
 import androidx.work.WorkerParameters
 import com.companionintelligence.localhub.CompanionSecureStore
+import com.companionintelligence.localhub.DeviceCredentialBinding
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 import java.util.concurrent.TimeUnit
@@ -37,8 +38,15 @@ class ReplicaSyncWorker(context: Context, params: WorkerParameters) : Worker(con
         }
         val started = System.currentTimeMillis()
         try {
-            val apiKey = CompanionSecureStore.credentials(context).get(API_KEY)
+            val credentials = CompanionSecureStore.credentials(context)
+            val apiKey = credentials.get(API_KEY)
             if (apiKey.isNullOrEmpty()) return Result.success()
+            // The origin comes from configuration the page hands over; the key goes only to the
+            // one it is stored with, so a script in the page cannot point it elsewhere.
+            if (!DeviceCredentialBinding.keyMaySendTo(credentials, config.apiBaseUrl)) {
+                Log.i(TAG, "skipped: the sync origin is not the one the key is stored for")
+                return Result.success()
+            }
             val cutoff = Instant.now().minus(config.lookbackDays.toLong(), ChronoUnit.DAYS).toString()
             val outcome = ReplicaSyncRunner(
                 transport = HttpReplicaTransport(config.apiBaseUrl, apiKey, cutoff),

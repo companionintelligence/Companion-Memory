@@ -20,7 +20,7 @@
  * alongside the answer.
  */
 
-import { getApiKey } from './apiAuth';
+import { deviceAccessTokensActive, getApiKey } from './apiAuth';
 import { getApiBaseUrl, isIosPlatform, isNativePlatform } from './apiBase';
 import { type ConnectionMode, getLatestConnectionMode } from './connectionMode';
 import {
@@ -410,9 +410,11 @@ export async function ensureLocalLlmLoaded(
   }
 
   const baseUrl = getApiBaseUrl();
-  const apiKey = getApiKey();
+  // Signed in with a device key. The key itself never comes through the page: the native intent
+  // client reads it, and the origin it was stored for, from the credential store.
+  const signedIn = deviceAccessTokensActive() || getApiKey() !== null;
   const canBindTools = Boolean(
-    options.useIntentTools && baseUrl && apiKey && spec.capabilities.includes('tools'),
+    options.useIntentTools && baseUrl && signedIn && spec.capabilities.includes('tools'),
   );
 
   // The phone's own search joins the tools when a replica is on this phone (set by the web app's
@@ -422,7 +424,7 @@ export async function ensureLocalLlmLoaded(
 
   await plugin.configureIntentTools(
     canBindTools
-      ? { enabled: true, baseUrl, apiKey: apiKey ?? undefined, connectionMode, localSearch }
+      ? { enabled: true, baseUrl, connectionMode, localSearch }
       : options.useIntentTools && localSearch && spec.capabilities.includes('tools')
         ? { enabled: true, connectionMode, localSearch }
         : { enabled: false },

@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod device_key;
 mod local_model;
 mod port_check;
 mod presence;
@@ -395,8 +396,9 @@ fn main() {
         }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_deep_link::init())
-        // OS keychain for the web app's device key (`secure_get` / `secure_set` /
-        // `secure_remove`, granted to the remote origin in capabilities/remote-device-key.json).
+        // OS keychain for the web app's device key (`secure_set` / `secure_remove`, granted to
+        // the remote origin in capabilities/remote-device-key.json). The page reads it only
+        // through device_secure_get_command, which never returns the key (device_key.rs).
         .plugin(tauri_plugin_ci_auth::init())
         .setup(|app| {
             let resource_dir = app.path().resource_dir()?;
@@ -415,6 +417,8 @@ fn main() {
                 &format!("v{} starting", env!("CARGO_PKG_VERSION")),
             );
             app.manage(StackPathsState(paths.clone()));
+            // The device key stays here; the page gets short-lived tokens (device_key.rs).
+            app.manage(device_key::DeviceTokens::for_gateway());
             let progress = stack_manager::new_progress();
             app.manage(StartupProgressState(progress.clone()));
             app.manage(local_model::LocalModelHandles::default());
@@ -520,6 +524,8 @@ fn main() {
             open_external_url_command,
             take_pending_deep_link_command,
             forget_stale_frontend_command,
+            device_secure_get_command,
+            device_access_token_command,
         ])
         .run(tauri::generate_context!())
         .expect("error while running the Companion Memory desktop app");
@@ -867,6 +873,31 @@ fn recommended_model_status(app: &tauri::AppHandle) -> local_model::recommended:
         resolved_chat_backend(app),
         &app.state::<local_model::recommended::Downloader>(),
     )
+}
+
+/// The page's keychain read: tauri-plugin-ci-auth's `secure_get`, except that the device key
+/// itself always reads as absent. See device_key.rs.
+#[tauri::command]
+async fn device_secure_get_command(
+    auth: tauri::State<'_, Arc<tauri_plugin_ci_auth::AuthState>>,
+    key: String,
+) -> Result<device_key::SecureValue, tauri_plugin_ci_auth::AuthError> {
+    let auth = auth.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || device_key::page_secure_get(&auth, &key))
+        .await
+        .map_err(|_| tauri_plugin_ci_auth::AuthError::InternalError)?
+}
+
+/// A short-lived access token for the device key, which never leaves Rust. See device_key.rs.
+#[tauri::command]
+async fn device_access_token_command(
+    auth: tauri::State<'_, Arc<tauri_plugin_ci_auth::AuthState>>,
+    tokens: tauri::State<'_, device_key::DeviceTokens>,
+    refresh: Option<bool>,
+) -> Result<device_key::DeviceAccessToken, String> {
+    Ok(tokens
+        .resolve(auth.inner().clone(), refresh.unwrap_or(false), device_key::now_ms())
+        .await)
 }
 
 /// What serves chat, once this launch's local-model resolution has finished.

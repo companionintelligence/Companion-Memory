@@ -78,8 +78,10 @@ to it is removed.
   security code of three or four digits that is the last group of the run is part of the
   card, as in ``4111 1111 1111 1111 123``, and a card with its security code glued on, as in
   ``4111111111111111123``, is found. Other digits after a card are kept. A 14-digit
-  ``YYYYMMDDhhmmss`` stamp is not treated as a card. A phone-shaped run inside a card is left
-  for the card rule.
+  ``YYYYMMDDhhmmss`` stamp is not treated as a card. Phones and cards compete for the same
+  digits, so they are read two ways and every digit either reading hides is replaced. One
+  reading protects only a card written alone as four groups of four digits, so a phone beside
+  a card is found first. The other leaves any phone match inside a card to the card rule.
 - ``address``: a house number, optionally with a hyphenated letter or a second number, such
   as ``221B``, ``221-B`` or ``12-14``, and optionally with a comma, one to three capitalised
   words, the first of which may be an accented capital, and a street suffix
@@ -155,7 +157,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import datetime
 
 CATEGORIES: tuple[str, ...] = (
@@ -1145,23 +1147,56 @@ def _redact_ibans(text: str, counts: Counter[str]) -> str:
     return "".join(pieces)
 
 
-def _redact_phones(text: str, counts: Counter[str]) -> str:
-    cards = _card_spans_of(text)
+def _lone_card_spans(text: str) -> list[tuple[int, int]]:
+    """Spans of digit runs that hold one card: four groups of four digits that pass Luhn.
 
-    def repl(match: re.Match[str]) -> str:
-        # A card can contain a phone-shaped run, as in 4000 0000 0000 0002. A phone match that
-        # lies inside a card is left for the card rule. A card that only overlaps the match does
-        # not win, since the match is then more likely a phone number.
-        if any(start <= match.start() and match.end() <= end for start, end in cards):
-            return match.group(0)
-        candidate = match.group(0)
-        span = _phone_span(candidate)
-        if span is None:
-            return candidate
-        counts["phone"] += 1
-        return "[PHONE]" + candidate[len(span) :]
+    Only a run of exactly four groups is taken, so a run with a phone or another card in
+    it is not. A run that overlaps a dotted card is not taken either, so the card rule
+    always reads the whole run.
+    """
+    masked = _mask_dates(text)
+    dotted = [(match.start(), match.end()) for match in _DOT_CARD_RE.finditer(masked)]
+    spans: list[tuple[int, int]] = []
+    for run in _CARD_RUN_RE.finditer(masked):
+        groups = _CARD_GROUP_RE.findall(run.group(0))
+        if len(groups) != 4 or any(len(group) != 4 for group in groups):
+            continue
+        if not _is_card("".join(groups)):
+            continue
+        if any(start < run.end() and run.start() < end for start, end in dotted):
+            continue
+        spans.append((run.start(), run.end()))
+    return spans
 
-    return _PHONE_RE.sub(repl, text)
+
+def _unobstructed_lone_cards(text: str) -> list[tuple[int, int]]:
+    """The lone cards that no phone match only partly covers."""
+    matches = [match.span() for match in _PHONE_RE.finditer(text)]
+    return [
+        (start, end)
+        for start, end in _lone_card_spans(text)
+        if not any(
+            m_start < end and start < m_end and not (start <= m_start and m_end <= end)
+            for m_start, m_end in matches
+        )
+    ]
+
+
+def _phone_spans(text: str, protected: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Positions of the numbers the phone rule takes.
+
+    A match that lies wholly inside a protected span is left for the card rule.
+    """
+    spans: list[tuple[int, int]] = []
+    for match in _PHONE_RE.finditer(text):
+        if any(
+            start <= match.start() and match.end() <= end for start, end in protected
+        ):
+            continue
+        number = _phone_span(match.group(0))
+        if number is not None:
+            spans.append((match.start(), match.start() + len(number)))
+    return spans
 
 
 def _card_spans_of(text: str) -> list[tuple[int, int]]:
@@ -1185,17 +1220,79 @@ def _card_spans_of(text: str) -> list[tuple[int, int]]:
     return sorted(found)
 
 
-def _redact_cards(text: str, counts: Counter[str]) -> str:
-    found = _card_spans_of(text)
-    if not found:
+def _blank(chars: list[str], spans: Iterable[tuple[int, int]]) -> None:
+    """Overwrite each span with letters, so positions stay and no rule reads it again."""
+    for start, end in spans:
+        chars[start:end] = "x" * (end - start)
+
+
+def _phone_card_reading(
+    text: str, protect: Callable[[str], list[tuple[int, int]]]
+) -> list[tuple[int, int, str]]:
+    """Everything one reading hides, as (start, end, category) positions in ``text``.
+
+    A pass takes the phones the phone rule finds when ``protect``'s spans are left to the
+    card rule, then the cards in what remains. Passes repeat until one finds nothing, since
+    taking one number can expose the next.
+    """
+    chars = list(text)
+    found: list[tuple[int, int, str]] = []
+    while True:
+        work = "".join(chars)
+        phones = _phone_spans(work, protect(work))
+        _blank(chars, phones)
+        cards = _card_spans_of("".join(chars))
+        _blank(chars, cards)
+        if not phones and not cards:
+            return found
+        found += [(start, end, "phone") for start, end in phones]
+        found += [(start, end, "card") for start, end in cards]
+
+
+def _redact_phones_and_cards(text: str, counts: Counter[str]) -> str:
+    """Replace phone numbers and cards.
+
+    The two rules compete for the same digits. A card can hold a phone-shaped run, as in
+    ``4000 0000 0000 0002``, and a card next to a phone can be read as one longer card
+    that leaves part of the real card behind. So the text is read two ways:
+
+    - the lone-card reading protects only a card written alone as four groups of four
+      digits, so a phone beside a card is taken first and the card is read from the rest;
+    - the whole-card reading protects any phone match that lies inside a card, so the
+      card rule takes a card that the phone rule would otherwise split.
+
+    Every digit that either reading hides is hidden. A span that only the second reading
+    covers is merged with the first reading's spans that it overlaps, and the merged span
+    is a card when any part of it is.
+    """
+    first = _phone_card_reading(text, _unobstructed_lone_cards)
+    second = _phone_card_reading(text, _card_spans_of)
+    hidden = {index for start, end, _ in first for index in range(start, end)}
+    extra = [
+        span
+        for span in second
+        if any(
+            text[index].isdigit() and index not in hidden
+            for index in range(span[0], span[1])
+        )
+    ]
+    merged: list[tuple[int, int, str]] = []
+    for start, end, category in sorted(first + extra):
+        if merged and start < merged[-1][1]:
+            last_start, last_end, last_category = merged[-1]
+            category = "card" if "card" in (last_category, category) else category
+            merged[-1] = (last_start, max(last_end, end), category)
+        else:
+            merged.append((start, end, category))
+    if not merged:
         return text
     pieces: list[str] = []
     cursor = 0
-    for start, end in found:
+    for start, end, category in merged:
         pieces.append(text[cursor:start])
-        pieces.append("[CARD]")
+        pieces.append("[CARD]" if category == "card" else "[PHONE]")
         cursor = end
-        counts["card"] += 1
+        counts[category] += 1
     pieces.append(text[cursor:])
     return "".join(pieces)
 
@@ -1420,7 +1517,10 @@ class Redactor:
     def redact(self, text: str) -> tuple[str, dict[str, int]]:
         """Return the redacted text and the number of replacements per category.
 
-        The rules run again on their own output until a pass changes nothing. The
+        The name, URL, e-mail, IBAN, phone and card rules run again on their own output
+        until a pass changes nothing. Then the address rule runs once, and the others run
+        again on its output, until nothing changes. The address rule runs last, so a house
+        number is never taken from a phone or card that a later pass would find. The
         result is a fixed point, so redacting it a second time changes nothing. Each
         change removes at least one character that is not part of a placeholder, so the
         loop ends.
@@ -1428,7 +1528,12 @@ class Redactor:
         counts: Counter[str] = Counter()
         current = _normalise(text)
         while True:
-            step = self._redact_pass(current, counts)
+            while True:
+                step = self._redact_pass(current, counts)
+                if step == current:
+                    break
+                current = step
+            step = _redact_addresses(current, counts)
             if step == current:
                 return current, dict(counts)
             current = step
@@ -1441,6 +1546,4 @@ class Redactor:
         out = _redact_emails(out, counts)
         out = _redact_secret_keywords(out, counts)
         out = _redact_ibans(out, counts)
-        out = _redact_phones(out, counts)
-        out = _redact_cards(out, counts)
-        return _redact_addresses(out, counts)
+        return _redact_phones_and_cards(out, counts)

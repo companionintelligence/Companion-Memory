@@ -119,7 +119,7 @@ function readStoredPortalAuth(): PortalAuth | null {
  */
 export function DeviceConnectPage() {
   const navigate = useNavigate();
-  const [{ authenticated, initializing }, { completePortalMemoryConnect }] = useAuth();
+  const [{ authenticated, initializing, signInEnded }, { completePortalMemoryConnect }] = useAuth();
   const { user, loading: userLoading, error: userError, refetch } = useCurrentUser();
 
   // Do not leave this page until Memory has accepted the minted key and `me`
@@ -168,10 +168,12 @@ export function DeviceConnectPage() {
     // answered and accepted a key; redirecting on the stale profile alone
     // bounces straight back to the offline screen and makes reconnection
     // impossible.
-    if (!needsNativeCloudConnect() && !initializing && authenticated && user) {
+    // Nor while Memory refuses this device's key: the profile on hand is the one remembered for an
+    // outage, and the person came here to sign in again (`MemorySignInEndedBanner`).
+    if (!needsNativeCloudConnect() && !initializing && authenticated && user && !signInEnded) {
       navigate('/', { replace: true });
     }
-  }, [authenticated, initializing, navigate, user]);
+  }, [authenticated, initializing, navigate, signInEnded, user]);
 
   useEffect(() => {
     if (

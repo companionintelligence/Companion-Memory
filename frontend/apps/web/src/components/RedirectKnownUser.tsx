@@ -1,9 +1,17 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 
-import { fetchJson, GlobalUID, isNativePlatform, LoadingPage } from '@ci/common';
+import {
+  deviceAppOutdated,
+  fetchJson,
+  GlobalUID,
+  isNativePlatform,
+  LoadingPage,
+  subscribeApiKey,
+} from '@ci/common';
 import { Navigate, useLocation } from 'react-router-dom';
 
 import { useFeatures } from '@/common/feature';
+import { DeviceAppOutdated } from '@/components/DeviceAppOutdated';
 import { isPastOutage, MemoryUnreachable } from '@/components/MemoryUnreachable';
 import { useAuth, useCurrentUser } from '@/hooks';
 import { appHomePath } from '@/lib/appHome';
@@ -83,6 +91,7 @@ export function RedirectKnownUser({ children }: { children: React.ReactNode }) {
   const { loading: featuresLoading } = useFeatures();
   const location = useLocation();
   const [hubIdentity, setHubIdentity] = useState<HubIdentity | undefined>(undefined);
+  const outdated = useSyncExternalStore(subscribeApiKey, deviceAppOutdated, deviceAppOutdated);
 
   useEffect(() => {
     if (isNativePlatform()) {
@@ -115,6 +124,13 @@ export function RedirectKnownUser({ children }: { children: React.ReactNode }) {
       cancelled = true;
     };
   }, []);
+
+  // A cold launch lands here first. With a key Memory (or this app) is too old to trade for tokens,
+  // the profile cannot load, and Log In would only mint another key the same Memory cannot trade.
+  // Say what to update, as the pages inside the app do (ProtectedRoute).
+  if (outdated) {
+    return <DeviceAppOutdated outdated={outdated} />;
+  }
 
   // Memory did not answer the session check or the profile and there is no profile to go on.
   // The splash, Log In and Sign up cannot work then, so say so, as the pages inside the app do

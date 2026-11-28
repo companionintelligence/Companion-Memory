@@ -13,6 +13,7 @@ import { ApiKeyService } from '../../services/ApiKeyService';
 import { ApiKeyStrategy } from '../../services/ApiKeyStrategy';
 import { JwtStrategy } from '../../services/JwtStrategy';
 import { SIGN_IN_PROVENANCE, type ValidatedApiKey } from '../../types';
+import { mintDeviceAccessToken, verifyDeviceAccessToken } from '../../utils/deviceAccessToken';
 import { ApiKeyController } from '../ApiKeyController';
 
 const mockApiKeyService = {
@@ -22,13 +23,14 @@ const mockApiKeyService = {
   update: jest.fn(),
   remove: jest.fn(),
   validateKey: jest.fn(),
+  validateCredential: jest.fn(),
 };
 
 /** The key the phone app signs in with, as `ApiKeyService.validateKey` reports it. */
 const DEVICE_KEY = {
   raw: 'a'.repeat(64),
   validated: {
-    keyId: 'k-device',
+    keyId: '019a0000-0000-7000-8000-00000000d001',
     userId: 'user-1',
     scopes: [],
     capability: 'full',
@@ -70,6 +72,30 @@ const BROAD_APP_KEY = {
 };
 
 const AUTH_USER = { id: 'user-1', name: 'Test User' };
+
+/**
+ * `ApiKeyService.validateCredential` over `keys`, as the real one behaves: a raw key by its value,
+ * and an access token by the real verification, then as the key it names (and only while that key
+ * is listed, which is how a revoked key's tokens stop working).
+ */
+function resolveCredentialsFrom(
+  keys: Array<{ raw: string; validated: Pick<ValidatedApiKey, 'keyId' | 'userId'> }>,
+): void {
+  const byRaw = async (raw: string) => keys.find((key) => key.raw === raw)?.validated ?? null;
+
+  mockApiKeyService.validateKey.mockImplementation(byRaw);
+  mockApiKeyService.validateCredential.mockImplementation(async (raw: string) => {
+    const claims = await verifyDeviceAccessToken(raw);
+
+    if (!claims) {
+      return byRaw(raw);
+    }
+
+    const key = keys.find((candidate) => candidate.validated.keyId === claims.keyId)?.validated;
+
+    return key && key.userId === claims.userId ? { ...key, accessTokenExpiresAt: claims.expiresAtMs } : null;
+  });
+}
 
 const mockUserService = {
   findById: jest.fn(),
@@ -290,10 +316,7 @@ describe('ApiKeyController (real guard + real JwtStrategy)', () => {
 
   describe('GET /keys/check — the Hub edge asking whether a key is real', () => {
     beforeEach(() => {
-      mockApiKeyService.validateKey.mockImplementation(
-        async (raw: string) =>
-          [DEVICE_KEY, READ_KEY, APP_KEY, BROAD_APP_KEY].find((key) => key.raw === raw)?.validated ?? null,
-      );
+      resolveCredentialsFrom([DEVICE_KEY, READ_KEY, APP_KEY, BROAD_APP_KEY]);
     });
 
     it('answers 204 for any usable key, a scope-limited one included', async () => {
@@ -321,10 +344,7 @@ describe('ApiKeyController (real guard + real JwtStrategy)', () => {
 
   describe('a sign-in key and the self-revoke route', () => {
     beforeEach(() => {
-      mockApiKeyService.validateKey.mockImplementation(
-        async (raw: string) =>
-          [DEVICE_KEY, READ_KEY, APP_KEY, BROAD_APP_KEY].find((key) => key.raw === raw)?.validated ?? null,
-      );
+      resolveCredentialsFrom([DEVICE_KEY, READ_KEY, APP_KEY, BROAD_APP_KEY]);
       mockApiKeyService.remove.mockResolvedValue(true);
     });
 
@@ -396,7 +416,7 @@ describe('ApiKeyController (real guard + real JwtStrategy)', () => {
       await request(app.getHttpServer()).delete('/keys/current').set('x-api-key', DEVICE_KEY.raw).expect(204);
 
       expect(mockApiKeyService.remove).toHaveBeenCalledTimes(1);
-      expect(mockApiKeyService.remove).toHaveBeenCalledWith({ userId: 'user-1' }, 'k-device');
+      expect(mockApiKeyService.remove).toHaveBeenCalledWith({ userId: 'user-1' }, DEVICE_KEY.validated.keyId);
     });
 
     it('lets a read-only key give itself up too', async () => {
@@ -427,6 +447,93 @@ describe('ApiKeyController (real guard + real JwtStrategy)', () => {
         .expect(401);
 
       expect(mockApiKeyService.remove).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /keys/access-token — the apps trading their key for a short-lived token', () => {
+    beforeEach(() => {
+      resolveCredentialsFrom([DEVICE_KEY, READ_KEY, APP_KEY, BROAD_APP_KEY]);
+      mockApiKeyService.remove.mockResolvedValue(true);
+    });
+
+    async function tokenFor(raw: string): Promise<string> {
+      const response = await request(app.getHttpServer())
+        .post('/keys/access-token')
+        .set('x-api-key', raw)
+        .expect(200);
+
+      return response.body.token as string;
+    }
+
+    it('gives the key a token that stands for it and lasts five minutes', async () => {
+      const before = Date.now();
+      const response = await request(app.getHttpServer())
+        .post('/keys/access-token')
+        .set('x-api-key', DEVICE_KEY.raw)
+        .expect(200);
+
+      expect(response.body.expiresIn).toBe(300);
+      const claims = await verifyDeviceAccessToken(response.body.token);
+      expect(claims).toEqual(
+        expect.objectContaining({ keyId: DEVICE_KEY.validated.keyId, userId: 'user-1' }),
+      );
+      expect(Date.parse(response.body.expiresAt)).toBe(claims?.expiresAtMs);
+      expect(claims!.expiresAtMs).toBeGreaterThanOrEqual(before + 299_000);
+    });
+
+    it('lets the token do what the key does: pass the Hub edge check and give the key up', async () => {
+      const token = await tokenFor(DEVICE_KEY.raw);
+
+      await request(app.getHttpServer()).get('/keys/check').set('x-api-key', token).expect(204);
+      await request(app.getHttpServer())
+        .get('/keys/check')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(204);
+      await request(app.getHttpServer()).delete('/keys/current').set('x-api-key', token).expect(204);
+      expect(mockApiKeyService.remove).toHaveBeenCalledWith({ userId: 'user-1' }, DEVICE_KEY.validated.keyId);
+    });
+
+    it('refuses a token asking for another, so a stolen one ends when it expires', async () => {
+      const token = await tokenFor(DEVICE_KEY.raw);
+
+      await request(app.getHttpServer()).post('/keys/access-token').set('x-api-key', token).expect(403);
+    });
+
+    it('keeps the token out of the routes that make and list keys, like the key itself', async () => {
+      const token = await tokenFor(DEVICE_KEY.raw);
+
+      await request(app.getHttpServer())
+        .post('/keys')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'successor', capability: 'full' })
+        .expect(401);
+      await request(app.getHttpServer()).get('/keys').set('x-api-key', token).expect(401);
+      expect(mockApiKeyService.create).not.toHaveBeenCalled();
+    });
+
+    it('stops working once its key is revoked, or once it expires', async () => {
+      const token = await tokenFor(DEVICE_KEY.raw);
+      resolveCredentialsFrom([READ_KEY]);
+      await request(app.getHttpServer()).get('/keys/check').set('x-api-key', token).expect(401);
+
+      resolveCredentialsFrom([DEVICE_KEY]);
+      const stale = await mintDeviceAccessToken(
+        { keyId: DEVICE_KEY.validated.keyId, userId: 'user-1' },
+        Date.now() - 301_000,
+      );
+      await request(app.getHttpServer()).get('/keys/check').set('x-api-key', stale.token).expect(401);
+    });
+
+    it('refuses a scope-limited app key, and an unknown key or a session', async () => {
+      await request(app.getHttpServer()).post('/keys/access-token').set('x-api-key', APP_KEY.raw).expect(403);
+      await request(app.getHttpServer())
+        .post('/keys/access-token')
+        .set('x-api-key', 'f'.repeat(64))
+        .expect(401);
+      await request(app.getHttpServer())
+        .post('/keys/access-token')
+        .set('Authorization', `Bearer ${sessionAccessToken(AUTH_USER.id)}`)
+        .expect(401);
     });
   });
 });

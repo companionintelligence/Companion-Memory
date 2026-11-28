@@ -581,6 +581,20 @@ describe('flushOutbox — draining', () => {
     expect(store.get('a')).toMatchObject({ status: 'needs_attention', attempts: 1 });
   });
 
+  // Refused for the key, not the row: it goes through once the person signs in again, so a run of
+  // them must not walk it toward needs_attention.
+  it('spends none of a row’s attempts on a 401', async () => {
+    setNativeWindow();
+    const { handler, store } = fakeSidecar([item({ id: 'a', seq: 1 })]);
+    const calls = installFetch(route(handler, () => jsonResponse(401, { message: 'Unauthorized' })));
+
+    const summary = await flushOutbox();
+
+    expect(summary).toMatchObject({ attempted: 1, failed: 1 });
+    expect(calls.some((call) => call.path.endsWith('/attempt'))).toBe(false);
+    expect(store.get('a')).toMatchObject({ status: 'pending', attempts: 0 });
+  });
+
   it('classifies a network failure as transient, leaving the item pending for the next drain', async () => {
     setNativeWindow();
     const { handler, store } = fakeSidecar([item({ id: 'a', seq: 1 })]);
