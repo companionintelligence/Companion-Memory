@@ -84,6 +84,12 @@ export interface UserScopedTable {
   }>;
   /** The table's primary key when it is one column, else null. */
   primaryKey?: string | null;
+  /**
+   * Every column of the primary key, in key order, with its SQL type, or empty when the table has
+   * none. The export reads a table in this order, a page at a time, each page starting after the
+   * last row of the one before.
+   */
+  keyColumns?: ReadonlyArray<{ column: string; type: string }>;
 }
 
 export interface ImportResult {

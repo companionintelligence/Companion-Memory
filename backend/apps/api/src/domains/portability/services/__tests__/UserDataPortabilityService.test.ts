@@ -71,6 +71,7 @@ describe('UserDataPortabilityService', () => {
 
     // Tests swap these for their own. A swap must not carry into the next test.
     queryRunner.query = jest.fn() as unknown as QueryRunner['query'];
+    queryRunner.startTransaction = jest.fn();
     queryRunner.commitTransaction = jest.fn();
     queryRunner.rollbackTransaction = jest.fn();
 
@@ -149,12 +150,128 @@ describe('UserDataPortabilityService', () => {
 
     beforeEach(() => {
       userService.findById = jest.fn().mockResolvedValue(null);
-      dataSource.query = jest
+      queryRunner.query = jest
         .fn()
-        // discoverUserTables, then one page of ci.notes, then the ci.files rows
+        // the snapshot's READ ONLY, discoverUserTables, one page of ci.notes, then the ci.files rows
+        .mockResolvedValueOnce([])
         .mockResolvedValueOnce([{ schema: 'ci', table: 'notes', user_column: 'user_id' }])
         .mockResolvedValueOnce([{ id: 'n1', title: 'Hello', user_id: 'user-1' }])
-        .mockResolvedValueOnce([FILE_ROW]);
+        .mockResolvedValueOnce([FILE_ROW]) as unknown as QueryRunner['query'];
+    });
+
+    it('reads every row on one read-only snapshot, ended before the file bytes go out', async () => {
+      const order: string[] = [];
+      queryRunner.startTransaction = jest.fn(async (level?: string) => {
+        order.push(`begin ${level}`);
+      }) as unknown as QueryRunner['startTransaction'];
+      queryRunner.commitTransaction = jest.fn(async () => {
+        order.push('commit');
+      }) as unknown as QueryRunner['commitTransaction'];
+      (fileService.getFileStreamWithLength as jest.Mock).mockImplementation(async () => {
+        order.push('file bytes');
+
+        return { stream: Readable.from([Buffer.from('x')]), contentLength: 1 };
+      });
+      const { res } = readableResponse();
+
+      await service.writeExportStream({ userId: 'user-1' } as never, res);
+
+      expect(order).toEqual(['begin REPEATABLE READ', 'commit', 'file bytes']);
+      expect((queryRunner.query as jest.Mock).mock.calls[0][0]).toBe('SET TRANSACTION READ ONLY');
+      expect(dataSource.query).not.toHaveBeenCalled();
+      expect(queryRunner.release).toHaveBeenCalledTimes(1);
+    });
+
+    /** `count` rows of a table keyed on `id`, each carrying its key as the query hands it back. */
+    const page = (from: number, count: number) =>
+      Array.from({ length: count }, (_, index) => ({
+        id: `n${from + index}`,
+        user_id: 'user-1',
+        __ci_export_key: [`n${from + index}`],
+      }));
+
+    it('pages a table in key order, each page starting after the last row of the one before', async () => {
+      queryRunner.query = jest
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          {
+            schema: 'ci',
+            table: 'notes',
+            user_column: 'user_id',
+            key_columns: [{ column: 'id', type: 'uuid' }],
+          },
+        ])
+        .mockResolvedValueOnce(page(0, 500))
+        .mockResolvedValueOnce(page(500, 3))
+        .mockResolvedValueOnce([]) as unknown as QueryRunner['query'];
+      const { res, records } = readableResponse();
+
+      await service.writeExportStream({ userId: 'user-1' } as never, res);
+
+      const calls = (queryRunner.query as jest.Mock).mock.calls as Array<[string, unknown[]]>;
+      const [first, second] = [calls[2], calls[3]];
+      expect(first[0]).toMatch(/ORDER BY "id"\s+LIMIT \$2/);
+      expect(first[0]).not.toMatch(/OFFSET/);
+      expect(first[1]).toEqual(['user-1', 500]);
+      expect(second[0]).toContain('AND ("id") > ($3::uuid)');
+      expect(second[1]).toEqual(['user-1', 500, 'n499']);
+
+      const rows = records().filter((record) => record.type === 'row');
+      expect(rows).toHaveLength(503);
+      expect(rows.some((record) => '__ci_export_key' in (record.row as object))).toBe(false);
+    });
+
+    it('pages a table with no primary key by where each row is stored', async () => {
+      queryRunner.query = jest
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ schema: 'ci', table: 'record_sources', user_column: 'owner_user_id' }])
+        .mockResolvedValueOnce(
+          Array.from({ length: 500 }, (_, index) => ({
+            owner_user_id: 'user-1',
+            __ci_export_key: ['16401', `(0,${index + 1})`],
+          })),
+        )
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([]) as unknown as QueryRunner['query'];
+      const { res } = readableResponse();
+
+      await service.writeExportStream({ userId: 'user-1' } as never, res);
+
+      const calls = (queryRunner.query as jest.Mock).mock.calls as Array<[string, unknown[]]>;
+      expect(calls[2][0]).toContain('ORDER BY tableoid, ctid');
+      expect(calls[3][0]).toContain('AND (tableoid, ctid) > ($3::oid, $4::tid)');
+      expect(calls[3][1]).toEqual(['user-1', 500, '16401', '(0,500)']);
+    });
+
+    it('ends the snapshot and lets its connection go when the download is cut', async () => {
+      const { res } = readableResponse();
+
+      queryRunner.query = jest
+        .fn()
+        // the snapshot's READ ONLY, discoverUserTables, then a page of ci.notes the client never takes
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          {
+            schema: 'ci',
+            table: 'notes',
+            user_column: 'user_id',
+            key_columns: [{ column: 'id', type: 'uuid' }],
+          },
+        ])
+        .mockImplementationOnce(async () => {
+          (res as unknown as PassThrough).destroy();
+
+          return page(0, 1);
+        }) as unknown as QueryRunner['query'];
+
+      await service.writeExportStream({ userId: 'user-1' } as never, res);
+
+      expect(queryRunner.startTransaction).toHaveBeenCalledTimes(1);
+      expect(queryRunner.rollbackTransaction).toHaveBeenCalledTimes(1);
+      expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
+      expect(queryRunner.release).toHaveBeenCalledTimes(1);
     });
 
     /** A file's bytes as the object store hands them over: 64 KiB at a time, counting what was read. */

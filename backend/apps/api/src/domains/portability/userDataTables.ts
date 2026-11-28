@@ -119,7 +119,16 @@ export const DISCOVER_USER_TABLES_SQL = `
             WHERE i.indrelid = format('%I.%I', c.table_schema, c.table_name)::regclass
               AND i.indisprimary
               AND i.indnkeyatts = 1
-         ) AS primary_key
+         ) AS primary_key,
+         (
+           SELECT json_agg(json_build_object('column', a.attname, 'type', format_type(a.atttypid, a.atttypmod)) ORDER BY k.position)
+             FROM pg_index i
+            CROSS JOIN LATERAL unnest(i.indkey::int2[]) WITH ORDINALITY AS k(attnum, position)
+             JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
+            WHERE i.indrelid = format('%I.%I', c.table_schema, c.table_name)::regclass
+              AND i.indisprimary
+              AND k.position <= i.indnkeyatts
+         ) AS key_columns
   FROM information_schema.columns c
   JOIN information_schema.tables t
     ON t.table_schema = c.table_schema AND t.table_name = c.table_name
@@ -170,6 +179,8 @@ export interface DiscoveredUserColumn {
   nullable_references?: Array<{ column: string; parent: string; key: string }> | null;
   /** The table's primary key when it is one column. */
   primary_key?: string | null;
+  /** Every column of the table's primary key, in key order, with its SQL type; null when it has none. */
+  key_columns?: Array<{ column: string; type: string }> | null;
 }
 
 /**
@@ -235,6 +246,7 @@ export function groupUserTables(rows: readonly DiscoveredUserColumn[]): UserScop
       selfReferences: Array.isArray(row.self_references) ? row.self_references : [],
       laterReferences: [],
       primaryKey: row.primary_key ?? null,
+      keyColumns: Array.isArray(row.key_columns) ? row.key_columns : [],
     });
   }
 
