@@ -371,8 +371,29 @@ describeWithDatabase(`Hub ↔ Memory account link, against real Postgres (${avai
       expect(row.email_proven_at).toBeNull();
     });
 
+    it("SECURITY: will not adopt the FIRST account when someone typed the arriving person's address", async () => {
+      // Whoever reaches a fresh Memory first claims it, with any address. That first account's
+      // address used to count as proven, so this Hub sign-in was handed the planted account.
+      const planted = await createAccount('arriving@example.com');
+
+      const arriving = await signIn('arriving@example.com', nextHubId());
+
+      expect(arriving.result).toMatchObject({ replaced: false, refused: 'account_unproven' });
+      expect(arriving.accountId).toBeNull();
+      expect(await hubLinks()).toEqual([]);
+      const [row] = await dataSource.query<Array<{ email_proven_at: Date | null }>>(
+        'SELECT email_proven_at FROM ci.users WHERE id = $1',
+        [planted.id],
+      );
+      expect(row.email_proven_at).toBeNull();
+    });
+
     it('adopts an account signed up in another case, instead of duplicating it', async () => {
-      const signedUp = await createAccount('Mixed@Example.com');
+      // A proven address (one a vouching sign-in gave the account): a typed one is not adopted.
+      const signedUp = await userService.create(
+        { userId: SYSTEM_USER },
+        { name: 'mixed', email: 'Mixed@Example.com', password: 'irrelevant-1', emailProven: true },
+      );
 
       const { accountId } = await signIn('mixed@example.com', nextHubId());
 

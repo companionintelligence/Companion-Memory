@@ -16,6 +16,8 @@ import {
   SettingsStatus,
 } from '../kit';
 
+import { messageFrom } from './accountMessages';
+import { CompanionAccountGroup } from './CompanionAccountGroup';
 import { RecoveryCodesSection } from './RecoveryCodesSection';
 
 /**
@@ -44,16 +46,6 @@ const SUCCESSOR_NOT_FOUND = 'SUCCESSOR_NOT_FOUND';
 
 /** The shortest new password the server accepts (`passwordPolicy.ts`). */
 const MIN_PASSWORD_LENGTH = 8;
-
-function messageFrom(error: unknown, fallback: string, signInAgain: string): string {
-  if (error instanceof FetchJsonError && error.status === 401 && error.message === 'REAUTH_REQUIRED') {
-    // An account with no password of its own proves itself by a recent sign-in
-    // instead; the window has passed.
-    return signInAgain;
-  }
-
-  return error instanceof FetchJsonError ? error.message : fallback;
-}
 
 /**
  * An `onChange` that stores the field's value and drops its form's error, which was about the
@@ -130,6 +122,10 @@ export function AccountSection() {
   // the account (`AccountController.changeEmail`). It also means "sign in again"
   // goes through the Hub.
   const [emailManagedByHub, setEmailManagedByHub] = useState(false);
+  // The Companion (Portal) sign-in connected to this account, and whether this Memory offers one.
+  const [companionAccount, setCompanionAccount] = useState<{ email: string | null } | null>(null);
+  const [companionAvailable, setCompanionAvailable] = useState(false);
+  const [accountVersion, setAccountVersion] = useState(0);
   const signInAgain = emailManagedByHub ? HUB_SIGN_IN_AGAIN : 'Sign in again to make this change.';
 
   useEffect(() => {
@@ -137,15 +133,23 @@ export function AccountSection() {
       return;
     }
 
-    fetchJson<{ email: string; hasOwnPassword: boolean; emailManagedByHub: boolean }>('/api/account', {
+    fetchJson<{
+      email: string;
+      hasOwnPassword: boolean;
+      emailManagedByHub: boolean;
+      companionAccount?: { email: string | null } | null;
+      companionAvailable?: boolean;
+    }>('/api/account', {
       headers: { ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) },
     })
       .then((result) => {
         setHasOwnPassword(result?.hasOwnPassword ?? true);
         setEmailManagedByHub(result?.emailManagedByHub ?? false);
+        setCompanionAccount(result?.companionAccount ?? null);
+        setCompanionAvailable(result?.companionAvailable ?? false);
       })
       .catch(() => {});
-  }, [authToken, needsWebSignIn]);
+  }, [authToken, needsWebSignIn, accountVersion]);
 
   const [newEmail, setNewEmail] = useState('');
   const [emailCurrentPassword, setEmailCurrentPassword] = useState('');
@@ -428,6 +432,16 @@ export function AccountSection() {
               </SettingsFooter>
             </SettingsForm>
           </SettingsGroup>
+
+          {companionAvailable || companionAccount ? (
+            <CompanionAccountGroup
+              authToken={authToken ?? null}
+              asksCurrentPassword={asksCurrentPassword}
+              signInAgain={signInAgain}
+              companionAccount={companionAccount}
+              onChanged={() => setAccountVersion((version) => version + 1)}
+            />
+          ) : null}
 
           <RecoveryCodesSection requiresPassword={asksCurrentPassword} signInAgain={signInAgain} />
 

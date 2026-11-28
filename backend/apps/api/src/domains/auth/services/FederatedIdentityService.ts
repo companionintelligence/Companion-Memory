@@ -6,7 +6,11 @@ import { v7 as uuidv7 } from 'uuid';
 import { HUB_ISSUER_PREFIX } from '@ci/common/crypto';
 import { LoggerService } from '@ci/common/logging';
 
-import { type FederatedIdentity, FederatedIdentityEntity } from '../entities/FederatedIdentityEntity';
+import {
+  type FederatedBindMethod,
+  type FederatedIdentity,
+  FederatedIdentityEntity,
+} from '../entities/FederatedIdentityEntity';
 
 /**
  * Resolves an external OIDC identity to a local user by its (issuer, subject)
@@ -56,7 +60,7 @@ export class FederatedIdentityService {
       issuer: string;
       subject: string;
       email?: string | null;
-      bindMethod?: 'sub' | 'email_link';
+      bindMethod?: FederatedBindMethod;
     },
     manager?: EntityManager,
   ): Promise<FederatedIdentity> {
@@ -100,6 +104,20 @@ export class FederatedIdentityService {
     });
 
     return entities.map(FederatedIdentityEntity.toEgressType);
+  }
+
+  /**
+   * Remove every OIDC (Portal) identity bound to `userId`, leaving its Hub bindings: Settings'
+   * "Disconnect" for a Companion account. Returns how many were removed.
+   */
+  async unbindOidc(userId: string): Promise<number> {
+    const result = await this.repository.delete({ userId, issuer: Not(Like(`${HUB_ISSUER_PREFIX}%`)) });
+
+    if ((result.affected ?? 0) > 0) {
+      this.logger.log(`unbound ${result.affected} OIDC identity(ies) from user ${userId}`);
+    }
+
+    return result.affected ?? 0;
   }
 
   /**

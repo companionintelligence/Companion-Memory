@@ -13,10 +13,11 @@ import {
   Header,
   Post,
   Req,
+  Res,
   UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 import { z } from 'zod/v3';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
@@ -33,6 +34,7 @@ import { FederatedIdentityService } from '../services/FederatedIdentityService';
 import { HubForwardAuthBridgeService } from '../services/HubForwardAuthBridgeService';
 import { LoginThrottleService } from '../services/LoginThrottleService';
 import { isManagedAppPrincipal } from '../types';
+import { COMPANION_LINK_COOKIE, COMPANION_LINK_TTL_MS, signCompanionLink } from '../utils/companionLink';
 import { newPasswordSchema } from '../utils/passwordPolicy';
 
 const deleteAccountSchema = z.object({
@@ -124,6 +126,10 @@ export class AccountController {
     hasFederatedIdentity: boolean;
     hasOwnPassword: boolean;
     emailManagedByHub: boolean;
+    /** The Companion (Portal) sign-in connected to this account, by its address, or null. */
+    companionAccount: { email: string | null } | null;
+    /** Whether this Memory can connect a Companion sign-in at all (OIDC is configured). */
+    companionAvailable: boolean;
   }> {
     const serviceContext = toServiceContext(context);
     const user = await this.requireUser(serviceContext);
@@ -131,12 +137,100 @@ export class AccountController {
 
     // `hasOwnPassword` is what the settings page keys the current-password field on, for
     // exactly the reason `requireReauth` keys on it — whatever the account's sign-in method.
+    const companion = await this.federatedIdentityService.listForUser(user.id, { oidcOnly: true });
+
     return {
       email: user.email,
       hasFederatedIdentity: federatedIdentities.length > 0,
       hasOwnPassword: Boolean(user.passwordSetAt),
       emailManagedByHub: await this.hubBridge.namesAccount(req, user),
+      companionAccount: companion.length > 0 ? { email: companion[0].email ?? null } : null,
+      companionAvailable: Boolean(config.auth.oidc.issuerUrl),
     };
+  }
+
+  /**
+   * Start connecting a Companion (Portal) sign-in to this account, for someone signed in to it.
+   *
+   * The first account's typed address no longer counts as proven (`UserService`), so an owner who
+   * set up with a password could not otherwise add Portal sign-in: the Portal's verified address
+   * matches no PROVEN account and is refused. Here the person proves the account itself instead,
+   * with the same check an email or password change asks (`requireReauth`), and the Portal round
+   * trip proves the identity. The callback (`OidcController`) links them by (issuer, subject),
+   * whatever address either side carries.
+   *
+   * Sets a signed cookie naming this account and session (`companionLink.ts`) and answers where
+   * to send the browser; the Portal sign-in it starts is the ordinary one.
+   */
+  @Post('companion-link')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  async startCompanionLink(
+    @Context() context: RequestContext,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+    @Body(new ValidationPipe(z.object({ currentPassword: z.string().optional() })))
+    input: { currentPassword?: string },
+  ): Promise<{ redirect: string }> {
+    const user = await this.requireUser(toServiceContext(context));
+
+    if (!config.auth.oidc.issuerUrl) {
+      throw new ConflictException('Companion sign-in is not set up on this Memory');
+    }
+
+    if ((await this.federatedIdentityService.listForUser(user.id, { oidcOnly: true })).length > 0) {
+      throw new ConflictException('A Companion account is already connected');
+    }
+
+    const sessionToken: string | undefined = req.cookies?.[config.auth.cookies.sessionTokenName];
+
+    // The link is bound to this browser's session, so it needs one: a bearer token alone (an API
+    // client) has no browser to carry the round trip.
+    if (!sessionToken) {
+      throw new BadRequestException('Connect a Companion account from a web sign-in');
+    }
+
+    await this.requireReauth(user, input.currentPassword, req);
+
+    res.cookie(
+      COMPANION_LINK_COOKIE,
+      signCompanionLink(config.auth.jwt.authTokenSecret, user.id, sessionToken),
+      {
+        httpOnly: true,
+        secure: req.secure,
+        sameSite: 'lax',
+        path: '/',
+        maxAge: COMPANION_LINK_TTL_MS,
+      },
+    );
+
+    return { redirect: '/api/authenticate/oidc' };
+  }
+
+  /**
+   * Disconnect the Companion (Portal) sign-in from this account. Refused while the account has no
+   * password of its own: the Portal is then its only way in, and removing it would lock the
+   * person out.
+   */
+  @Delete('companion-link')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async removeCompanionLink(
+    @Context() context: RequestContext,
+    @Req() req: Request,
+    @Body(new ValidationPipe(z.object({ currentPassword: z.string().optional() })))
+    input: { currentPassword?: string },
+  ): Promise<void> {
+    const user = await this.requireUser(toServiceContext(context));
+
+    if (!user.passwordSetAt) {
+      throw new ConflictException(
+        'Set a password first: without one you could not sign in after disconnecting',
+      );
+    }
+
+    await this.requireReauth(user, input.currentPassword, req);
+    await this.federatedIdentityService.unbindOidc(user.id);
   }
 
   /**
