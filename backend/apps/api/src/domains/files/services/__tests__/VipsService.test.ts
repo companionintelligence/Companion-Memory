@@ -46,6 +46,14 @@ describeIfVips('VipsService.probe', () => {
     });
   });
 
+  // Imports and uploads decide what reaches libvips, so its least-tested parsers stay off.
+  it.each([
+    ['a PPM', Buffer.from('P6\n2 2\n255\n' + '\u0000'.repeat(12), 'latin1')],
+    ['an SVG', Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>')],
+  ])('refuses %s, a format whose loader libvips marks untrusted', async (_label, bytes) => {
+    await expect(makeService().probe(bytes)).rejects.toBeInstanceOf(VipsDecodeError);
+  });
+
   it('rejects bytes libvips does not recognise with VipsDecodeError', async () => {
     await expect(makeService().probe(Buffer.from('not an image'))).rejects.toBeInstanceOf(VipsDecodeError);
   });

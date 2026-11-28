@@ -52,6 +52,10 @@ export AUTH_TOKEN_SECRET AUTH_REFRESH_TOKEN_SECRET
 export AUTH_SESSION_PEPPER AUTH_FIELD_ENCRYPTION_KEY AUTH_CSRF_TOKEN_SECRET
 export POWERSYNC_JWT_SECRET
 export SIDECAR_AUTH_SECRET
+# The document parser's own bearer (setup-secrets mints it). Optional: without it
+# the API presents SIDECAR_AUTH_SECRET, as to a parser inside the summary container.
+: "${PARSER_AUTH_SECRET:=$(get_secret PARSER_AUTH_SECRET)}"
+[ -n "$PARSER_AUTH_SECRET" ] && export PARSER_AUTH_SECRET
 
 # ── Validation ───────────────────────────────────
 
@@ -151,5 +155,21 @@ fi
 [ "$fail" -eq 1 ] && exit 1
 
 # ── Launch ───────────────────────────────────────
+
+# Memory runs as the unprivileged `node` user (uid 1000), not root, so a flaw in
+# anything that parses an imported file (libvips, ffmpeg, unzip, pdftotext, the
+# importers) runs without root in the container. The entrypoint itself starts as
+# root only to read the secrets above and to hand the folders Memory writes to
+# that user: an install that ran as root before has them owned by root.
+# `--user` set by compose (already not root) skips all of this.
+if [ "$(id -u)" = 0 ]; then
+  for dir in /var/lib/ci-import /var/tmp/ci-import; do
+    mkdir -p "$dir"
+    [ "$(stat -c %u "$dir")" = 1000 ] || chown -R node:node "$dir"
+  done
+
+  export HOME=/home/node
+  exec setpriv --reuid=node --regid=node --init-groups -- "$@"
+fi
 
 exec "$@"

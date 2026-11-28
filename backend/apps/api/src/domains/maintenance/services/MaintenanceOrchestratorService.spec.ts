@@ -37,6 +37,7 @@ function makeService() {
   const embeddingCountQb = {
     select: jest.fn().mockReturnThis(),
     where: jest.fn().mockReturnThis(),
+    andWhere: jest.fn().mockReturnThis(),
     getRawOne: jest.fn(async () => ({ count: '0' })),
   };
 
@@ -459,7 +460,7 @@ describe('MaintenanceOrchestratorService', () => {
       windowLimit: 100,
       onProgress: expect.any(Function),
     });
-    expect(searchIndex.backfill).toHaveBeenCalledWith({ batchSize: 500, entityTypes: ['communication'] });
+    expect(searchIndex.backfill).toHaveBeenCalledWith({ batchSize: 500, entityTypes: ['communication'], userId: USER_ID });
   });
 
   it('geocode legs are enqueue-and-return: candidate count capped at limit, one job on the geocode queue', async () => {
@@ -538,8 +539,9 @@ describe('MaintenanceOrchestratorService', () => {
 
     // The poll stops as soon as embedded >= enqueued: exactly two polls (3 reads with baseline).
     expect(embeddingCountQb.getRawOne).toHaveBeenCalledTimes(3);
-    // The drain count is restricted to the swept entity types.
-    expect(embeddingCountQb.where).toHaveBeenCalledWith('embedding.entityType IN (:...types)', {
+    // The drain counts the caller's own embeddings, of the swept entity types.
+    expect(embeddingCountQb.where).toHaveBeenCalledWith('embedding.userId = :userId', { userId: USER_ID });
+    expect(embeddingCountQb.andWhere).toHaveBeenCalledWith('embedding.entityType IN (:...types)', {
       types: ['communication'],
     });
 
@@ -553,6 +555,23 @@ describe('MaintenanceOrchestratorService', () => {
       enqueued: 3,
       drain: { enqueued: 3, embedded: 3, skipped: 0, drained: true },
     });
+  });
+
+  // Any signed-in user can run the orchestrator; the unscoped sweep re-embeds every account's rows.
+  it('search_index sweeps only the caller’s rows, whatever account the request body names', async () => {
+    const { service, searchIndex } = makeService();
+    const { emit } = collectEmits();
+
+    await service.orchestrate(
+      USER_ID,
+      {
+        stages: ['search_index'],
+        options: { searchIndex: { entityTypes: ['content'], userId: 'someone-else' } as never },
+      },
+      emit,
+    );
+
+    expect(searchIndex.backfill).toHaveBeenCalledWith({ entityTypes: ['content'], userId: USER_ID });
   });
 
   it('search_index drain: counts skip-marked rows toward completion, so a skip-heavy drain ends without the timeout', async () => {

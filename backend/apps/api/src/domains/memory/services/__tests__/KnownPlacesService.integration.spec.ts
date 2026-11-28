@@ -1,3 +1,4 @@
+import { NotFoundException } from '@nestjs/common';
 import type { ModuleRef } from '@nestjs/core';
 import { DataSource } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
@@ -540,6 +541,27 @@ describeWithDb(`KnownPlacesService against Postgres (${availability.target})`, (
     expect(await activeLivesIn(ownerId)).toEqual([
       { relationship_id: place.id, to_entity_id: homeLocationId },
     ]);
+  });
+
+  // The relationship is written with raw SQL, so nothing else checks its end: naming another
+  // account's Location handed back that place's name and coordinates as the caller's own.
+  it("refuses to confirm another account's Location, and writes nothing", async () => {
+    await expect(
+      service.updateKnownPlace(stranger, { label: 'Mine now', kind: 'home', locationId: homeLocationId }),
+    ).rejects.toThrow(NotFoundException);
+
+    const [{ count }] = await dataSource.query(
+      `SELECT count(*)::int AS count FROM ci.relationships WHERE owner_user_id = $1 AND to_entity_id = $2`,
+      [strangerId, homeLocationId],
+    );
+    expect(count).toBe(0);
+    expect(await service.getKnownPlaces(stranger, 'home')).toEqual([]);
+  });
+
+  it('refuses a locationId that is not an id at all', async () => {
+    await expect(
+      service.updateKnownPlace(owner, { label: 'Home', kind: 'home', locationId: 'not-a-uuid' }),
+    ).rejects.toThrow(NotFoundException);
   });
 
   it('re-confirming Home updates the same relationship instead of minting a second place', async () => {

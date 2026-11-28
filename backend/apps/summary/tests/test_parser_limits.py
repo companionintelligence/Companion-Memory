@@ -15,7 +15,6 @@ from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.testclient import TestClient
 
 from ci.summary import parser as parser_module
-from ci.summary.config import settings
 from ci.summary.parser import LimitRequestBody, app
 from ci.summary.parser_worker import (
     MAX_COMPRESSION_RATIO,
@@ -65,7 +64,7 @@ def _docx_bytes(paragraph: str = "Hello world", padding: bytes = b"") -> bytes:
 
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
-    monkeypatch.setattr(settings, "sidecar_auth_secret", "s3cret")
+    monkeypatch.setenv("PARSER_AUTH_SECRET", "s3cret")
     return TestClient(app)
 
 

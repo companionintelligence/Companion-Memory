@@ -288,6 +288,8 @@ describe('AccountController (real guards + real JwtStrategy and ApiKeyStrategy)'
           hasFederatedIdentity: false,
           hasOwnPassword: true,
           emailManagedByHub: false,
+          companionAccount: null,
+          companionAvailable: false,
         });
     });
   });

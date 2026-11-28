@@ -33,8 +33,13 @@ if [[ -f "$LEGACY_OVERRIDE_HOST" ]]; then
   echo "==> Removed override: $LEGACY_OVERRIDE_HOST"
 fi
 
-echo "==> Recreating api + gateway + hbpe-service + summary-service from Hub-pinned compose..."
-hub_compose "up -d --force-recreate --no-deps api gateway hbpe-service summary-service"
+RECREATE="api gateway hbpe-service summary-service"
+if hub_compose "config --services" | grep -qx document-parser; then
+  RECREATE="${RECREATE} document-parser"
+fi
+
+echo "==> Recreating ${RECREATE} from Hub-pinned compose..."
+hub_compose "up -d --force-recreate --no-deps ${RECREATE}"
 
 refresh_traefik_upstream
 

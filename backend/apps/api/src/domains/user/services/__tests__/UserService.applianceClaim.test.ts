@@ -212,22 +212,18 @@ describe('UserService — claiming an unowned appliance', () => {
     expect(update!.sql).not.toMatch(/deleted_at/);
   });
 
-  it("marks the first account's address proven, keeping any earlier stamp", async () => {
-    // Nobody else is on the appliance yet, so its address cannot be someone else's planted to
-    // receive their Portal or Hub sign-in; an owner who signed up with a password keeps the link.
+  it("does not mark the first account's typed address proven: claiming the appliance proves nothing about it", async () => {
+    // Whoever reaches a fresh appliance first can type somebody else's address. Proven, it would
+    // receive that person's later Portal or Hub sign-in (2026-11-20 audit).
     const { service, queries } = makeService();
 
     const owner = await service.create(SYSTEM, NEW_USER);
 
     const update = queries.find((q) => q.sql.includes("SET role = 'admin'"));
 
-    expect(update!.sql).toMatch(/email_proven_at = COALESCE\(email_proven_at, now\(\)\)/);
-    // ...and the account handed back says so, as it says `admin`.
-    expect(owner.emailProvenAt).toBeInstanceOf(Date);
-
-    const member = await makeService({ promotedRows: [] }).service.create(SYSTEM, NEW_USER);
-
-    expect(member.emailProvenAt).toBeNull();
+    expect(update!.sql).not.toMatch(/email_proven_at/);
+    expect(owner.role).toBe('admin');
+    expect(owner.emailProvenAt).toBeNull();
   });
 
   it('stores the address trimmed and lower-cased', async () => {

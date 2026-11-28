@@ -30,7 +30,7 @@ import {
 import { LoggerService } from '@ci/common/logging';
 import { ValidationPipe } from '@ci/common/pipes';
 import config from '@ci/configuration';
-import { type CreateUserDto, UserService } from '@ci/domains/user';
+import { type CreateUserDto, normalizeEmail, UserService } from '@ci/domains/user';
 
 import { AuthService, type SignupIntent } from '../services/AuthService';
 import { CsrfService } from '../services/CsrfService';
@@ -40,6 +40,7 @@ import { OidcNativeCodeService } from '../services/OidcNativeCodeService';
 import { SignupCodeService } from '../services/SignupCodeService';
 import { MEMORY_SIGN_IN_CLIENT } from '../utils/applianceAudience';
 import { ensureCsrfCookie, setCsrfCookie, setSessionCookie } from '../utils/authCookies';
+import { COMPANION_LINK_COOKIE, verifyCompanionLink } from '../utils/companionLink';
 import { renderSignupConfirmPage } from '../utils/signupConfirmPage';
 
 /**
@@ -447,6 +448,11 @@ export class OidcController {
       return failRedirect('missing_pkce');
     }
 
+    // "Connect a Companion account", started from Settings (`AccountController.startCompanionLink`):
+    // read once, whatever this sign-in turns out to be. Web only; a native sign-in never carries it.
+    const linkCookie: unknown = isNative ? undefined : req.cookies?.[COMPANION_LINK_COOKIE];
+    res.clearCookie(COMPANION_LINK_COOKIE, { path: '/' });
+
     if (error) {
       return failRedirect(error);
     }
@@ -559,6 +565,14 @@ export class OidcController {
         name: userInfo.name,
         emailVerified: userInfo.email_verified === true,
       };
+      if (linkCookie !== undefined) {
+        return await this.finishCompanionLink(req, res, linkCookie, {
+          issuer,
+          subject: userInfo.sub,
+          person,
+        });
+      }
+
       // (iss, sub) first; email is only a one-time link for unfederated rows.
       const resolution = await this.resolvePortalUser({
         subject: userInfo.sub,
@@ -1196,6 +1210,78 @@ export class OidcController {
       },
       manager,
     );
+  }
+
+  /**
+   * The end of "Connect a Companion account": link the Portal identity this round trip proved to
+   * the account the signed-in person proved with their password (`AccountController`), and return
+   * them to Settings. No new session: they are already signed in.
+   *
+   * Only for the browser and session that asked, while still signed in as that account
+   * (`verifyCompanionLink`, `sessionEstablishedAt`). Refused, linking nothing, when the identity
+   * already belongs to another account. When the Portal vouches for the account's own address,
+   * that address becomes proven too, as a Portal-made account's is.
+   */
+  private async finishCompanionLink(
+    req: Request,
+    res: Response,
+    linkCookie: unknown,
+    identity: { issuer: string | undefined; subject: string | undefined; person: PortalPerson },
+  ): Promise<void> {
+    const done = (outcome: string) => res.redirect(`/self?companion=${encodeURIComponent(outcome)}`);
+    const sessionToken: string | undefined = req.cookies?.[config.auth.cookies.sessionTokenName];
+    const userId = verifyCompanionLink(config.auth.jwt.authTokenSecret, linkCookie, sessionToken);
+
+    if (
+      !userId ||
+      !sessionToken ||
+      (await this.authService.sessionEstablishedAt(userId, sessionToken)) == null
+    ) {
+      this.logger.warn('Companion link refused: no matching signed-in session for the link');
+
+      return done('expired');
+    }
+
+    const { issuer, subject, person } = identity;
+
+    if (!issuer || !subject) {
+      return done('failed');
+    }
+
+    const holder = await this.federatedIdentityService.findUserId(issuer, subject);
+
+    if (holder != null && holder !== userId) {
+      this.logger.warn(
+        `Companion link refused for user ${userId}: ${issuer}#${subject} belongs to another account`,
+      );
+
+      return done('linked_elsewhere');
+    }
+
+    if (holder == null) {
+      await this.federatedIdentityService.bind({
+        userId,
+        issuer,
+        subject,
+        email: person.email,
+        bindMethod: 'session_link',
+      });
+    }
+
+    const user = await this.userService.findById({ userId: SYSTEM_USER }, userId);
+
+    if (
+      user &&
+      person.emailVerified &&
+      normalizeEmail(person.email) === user.email &&
+      !this.userService.isEmailProven(user)
+    ) {
+      await this.userService.markEmailProven(userId);
+    }
+
+    this.logger.log(`Companion account ${issuer}#${subject} connected to user ${userId}`);
+
+    return done('connected');
   }
 
   /**

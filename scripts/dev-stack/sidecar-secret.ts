@@ -28,7 +28,29 @@ const KEY = 'SIDECAR_AUTH_SECRET';
  * `.env` does not exist, and a file holding just this key would stop it.
  */
 export function ensureSidecarAuthSecret(envFile: string, env: NodeJS.ProcessEnv = process.env): boolean {
-  if (env[KEY] !== undefined) {
+  return ensureMintedSecret(
+    envFile,
+    KEY,
+    'Bearer the API presents to the HBPE/Summary sidecars; they refuse requests without it.',
+    env,
+  );
+}
+
+/**
+ * The same for PARSER_AUTH_SECRET, the document parser's own bearer (added 2026-11-27, when the
+ * parser left the summary container): the parser container exits 1 without it.
+ */
+export function ensureParserAuthSecret(envFile: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  return ensureMintedSecret(
+    envFile,
+    'PARSER_AUTH_SECRET',
+    'Bearer the API presents to the document parser only; it refuses requests without it.',
+    env,
+  );
+}
+
+function ensureMintedSecret(envFile: string, key: string, comment: string, env: NodeJS.ProcessEnv): boolean {
+  if (env[key] !== undefined) {
     return false;
   }
 
@@ -37,13 +59,10 @@ export function ensureSidecarAuthSecret(envFile: string, env: NodeJS.ProcessEnv 
   if (fs.existsSync(envFile)) {
     // Leading newline: a `.env` that does not end in one would otherwise glue
     // this key onto its last value.
-    fs.appendFileSync(
-      envFile,
-      `\n# Bearer the API presents to the HBPE/Summary sidecars; they refuse requests without it.\n${KEY}=${secret}\n`,
-    );
+    fs.appendFileSync(envFile, `\n# ${comment}\n${key}=${secret}\n`);
   }
 
-  env[KEY] = secret;
+  env[key] = secret;
 
   return true;
 }

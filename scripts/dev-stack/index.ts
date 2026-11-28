@@ -35,7 +35,7 @@ import { keyFromArgv } from './key';
 import { fail, link, note, ok, step, table } from './log';
 import { buildOvermindEnv, powersyncEnabled, powersyncMissingKeys } from './overmind-env';
 import { allocStackPorts, dockerPublishedPorts } from './ports';
-import { ensureSidecarAuthSecret } from './sidecar-secret';
+import { ensureParserAuthSecret, ensureSidecarAuthSecret } from './sidecar-secret';
 import { removeStaleContainers } from './stale-containers';
 import { acquireSupervisorLock, liveStackMessage, readLiveHolder, socketIsLive } from './supervisor-lock';
 
@@ -46,6 +46,10 @@ dotenv.config({ path: path.join(ROOT, '.env'), quiet: true });
 // `make init` backfills it for `make dev`; running this script directly skips that.
 if (ensureSidecarAuthSecret(path.join(ROOT, '.env'))) {
   note('Added a generated SIDECAR_AUTH_SECRET to .env (it predated sidecar auth)');
+}
+
+if (ensureParserAuthSecret(path.join(ROOT, '.env'))) {
+  note('Added a generated PARSER_AUTH_SECRET to .env (it predated the parser’s own container)');
 }
 
 const caddy = new CaddyClient();

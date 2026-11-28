@@ -16,6 +16,8 @@ import {
   SettingsStatus,
 } from '../kit';
 
+import { messageFrom } from './accountMessages';
+import { CompanionAccountGroup } from './CompanionAccountGroup';
 import { RecoveryCodesSection } from './RecoveryCodesSection';
 
 /**
@@ -23,7 +25,15 @@ import { RecoveryCodesSection } from './RecoveryCodesSection';
  * fresh session when there is no Memory session to keep, so reloading alone would
  * keep the old one.
  */
-const HUB_SIGN_IN_AGAIN = 'Sign out, then open Memory from your Hub again to make this change.';
+/**
+ * What to do when the server wants a fresh sign-in for a change (`REAUTH_REQUIRED`): an account with
+ * no password of its own proves itself by a sign-in less than 10 minutes old
+ * (`AccountController.REAUTH_SESSION_WINDOW_MS`). Both say to log out first, since refreshing the
+ * page keeps the same session, and name the time limit, so the message does not read as an error.
+ */
+const SIGN_IN_AGAIN = 'Log out and back in, then come back here within 10 minutes to make this change.';
+const HUB_SIGN_IN_AGAIN =
+  'Log out, open Memory from your Hub again, then come back here within 10 minutes to make this change.';
 
 /**
  * What a 403 from `DELETE /account` means. Only the device key a phone holds can meet
@@ -44,16 +54,6 @@ const SUCCESSOR_NOT_FOUND = 'SUCCESSOR_NOT_FOUND';
 
 /** The shortest new password the server accepts (`passwordPolicy.ts`). */
 const MIN_PASSWORD_LENGTH = 8;
-
-function messageFrom(error: unknown, fallback: string, signInAgain: string): string {
-  if (error instanceof FetchJsonError && error.status === 401 && error.message === 'REAUTH_REQUIRED') {
-    // An account with no password of its own proves itself by a recent sign-in
-    // instead; the window has passed.
-    return signInAgain;
-  }
-
-  return error instanceof FetchJsonError ? error.message : fallback;
-}
 
 /**
  * An `onChange` that stores the field's value and drops its form's error, which was about the
@@ -130,22 +130,34 @@ export function AccountSection() {
   // the account (`AccountController.changeEmail`). It also means "sign in again"
   // goes through the Hub.
   const [emailManagedByHub, setEmailManagedByHub] = useState(false);
-  const signInAgain = emailManagedByHub ? HUB_SIGN_IN_AGAIN : 'Sign in again to make this change.';
+  // The Companion (Portal) sign-in connected to this account, and whether this Memory offers one.
+  const [companionAccount, setCompanionAccount] = useState<{ email: string | null } | null>(null);
+  const [companionAvailable, setCompanionAvailable] = useState(false);
+  const [accountVersion, setAccountVersion] = useState(0);
+  const signInAgain = emailManagedByHub ? HUB_SIGN_IN_AGAIN : SIGN_IN_AGAIN;
 
   useEffect(() => {
     if (needsWebSignIn) {
       return;
     }
 
-    fetchJson<{ email: string; hasOwnPassword: boolean; emailManagedByHub: boolean }>('/api/account', {
+    fetchJson<{
+      email: string;
+      hasOwnPassword: boolean;
+      emailManagedByHub: boolean;
+      companionAccount?: { email: string | null } | null;
+      companionAvailable?: boolean;
+    }>('/api/account', {
       headers: { ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}) },
     })
       .then((result) => {
         setHasOwnPassword(result?.hasOwnPassword ?? true);
         setEmailManagedByHub(result?.emailManagedByHub ?? false);
+        setCompanionAccount(result?.companionAccount ?? null);
+        setCompanionAvailable(result?.companionAvailable ?? false);
       })
       .catch(() => {});
-  }, [authToken, needsWebSignIn]);
+  }, [authToken, needsWebSignIn, accountVersion]);
 
   const [newEmail, setNewEmail] = useState('');
   const [emailCurrentPassword, setEmailCurrentPassword] = useState('');
@@ -428,6 +440,16 @@ export function AccountSection() {
               </SettingsFooter>
             </SettingsForm>
           </SettingsGroup>
+
+          {companionAvailable || companionAccount ? (
+            <CompanionAccountGroup
+              authToken={authToken ?? null}
+              asksCurrentPassword={asksCurrentPassword}
+              signInAgain={signInAgain}
+              companionAccount={companionAccount}
+              onChanged={() => setAccountVersion((version) => version + 1)}
+            />
+          ) : null}
 
           <RecoveryCodesSection requiresPassword={asksCurrentPassword} signInAgain={signInAgain} />
 

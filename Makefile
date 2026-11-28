@@ -662,6 +662,13 @@ init: ## Initialize repository after checkout
 		printf '\n# Bearer the API presents to the HBPE/Summary sidecars; they refuse requests without it.\nSIDECAR_AUTH_SECRET=%s\n' \
 			"$$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')" >> .env; \
 	fi
+	@# The same for the document parser's own bearer, added when the parser left
+	@# the summary container: the parser exits 1 without it.
+	@if [ -f .env ] && ! grep -q '^PARSER_AUTH_SECRET=' .env; then \
+		printf "Adding a generated PARSER_AUTH_SECRET to .env...\n\n"; \
+		printf '\n# Bearer the API presents to the document parser only; it refuses requests without it.\nPARSER_AUTH_SECRET=%s\n' \
+			"$$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')" >> .env; \
+	fi
 
 .PHONY: install
 install: ## Install project dependencies

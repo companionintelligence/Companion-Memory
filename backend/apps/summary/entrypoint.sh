@@ -1,6 +1,9 @@
 #!/bin/bash
-# Entrypoint for the CI-Summary service.
-# Loads secrets, assembles DATABASE_URL, then starts services.
+# Entrypoint for the CI-Summary image: the summary service and the document parser.
+# Loads secrets, assembles DATABASE_URL, then starts what SUMMARY_ROLE names:
+#   summary  the summary API (port 8001), with its database role
+#   parser   the document parser (port 8002) alone, with no database settings
+#   all      both in one container, as before the parser had its own (the default)
 
 set -e
 
@@ -24,6 +27,48 @@ get_secret() {
     fi
   done < "$SECRETS_FILE"
 }
+
+# ── Role ─────────────────────────────────────────
+
+SUMMARY_ROLE="${SUMMARY_ROLE:-all}"
+case "$SUMMARY_ROLE" in
+  all|summary|parser) ;;
+  *)
+    echo "Error: SUMMARY_ROLE must be summary, parser or all (got: $SUMMARY_ROLE)."
+    exit 1
+    ;;
+esac
+
+# The parser reads documents an import or a sync brought in, chosen by whoever
+# made them, through large parsing libraries. Run on its own it holds one secret,
+# the bearer the API presents to it, and nothing else: no database settings and
+# not the bearer the summary service accepts. So a document that took over the
+# parser could not reach the database or ask the summary service for anything.
+if [ "$SUMMARY_ROLE" = parser ]; then
+  : "${PARSER_AUTH_SECRET:=$(get_secret PARSER_AUTH_SECRET)}"
+  if [ -z "$PARSER_AUTH_SECRET" ]; then
+    echo "Error: PARSER_AUTH_SECRET is not set."
+    echo ""
+    echo "The API presents this bearer to the document parser, which refuses every"
+    echo "request without it. setup-secrets mints it; otherwise:"
+    echo ""
+    echo "  1. Add PARSER_AUTH_SECRET to $SECRETS_FILE, or"
+    echo "  2. Set the PARSER_AUTH_SECRET environment variable"
+    exit 1
+  fi
+  # An allowlist, not a list of things to drop: whatever runs this container can
+  # hand it more than its compose file names. A Hub gives every service of an app
+  # the whole app env, Memory's connect and identity keys and HUB_API_KEY among
+  # them, which removing DATABASE_* alone left in the parser's hands. The parser
+  # reads only PARSER_AUTH_SECRET; the rest is what Python and uvicorn run on.
+  parser_env=()
+  for name in PATH HOME LANG LC_ALL TZ TMPDIR VIRTUAL_ENV PYTHONPATH \
+    PYTHONUNBUFFERED PYTHONDONTWRITEBYTECODE PARSER_AUTH_SECRET; do
+    [ -n "${!name:-}" ] && parser_env+=("$name=${!name}")
+  done
+  echo "Starting the document parser on port 8002..."
+  exec env -i "${parser_env[@]}" uvicorn ci.summary.parser:app --host 0.0.0.0 --port 8002
+fi
 
 # ── Database ─────────────────────────────────────
 
@@ -83,6 +128,15 @@ fi
 # Scheduling is owned by the NestJS API (pg-boss crons); background work
 # arrives through the summary API's /functions/run endpoint. There is no
 # separate worker process anymore.
+
+if [ "$SUMMARY_ROLE" = summary ]; then
+  echo "Starting FastAPI summary API server on port 8001..."
+  exec uvicorn ci.summary.api:app --host 0.0.0.0 --port 8001
+fi
+
+# `all`: both, the parser with its own bearer when the secrets carry one.
+: "${PARSER_AUTH_SECRET:=$(get_secret PARSER_AUTH_SECRET)}"
+[ -n "$PARSER_AUTH_SECRET" ] && export PARSER_AUTH_SECRET
 
 echo "Starting CI-Summary services..."
 

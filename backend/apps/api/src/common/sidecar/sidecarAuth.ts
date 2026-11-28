@@ -15,3 +15,14 @@ export function sidecarAuthHeaders(): Record<string, string> {
 
   return secret ? { Authorization: `Bearer ${secret}` } : {};
 }
+
+/**
+ * The bearer for the document parser alone: its own PARSER_AUTH_SECRET, so the parser never holds
+ * the key the summary and HBPE sidecars accept. Falls back to SIDECAR_AUTH_SECRET on an install
+ * whose parser still runs inside the summary container and has no key of its own.
+ */
+export function parserAuthHeaders(): Record<string, string> {
+  const secret = config.services.parserAuthSecret || config.services.sidecarAuthSecret;
+
+  return secret ? { Authorization: `Bearer ${secret}` } : {};
+}

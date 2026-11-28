@@ -70,6 +70,14 @@ check_backup_slot() {
 check_backup_slot
 
 RECREATE="api gateway hbpe-service summary-service"
+# The document parser has its own service once the Hub's ci-memory listing names
+# it (it used to run inside summary-service). An override for a service the
+# listing does not define would make compose create a bare one, so only then.
+PARSER_LISTED=0
+if hub_compose "config --services" | grep -qx document-parser; then
+  PARSER_LISTED=1
+  RECREATE="${RECREATE} document-parser"
+fi
 if [[ "$FRONTEND_ONLY" -eq 1 ]]; then
   RECREATE="gateway"
 fi
@@ -181,6 +189,14 @@ EOF
   summary-service:
     image: ${SUMMARY_IMAGE}
 ${ENV_FILE_YAML}
+EOF
+  fi
+  # No env_file: the parser must not get the app env (database, LLM key).
+  if [[ "$PARSER_LISTED" -eq 1 ]] && keep_swapped document-parser "$SUMMARY_IMAGE"; then
+    PINNED="${PINNED} document-parser"
+    cat <<EOF
+  document-parser:
+    image: ${SUMMARY_IMAGE}
 EOF
   fi
   cat <<EOF

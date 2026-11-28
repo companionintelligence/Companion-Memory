@@ -410,7 +410,7 @@ export class MaintenanceOrchestratorService {
         return this.runMediaDimensionsLeg(userId, options.mediaDimensions ?? {});
 
       case 'search_index':
-        return this.runSearchIndexLeg(body, progress);
+        return this.runSearchIndexLeg(userId, body, progress);
 
       case 'backfill_summaries':
         return this.summaryBackfillService.backfill(userId, {
@@ -601,17 +601,21 @@ export class MaintenanceOrchestratorService {
    * a genuinely stalled drain (e.g. Ollama down with jobs still queued).
    */
   private async runSearchIndexLeg(
+    userId: string,
     body: OrchestrateBody,
     progress: (counters: Record<string, unknown>) => void,
   ): Promise<object> {
-    const opts = body.options?.searchIndex ?? {};
+    // The caller's own rows only: any signed-in user can run the orchestrator, and the unscoped
+    // sweep re-embeds every account's (the administrator's `search-index/backfill`). Set after
+    // the request's own options, so a body cannot name another account.
+    const opts = { ...body.options?.searchIndex, userId };
     const drain = body.searchIndexDrain;
 
     if (!drain) {
       return this.searchIndexBackfillService.backfill(opts);
     }
 
-    const baseline = await this.embeddedCount(opts.entityTypes);
+    const baseline = await this.embeddedCount(opts.entityTypes, userId);
     const skipBaseline = await this.skippedCount(opts.entityTypes);
     const result = await this.searchIndexBackfillService.backfill(opts);
     const timeoutMs = drain.timeoutMs ?? DRAIN_DEFAULT_TIMEOUT_MS;
@@ -621,7 +625,7 @@ export class MaintenanceOrchestratorService {
 
     while (embedded + skipped < result.enqueued && Date.now() - drainStartedAt < timeoutMs) {
       await sleep(this.drainPollIntervalMs);
-      embedded = Math.max((await this.embeddedCount(opts.entityTypes)) - baseline, 0);
+      embedded = Math.max((await this.embeddedCount(opts.entityTypes, userId)) - baseline, 0);
       skipped = Math.max((await this.skippedCount(opts.entityTypes)) - skipBaseline, 0);
       progress({ enqueued: result.enqueued, embedded, skipped });
     }
@@ -644,14 +648,15 @@ export class MaintenanceOrchestratorService {
    * serves (the leading `entity_type` column of the table's unique index serves
    * the filter). Global, not user-scoped, mirroring the backfill it tracks.
    */
-  private async embeddedCount(types?: readonly string[]): Promise<number> {
+  private async embeddedCount(types: readonly string[] | undefined, userId: string): Promise<number> {
     const builder = this.dataSource
       .getRepository(EmbeddingEntity)
       .createQueryBuilder('embedding')
-      .select('COUNT(*)', 'count');
+      .select('COUNT(*)', 'count')
+      .where('embedding.userId = :userId', { userId });
 
     if (types && types.length > 0) {
-      builder.where('embedding.entityType IN (:...types)', { types: [...types] });
+      builder.andWhere('embedding.entityType IN (:...types)', { types: [...types] });
     }
 
     const row = await builder.getRawOne<{ count: string }>();

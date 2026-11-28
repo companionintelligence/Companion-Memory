@@ -1,6 +1,11 @@
 import { Column, CreateDateColumn, Entity, PrimaryColumn } from 'typeorm';
 
-export type FederatedBindMethod = 'sub' | 'email_link';
+/**
+ * How the identity came to be bound: `sub`, by the Portal sign-in that created the account;
+ * `email_link`, once, by an address both sides vouched for; `session_link`, by the person signed
+ * in to the account, who proved it and then signed in to the Portal from Settings.
+ */
+export type FederatedBindMethod = 'sub' | 'email_link' | 'session_link';
 
 /**
  * `ci.federated_identities` — binds an external OIDC identity (issuer +

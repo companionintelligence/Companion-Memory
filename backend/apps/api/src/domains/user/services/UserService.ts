@@ -229,10 +229,9 @@ export class UserService {
       const saved = await manager.save(instance);
 
       // Before the event, so nothing observing UserCreated can read a half-claimed appliance. The
-      // returned account says what the row now says: admin, with its address proven.
+      // returned account says what the row now says: admin.
       if (await this.claimApplianceIfUnowned(manager, saved.id)) {
         saved.role = 'admin';
-        saved.emailProvenAt ??= new Date();
       }
 
       await alongside?.(manager, UserEntity.toEgressType(saved));
@@ -312,10 +311,14 @@ export class UserService {
    * operator's: clear the departed owner's `deleted_at` and `purge_after` inside the grace period,
    * or set `role = 'admin'` on the account that should hold it (`make dbshell`).
    *
-   * The first account's address is also marked proven (`email_proven_at`). Nobody else is on the
-   * appliance yet, so it cannot be another person's address planted to receive their Portal or
-   * Hub sign-in, which is the case the proof exists for. The owner who signed up with a password
-   * keeps their Portal sign-in.
+   * The first account's address is NOT marked proven here. It used to be, on the reasoning that
+   * nobody else is on the appliance yet; but whoever reaches a fresh appliance first can sign up
+   * with a password under somebody else's address, and a proven address is what hands that
+   * person's later Portal or Hub sign-in to the account (2026-11-20 audit). An address is proven
+   * only by a sign-in that vouches for it (`CreateUserDto.emailProven`). An owner who signed up
+   * with a password connects their Portal sign-in from Settings instead
+   * (`POST /account/companion-link`), and through the Hub by signing in with the password in the
+   * same browser (`HubForwardAuthBridgeService`).
    *
    * Runs in {@link insertAccount}'s transaction, under its advisory lock, because the decision reads
    * a table it is about to write. Two signups racing on a fresh appliance would otherwise both
@@ -335,8 +338,7 @@ export class UserService {
     const promoted = await manager.query<Array<{ id: string }>>(
       `WITH promoted AS (
          UPDATE ci.users
-            SET role = 'admin',
-                email_proven_at = COALESCE(email_proven_at, now())
+            SET role = 'admin'
           WHERE id = $1
             AND NOT EXISTS (
               SELECT 1 FROM ci.users WHERE id <> $1

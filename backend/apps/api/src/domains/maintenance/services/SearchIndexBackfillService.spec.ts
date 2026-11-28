@@ -56,8 +56,15 @@ function makeDataSource(
   pagesByType: Record<string, string[][]>,
   embeddedByType: Record<string, number> = {},
 ) {
-  const calls: Array<{ entityType: string; after: string | null; afterTs?: string | null; limit: number }> =
-    [];
+  const calls: Array<{
+    entityType: string;
+    after: string | null;
+    afterTs?: string | null;
+    limit: number;
+    owner: string | null;
+    sql: string;
+  }> = [];
+  const embeddedProbes: Array<{ entityType: string; owner: string | null }> = [];
   const cursors: Record<string, number> = {};
 
   const query = jest.fn(async (sql: string, params?: unknown[]) => {
@@ -71,18 +78,20 @@ function makeDataSource(
     // ci_search.embeddings; answer the configured drain count for that type.
     if (/FROM ci_search\.embeddings/i.test(sql)) {
       const entityType = params[0] as string;
+      embeddedProbes.push({ entityType, owner: (params[1] ?? null) as string | null });
 
       return [{ count: String(embeddedByType[entityType] ?? 0) }];
     }
 
-    // Time-paged (hypertable) types bind 4 params (type, afterTs, afterId, limit);
-    // plain uuid keysets bind 3 (type, afterId, limit).
-    const timePaged = params.length === 4;
+    // Time-paged (hypertable) types bind 5 params (type, afterTs, afterId, limit, owner);
+    // plain uuid keysets bind 4 (type, afterId, limit, owner).
+    const timePaged = params.length === 5;
     const entityType = params[0] as string;
     const after = ((timePaged ? params[2] : params[1]) ?? null) as string | null;
     const afterTs = timePaged ? ((params[1] ?? null) as string | null) : undefined;
     const limit = (timePaged ? params[3] : params[2]) as number;
-    calls.push({ entityType, after, afterTs, limit });
+    const owner = ((timePaged ? params[4] : params[3]) ?? null) as string | null;
+    calls.push({ entityType, after, afterTs, limit, owner, sql });
 
     const pages = pagesByType[entityType] ?? [];
     const idx = cursors[entityType] ?? 0;
@@ -93,7 +102,7 @@ function makeDataSource(
     return page.map((id) => (timePaged ? { id, ts: `ts-${id}` } : { id }));
   });
 
-  return { query, calls } as const;
+  return { query, calls, embeddedProbes } as const;
 }
 
 function makeService(pagesByType: Record<string, string[][]>, embeddedByType: Record<string, number> = {}) {
@@ -315,6 +324,37 @@ describe('SearchIndexBackfillService', () => {
     expect(result.embedded).toBe(42);
     expect(result.embeddedPerType).toEqual({ communication: 42 });
     expect(sendMany).not.toHaveBeenCalled();
+  });
+
+  // Any signed-in user can reach the sweep through POST /v1/ingest/finish and the orchestrator,
+  // so those pass the caller; only the administrator's route sweeps every account.
+  it('sweeps every account when no owner is given (the administrator’s appliance-wide job)', async () => {
+    const { service, ds } = makeService({ content: [['c1'], []], communication: [['m1'], []] });
+
+    await service.backfill({ entityTypes: ['content', 'communication'], batchSize: 100 });
+
+    expect(ds.calls.length).toBeGreaterThan(0);
+    expect(ds.calls.every((call) => call.owner === null)).toBe(true);
+    expect(ds.embeddedProbes.every((probe) => probe.owner === null)).toBe(true);
+  });
+
+  it('sweeps and counts only the given account’s rows, by each table’s own owner column', async () => {
+    const { service, ds } = makeService({
+      content: [['c1'], []],
+      communication: [['m1'], []],
+      person: [['p1'], []],
+    });
+
+    await service.backfill({ entityTypes: ['content', 'communication', 'person'], batchSize: 100, userId: 'user-1' });
+
+    expect(ds.calls.every((call) => call.owner === 'user-1')).toBe(true);
+    expect(ds.embeddedProbes.map((probe) => probe.owner)).toEqual(['user-1', 'user-1', 'user-1']);
+    const sqlFor = (type: string) => ds.calls.find((call) => call.entityType === type)?.sql ?? '';
+    expect(sqlFor('content')).toMatch(/s\."user_id" = \$4::uuid/);
+    // Hypertable-paged, so the owner is the fifth value.
+    expect(sqlFor('communication')).toMatch(/s\."user_id" = \$5::uuid/);
+    // ci.entities rows are owned through owner_user_id.
+    expect(sqlFor('person')).toMatch(/s\."owner_user_id" = \$4::uuid/);
   });
 
   it('keyset-pages plain uuid tables until a short page, advancing the cursor by the last id', async () => {

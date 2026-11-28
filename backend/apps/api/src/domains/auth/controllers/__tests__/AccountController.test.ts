@@ -78,6 +78,7 @@ function makeController(
 
   const federatedIdentityService = {
     listForUser: jest.fn().mockResolvedValue(hasFederatedIdentity ? [{ id: 'fed1' }] : []),
+    unbindOidc: jest.fn().mockResolvedValue(1),
   };
 
   const hubBridge = {
@@ -283,6 +284,8 @@ describe('AccountController — get', () => {
       hasFederatedIdentity: false,
       hasOwnPassword: true,
       emailManagedByHub: false,
+      companionAccount: null,
+      companionAvailable: false,
     });
   });
 
@@ -294,6 +297,9 @@ describe('AccountController — get', () => {
       hasFederatedIdentity: true,
       hasOwnPassword: false,
       emailManagedByHub: false,
+      // The fake identity carries no address.
+      companionAccount: { email: null },
+      companionAvailable: false,
     });
   });
 
@@ -697,5 +703,97 @@ describe('AccountController — sign out everywhere', () => {
     );
     expect(authService.invalidateOtherSessions).not.toHaveBeenCalled();
     expect(apiKeyService.revokeAllExceptConnect).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * "Connect a Companion account" (`POST`/`DELETE /account/companion-link`): the first account's typed
+ * address no longer counts as proven, so a password-first owner adds Portal sign-in here, proving
+ * the account with the same re-authentication an email change asks.
+ */
+describe('AccountController — connecting a Companion account', () => {
+  const issuer = config.auth.oidc.issuerUrl;
+
+  beforeEach(() => {
+    config.auth.oidc.issuerUrl = 'http://portal.test';
+  });
+
+  afterEach(() => {
+    config.auth.oidc.issuerUrl = issuer;
+  });
+
+  const makeRes = () => ({ cookie: jest.fn() });
+
+  it('asks for the current password first, and sets nothing without it', async () => {
+    const { controller } = makeController();
+    const res = makeRes();
+
+    await expect(
+      controller.startCompanionLink(requestContext(), mockRequest(), res as never, {}),
+    ).rejects.toThrow('Current password is required');
+    expect(res.cookie).not.toHaveBeenCalled();
+  });
+
+  it('sets the signed, short-lived, httpOnly link cookie and sends the browser to the Portal sign-in', async () => {
+    const { controller } = makeController();
+    const res = makeRes();
+
+    await expect(
+      controller.startCompanionLink(requestContext(), mockRequest(), res as never, {
+        currentPassword: 'correct',
+      }),
+    ).resolves.toEqual({ redirect: '/api/authenticate/oidc' });
+
+    expect(res.cookie).toHaveBeenCalledWith(
+      'ci_companion_link',
+      expect.stringMatching(/^[\w-]+\.[\w-]+$/),
+      expect.objectContaining({ httpOnly: true, sameSite: 'lax', maxAge: 10 * 60 * 1000 }),
+    );
+  });
+
+  it('refuses when a Companion account is already connected', async () => {
+    const { controller } = makeController(undefined, { hasFederatedIdentity: true });
+
+    await expect(
+      controller.startCompanionLink(requestContext(), mockRequest(), makeRes() as never, {
+        currentPassword: 'correct',
+      }),
+    ).rejects.toThrow('A Companion account is already connected');
+  });
+
+  it('refuses without a browser session to carry the round trip', async () => {
+    const { controller } = makeController();
+    const noSession = { cookies: {} } as never;
+
+    await expect(
+      controller.startCompanionLink(requestContext(), noSession, makeRes() as never, {
+        currentPassword: 'correct',
+      }),
+    ).rejects.toThrow('Connect a Companion account from a web sign-in');
+  });
+
+  it('refuses where this Memory has no Companion sign-in set up', async () => {
+    config.auth.oidc.issuerUrl = '';
+    const { controller } = makeController();
+
+    await expect(
+      controller.startCompanionLink(requestContext(), mockRequest(), makeRes() as never, {
+        currentPassword: 'correct',
+      }),
+    ).rejects.toThrow('Companion sign-in is not set up on this Memory');
+  });
+
+  it('disconnects after the password, and only an account that keeps a password of its own', async () => {
+    const withPassword = makeController();
+    await withPassword.controller.removeCompanionLink(requestContext(), mockRequest(), {
+      currentPassword: 'correct',
+    });
+    expect(withPassword.federatedIdentityService.unbindOidc).toHaveBeenCalledWith('u1');
+
+    const portalOnly = makeController({ id: 'u1', email: 'jsmith@example.com', passwordSetAt: null });
+    await expect(
+      portalOnly.controller.removeCompanionLink(requestContext(), mockRequest(), {}),
+    ).rejects.toThrow('Set a password first');
+    expect(portalOnly.federatedIdentityService.unbindOidc).not.toHaveBeenCalled();
   });
 });

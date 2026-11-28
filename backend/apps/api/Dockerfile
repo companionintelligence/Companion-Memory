@@ -132,9 +132,21 @@ RUN apt-get update && \
 # image, run `yarn dbmate …`: a bare `node bin/dbmate.js` bypasses yarn and finds
 # no dbmate at all.
 
+# Yarn's copy lives outside root's home, readable by everyone: the entrypoint runs
+# Memory, and `yarn migrate` in migrate-database, as the `node` user, which could
+# not read /root/.cache and would otherwise fetch Yarn again (an offline install
+# cannot).
+ENV COREPACK_HOME=/usr/local/share/corepack
+
 RUN npm install --global corepack@0.36.0 \
     && corepack enable \
-    && corepack prepare yarn@4.9.1 --activate
+    && corepack prepare yarn@4.9.1 --activate \
+    && chmod -R a+rX "$COREPACK_HOME"
+
+# The folders Memory writes (config/default.json `import`), owned by the user it
+# runs as. A bind mount over either is handed over by the entrypoint instead.
+RUN mkdir -p /var/lib/ci-import /var/tmp/ci-import \
+    && chown node:node /var/lib/ci-import /var/tmp/ci-import
 
 WORKDIR /app
 

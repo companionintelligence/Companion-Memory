@@ -114,6 +114,8 @@ services:
       GATEWAY_ALLOWED_HOSTS: localhost
   object-store:
     image: ghcr.io/companionintelligence/companion/object-store:${CI_SERVER_IMAGE_TAG}
+  document-parser:
+    image: ghcr.io/companionintelligence/companion/summary-service:${CI_SERVER_IMAGE_TAG}
   summary-service:
     image: ghcr.io/companionintelligence/companion/summary-service:${CI_SERVER_IMAGE_TAG}
     # The model this app runs (or the user's own Ollama) answers on the host's

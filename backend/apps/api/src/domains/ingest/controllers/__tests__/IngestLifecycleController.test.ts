@@ -68,7 +68,8 @@ describe('IngestLifecycleController', () => {
       const res = await controller.finish(ctx, { searchIndexOnly: true });
 
       expect(res).toBe(backfillResult);
-      expect(backfill.backfill).toHaveBeenCalledWith({ entityTypes: undefined });
+      // The caller's rows only: this route takes any capture key.
+      expect(backfill.backfill).toHaveBeenCalledWith({ entityTypes: undefined, userId: 'user-1' });
       expect(orchestrator.orchestrate).not.toHaveBeenCalled();
     });
 
@@ -82,6 +83,7 @@ describe('IngestLifecycleController', () => {
 
       expect(backfill.backfill).toHaveBeenCalledWith({
         entityTypes: ['communication', 'content'],
+        userId: 'user-1',
       });
     });
   });

@@ -194,12 +194,21 @@ describeWithDb(`UserService — claiming an unowned appliance, in Postgres (${av
     expect(racers.map((racer) => racer.role)).toEqual(stored);
   });
 
-  it("marks the first account's address proven, and leaves the next one unproven", async () => {
+  // Whoever reaches a fresh appliance first can type somebody else's address; proven, it would
+  // receive that person's later Portal or Hub sign-in. Only a vouching sign-in proves one.
+  it("leaves the first account's typed address unproven, like every other account's", async () => {
     const owner = await createAccount('owner');
     const member = await createAccount('member');
 
-    expect(owner.emailProvenAt).toBeInstanceOf(Date);
+    expect(owner.role).toBe('admin');
+    expect(owner.emailProvenAt).toBeNull();
     expect(member.emailProvenAt).toBeNull();
+
+    const [row] = await dataSource.query<Array<{ email_proven_at: Date | null }>>(
+      'SELECT email_proven_at FROM ci.users WHERE id = $1',
+      [owner.id],
+    );
+    expect(row.email_proven_at).toBeNull();
   });
 
   it('does not promote the next account after the owner left while a member stayed', async () => {

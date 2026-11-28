@@ -84,7 +84,7 @@ project_all() {
     OBJECT_STORE_USERNAME OBJECT_STORE_PASSWORD \
     AUTH_TOKEN_SECRET AUTH_REFRESH_TOKEN_SECRET AUTH_SESSION_PEPPER \
     AUTH_FIELD_ENCRYPTION_KEY AUTH_CSRF_TOKEN_SECRET \
-    POWERSYNC_JWT_SECRET SIDECAR_AUTH_SECRET LLM_API_KEY
+    POWERSYNC_JWT_SECRET SIDECAR_AUTH_SECRET PARSER_AUTH_SECRET LLM_API_KEY
   # Postgres itself bootstraps from the superuser credentials only.
   project database \
     DATABASE_ADMIN_USERNAME DATABASE_ADMIN_PASSWORD DATABASE_ADMIN_NAME
@@ -102,6 +102,11 @@ project_all() {
     DATABASE_USERNAME DATABASE_PASSWORD DATABASE_NAME SIDECAR_AUTH_SECRET
   project summary \
     DATABASE_USERNAME DATABASE_PASSWORD DATABASE_NAME SIDECAR_AUTH_SECRET LLM_API_KEY
+  # The document parser reads files whoever made them chose, so it gets its own
+  # bearer and nothing else: no database role, and not the summary service's
+  # bearer, so a document that took it over reaches neither.
+  project parser \
+    PARSER_AUTH_SECRET
   # Replication role for streaming, app role for its own storage schema, and
   # the HS256 key it validates client tokens with.
   project powersync \
@@ -127,6 +132,9 @@ if [ -f "$SECRETS_FILE" ]; then
   # Shared bearer the API presents to the Python sidecars (and they require).
   # Added 2026-09-24; existing appliances pick it up here on their next boot.
   ensure_secret SIDECAR_AUTH_SECRET "$(random_password)"
+  # The document parser's own bearer. Added 2026-11-27, when it left the summary
+  # service's container.
+  ensure_secret PARSER_AUTH_SECRET "$(random_password)"
   project_all
   exit 0
 fi
@@ -150,6 +158,7 @@ SESSION_PEPPER=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
 ENCRYPTION_KEY=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
 CSRF_SECRET=$(head -c 32 /dev/urandom | base64 | tr -d '\n')
 SIDECAR_SECRET=$(random_password)
+PARSER_SECRET=$(random_password)
 
 # ── Write Secrets File ───────────────────────────
 
@@ -203,6 +212,7 @@ AUTH_SESSION_PEPPER=${SESSION_PEPPER}
 AUTH_FIELD_ENCRYPTION_KEY=${ENCRYPTION_KEY}
 AUTH_CSRF_TOKEN_SECRET=${CSRF_SECRET}
 SIDECAR_AUTH_SECRET=${SIDECAR_SECRET}
+PARSER_AUTH_SECRET=${PARSER_SECRET}
 EOF
 
 chmod 600 "$SECRETS_FILE"
