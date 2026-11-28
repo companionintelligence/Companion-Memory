@@ -17,6 +17,16 @@ const execFileAsync = promisify(execFile);
  */
 const VIPS_TIMEOUT_MS = 120_000;
 
+/**
+ * The environment every `vips` / `vipsheader` run gets: libvips refuses the loaders it marks
+ * untrusted (ImageMagick, PDF, SVG, JPEG 2000, PPM, FITS, MAT, Analyze, raw and the like, the
+ * least-tested parsers in it). Every file decoded here is one an import or an upload brought in,
+ * chosen by whoever made it. The formats photos come in (JPEG, PNG, WebP, GIF, TIFF, HEIC) load
+ * unchanged; the others are recorded as undecodable, as an unknown format already is. libvips 8.13
+ * and later read it; earlier ones ignore it.
+ */
+const VIPS_ENV = { ...process.env, VIPS_BLOCK_UNTRUSTED: '1' };
+
 /** What the header of an encoded image says about it, before any rotation. */
 export interface ImageProbe {
   /** Stored pixel width, as encoded — NOT corrected for EXIF orientation. */
@@ -178,6 +188,7 @@ export class VipsService {
       const { stdout } = await execFileAsync(command, args, {
         timeout: VIPS_TIMEOUT_MS,
         maxBuffer: 4 * 1024 * 1024,
+        env: VIPS_ENV,
       });
 
       return { stdout };
