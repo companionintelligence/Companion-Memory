@@ -45,7 +45,13 @@ def _run(
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     fake = bin_dir / "uvicorn"
-    fake.write_text(FAKE_UVICORN)
+    # The settings are written into the fake itself, not passed in its environment: the parser
+    # role starts uvicorn with an allowlisted environment, which would drop them.
+    fake.write_text(
+        FAKE_UVICORN.replace("$FAKE_DIR", str(tmp_path))
+        .replace("$FAKE_EXITS", exits)
+        .replace("$FAKE_STATUS", str(status))
+    )
     fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
 
     env = {
@@ -112,17 +118,29 @@ def test_the_parser_role_starts_only_the_parser_with_no_database_or_summary_bear
             "PARSER_AUTH_SECRET": "parser-s3cret",
             "DATABASE_PASSWORD": "db-password",
             "DATABASE_USERNAME": "companion",
+            # What a Hub hands every service of an app, from its app env.
+            "CI_HUB_FORWARD_AUTH_SECRET": "memory-connect-key",
+            "CI_HUB_FORWARD_AUTH_IDENTITY_SECRET": "memory-identity-key",
+            "HUB_API_KEY": "hub-api-key",
+            "GOOGLE_MAPS_KEY": "maps-key",
+            "LLM_API_KEY": "llm-key",
         },
     )
 
     assert result.returncode == 0, result.stderr
     env = _env_of(tmp_path, "ci.summary.parser:app")
     assert env["PARSER_AUTH_SECRET"] == "parser-s3cret"
+    assert "PATH" in env
     for name in (
         "DATABASE_URL",
         "DATABASE_PASSWORD",
         "DATABASE_USERNAME",
         "SIDECAR_AUTH_SECRET",
+        "CI_HUB_FORWARD_AUTH_SECRET",
+        "CI_HUB_FORWARD_AUTH_IDENTITY_SECRET",
+        "HUB_API_KEY",
+        "GOOGLE_MAPS_KEY",
+        "LLM_API_KEY",
     ):
         assert name not in env, name
     assert not (tmp_path / "ci.summary.api:app.pid").exists()

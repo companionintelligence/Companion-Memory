@@ -56,11 +56,18 @@ if [ "$SUMMARY_ROLE" = parser ]; then
     echo "  2. Set the PARSER_AUTH_SECRET environment variable"
     exit 1
   fi
-  unset DATABASE_URL DATABASE_HOST DATABASE_PORT DATABASE_USERNAME DATABASE_PASSWORD \
-    DATABASE_NAME SIDECAR_AUTH_SECRET LLM_API_KEY
-  export PARSER_AUTH_SECRET
+  # An allowlist, not a list of things to drop: whatever runs this container can
+  # hand it more than its compose file names. A Hub gives every service of an app
+  # the whole app env, Memory's connect and identity keys and HUB_API_KEY among
+  # them, which removing DATABASE_* alone left in the parser's hands. The parser
+  # reads only PARSER_AUTH_SECRET; the rest is what Python and uvicorn run on.
+  parser_env=()
+  for name in PATH HOME LANG LC_ALL TZ TMPDIR VIRTUAL_ENV PYTHONPATH \
+    PYTHONUNBUFFERED PYTHONDONTWRITEBYTECODE PARSER_AUTH_SECRET; do
+    [ -n "${!name:-}" ] && parser_env+=("$name=${!name}")
+  done
   echo "Starting the document parser on port 8002..."
-  exec uvicorn ci.summary.parser:app --host 0.0.0.0 --port 8002
+  exec env -i "${parser_env[@]}" uvicorn ci.summary.parser:app --host 0.0.0.0 --port 8002
 fi
 
 # ── Database ─────────────────────────────────────
