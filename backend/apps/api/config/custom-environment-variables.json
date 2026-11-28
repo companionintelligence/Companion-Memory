@@ -185,7 +185,8 @@
     "summary": {
       "host": "SUMMARY_HOST"
     },
-    "sidecarAuthSecret": "SIDECAR_AUTH_SECRET"
+    "sidecarAuthSecret": "SIDECAR_AUTH_SECRET",
+    "parserAuthSecret": "PARSER_AUTH_SECRET"
   },
   "embedding": {
     "apiBase": "LLM_EMBEDDING_API_BASE",

@@ -22,7 +22,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from .auth import install_sidecar_auth
+from ci.sidecar.auth import install_sidecar_auth
+
 from .parser_worker import (
     MAX_UPLOAD_BYTES,
     ConversionFailed,
@@ -38,7 +39,20 @@ app = FastAPI(
     version=PARSER_VERSION,
     description="Extracts text from uploaded documents and returns a normalized ParsedDocument.",
 )
-install_sidecar_auth(app)
+
+
+def _parser_secret() -> str:
+    """
+    The bearer the API presents to the parser: PARSER_AUTH_SECRET, or, in the old one-container
+    layout (SUMMARY_ROLE=all) without it, the summary service's SIDECAR_AUTH_SECRET.
+
+    Read from the environment and not through `config.settings`, on purpose: those settings
+    require DATABASE_URL, which the parser run on its own (SUMMARY_ROLE=parser) is never given.
+    """
+    return os.getenv("PARSER_AUTH_SECRET", "") or os.getenv("SIDECAR_AUTH_SECRET", "")
+
+
+install_sidecar_auth(app, secret=_parser_secret)
 
 # Room for the multipart framing and the mime_type field around the file.
 _MULTIPART_SLACK_BYTES = 1024 * 1024

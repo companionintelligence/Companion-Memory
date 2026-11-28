@@ -8,6 +8,7 @@ import { Context, type RequestContext, toServiceContext } from '@ci/common/conte
 import { READ_CAPABILITY, RequireCapability } from '@ci/common/decorators';
 import { FeatureService } from '@ci/common/feature';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { parserAuthHeaders, sidecarAuthHeaders } from '@ci/common/sidecar/sidecarAuth';
 import config from '@ci/configuration';
 import { FileService } from '@ci/domains/files';
 import { OllamaService } from '@ci/domains/llm';
@@ -228,7 +229,7 @@ export class HealthController {
         return { ok: true };
       }),
       this.probeSidecar('summaries', config.services.summary.host),
-      this.probeSidecar('documents', config.services.parser.host),
+      this.probeSidecar('documents', config.services.parser.host, parserAuthHeaders()),
       this.probeSidecar('predictions', config.services.hbpe.host),
       probe('processing', async () => {
         if (!this.dataSource) {
@@ -349,7 +350,11 @@ export class HealthController {
     }
   }
 
-  private probeSidecar(name: string, host: string): Promise<DependencyHealth> {
+  private probeSidecar(
+    name: string,
+    host: string,
+    headers: Record<string, string> = sidecarAuthHeaders(),
+  ): Promise<DependencyHealth> {
     return probe(name, async () => {
       if (!host) {
         return { ok: false, detail: 'not configured' };
@@ -357,9 +362,7 @@ export class HealthController {
 
       const response = await fetch(`${host.replace(/\/$/, '')}/health`, {
         signal: AbortSignal.timeout(LLM_PROBE_TIMEOUT_MS),
-        headers: config.services.sidecarAuthSecret
-          ? { Authorization: `Bearer ${config.services.sidecarAuthSecret}` }
-          : {},
+        headers,
       });
       const body = (await response.json()) as { status?: string };
 

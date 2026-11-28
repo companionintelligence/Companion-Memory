@@ -6,7 +6,7 @@ import { after, test } from 'node:test';
 
 import dotenv from 'dotenv';
 
-import { ensureSidecarAuthSecret } from './sidecar-secret';
+import { ensureParserAuthSecret, ensureSidecarAuthSecret } from './sidecar-secret';
 
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'dev-stack-env-'));
 
@@ -75,4 +75,20 @@ test('ensureSidecarAuthSecret: never creates a missing .env, which would stop ma
   assert.equal(ensureSidecarAuthSecret(file, env), true);
   assert.equal(fs.existsSync(file), false);
   assert.match(env.SIDECAR_AUTH_SECRET ?? '', /^[0-9a-f]{64}$/);
+});
+
+test('ensureParserAuthSecret: mints its own key, distinct from the sidecar one, and keeps an explicit value', () => {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'parser-secret-')), '.env');
+  fs.writeFileSync(file, 'FOO=bar');
+  const env: NodeJS.ProcessEnv = {};
+
+  assert.equal(ensureSidecarAuthSecret(file, env), true);
+  assert.equal(ensureParserAuthSecret(file, env), true);
+  assert.match(env.PARSER_AUTH_SECRET ?? '', /^[0-9a-f]{64}$/);
+  assert.notEqual(env.PARSER_AUTH_SECRET, env.SIDECAR_AUTH_SECRET);
+  assert.match(
+    fs.readFileSync(file, 'utf8'),
+    new RegExp(`\\nPARSER_AUTH_SECRET=${env.PARSER_AUTH_SECRET}\\n`),
+  );
+  assert.equal(ensureParserAuthSecret(file, { PARSER_AUTH_SECRET: 'set' }), false);
 });

@@ -23,7 +23,7 @@ mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
 run
 [ -f "$master" ] || fail "master not created"
 [ "$(mode "$master")" = "600" ] || fail "master is $(mode "$master"), want 600"
-for svc in api database setup-database object-store hbpe summary powersync tooling; do
+for svc in api database setup-database object-store hbpe summary parser powersync tooling; do
   [ -f "$root/$svc/.env.secrets" ] || fail "no projection for $svc"
   [ "$(mode "$root/$svc/.env.secrets")" = "644" ] || fail "$svc projection is not 644"
 done
@@ -31,8 +31,17 @@ done
 # The api holds the signing secrets; nothing else does.
 has "$root/api/.env.secrets" AUTH_TOKEN_SECRET || fail "api lacks AUTH_TOKEN_SECRET"
 has "$root/api/.env.secrets" AUTH_FIELD_ENCRYPTION_KEY || fail "api lacks AUTH_FIELD_ENCRYPTION_KEY"
-for svc in database setup-database object-store hbpe summary powersync tooling; do
+for svc in database setup-database object-store hbpe summary parser powersync tooling; do
   if grep -q "^AUTH_" "$root/$svc/.env.secrets"; then fail "$svc projection carries an AUTH_* secret"; fi
+done
+
+# The document parser holds its own bearer and nothing else; only the api shares it.
+[ "$(grep -c '^[A-Z_]*=' "$root/parser/.env.secrets")" = "1" ] || fail "parser projection is not exactly its 1 key"
+has "$root/parser/.env.secrets" PARSER_AUTH_SECRET || fail "parser lacks PARSER_AUTH_SECRET"
+[ "$(value "$root/api/.env.secrets" PARSER_AUTH_SECRET)" = "$(value "$master" PARSER_AUTH_SECRET)" ] || fail "api PARSER_AUTH_SECRET differs from master"
+[ "$(value "$master" PARSER_AUTH_SECRET)" != "$(value "$master" SIDECAR_AUTH_SECRET)" ] || fail "parser and sidecar bearers are the same value"
+for svc in summary hbpe; do
+  if has "$root/$svc/.env.secrets" PARSER_AUTH_SECRET; then fail "$svc can present the parser bearer"; fi
 done
 
 # The sidecars get their role and the shared bearer, not the object store.
@@ -53,12 +62,14 @@ if has "$root/database/.env.secrets" DATABASE_PASSWORD; then fail "database can 
 # ── upgrade: an older master (no SIDECAR_AUTH_SECRET, 0644) keeps its values,
 # gains the key, tightens to 0600, and is re-projected.
 before=$(value "$master" AUTH_TOKEN_SECRET)
-grep -v '^SIDECAR_AUTH_SECRET=' "$master" > "$master.old" && mv "$master.old" "$master"
+grep -v -e '^SIDECAR_AUTH_SECRET=' -e '^PARSER_AUTH_SECRET=' "$master" > "$master.old" && mv "$master.old" "$master"
 chmod 644 "$master"
 rm -rf "$root"
 run
 [ "$(value "$master" AUTH_TOKEN_SECRET)" = "$before" ] || fail "upgrade rewrote AUTH_TOKEN_SECRET"
 has "$master" SIDECAR_AUTH_SECRET || fail "upgrade did not add SIDECAR_AUTH_SECRET"
+has "$master" PARSER_AUTH_SECRET || fail "upgrade did not add PARSER_AUTH_SECRET"
+[ "$(value "$root/parser/.env.secrets" PARSER_AUTH_SECRET)" = "$(value "$master" PARSER_AUTH_SECRET)" ] || fail "parser projection missed the added key"
 [ "$(mode "$master")" = "600" ] || fail "upgrade left the master at $(mode "$master")"
 [ "$(value "$root/hbpe/.env.secrets" SIDECAR_AUTH_SECRET)" = "$(value "$master" SIDECAR_AUTH_SECRET)" ] || fail "hbpe projection missed the added key"
 

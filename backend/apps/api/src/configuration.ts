@@ -567,8 +567,8 @@ export const ConfigSchema = z.object({
     }),
     /**
      * Summary service API (function runner + manual triggers). Distinct from
-     * `parser`, which is the document-parsing app on a different port of the
-     * same container.
+     * `parser`, the document parser, which runs from the same image in its own
+     * container (`document-parser`) with no database access.
      */
     summary: z.object({
       host: z.string().default('http://summary-service:8001'),
@@ -581,6 +581,14 @@ export const ConfigSchema = z.object({
      * dispatch a single function run.
      */
     sidecarAuthSecret: z.string().default(''),
+    /**
+     * The document parser's own bearer (PARSER_AUTH_SECRET, minted by setup-secrets), presented
+     * only to the parser. The parser reads files whoever made them chose, so it holds this and no
+     * other secret: not the database role, and not SIDECAR_AUTH_SECRET, which the summary service
+     * accepts. Empty (an older install, the parser still inside the summary container) falls back
+     * to SIDECAR_AUTH_SECRET.
+     */
+    parserAuthSecret: z.string().default(''),
   }),
   signalCli: z.object({
     restUrl: z.string(),
@@ -1890,6 +1898,7 @@ enforceNoCommittedSecrets(
     OBJECT_STORE_USERNAME: parsed.staticfiles.auth.accessKeyId,
     OBJECT_STORE_PASSWORD: parsed.staticfiles.auth.secretAccessKey,
     SIDECAR_AUTH_SECRET: parsed.services.sidecarAuthSecret,
+    PARSER_AUTH_SECRET: parsed.services.parserAuthSecret,
     POWERSYNC_JWT_SECRET: parsed.powersync.jwtSecret,
   },
   process.env.NODE_ENV,

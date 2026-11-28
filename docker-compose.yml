@@ -149,6 +149,9 @@ services:
     extra_hosts:
       - host.docker.internal:host-gateway
     environment:
+      # The summary API alone. The document parser, from the same image, is the
+      # document-parser service below, without this service's database role.
+      SUMMARY_ROLE: summary
       # Opt-out error reporting; see the note on hbpe-service above.
       SENTRY_DSN: ${SENTRY_DSN_SUMMARY:-}
       SENTRY_ENV: ${SENTRY_ENV:-}
@@ -173,10 +176,9 @@ services:
       # answers 200 even when the LLM endpoint is unreachable (it reports
       # `status: degraded` in the body) — a missing model is a degraded
       # service, not a dead container, and only the container's liveness is
-      # this probe's business. Both ports: the document parser on 8002 lives
-      # in the same container, and a probe of 8001 alone called it healthy
-      # with the parser gone (entrypoint.sh now also exits when either dies).
-      test: ["CMD", "python", "-c", "import urllib.request; [urllib.request.urlopen(f'http://localhost:{port}/health', timeout=4) for port in (8001, 8002)]"]
+      # this probe's business. The document parser is document-parser now,
+      # with its own probe.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health', timeout=4)"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -184,11 +186,45 @@ services:
       # endpoint makes it spend its whole timeout.
       start_period: 60s
       start_interval: 5s
-    # Same rationale as hbpe-service's limit above, smaller number: this
-    # sidecar holds the document parser and short LLM requests, not model
-    # weights. Also unmeasured — raise SUMMARY_MEM_LIMIT if a large PDF parse
-    # starts getting OOM-killed.
+    # Same rationale as hbpe-service's limit above, smaller number: short LLM
+    # requests, not model weights. Unmeasured.
     mem_limit: ${SUMMARY_MEM_LIMIT:-8g}
+    profiles: [ "local", "staging", "production" ]
+
+  # The document parser (ci.summary.parser), from the summary image. It reads
+  # files an import or a sync brought in, chosen by whoever made them, through
+  # large parsing libraries, so it runs on its own holding one secret: the bearer
+  # only the API presents to it (PARSER_AUTH_SECRET). No database settings, no
+  # LLM key, and not SIDECAR_AUTH_SECRET, which the summary service accepts: a
+  # document that took the parser over reaches neither. It used to share the
+  # summary service's container, role and environment.
+  document-parser:
+    image: ci/summary-service
+    environment:
+      SUMMARY_ROLE: parser
+      SENTRY_DSN: ${SENTRY_DSN_SUMMARY:-}
+      SENTRY_ENV: ${SENTRY_ENV:-}
+      CI_TELEMETRY: ${CI_TELEMETRY:-}
+      CI_LOCAL_ONLY: ${CI_LOCAL_ONLY:-}
+      CI_SERVER_VERSION: ${CI_SERVER_VERSION:-}
+    networks:
+      - ci
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health', timeout=4)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+      start_interval: 5s
+    # A large PDF or Office file is what this holds; raise PARSER_MEM_LIMIT if a
+    # parse starts getting OOM-killed. Unmeasured, like the limits above.
+    mem_limit: ${PARSER_MEM_LIMIT:-8g}
     profiles: [ "local", "staging", "production" ]
 
   # NOTE: summary-service and hbpe-service declare
@@ -337,6 +373,7 @@ volumes:
   secrets-object-store:
   secrets-hbpe:
   secrets-summary:
+  secrets-parser:
   secrets-powersync:
   secrets-tooling:
   hbpe-models:

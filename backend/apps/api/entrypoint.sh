@@ -52,6 +52,10 @@ export AUTH_TOKEN_SECRET AUTH_REFRESH_TOKEN_SECRET
 export AUTH_SESSION_PEPPER AUTH_FIELD_ENCRYPTION_KEY AUTH_CSRF_TOKEN_SECRET
 export POWERSYNC_JWT_SECRET
 export SIDECAR_AUTH_SECRET
+# The document parser's own bearer (setup-secrets mints it). Optional: without it
+# the API presents SIDECAR_AUTH_SECRET, as to a parser inside the summary container.
+: "${PARSER_AUTH_SECRET:=$(get_secret PARSER_AUTH_SECRET)}"
+[ -n "$PARSER_AUTH_SECRET" ] && export PARSER_AUTH_SECRET
 
 # ── Validation ───────────────────────────────────
 

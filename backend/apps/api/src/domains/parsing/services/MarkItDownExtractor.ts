@@ -3,7 +3,7 @@ import { extname } from 'node:path';
 import { Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
-import { sidecarAuthHeaders } from '@ci/common/sidecar/sidecarAuth';
+import { parserAuthHeaders } from '@ci/common/sidecar/sidecarAuth';
 import config from '@ci/configuration';
 
 import { type ParsedDocument } from '../types';
@@ -68,7 +68,7 @@ export class MarkItDownExtractor implements DocumentExtractor {
 
     const response = await fetch(url, {
       method: 'POST',
-      headers: sidecarAuthHeaders(),
+      headers: parserAuthHeaders(),
       body: form,
       signal: AbortSignal.timeout(PARSER_REQUEST_TIMEOUT_MS),
     });

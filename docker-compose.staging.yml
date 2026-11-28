@@ -152,6 +152,10 @@ services:
     ports:
       - 127.0.0.1:9000:9000
 
+  document-parser:
+    environment:
+      PARSER_AUTH_SECRET: ${PARSER_AUTH_SECRET}
+
   summary-service:
     # Pass the shared LLM config from .env explicitly (not via env_file) so
     # host-oriented vars like DATABASE_HOST=localhost don't leak into the container.

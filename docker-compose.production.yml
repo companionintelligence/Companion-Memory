@@ -258,6 +258,14 @@ services:
       generate-secrets:
         condition: service_completed_successfully
 
+  document-parser:
+    volumes:
+      # Its projection holds PARSER_AUTH_SECRET and nothing else (setup-secrets).
+      - secrets-parser:/run/secrets:ro
+    depends_on:
+      generate-secrets:
+        condition: service_completed_successfully
+
   summary-service:
     volumes:
       - secrets-summary:/run/secrets:ro
@@ -294,6 +302,7 @@ services:
       - secrets-object-store:/run/secrets/services/object-store
       - secrets-hbpe:/run/secrets/services/hbpe
       - secrets-summary:/run/secrets/services/summary
+      - secrets-parser:/run/secrets/services/parser
       - secrets-powersync:/run/secrets/services/powersync
       - secrets-tooling:/run/secrets/services/tooling
     profiles: [ "production" ]
