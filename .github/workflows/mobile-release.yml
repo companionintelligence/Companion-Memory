@@ -357,10 +357,17 @@ jobs:
           IOS_MISSING: ${{ steps.secrets.outputs.ios_missing }}
           ANDROID_SECRETS: ${{ steps.secrets.outputs.android }}
           ANDROID_MISSING: ${{ steps.secrets.outputs.android_missing }}
+          # The inputs reach the script as variables, never pasted into it: a
+          # `version_name` (free text, from a dispatch or a calling workflow)
+          # with a quote in it ran as shell here, in the job that holds the
+          # signing secrets.
+          VERSION_NAME_INPUT: ${{ inputs.version_name }}
+          DRY_RUN_INPUT: ${{ inputs.dry_run }}
+          PLATFORM_INPUT: ${{ inputs.platform }}
         run: |
           set -euo pipefail
-          if [ -n "${{ inputs.version_name }}" ]; then
-            NAME="${{ inputs.version_name }}"
+          if [ -n "${VERSION_NAME_INPUT}" ]; then
+            NAME="${VERSION_NAME_INPUT}"
           elif [[ "${GITHUB_REF}" == refs/tags/ios-v* ]]; then
             NAME="${GITHUB_REF#refs/tags/ios-v}"
           elif [[ "${GITHUB_REF}" == refs/tags/android-v* ]]; then
@@ -369,6 +376,12 @@ jobs:
             NAME="${GITHUB_REF#refs/tags/mobile-release-v}"
           else
             NAME="0.1.0"
+          fi
+          # The name becomes the apps' version string and a step output. Only a
+          # version: digits and dots, then an optional -suffix (2026.11.17, 1.4.0-rc.1).
+          if ! [[ "${NAME}" =~ ^[0-9]+(\.[0-9]+){1,3}(-[0-9A-Za-z][0-9A-Za-z.]*)?$ ]]; then
+            echo "::error::version_name must look like 2026.11.17 or 1.4.0-rc.1 (got an unusable value)"
+            exit 1
           fi
           # Minutes since BUILD_NUMBER_EPOCH; see that env entry for why it isn't
           # run_number any more.
@@ -385,10 +398,13 @@ jobs:
           if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
             echo "dry_run=false" >> "$GITHUB_OUTPUT"
           else
-            echo "dry_run=${{ inputs.dry_run }}" >> "$GITHUB_OUTPUT"
+            case "${DRY_RUN_INPUT}" in
+              true|false) echo "dry_run=${DRY_RUN_INPUT}" >> "$GITHUB_OUTPUT" ;;
+              *) echo "::error::dry_run must be true or false"; exit 1 ;;
+            esac
           fi
           # Which lanes to run: tag prefix, or the dispatch choice (default ios).
-          PLATFORM="${{ inputs.platform }}"
+          PLATFORM="${PLATFORM_INPUT}"
           RUN_IOS=false
           RUN_ANDROID=false
           if [ "${GITHUB_EVENT_NAME}" = "push" ]; then

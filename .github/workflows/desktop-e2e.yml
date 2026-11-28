@@ -241,6 +241,10 @@ jobs:
       # production profile mints every DB/auth credential into a Docker volume
       # on first boot, exactly as it does for a real install.
       - name: Write the desktop compose .env
+        env:
+          # A variable, not pasted into the script (the tag is verified against the
+          # published images above, but nothing here should be shell it runs).
+          IMAGE_TAG: ${{ steps.image.outputs.tag }}
         run: |
           set -euo pipefail
           import_work="$GITHUB_WORKSPACE/desktop-e2e-import-work"
@@ -248,7 +252,7 @@ jobs:
           mkdir -p "$import_work" "$repo_dir"
           cat > "$GITHUB_WORKSPACE/$COMPOSE_DIR/.env" <<EOF
           COMPOSE_PROJECT_NAME=$COMPOSE_PROJECT_NAME
-          CI_SERVER_IMAGE_TAG=${{ steps.image.outputs.tag }}
+          CI_SERVER_IMAGE_TAG=$IMAGE_TAG
           APP_PUBLIC_HOSTNAME=127.0.0.1
           CI_IMPORT_WORK_DIR=$import_work
           CI_REPO_DIR=$repo_dir
