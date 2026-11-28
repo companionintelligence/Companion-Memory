@@ -6,6 +6,7 @@ import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
 
 import type { MemoryEntityOf } from '../../useEntityService';
 import { COMMUNICATION_FRAGMENT } from '../EntityCard/CommunicationCard';
+import { renderMessageBody } from '../EntityCard/messageHtml';
 
 import { EntityDetailScaffold, EntityMedia, resolveStaticUrl } from './EntityDetailScaffold';
 import { asHttpUrl } from './GenericDetails';
@@ -167,7 +168,13 @@ export function CommunicationDetails({ entity }: Props) {
       taggable
       editFields={[
         { key: 'subject', label: 'Subject', value: data.subject ?? '' },
-        { key: 'content', label: 'Content', value: data.communicationContent ?? '', multiline: true },
+        {
+          key: 'content',
+          label: 'Content',
+          value: data.communicationContent ?? '',
+          multiline: true,
+          display: renderMessageBody,
+        },
       ]}
       onSave={async (values) => {
         await updateCommunication({

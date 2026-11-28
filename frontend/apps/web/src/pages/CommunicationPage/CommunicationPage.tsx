@@ -15,6 +15,7 @@ import { PageContent } from '@/components/layout';
 import { Tag } from '@/components/Tag';
 import { gql } from '@/graphql';
 import { useDateTimeFormat } from '@/hooks/useDateTimeFormat';
+import { renderMessageBody } from '@/pages/MemoryPage/Components/EntityCard/messageHtml';
 
 // Exported for the colocated test, which mocks it failing.
 export const GET_COMMUNICATION = gql(`
@@ -142,7 +143,13 @@ export function CommunicationPage() {
               onEditModeChange={setEditMode}
               fields={[
                 { key: 'subject', label: 'Subject', value: communication.subject ?? '' },
-                { key: 'content', label: 'Content', value: communication.content ?? '', multiline: true },
+                {
+                  key: 'content',
+                  label: 'Content',
+                  value: communication.content ?? '',
+                  multiline: true,
+                  display: renderMessageBody,
+                },
               ]}
               metaItems={[
                 { label: 'Type', value: formatEntityLabel(communication.type) },

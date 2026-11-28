@@ -13,6 +13,11 @@ export interface EditField {
   placeholder?: string;
   /** Omit this field from the read-only view when `value` is empty. */
   hideWhenEmpty?: boolean;
+  /**
+   * How the read-only view shows `value`, when plain text is not right (a message body's HTML). Editing
+   * still edits `value` as text.
+   */
+  display?: (value: string) => ReactNode;
 }
 
 /** A read-only label/value pair shown alongside the editable fields. */
@@ -202,6 +207,8 @@ export function EntityFields({ fields, editing, values, onChange, idPrefix = 'fi
                   onChange={(event) => onChange(field.key, event.target.value)}
                 />
               )
+            ) : field.value && field.display ? (
+              <div className="break-words text-sm text-foreground/90">{field.display(field.value)}</div>
             ) : field.value ? (
               <p className="whitespace-pre-wrap break-words text-sm text-foreground/90">{field.value}</p>
             ) : (
