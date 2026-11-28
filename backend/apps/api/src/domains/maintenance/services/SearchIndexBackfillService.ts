@@ -193,6 +193,30 @@ const EVENT_BY_TYPE: Record<BackfillableEntity, BackfillEventSpec> = {
   },
 };
 
+/**
+ * The column naming a swept row's owner, per type: `user_id` where the table has it (as the
+ * account export decides, `userDataTables.ts`), else `owner_user_id` (the `ci.entities` rows).
+ * Typed over every type, so a new backfillable type cannot be swept unscoped by omission.
+ */
+const SWEEP_OWNER_COLUMN: Record<BackfillableEntity, 'user_id' | 'owner_user_id'> = {
+  communication: 'user_id',
+  event: 'user_id',
+  content: 'user_id',
+  item: 'user_id',
+  'browser-activity': 'user_id',
+  file: 'user_id',
+  person: 'owner_user_id',
+  concept: 'owner_user_id',
+  position: 'user_id',
+  product: 'user_id',
+  receipt: 'user_id',
+  note: 'user_id',
+  thread: 'user_id',
+  task: 'user_id',
+  place: 'owner_user_id',
+  'file-chunk': 'user_id',
+};
+
 /** One row of the sweep as the event payload its listener expects. */
 export function backfillEventPayload(
   spec: BackfillEventSpec,
@@ -240,6 +264,13 @@ export interface SearchIndexBackfillOptions {
    * the orchestrate leg) piled up 5.1M jobs this way.
    */
   pendingThreshold?: number;
+  /**
+   * Sweep only this account's rows, and count only its embeddings. Unset sweeps every account's:
+   * that is the administrator's appliance-wide job (`POST /maintenance/search-index/backfill`).
+   * The routes any signed-in user can call (`POST /v1/ingest/finish`, the orchestrator's
+   * `search_index` leg) set it, so one person's import never re-embeds everyone's rows.
+   */
+  userId?: string;
 }
 
 export interface SearchIndexBackfillResult {
@@ -323,7 +354,7 @@ export class SearchIndexBackfillService {
       this.logger.warn('Search-index backfill: sweep already running, skipping this trigger');
 
       // Still report drain state so an overlapping trigger isn't blind to progress.
-      const { embedded, embeddedPerType } = await this.embeddedCounts(types);
+      const { embedded, embeddedPerType } = await this.embeddedCounts(types, options.userId);
 
       return { enqueued: 0, perType: {}, embedded, embeddedPerType, skipped: 'already_running' };
     }
@@ -351,7 +382,7 @@ export class SearchIndexBackfillService {
           pendingThreshold,
         });
 
-        const { embedded, embeddedPerType } = await this.embeddedCounts(types);
+        const { embedded, embeddedPerType } = await this.embeddedCounts(types, options.userId);
 
         return { enqueued: 0, perType: {}, embedded, embeddedPerType, skipped: 'queue_backlog', pending };
       }
@@ -362,7 +393,7 @@ export class SearchIndexBackfillService {
     let enqueued = 0;
 
     for (const entityType of types) {
-      const { count, error } = await this.backfillType(entityType, batchSize, options.limitPerType);
+      const { count, error } = await this.backfillType(entityType, batchSize, options.limitPerType, options.userId);
       perType[entityType] = count;
       enqueued += count;
 
@@ -379,8 +410,8 @@ export class SearchIndexBackfillService {
 
     // Sample drain progress AFTER the enqueue so `embedded` reflects what has
     // actually been indexed by the time the response is built.
-    const { embedded, embeddedPerType } = await this.embeddedCounts(types);
-    this.logger.log('Search-index backfill: sweep complete', { enqueued, embedded });
+    const { embedded, embeddedPerType } = await this.embeddedCounts(types, options.userId);
+    this.logger.log('Search-index backfill: sweep complete', { enqueued, embedded, scoped: options.userId != null });
 
     const base: SearchIndexBackfillResult = { enqueued, perType, embedded, embeddedPerType };
 
@@ -396,6 +427,7 @@ export class SearchIndexBackfillService {
    */
   private async embeddedCounts(
     types: BackfillableEntity[],
+    userId?: string,
   ): Promise<{ embedded: number; embeddedPerType: Record<string, number> }> {
     const embeddedPerType: Record<string, number> = {};
     let embedded = 0;
@@ -404,8 +436,9 @@ export class SearchIndexBackfillService {
       const rows: Array<{ count: string }> = await this.dataSource.query(
         `SELECT count(*)::bigint AS count
            FROM ci_search.embeddings
-          WHERE entity_type = $1`,
-        [entityType],
+          WHERE entity_type = $1
+            AND ($2::uuid IS NULL OR user_id = $2::uuid)`,
+        [entityType, userId ?? null],
       );
       const count = Number(rows[0]?.count ?? 0);
       embeddedPerType[entityType] = count;
@@ -438,6 +471,7 @@ export class SearchIndexBackfillService {
     entityType: BackfillableEntity,
     batchSize: number,
     limitPerType: number | undefined,
+    userId: string | undefined,
   ): Promise<{ count: number; error?: string }> {
     const spec = EVENT_BY_TYPE[entityType];
     let after: PageCursor | null = null;
@@ -449,7 +483,7 @@ export class SearchIndexBackfillService {
     // The idempotent LEFT JOIN makes a re-run resume from what's still missing.
     try {
       for (;;) {
-        const rows = await this.missingIds(entityType, batchSize, after);
+        const rows = await this.missingIds(entityType, batchSize, after, userId);
         if (rows.length === 0) {
           break;
         }
@@ -510,6 +544,7 @@ export class SearchIndexBackfillService {
     entityType: BackfillableEntity,
     batchSize: number,
     after: PageCursor | null,
+    userId?: string,
   ): Promise<Array<{ id: string; ts?: string | null; owner?: string; extra?: Record<string, string> }>> {
     const source = ENTITY_SOURCE_MAP[entityType];
     // The owner column, for listeners that read it from the payload (see EVENT_BY_TYPE).
@@ -551,6 +586,8 @@ export class SearchIndexBackfillService {
       : '';
     const documentMissing = deviceIndexed ? 'OR d.entity_id IS NULL' : '';
     const timeColumn = TIME_PAGED_TYPES[entityType];
+    // One account's rows only, when the caller is not the administrator's appliance-wide sweep.
+    const ownerColumnName = SWEEP_OWNER_COLUMN[entityType];
 
     if (timeColumn != null) {
       return this.dataSource.query(
@@ -569,9 +606,10 @@ export class SearchIndexBackfillService {
             ${excluded}
             AND ($2::timestamptz IS NULL
                  OR (s."${timeColumn}", s."${source.idColumn}") > ($2::timestamptz, $3::uuid))
+            AND ($5::uuid IS NULL OR s."${ownerColumnName}" = $5::uuid)
           ORDER BY s."${timeColumn}", s."${source.idColumn}"
           LIMIT $4`,
-        [entityType, after?.ts ?? null, after?.id ?? null, batchSize],
+        [entityType, after?.ts ?? null, after?.id ?? null, batchSize, userId ?? null],
       );
     }
 
@@ -590,9 +628,10 @@ export class SearchIndexBackfillService {
           ${discriminator}
           ${excluded}
           AND ($2::uuid IS NULL OR s."${source.idColumn}" > $2::uuid)
+          AND ($4::uuid IS NULL OR s."${ownerColumnName}" = $4::uuid)
         ORDER BY s."${source.idColumn}"
         LIMIT $3`,
-      [entityType, after?.id ?? null, batchSize],
+      [entityType, after?.id ?? null, batchSize, userId ?? null],
     );
   }
 }
