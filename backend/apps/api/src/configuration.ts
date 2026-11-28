@@ -195,8 +195,11 @@ export const ConfigSchema = z.object({
     // security-trust-and-ops.md.
     hubForwardAuth: z.object({
       enabled: z.boolean(),
-      // The Hub-wide secret. Authenticates the Hub connect exchange and the agent
-      // doorbell, and verifies the unbound identity format an older Hub sends.
+      // CI_HUB_FORWARD_AUTH_SECRET. Authenticates the Hub's connect calls (code
+      // exchange, rotation, revocation) and signs the agent doorbell, and verifies
+      // the unbound identity format an older Hub sends. A current Hub gives each
+      // Memory a key of its own here; an older one gave every Memory its Hub-wide
+      // secret, which its other endpoints also took (2026-11-20 audit).
       secret: z.string(),
       // This app's own forward-auth key (CI_HUB_FORWARD_AUTH_IDENTITY_SECRET) and
       // its app URN (CI_APP_URN), both written by a Hub that signs the bound

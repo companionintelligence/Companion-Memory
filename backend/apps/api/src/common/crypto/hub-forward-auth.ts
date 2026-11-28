@@ -325,7 +325,10 @@ export function formatForwardAuthAssertion(nonce: string, signature: string): st
 
 /** What {@link verifyHubForwardAuth} checks a request against; build it with {@link forwardAuthPolicy}. */
 export interface ForwardAuthPolicy {
-  /** `CI_HUB_FORWARD_AUTH_SECRET`, the Hub-wide secret. Verifies the unbound format. */
+  /**
+   * `CI_HUB_FORWARD_AUTH_SECRET`: this Memory's own key from a current Hub, the Hub-wide secret from
+   * an older one. Verifies the unbound format.
+   */
   sharedSecret: string;
   /** This app's own key and URN, both provisioned by the Hub; null from a Hub that gave neither. */
   bound: { secret: string; audience: string } | null;
