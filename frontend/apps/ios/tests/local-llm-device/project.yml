@@ -32,6 +32,7 @@ targets:
         excludes:
           - LocalLLMPlugin.swift # needs Capacitor
           - ModelDownloader.swift # the bench pushes model files itself
+          - LocalSearchStore.swift # needs the SQLCipher pod; Sources/NoReplicaSearchStore.swift stands in
       - path: ../../ios/App/App/Vendor/LiteRTLM
     dependencies:
       - framework: ../../ios/App/Frameworks/CLiteRTLM.xcframework
