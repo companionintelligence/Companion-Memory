@@ -45,6 +45,15 @@ export interface McpCatalogEntry {
   warning?: string;
 }
 
+/*
+ * Every stdio entry names an exact package version (`pkg@1.2.3`), never `@latest` or none: npx and
+ * uvx fetch whatever the name resolves to at launch, so an unpinned entry ran whatever was
+ * published last, on the host, with the server's access (2026-11-20 audit). Pinned to a release at
+ * least a week old when one exists. `mcpSuggestedCatalog.test.ts` refuses an unpinned entry.
+ *
+ * `server-github` and `server-postgres` are archived upstream ("no security guarantees"), and
+ * `mcp-server-sqlite` with them; pinned to their last releases.
+ */
 const NORMAL_CATALOG: McpCatalogEntry[] = [
   {
     slug: 'filesystem-mcp',
@@ -53,7 +62,7 @@ const NORMAL_CATALOG: McpCatalogEntry[] = [
     tags: ['files', 'local'],
     transport: 'stdio',
     command: 'npx',
-    args: ['-y', '@modelcontextprotocol/server-filesystem@latest', '${ALLOWED_PATH}'],
+    args: ['-y', '@modelcontextprotocol/server-filesystem@2.4.0', '${ALLOWED_PATH}'],
     env: [
       {
         key: 'ALLOWED_PATH',
@@ -71,7 +80,7 @@ const NORMAL_CATALOG: McpCatalogEntry[] = [
     tags: ['github', 'dev'],
     transport: 'stdio',
     command: 'npx',
-    args: ['-y', '@modelcontextprotocol/server-github@latest'],
+    args: ['-y', '@modelcontextprotocol/server-github@2025.4.8'],
     env: [{ key: 'GITHUB_TOKEN', label: 'GitHub personal access token', required: true, secret: true }],
     riskTier: 'normal',
   },
@@ -82,7 +91,7 @@ const NORMAL_CATALOG: McpCatalogEntry[] = [
     tags: ['git', 'dev'],
     transport: 'stdio',
     command: 'uvx',
-    args: ['mcp-server-git'],
+    args: ['mcp-server-git@2026.11.18'],
     env: [
       {
         key: 'REPOSITORY_PATH',
@@ -101,7 +110,7 @@ const NORMAL_CATALOG: McpCatalogEntry[] = [
     tags: ['web', 'http'],
     transport: 'stdio',
     command: 'uvx',
-    args: ['mcp-server-fetch'],
+    args: ['mcp-server-fetch@2026.11.18'],
     requires: { host_software: ['uv'] },
     riskTier: 'normal',
   },
@@ -112,7 +121,7 @@ const NORMAL_CATALOG: McpCatalogEntry[] = [
     tags: ['database', 'sql'],
     transport: 'stdio',
     command: 'uvx',
-    args: ['mcp-server-sqlite', '--db-path', '${DB_PATH}'],
+    args: ['mcp-server-sqlite@2025.4.25', '--db-path', '${DB_PATH}'],
     env: [{ key: 'DB_PATH', label: 'Database file path', required: true }],
     requires: { host_software: ['uv'] },
     riskTier: 'normal',
@@ -124,7 +133,7 @@ const NORMAL_CATALOG: McpCatalogEntry[] = [
     tags: ['database', 'postgres'],
     transport: 'stdio',
     command: 'npx',
-    args: ['-y', '@modelcontextprotocol/server-postgres@latest'],
+    args: ['-y', '@modelcontextprotocol/server-postgres@0.6.2'],
     env: [{ key: 'DATABASE_URL', label: 'Postgres connection string', required: true, secret: true }],
     riskTier: 'normal',
   },
@@ -148,7 +157,7 @@ const HIGH_RISK_CATALOG: McpCatalogEntry[] = [
     tags: ['desktop', 'automation', 'high-risk'],
     transport: 'stdio',
     command: 'uvx',
-    args: ['computer-control-mcp@latest'],
+    args: ['computer-control-mcp@0.3.16'],
     requires: { host_software: ['uv'] },
     riskTier: 'high_risk',
     warning:
@@ -163,7 +172,7 @@ const HIGH_RISK_CATALOG: McpCatalogEntry[] = [
     tags: ['desktop', 'automation', 'high-risk'],
     transport: 'stdio',
     command: 'npx',
-    args: ['-y', '@qwen-code/open-computer-use', 'mcp'],
+    args: ['-y', '@qwen-code/open-computer-use@0.2.3', 'mcp'],
     riskTier: 'high_risk',
     warning:
       "Gives the assistant full, unsandboxed control of this device's mouse, keyboard, and screen. It can see " +
