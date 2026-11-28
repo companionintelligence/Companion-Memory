@@ -165,7 +165,10 @@ export function CommunicationCard({ entity }: Props) {
       {data.communicationContent && (
         // HTML is cleaned whole and clipped here, not cut first: an email's first thousand characters
         // are its <head>, which cleaned to nothing and left the card blank. Text is still cut short.
-        <div className="max-h-40 overflow-hidden text-sm text-card-foreground" data-testid="communication-card-body">
+        <div
+          className="max-h-40 overflow-hidden text-sm text-card-foreground"
+          data-testid="communication-card-body"
+        >
           {renderMessageBody(cardMessageBody(data.communicationContent))}
         </div>
       )}
